@@ -31,6 +31,7 @@ import { z } from 'zod';
 import WebSocket from 'ws';
 import { isMainModule } from './core/entry.js';
 import { writePidFile, removePidFile } from './core/pidfile.js';
+import { loadWorkspaces } from './core/workspaces.js';
 
 // Load environment variables
 dotenv.config();
@@ -898,6 +899,24 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       error: (error as Error).message,
       details: 'Internal server error during sync operation'
     });
+  }
+});
+
+// ─── Workspaces API (one project per board) ───────────────────
+//
+// Loaded per request rather than cached at boot: a project's board.config.json gets
+// edited while the server runs, and restarting to notice a config change would be silly.
+app.get('/api/workspaces', async (_req: Request, res: Response) => {
+  try {
+    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    res.json({
+      success: true,
+      configured: Boolean(process.env.EXCALIDRAW_WORKSPACES),
+      workspaces
+    });
+  } catch (error) {
+    logger.error('Failed to load workspaces:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
   }
 });
 
