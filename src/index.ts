@@ -117,6 +117,10 @@ const ElementSchema = z.object({
   endElementId: z.string().optional(),
   endArrowhead: z.string().optional(),
   startArrowhead: z.string().optional(),
+  // Standard Excalidraw integration fields: `link` makes a shape clickable and
+  // `customData` carries arbitrary per-element data for integrations.
+  link: z.string().nullable().optional(),
+  customData: z.record(z.unknown()).optional(),
 });
 
 const ElementIdSchema = z.object({
@@ -185,7 +189,9 @@ const tools: Tool[] = [
         startElementId: { type: 'string', description: 'For arrows: ID of the element to bind the arrow start to. Arrow auto-routes to element edge.' },
         endElementId: { type: 'string', description: 'For arrows: ID of the element to bind the arrow end to. Arrow auto-routes to element edge.' },
         endArrowhead: { type: 'string', description: 'Arrowhead style at end: arrow, bar, dot, triangle, or null' },
-        startArrowhead: { type: 'string', description: 'Arrowhead style at start: arrow, bar, dot, triangle, or null' }
+        startArrowhead: { type: 'string', description: 'Arrowhead style at start: arrow, bar, dot, triangle, or null' },
+        link: { type: 'string', description: 'URL the element links to. Excalidraw renders a clickable link badge on the shape.' },
+        customData: { type: 'object', description: 'Arbitrary per-element data preserved by Excalidraw. Use it to bind a shape to external records.' }
       },
       required: ['type', 'x', 'y']
     }
@@ -213,7 +219,9 @@ const tools: Tool[] = [
         opacity: { type: 'number' },
         text: { type: 'string' },
         fontSize: { type: 'number' },
-        fontFamily: { type: ['string', 'number'], description: 'Font family: virgil/hand/handwritten (1), helvetica/sans/sans-serif (2), cascadia/mono/monospace (3), excalifont (5), nunito (6), lilita/lilita one (7), comic shanns/comic (8), or numeric ID' }
+        fontFamily: { type: ['string', 'number'], description: 'Font family: virgil/hand/handwritten (1), helvetica/sans/sans-serif (2), cascadia/mono/monospace (3), excalifont (5), nunito (6), lilita/lilita one (7), comic shanns/comic (8), or numeric ID' },
+        link: { type: 'string', description: 'URL the element links to. Excalidraw renders a clickable link badge on the shape.' },
+        customData: { type: 'object', description: 'Arbitrary per-element data preserved by Excalidraw. Use it to bind a shape to external records.' }
       },
       required: ['id']
     }

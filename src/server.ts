@@ -187,6 +187,11 @@ const CreateElementSchema = z.object({
   fileId: z.string().optional(),
   status: z.string().optional(),
   scale: z.tuple([z.number(), z.number()]).optional(),
+  // Standard Excalidraw integration fields. Both already survive a frontend sync,
+  // which spreads the element unvalidated — accepting them here removes an
+  // asymmetry where the browser could set them but the API could not.
+  link: z.string().nullable().optional(),
+  customData: z.record(z.unknown()).optional(),
 });
 
 const UpdateElementSchema = z.object({
@@ -245,6 +250,8 @@ const UpdateElementSchema = z.object({
   fileId: z.string().optional(),
   status: z.string().optional(),
   scale: z.tuple([z.number(), z.number()]).optional(),
+  link: z.string().nullable().optional(),
+  customData: z.record(z.unknown()).optional(),
 });
 
 // API Routes
