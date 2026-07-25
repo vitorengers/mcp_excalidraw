@@ -818,15 +818,14 @@ function App(): JSX.Element {
     }
 
     try {
-      // 1. Get current elements
-      const currentElements = api.getSceneElements()
+      // 1. Get current elements, deleted ones included. The backend reconciles by
+      // version and never treats absence as a deletion, so tombstones have to travel
+      // explicitly — otherwise deleting a shape here would leave it alive there.
+      const currentElements = api.getSceneElementsIncludingDeleted()
       console.log(`Syncing ${currentElements.length} elements to backend`)
 
-      // Filter out deleted elements
-      const activeElements = currentElements.filter(el => !el.isDeleted)
-
       // 3. Convert to backend format
-      const backendElements = activeElements.map(convertToBackendFormat)
+      const backendElements = currentElements.map(convertToBackendFormat)
 
       // 4. Send to backend
       const response = await fetch('/api/elements/sync', {

@@ -55,6 +55,26 @@ app.use('/assets/fonts', express.static(
   path.join(__dirname, '../node_modules/@excalidraw/excalidraw/dist/prod/fonts')
 ));
 
+/**
+ * Whether `incoming` should win over `current` when both describe the same element.
+ *
+ * Mirrors how Excalidraw reconciles collaborative scenes: `version` counts edits and
+ * decides; `versionNonce` only breaks ties, where it is arbitrary but identical on
+ * every peer, so all of them converge on the same winner instead of flip-flopping.
+ */
+function isNewerVersion(incoming: any, current: any): boolean {
+  const incomingVersion = typeof incoming?.version === 'number' ? incoming.version : 0;
+  const currentVersion = typeof current?.version === 'number' ? current.version : 0;
+
+  if (incomingVersion !== currentVersion) return incomingVersion > currentVersion;
+
+  const incomingNonce = typeof incoming?.versionNonce === 'number' ? incoming.versionNonce : 0;
+  const currentNonce = typeof current?.versionNonce === 'number' ? current.versionNonce : 0;
+
+  // Lower nonce wins, matching Excalidraw, so the choice is stable across peers.
+  return incomingNonce < currentNonce;
+}
+
 // WebSocket connections
 const clients = new Set<WebSocket>();
 
@@ -781,40 +801,66 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
     // Record element count before sync
     const beforeCount = elements.size;
 
-    // 1. Clear existing memory storage
-    elements.clear();
-    logger.info(`Cleared existing elements: ${beforeCount} elements removed`);
-
-    // 2. Batch write new data
+    // Reconcile instead of clear-and-replace. A payload is what one client knows,
+    // not the whole truth: an element the client never saw (created through the API
+    // moments earlier) must survive. Absence means "no information", never "delete" —
+    // deletions travel explicitly as isDeleted, the same contract Excalidraw uses
+    // when reconciling collaborative scenes.
     let successCount = 0;
+    let updatedCount = 0;
+    let staleCount = 0;
+    let deletedCount = 0;
     const processedElements: ServerElement[] = [];
 
     frontendElements.forEach((element: any, index: number) => {
       try {
         // Ensure element has ID, generate one if missing
         const elementId = element.id || generateId();
+        const existing = elements.get(elementId);
 
-        // Add server metadata
+        if (element.isDeleted) {
+          // An explicit tombstone. Only honour it when it is newer than what we
+          // hold, so a stale client cannot resurrect-then-delete a fresher edit.
+          if (!existing) return;                       // already gone
+          if (!isNewerVersion(element, existing)) { staleCount++; return; }
+          elements.delete(elementId);
+          deletedCount++;
+          return;
+        }
+
+        if (existing && !isNewerVersion(element, existing)) {
+          // Our copy is newer — keep it and let the broadcast correct the client.
+          staleCount++;
+          processedElements.push(existing);
+          return;
+        }
+
+        // Add server metadata. Note version comes from the incoming element: it is
+        // what makes the next reconciliation possible, so it must not be reset.
         const processedElement: ServerElement = {
           ...element,
           id: elementId,
           syncedAt: new Date().toISOString(),
           source: 'frontend_sync',
           syncTimestamp: timestamp,
-          version: 1
+          version: typeof element.version === 'number' ? element.version : 1
         };
 
         // Store to memory
         elements.set(elementId, processedElement);
         processedElements.push(processedElement);
         successCount++;
+        if (existing) updatedCount++;
 
       } catch (elementError) {
         logger.warn(`Failed to process element ${index}:`, elementError);
       }
     });
 
-    logger.info(`Sync completed: ${successCount}/${frontendElements.length} elements synced`);
+    logger.info(
+      `Sync reconciled: ${successCount} applied (${updatedCount} updates), ` +
+      `${deletedCount} deleted, ${staleCount} ignored as stale, ${elements.size} total`
+    );
 
     // 3. Broadcast sync event to all WebSocket clients
     broadcast({
@@ -829,6 +875,9 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       success: true,
       message: `Successfully synced ${successCount} elements`,
       count: successCount,
+      updated: updatedCount,
+      deleted: deletedCount,
+      stale: staleCount,
       syncedAt: new Date().toISOString(),
       beforeCount,
       afterCount: elements.size
