@@ -1,0 +1,99 @@
+/* Docs panel. Colours come from Excalidraw's own theme variables so the panel
+   follows the canvas into dark mode instead of staying stubbornly light. */
+.element-docs {
+  padding: 0 1rem 1.5rem;
+  overflow-y: auto;
+  height: 100%;
+  color: var(--text-primary-color);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.element-docs__hint,
+.element-docs__error {
+  color: var(--color-gray-60);
+  font-size: 0.8125rem;
+}
+
+.element-docs__error {
+  color: var(--color-danger, #e03131);
+}
+
+.element-docs__title {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0 0 0.5rem;
+}
+
+.element-docs__body > *:first-child {
+  margin-top: 0;
+}
+
+.element-docs__body h1 { font-size: 1.125rem; }
+.element-docs__body h2 { font-size: 1rem; }
+.element-docs__body h3 { font-size: 0.9375rem; }
+
+.element-docs__body h1,
+.element-docs__body h2,
+.element-docs__body h3 {
+  font-weight: 700;
+  margin: 1.25rem 0 0.5rem;
+}
+
+.element-docs__body p,
+.element-docs__body ul,
+.element-docs__body ol {
+  margin: 0 0 0.75rem;
+}
+
+.element-docs__body ul,
+.element-docs__body ol {
+  padding-left: 1.25rem;
+}
+
+.element-docs__body code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.8125em;
+  background: var(--color-gray-10);
+  border-radius: 3px;
+  padding: 0.1em 0.3em;
+}
+
+/* Wide code and tables scroll inside the panel rather than widening it. */
+.element-docs__body pre {
+  background: var(--color-gray-10);
+  border-radius: 6px;
+  padding: 0.75rem;
+  overflow-x: auto;
+}
+
+.element-docs__body pre code {
+  background: none;
+  padding: 0;
+}
+
+.element-docs__body table {
+  border-collapse: collapse;
+  width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+
+.element-docs__body th,
+.element-docs__body td {
+  border: 1px solid var(--color-gray-30);
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+}
+
+.element-docs__body blockquote {
+  margin: 0 0 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--color-gray-30);
+  color: var(--color-gray-70);
+}
+
+.element-docs__body img {
+  max-width: 100%;
+  height: auto;
+}
