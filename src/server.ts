@@ -32,6 +32,12 @@ import WebSocket from 'ws';
 import { isMainModule } from './core/entry.js';
 import { writePidFile, removePidFile } from './core/pidfile.js';
 import { loadWorkspaces } from './core/workspaces.js';
+import {
+  elementsFor,
+  workspaceIdFrom,
+  normalizeWorkspaceId,
+  activeWorkspaceIds
+} from './core/element-store.js';
 
 // Load environment variables
 dotenv.config();
@@ -80,14 +86,29 @@ function isNewerVersion(incoming: any, current: any): boolean {
 // WebSocket connections
 const clients = new Set<WebSocket>();
 
-// Broadcast to all connected clients
-function broadcast(message: WebSocketMessage): void {
-  const data = JSON.stringify(message);
+/** Elements held across every workspace — for counters that describe the process. */
+function totalElementCount(): number {
+  return activeWorkspaceIds().reduce((total, id) => total + elementsFor(id).size, 0);
+}
+
+/** Which board each socket is watching, so events do not cross boards. */
+const socketWorkspaces = new WeakMap<WebSocket, string>();
+
+/**
+ * Broadcast to the clients watching one workspace.
+ *
+ * Omitting `workspaceId` reaches every client — right for server-wide notices, wrong
+ * for element events, which would make one board redraw with another board's shapes.
+ */
+function broadcast(message: WebSocketMessage, workspaceId?: string): void {
+  const data = JSON.stringify(
+    workspaceId ? { ...message, workspace: workspaceId } : message
+  );
   clients.forEach(client => {
     try {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(data);
-      }
+      if (client.readyState !== WebSocket.OPEN) return;
+      if (workspaceId && socketWorkspaces.get(client) !== workspaceId) return;
+      client.send(data);
     } catch (err) {
       logger.warn('Failed to send to client, removing');
       clients.delete(client);
@@ -102,16 +123,21 @@ function normalizeLineBreakMarkup(text: string): string {
 }
 
 // WebSocket connection handling
-wss.on('connection', (ws: WebSocket) => {
+wss.on('connection', (ws: WebSocket, request) => {
+  // A socket belongs to one board for its lifetime: the client reconnects when it
+  // switches tabs, which is simpler than multiplexing workspaces over one socket.
+  const requestUrl = new URL(request.url ?? '/', 'http://localhost');
+  const workspaceId = normalizeWorkspaceId(requestUrl.searchParams.get('workspace'));
+  socketWorkspaces.set(ws, workspaceId);
   clients.add(ws);
-  logger.info('New WebSocket connection established');
+  logger.info(`New WebSocket connection established (workspace: ${workspaceId})`);
 
   // Send current elements to new client
   const filesObj: Record<string, ExcalidrawFile> = {};
   files.forEach((f, id) => { filesObj[id] = f; });
   const initialMessage: InitialElementsMessage & { files?: Record<string, ExcalidrawFile> } = {
     type: 'initial_elements',
-    elements: Array.from(elements.values()),
+    elements: Array.from(elementsFor(workspaceId).values()),
     ...(files.size > 0 ? { files: filesObj } : {})
   };
   ws.send(JSON.stringify(initialMessage));
@@ -119,19 +145,21 @@ wss.on('connection', (ws: WebSocket) => {
   // Send sync status to new client
   const syncMessage: SyncStatusMessage = {
     type: 'sync_status',
-    elementCount: elements.size,
+    elementCount: elementsFor(workspaceId).size,
     timestamp: new Date().toISOString()
   };
   ws.send(JSON.stringify(syncMessage));
 
   ws.on('close', () => {
     clients.delete(ws);
+    socketWorkspaces.delete(ws);
     logger.info('WebSocket connection closed');
   });
 
   ws.on('error', (error) => {
     logger.error('WebSocket error:', error);
     clients.delete(ws);
+    socketWorkspaces.delete(ws);
   });
 });
 
@@ -261,7 +289,7 @@ const UpdateElementSchema = z.object({
 // Get all elements
 app.get('/api/elements', (req: Request, res: Response) => {
   try {
-    const elementsArray = Array.from(elements.values());
+    const elementsArray = Array.from(elementsFor(workspaceIdFrom(req)).values());
     res.json({
       success: true,
       elements: elementsArray,
@@ -280,7 +308,9 @@ app.get('/api/elements', (req: Request, res: Response) => {
 app.post('/api/elements', (req: Request, res: Response) => {
   try {
     const params = CreateElementSchema.parse(req.body);
-    logger.info('Creating element via API', { type: params.type });
+    const workspaceId = workspaceIdFrom(req);
+    const store = elementsFor(workspaceId);
+    logger.info('Creating element via API', { type: params.type, workspace: workspaceId });
 
     // Prioritize passed ID (for MCP sync), otherwise generate new ID
     const id = params.id || generateId();
@@ -295,17 +325,17 @@ app.post('/api/elements', (req: Request, res: Response) => {
 
     // Resolve arrow bindings against existing elements
     if (element.type === 'arrow' || element.type === 'line') {
-      resolveArrowBindings([element]);
+      resolveArrowBindings([element], store);
     }
 
-    elements.set(id, element);
+    store.set(id, element);
 
     // Broadcast to all connected clients
     const message: ElementCreatedMessage = {
       type: 'element_created',
       element: element
     };
-    broadcast(message);
+    broadcast(message, workspaceId);
 
     res.json({
       success: true,
@@ -326,6 +356,8 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
     const { id } = req.params;
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const updates = UpdateElementSchema.parse({ id, ...body });
+    const workspaceId = workspaceIdFrom(req);
+    const store = elementsFor(workspaceId);
 
     if (!id) {
       return res.status(400).json({
@@ -334,7 +366,7 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
       });
     }
 
-    const existingElement = elements.get(id);
+    const existingElement = store.get(id);
     if (!existingElement) {
       return res.status(404).json({
         success: false,
@@ -374,21 +406,21 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
       }
     }
 
-    elements.set(id, updatedElement);
+    store.set(id, updatedElement);
 
     // Broadcast to all connected clients
     const message: ElementUpdatedMessage = {
       type: 'element_updated',
       element: updatedElement
     };
-    broadcast(message);
+    broadcast(message, workspaceId);
 
     // Moving/resizing a shape must drag its bound arrows along
     const geometryChanged = ['x', 'y', 'width', 'height']
       .some(key => Object.prototype.hasOwnProperty.call(body, key));
     if (geometryChanged && updatedElement.type !== 'arrow' && updatedElement.type !== 'line') {
-      for (const arrow of rerouteBoundArrows(id)) {
-        broadcast({ type: 'element_updated', element: arrow } as ElementUpdatedMessage);
+      for (const arrow of rerouteBoundArrows(id, store)) {
+        broadcast({ type: 'element_updated', element: arrow } as ElementUpdatedMessage, workspaceId);
       }
     }
 
@@ -408,13 +440,15 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
 // Clear all elements (must be before /:id route)
 app.delete('/api/elements/clear', (req: Request, res: Response) => {
   try {
-    const count = elements.size;
-    elements.clear();
+    const workspaceId = workspaceIdFrom(req);
+    const store = elementsFor(workspaceId);
+    const count = store.size;
+    store.clear();
 
     broadcast({
       type: 'canvas_cleared',
       timestamp: new Date().toISOString()
-    });
+    }, workspaceId);
 
     logger.info(`Canvas cleared: ${count} elements removed`);
 
@@ -444,21 +478,23 @@ app.delete('/api/elements/:id', (req: Request, res: Response) => {
       });
     }
 
-    if (!elements.has(id)) {
+    const workspaceId = workspaceIdFrom(req);
+    const store = elementsFor(workspaceId);
+    if (!store.has(id)) {
       return res.status(404).json({
         success: false,
         error: `Element with ID ${id} not found`
       });
     }
 
-    elements.delete(id);
+    store.delete(id);
 
     // Broadcast to all connected clients
     const message: ElementDeletedMessage = {
       type: 'element_deleted',
       elementId: id!
     };
-    broadcast(message);
+    broadcast(message, workspaceId);
 
     res.json({
       success: true,
@@ -477,7 +513,7 @@ app.delete('/api/elements/:id', (req: Request, res: Response) => {
 app.get('/api/elements/search', (req: Request, res: Response) => {
   try {
     const { type, x_min, x_max, y_min, y_max, ...filters } = req.query;
-    let results = Array.from(elements.values());
+    let results = Array.from(elementsFor(workspaceIdFrom(req)).values());
 
     // Filter by type if specified
     if (type && typeof type === 'string') {
@@ -534,7 +570,7 @@ app.get('/api/elements/:id', (req: Request, res: Response) => {
       });
     }
 
-    const element = elements.get(id);
+    const element = elementsFor(workspaceIdFrom(req)).get(id);
 
     if (!element) {
       return res.status(404).json({
@@ -609,12 +645,15 @@ function computeEdgePoint(
 }
 
 // Helper: resolve arrow bindings in a batch
-function resolveArrowBindings(batchElements: ServerElement[]): void {
+function resolveArrowBindings(
+  batchElements: ServerElement[],
+  store: Map<string, ServerElement>
+): void {
   const elementMap = new Map<string, ServerElement>();
   batchElements.forEach(el => elementMap.set(el.id, el));
 
   // Also check existing elements for cross-batch references
-  elements.forEach((el, id) => {
+  store.forEach((el, id) => {
     if (!elementMap.has(id)) elementMap.set(id, el);
   });
 
@@ -676,14 +715,17 @@ function resolveArrowBindings(batchElements: ServerElement[]): void {
 // visual connection follows the shape — bindings are otherwise only resolved
 // at creation time, which left arrows floating at stale coordinates when
 // update/align/distribute moved their endpoints. Returns the re-routed arrows.
-function rerouteBoundArrows(movedId: string): ServerElement[] {
+function rerouteBoundArrows(
+  movedId: string,
+  store: Map<string, ServerElement>
+): ServerElement[] {
   const rerouted: ServerElement[] = [];
-  elements.forEach(el => {
+  store.forEach(el => {
     if (el.type !== 'arrow' && el.type !== 'line') return;
     const startRef = (el as any).start as { id: string } | undefined;
     const endRef = (el as any).end as { id: string } | undefined;
     if (startRef?.id !== movedId && endRef?.id !== movedId) return;
-    resolveArrowBindings([el]);
+    resolveArrowBindings([el], store);
     el.updatedAt = new Date().toISOString();
     el.version = (el.version || 0) + 1;
     rerouted.push(el);
@@ -695,6 +737,8 @@ function rerouteBoundArrows(movedId: string): ServerElement[] {
 app.post('/api/elements/batch', (req: Request, res: Response) => {
   try {
     const { elements: elementsToCreate } = req.body;
+    const batchWorkspaceId = workspaceIdFrom(req);
+    const batchStore = elementsFor(batchWorkspaceId);
 
     if (!Array.isArray(elementsToCreate)) {
       return res.status(400).json({
@@ -722,17 +766,17 @@ app.post('/api/elements/batch', (req: Request, res: Response) => {
     });
 
     // Resolve arrow bindings (computes positions, startBinding, endBinding, boundElements)
-    resolveArrowBindings(createdElements);
+    resolveArrowBindings(createdElements, batchStore);
 
     // Store all elements after binding resolution
-    createdElements.forEach(el => elements.set(el.id, el));
+    createdElements.forEach(el => batchStore.set(el.id, el));
 
     // Broadcast to all connected clients
     const message: BatchCreatedMessage = {
       type: 'elements_batch_created',
       elements: createdElements
     };
-    broadcast(message);
+    broadcast(message, batchWorkspaceId);
 
     res.json({
       success: true,
@@ -808,7 +852,9 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
     }
 
     // Record element count before sync
-    const beforeCount = elements.size;
+    const syncWorkspaceId = workspaceIdFrom(req);
+    const store = elementsFor(syncWorkspaceId);
+    const beforeCount = store.size;
 
     // Reconcile instead of clear-and-replace. A payload is what one client knows,
     // not the whole truth: an element the client never saw (created through the API
@@ -825,14 +871,14 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       try {
         // Ensure element has ID, generate one if missing
         const elementId = element.id || generateId();
-        const existing = elements.get(elementId);
+        const existing = store.get(elementId);
 
         if (element.isDeleted) {
           // An explicit tombstone. Only honour it when it is newer than what we
           // hold, so a stale client cannot resurrect-then-delete a fresher edit.
           if (!existing) return;                       // already gone
           if (!isNewerVersion(element, existing)) { staleCount++; return; }
-          elements.delete(elementId);
+          store.delete(elementId);
           deletedCount++;
           return;
         }
@@ -856,7 +902,7 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
         };
 
         // Store to memory
-        elements.set(elementId, processedElement);
+        store.set(elementId, processedElement);
         processedElements.push(processedElement);
         successCount++;
         if (existing) updatedCount++;
@@ -868,7 +914,7 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
 
     logger.info(
       `Sync reconciled: ${successCount} applied (${updatedCount} updates), ` +
-      `${deletedCount} deleted, ${staleCount} ignored as stale, ${elements.size} total`
+      `${deletedCount} deleted, ${staleCount} ignored as stale, ${store.size} total`
     );
 
     // 3. Broadcast sync event to all WebSocket clients
@@ -889,7 +935,7 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       stale: staleCount,
       syncedAt: new Date().toISOString(),
       beforeCount,
-      afterCount: elements.size
+      afterCount: store.size
     });
 
   } catch (error) {
@@ -1047,11 +1093,12 @@ app.post('/api/export/image', (req: Request, res: Response) => {
     // sync to the canonical server state before exporting
     const filesObj: Record<string, ExcalidrawFile> = {};
     files.forEach((f, id) => { filesObj[id] = f; });
+    const exportWorkspaceId = workspaceIdFrom(req);
     broadcast({
       type: 'initial_elements',
-      elements: Array.from(elements.values()),
+      elements: Array.from(elementsFor(exportWorkspaceId).values()),
       ...(files.size > 0 ? { files: filesObj } : {})
-    } as InitialElementsMessage & { files?: Record<string, ExcalidrawFile> });
+    } as InitialElementsMessage & { files?: Record<string, ExcalidrawFile> }, exportWorkspaceId);
 
     // Give browsers time to process the reload before requesting export
     setTimeout(() => {
@@ -1293,7 +1340,7 @@ app.post('/api/snapshots', (req: Request, res: Response) => {
 
     const snapshot: Snapshot = {
       name,
-      elements: Array.from(elements.values()),
+      elements: Array.from(elementsFor(workspaceIdFrom(req)).values()),
       createdAt: new Date().toISOString()
     };
 
@@ -1380,7 +1427,7 @@ app.get('/health', (req: Request, res: Response) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    elements_count: elements.size,
+    elements_count: totalElementCount(),
     websocket_clients: clients.size,
     // Identity for `stop`: it must only ever signal a process that both
     // identifies as this service AND self-reports its pid — never a pid
@@ -1394,7 +1441,8 @@ app.get('/health', (req: Request, res: Response) => {
 app.get('/api/sync/status', (req: Request, res: Response) => {
   res.json({
     success: true,
-    elementCount: elements.size,
+    elementCount: totalElementCount(),
+    workspaces: activeWorkspaceIds().length,
     timestamp: new Date().toISOString(),
     memoryUsage: {
       heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024), // MB
