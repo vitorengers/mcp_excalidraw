@@ -4,6 +4,7 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import net from 'net';
 import path from 'path';
+import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import logger from './utils/logger.js';
@@ -897,6 +898,51 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       error: (error as Error).message,
       details: 'Internal server error during sync operation'
     });
+  }
+});
+
+// ─── Docs API (markdown shown for the selected element) ───────
+//
+// A shape can carry `customData.docKey`; this serves the matching markdown so the
+// canvas can show the reasoning behind a box without leaving the drawing. Disabled
+// until EXCALIDRAW_DOCS_DIR points somewhere, because serving arbitrary files from
+// an unauthenticated local API is not something to enable by default.
+const DOCS_DIR = process.env.EXCALIDRAW_DOCS_DIR
+  ? path.resolve(process.env.EXCALIDRAW_DOCS_DIR)
+  : null;
+
+// Keys become filenames, so anything that could climb out of DOCS_DIR is rejected
+// outright rather than normalised — a rejected key is obvious, a rewritten one is not.
+const DOC_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+app.get('/api/docs/:key', async (req: Request, res: Response) => {
+  if (!DOCS_DIR) {
+    return res.status(404).json({
+      success: false,
+      error: 'No docs directory configured. Set EXCALIDRAW_DOCS_DIR to enable this endpoint.'
+    });
+  }
+
+  const key = req.params.key ?? '';
+  if (!DOC_KEY_PATTERN.test(key) || key.includes('..')) {
+    return res.status(400).json({ success: false, error: 'Invalid doc key' });
+  }
+
+  const filePath = path.resolve(DOCS_DIR, `${key}.md`);
+  // Defence in depth: even with the pattern above, confirm we stayed inside DOCS_DIR.
+  if (filePath !== DOCS_DIR && !filePath.startsWith(DOCS_DIR + path.sep)) {
+    return res.status(400).json({ success: false, error: 'Invalid doc key' });
+  }
+
+  try {
+    const markdown = await fs.readFile(filePath, 'utf-8');
+    res.json({ success: true, key, markdown });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return res.status(404).json({ success: false, error: `No doc for key "${key}"` });
+    }
+    logger.error(`Failed to read doc "${key}":`, error);
+    res.status(500).json({ success: false, error: (error as Error).message });
   }
 });
 

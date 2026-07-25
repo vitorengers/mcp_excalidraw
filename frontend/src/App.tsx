@@ -9,6 +9,7 @@ import {
 } from '@excalidraw/excalidraw'
 import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
 import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/mermaidConverter'
+import { ElementDocsPanel } from './components/ElementDocsPanel'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
 // Type definitions
@@ -325,6 +326,14 @@ function App(): JSX.Element {
     return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   })
 
+  // Documentation panel: which shape's doc is on screen
+  const [selectedDoc, setSelectedDoc] = useState<{ key: string | null; title: string | null }>({
+    key: null,
+    title: null
+  })
+  const [docsDocked, setDocsDocked] = useState<boolean>(true)
+  const lastSelectedIdRef = useRef<string | null>(null)
+
   // Sync state management
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle')
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null)
@@ -332,6 +341,41 @@ function App(): JSX.Element {
   const syncInFlightRef = useRef<boolean>(false)
   const suppressAutoSyncCountRef = useRef<number>(0)
   const userInteractedRef = useRef<boolean>(false)
+
+  /**
+   * Track which selected shape the docs panel should describe.
+   *
+   * onChange fires on every pointer move, so this bails out unless the selection
+   * actually changed — otherwise the panel would refetch continuously while dragging.
+   * A multi-selection resolves to no doc: showing one shape's document while several
+   * are highlighted reads as if it described all of them.
+   */
+  const syncSelectedDoc = (appState: { selectedElementIds?: Record<string, boolean> } | undefined): void => {
+    const selectedIds = Object.keys(appState?.selectedElementIds ?? {}).filter(
+      (id) => appState?.selectedElementIds?.[id]
+    )
+    const selectedId = selectedIds.length === 1 ? selectedIds[0] : null
+
+    if (selectedId === lastSelectedIdRef.current) return
+    lastSelectedIdRef.current = selectedId
+
+    if (!selectedId || !excalidrawAPI) {
+      setSelectedDoc({ key: null, title: null })
+      return
+    }
+
+    const element = excalidrawAPI
+      .getSceneElements()
+      .find((candidate) => candidate.id === selectedId) as
+      | (ExcalidrawElement & { customData?: { docKey?: unknown }; text?: string })
+      | undefined
+
+    const docKey = element?.customData?.docKey
+    setSelectedDoc({
+      key: typeof docKey === 'string' && docKey ? docKey : null,
+      title: typeof element?.text === 'string' ? element.text : null
+    })
+  }
 
   const applySceneUpdateWithoutAutoSync = (
     api: ExcalidrawImperativeAPI,
@@ -983,6 +1027,7 @@ function App(): JSX.Element {
                   console.warn('Failed to save theme to localStorage:', error)
                 }
               }
+              syncSelectedDoc(appState)
               scheduleAutoSync()
             }}
             initialData={{
@@ -991,7 +1036,14 @@ function App(): JSX.Element {
                 theme
               }
             }}
-          />
+          >
+            <ElementDocsPanel
+              docKey={selectedDoc.key}
+              title={selectedDoc.title}
+              docked={docsDocked}
+              onDock={setDocsDocked}
+            />
+          </Excalidraw>
         </div>
       </div>
     </div>
