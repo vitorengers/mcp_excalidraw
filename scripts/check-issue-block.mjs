@@ -88,7 +88,23 @@ async function main() {
   check('409 with the existing issue', again.status === 409, `got ${again.status}`);
   check('returns the existing URL', Boolean(again.body.issueUrl));
 
-  console.log('\n5. a block with nothing written in it is rejected');
+  console.log('\n5. the observation can live in a label bound to the shape');
+  const boxed = await call('/api/elements', {
+    method: 'POST',
+    body: JSON.stringify({ type: 'rectangle', x: 0, y: 300, width: 200, height: 100, customData: { kind: 'issue' } }),
+  });
+  const boxedId = boxed.body.element.id;
+  await call('/api/elements', {
+    method: 'POST',
+    body: JSON.stringify({
+      type: 'text', x: 10, y: 310, text: 'As abas demoram a trocar em boards grandes',
+      containerId: boxedId,
+    }),
+  });
+  const boxedRun = await call(`/api/issue-block/${boxedId}`, { method: 'POST' });
+  check('accepted with the label as the observation', boxedRun.status === 202, `got ${boxedRun.status}`);
+
+  console.log('\n6. a block with nothing written in it is rejected');
   const empty = await call('/api/elements', {
     method: 'POST',
     body: JSON.stringify({ type: 'rectangle', x: 0, y: 0, width: 10, height: 10, customData: { kind: 'issue' } }),

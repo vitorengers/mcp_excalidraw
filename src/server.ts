@@ -224,6 +224,9 @@ const CreateElementSchema = z.object({
   // asymmetry where the browser could set them but the API could not.
   link: z.string().nullable().optional(),
   customData: z.record(z.unknown()).optional(),
+  // A shape's label is a text element bound to it through containerId; without this
+  // the binding is stripped and the label becomes a free-floating text.
+  containerId: z.string().nullable().optional(),
 });
 
 const UpdateElementSchema = z.object({
@@ -284,6 +287,9 @@ const UpdateElementSchema = z.object({
   scale: z.tuple([z.number(), z.number()]).optional(),
   link: z.string().nullable().optional(),
   customData: z.record(z.unknown()).optional(),
+  // A shape's label is a text element bound to it through containerId; without this
+  // the binding is stripped and the label becomes a free-floating text.
+  containerId: z.string().nullable().optional(),
 });
 
 // API Routes
@@ -1016,9 +1022,16 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     return res.status(409).json({ success: false, error: 'A run is already in flight for this block.' });
   }
 
+  // A shape's label is a separate element bound to it, so reading element.text alone
+  // would find nothing for the normal way of writing inside a box.
+  const boundText = Array.from(store.values()).find(
+    (candidate) => candidate.type === 'text' &&
+      (candidate as ServerElement & { containerId?: string }).containerId === elementId
+  );
   const observation = typeof req.body?.observation === 'string' && req.body.observation.trim()
     ? req.body.observation.trim()
-    : typeof element.text === 'string' ? element.text.trim() : '';
+    : [element.text, boundText?.text]
+        .find((value) => typeof value === 'string' && value.trim())?.trim() ?? '';
   if (!observation) {
     return res.status(400).json({ success: false, error: 'The block has no observation to work from.' });
   }
