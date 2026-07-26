@@ -33,6 +33,7 @@ import { isMainModule } from './core/entry.js';
 import { writePidFile, removePidFile } from './core/pidfile.js';
 import { loadWorkspaces } from './core/workspaces.js';
 import { runIssueAgent } from './core/issue-agent.js';
+import { fetchIssue } from './core/github-issue.js';
 import {
   elementsFor,
   workspaceIdFrom,
@@ -1067,11 +1068,45 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   // long looks indistinguishable from a hang. Progress arrives over the socket.
   res.status(202).json({ success: true, state: 'running', elementId });
 
+  /**
+   * Retitle the block to the issue it produced.
+   *
+   * The observation is what started the run; once the issue exists, the title is what
+   * the card is *about*, and a board full of raw observations reads like a scratchpad.
+   * The original text is kept in customData rather than discarded — it is the wording
+   * that produced this particular issue, and the panel still shows it.
+   *
+   * Best-effort by design: the issue is already created by the time this runs, so a
+   * failure here must not turn a successful run into a failed block.
+   */
+  const adoptIssueTitle = async (issueUrl: string): Promise<void> => {
+    const detail = await fetchIssue(workspace, issueUrl);
+    if (!detail.title) return;
+
+    markState('created', { issueUrl, issueError: null, issueTitle: detail.title, observation });
+
+    const label = store.get(boundText?.id ?? '');
+    if (!label) return;
+    const updatedLabel: ServerElement = {
+      ...label,
+      text: detail.title,
+      updatedAt: new Date().toISOString(),
+      version: (label.version || 0) + 1
+    };
+    store.set(updatedLabel.id, updatedLabel);
+    broadcast({ type: 'element_updated', element: updatedLabel } as ElementUpdatedMessage, workspaceId);
+  };
+
   try {
     const result = await runIssueAgent(workspace, observation, { agentCommand: ISSUE_AGENT_COMMAND });
     if (result.ok && result.issueUrl) {
-      markState('created', { issueUrl: result.issueUrl, issueError: null });
+      markState('created', { issueUrl: result.issueUrl, issueError: null, observation });
       logger.info(`Issue block ${elementId} created ${result.issueUrl}`);
+      try {
+        await adoptIssueTitle(result.issueUrl);
+      } catch (error) {
+        logger.warn(`Issue block ${elementId}: could not read back the issue — ${(error as Error).message}`);
+      }
     } else {
       markState('failed', { issueError: result.error });
       logger.warn(`Issue block ${elementId} failed: ${result.error}`);
@@ -1080,6 +1115,55 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     markState('failed', { issueError: (error as Error).message });
   } finally {
     issueRunsInFlight.delete(elementId);
+  }
+});
+
+/**
+ * The issue behind a block, read live.
+ *
+ * Read at selection time rather than copied onto the element at creation time: the body
+ * is kilobytes that would otherwise ride in every autosync payload and every export, and
+ * it would go stale as soon as anyone edited the issue on GitHub.
+ */
+app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
+  const elementId = req.params.id ?? '';
+
+  // Reading is not writing, but it still spawns a process holding the user's gh
+  // credentials — the same reason the run route is loopback-only.
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    return res.status(403).json({
+      success: false,
+      error: 'Issue blocks only read while the server is bound to loopback.'
+    });
+  }
+
+  const workspaceId = workspaceIdFrom(req);
+  const element = elementsFor(workspaceId).get(elementId);
+  if (!element) {
+    return res.status(404).json({ success: false, error: `Element ${elementId} not found` });
+  }
+
+  const custom = (element.customData ?? {}) as Record<string, unknown>;
+  const issueUrl = typeof custom.issueUrl === 'string' ? custom.issueUrl : '';
+  if (!issueUrl) {
+    return res.status(404).json({ success: false, error: 'This block has no issue yet.' });
+  }
+
+  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace || workspace.error) {
+    return res.status(400).json({
+      success: false,
+      error: workspace?.error ?? `Workspace "${workspaceId}" is not registered.`
+    });
+  }
+
+  try {
+    const issue = await fetchIssue(workspace, issueUrl);
+    res.json({ success: true, issue });
+  } catch (error) {
+    // 502: the failure is GitHub's or gh's, not the caller's request.
+    res.status(502).json({ success: false, error: (error as Error).message });
   }
 });
 
