@@ -91,10 +91,21 @@ export interface IssueAgentResult {
   error: string | null;
 }
 
+/**
+ * The last GitHub URL of a given kind in the output.
+ *
+ * The last, not the first: an agent may well have listed existing issues or pull
+ * requests on its way to creating the one it is reporting.
+ */
+export function extractGithubUrl(output: string, kind: 'issues' | 'pull'): string | null {
+  const pattern = new RegExp(`https://github\\.com/[^\\s"'<>]+/${kind}/\\d+`, 'g');
+  const matches = output.match(pattern);
+  return matches?.length ? (matches[matches.length - 1] ?? null) : null;
+}
+
 /** Last non-empty line that looks like a GitHub issue URL. */
 export function extractIssueUrl(output: string): string | null {
-  const matches = output.match(/https:\/\/github\.com\/[^\s"'<>]+\/issues\/\d+/g);
-  return matches?.length ? (matches[matches.length - 1] ?? null) : null;
+  return extractGithubUrl(output, 'issues');
 }
 
 /**
@@ -165,17 +176,41 @@ export function tokenizeCommand(input: string): string[] {
   return tokens;
 }
 
-export async function runIssueAgent(
+export interface AgentRun {
+  ok: boolean;
+  /** The GitHub URL the run was asked to produce, or null when it produced none. */
+  url: string | null;
+  output: string;
+  error: string | null;
+}
+
+export interface RunAgentOptions {
+  agentCommand: string;
+  timeoutMs?: number;
+  /** Which kind of URL counts as the answer. */
+  expects: 'issues' | 'pull';
+  /** Named in log lines and in the error a caller shows. */
+  what: string;
+}
+
+/**
+ * Run an agent inside a workspace and take one GitHub URL from what it printed.
+ *
+ * Shared rather than copied per feature, because the salvage below was earned: an agent
+ * created its issue and then kept working past the timeout, and reporting that as a
+ * failure would have invited a second run for work that had already succeeded.
+ */
+export async function runAgent(
   workspace: Workspace,
-  observation: string,
-  options: { agentCommand: string; timeoutMs?: number }
-): Promise<IssueAgentResult> {
-  const prompt = `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observation}`;
+  prompt: string,
+  options: RunAgentOptions
+): Promise<AgentRun> {
   const { command, args, cwd } = buildAgentCommand(workspace, options.agentCommand);
+  const noun = options.expects === 'pull' ? 'pull request URL' : 'issue URL';
 
-  logger.info(`Running issue agent for workspace "${workspace.id}"`, { command, cwd });
+  logger.info(`Running ${options.what} for workspace "${workspace.id}"`, { command, cwd });
 
-  return new Promise((resolve) => {
+  return new Promise<AgentRun>((resolve) => {
     const child = spawn(command, args, {
       cwd,
       env: { ...process.env, PATH: agentPath() },
@@ -192,25 +227,23 @@ export async function runIssueAgent(
     let stderr = '';
     let settled = false;
 
-    // An investigation legitimately takes many minutes; the ceiling exists only so a
-    // wedged agent cannot hold the element in "running" forever with no way back.
+    // Real work legitimately takes many minutes; the ceiling exists only so a wedged
+    // agent cannot hold the element in "running" forever with no way back.
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
       child.kill();
 
-      // The agent may well have created the issue and then kept working. Reporting a
-      // failure for work that succeeded is worse than reporting a slow success, so
-      // salvage the URL from whatever it printed before the kill.
-      const salvaged = extractIssueUrl(stdout);
+      // The agent may well have finished the visible work and then kept going.
+      // Reporting a failure for work that succeeded is worse than reporting a slow
+      // success, so salvage the URL from whatever it printed before the kill.
+      const salvaged = extractGithubUrl(stdout, options.expects);
       resolve({
         ok: Boolean(salvaged),
-        issueUrl: salvaged,
+        url: salvaged,
         output: stdout,
-        error: salvaged
-          ? null
-          : `Agent timed out after ${timeoutMs / 1000}s without returning an issue URL`,
+        error: salvaged ? null : `Agent timed out after ${timeoutMs / 1000}s without returning a ${noun}`,
       });
     }, timeoutMs);
 
@@ -221,24 +254,39 @@ export async function runIssueAgent(
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      resolve({ ok: false, issueUrl: null, output: stdout, error: error.message });
+      resolve({ ok: false, url: null, output: stdout, error: error.message });
     });
 
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      const issueUrl = extractIssueUrl(stdout);
+      const url = extractGithubUrl(stdout, options.expects);
       resolve({
-        ok: code === 0 && Boolean(issueUrl),
-        issueUrl,
+        ok: code === 0 && Boolean(url),
+        url,
         output: stdout,
         error: code === 0
-          ? (issueUrl
+          ? (url
               ? null
-              : `Agent finished without returning an issue URL. It said: ${stdout.trim().slice(-600) || '(nothing)'}`)
+              : `Agent finished without returning a ${noun}. It said: ${stdout.trim().slice(-600) || '(nothing)'}`)
           : `Agent exited with code ${code}: ${stderr.slice(-500)}`,
       });
     });
   });
+}
+
+export async function runIssueAgent(
+  workspace: Workspace,
+  observation: string,
+  options: { agentCommand: string; timeoutMs?: number }
+): Promise<IssueAgentResult> {
+  const prompt = `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observation}`;
+  const run = await runAgent(workspace, prompt, {
+    agentCommand: options.agentCommand,
+    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    expects: 'issues',
+    what: 'issue agent',
+  });
+  return { ok: run.ok, issueUrl: run.url, output: run.output, error: run.error };
 }

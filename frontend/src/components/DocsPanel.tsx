@@ -19,6 +19,10 @@ export interface IssueTarget {
   issueTitle?: string | null
   /** The text that produced the issue, preserved when the label was retitled. */
   observation?: string | null
+  /** Set once an agent has been asked to implement the issue. */
+  implementState?: 'running' | 'done' | 'failed' | null
+  implementUrl?: string | null
+  implementError?: string | null
 }
 
 /** The issue itself, read live when a created block is selected. */
@@ -46,6 +50,7 @@ export interface DocsPanelBodyProps {
   /** Set when the selected shape is an issue block. */
   issue?: IssueTarget | null
   onCreateIssue?: (id: string) => void
+  onImplementIssue?: (id: string) => void
 }
 
 /**
@@ -56,7 +61,7 @@ export interface DocsPanelBodyProps {
  * panel moved off the window edge was its position, not any of this.
  */
 export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
-  docKey, title, workspace, collapsible, onToggleCollapse, issue, onCreateIssue
+  docKey, title, workspace, collapsible, onToggleCollapse, issue, onCreateIssue, onImplementIssue
 }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
   const [issueDetail, setIssueDetail] = useState<IssueDetailState>({ status: 'idle' })
@@ -153,6 +158,42 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                   ? ` · ${issueDetail.state.toLowerCase()}`
                   : ''}
               </a>
+
+              {/* Above the description, because it is an action on the issue rather than
+                  part of reading it, and a reader who has decided should not have to
+                  scroll a body this long to act. */}
+              <div className="element-docs__implement">
+                {issue.implementState === 'done' && issue.implementUrl && (
+                  <a
+                    className="element-docs__issue-link"
+                    href={issue.implementUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Implemented · {issue.implementUrl.replace(/^https:\/\/github\.com\//, '')}
+                  </a>
+                )}
+
+                {issue.implementState === 'running' && (
+                  <p className="element-docs__hint">
+                    An agent is implementing this issue in the project. This takes a while.
+                  </p>
+                )}
+
+                {issue.implementState === 'failed' && (
+                  <p className="element-docs__error">{issue.implementError ?? 'The run failed.'}</p>
+                )}
+
+                {issue.implementState !== 'done' && issue.implementState !== 'running' && onImplementIssue && (
+                  <button
+                    type="button"
+                    className="element-docs__collapse"
+                    onClick={() => onImplementIssue(issue.id)}
+                  >
+                    Implement / Fix
+                  </button>
+                )}
+              </div>
 
               {issueDetail.status === 'loading' && (
                 <p className="element-docs__hint">Reading the issue…</p>

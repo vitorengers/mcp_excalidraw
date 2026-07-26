@@ -32,6 +32,10 @@ export interface IssueTargetData {
   issueError: string | null;
   issueTitle: string | null;
   observation: string | null;
+  /** Set once an agent has been asked to implement the issue. */
+  implementState: 'running' | 'done' | 'failed' | null;
+  implementUrl: string | null;
+  implementError: string | null;
 }
 
 export interface CollapsibleTargetData {
@@ -116,6 +120,9 @@ export function resolvePanelTarget(
           issueError: asString(custom.issueError),
           issueTitle: asString(custom.issueTitle),
           observation: asString(custom.observation),
+          implementState: asString(custom.implementState) as IssueTargetData['implementState'],
+          implementUrl: asString(custom.implementUrl),
+          implementError: asString(custom.implementError),
         }
       : null;
 

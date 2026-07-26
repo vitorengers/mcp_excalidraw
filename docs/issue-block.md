@@ -53,6 +53,42 @@ is not what decided it. Step 3 sends the agent to read the project's own documen
 proposing anything, and that project documents in Portuguese, so the agent took the language
 from its surroundings. Nothing in the prompt said otherwise. Now it names English outright.
 
+## Implementing the issue
+
+A created block carries an **Implement / Fix** button above the description.
+`POST /api/issue-block/:id/implement` runs an agent inside the project to implement that
+issue, and the pull request URL comes back onto the block the way the issue URL did.
+
+**It is a different agent with different powers, and that is the whole point.** The issue
+agent is deliberately powerless — `gh`, `git` and reading, nothing that writes. An agent
+that implements must write code, run the build and run the checks, so it needs `Write`,
+`Edit` and an unrestricted `Bash`. Sharing a command between the two would mean that
+turning on issue blocks quietly turned on repository writes, which is not a decision
+anyone would have made on purpose. So it has its own variable and is **off until it is
+set**:
+
+```
+EXCALIDRAW_IMPLEMENT_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --allowedTools "Bash Read Write Edit Grep Glob"'
+```
+
+The other guards carry over — loopback only, one run at a time per element — and one is
+added: a block with no issue has nothing to implement, and a block that already produced a
+pull request will not produce a second one.
+
+### What the agent is told
+
+The workflow is **not** in the prompt. Each project records how work is done in it — branch
+naming, whether a change ships with a check, whether the agent opens a pull request or
+merges it itself — and the agent runs inside that project, so it is told to read its own
+project memory and treat that as the authority. Writing this repository's conventions into
+the prompt would make the feature wrong for every other board.
+
+What the prompt does carry is what an unattended run needs: investigate before changing
+anything and stop if the issue is already fixed; implement the smallest change that meets
+the definition of done and no more; run the project's own checks and read the output,
+because compiling is not working; and — since nobody can answer a question mid-run — decide
+the issue's open questions, state the call in the pull request, and keep going.
+
 ## Configuration
 
 ```

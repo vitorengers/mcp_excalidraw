@@ -34,6 +34,7 @@ import { writePidFile, removePidFile } from './core/pidfile.js';
 import { loadWorkspaces } from './core/workspaces.js';
 import { runIssueAgent } from './core/issue-agent.js';
 import { fetchIssue } from './core/github-issue.js';
+import { runImplementAgent } from './core/implement-agent.js';
 import { layoutLabel, DEFAULT_BOUND_TEXT_FONT_SIZE } from './core/text-layout.js';
 import {
   elementsFor,
@@ -1151,6 +1152,109 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     markState('failed', { issueError: (error as Error).message });
   } finally {
     issueRunsInFlight.delete(elementId);
+  }
+});
+
+// ─── Implementing an issue ────────────────────────────────────
+//
+// The issue block's opposite number, and its opposite in permissions. The issue agent is
+// deliberately powerless — gh, git and reading, nothing that writes. An agent that
+// implements has to write code, so it gets its own command and its own opt-in: enabling
+// issue blocks must not quietly enable repository writes.
+const IMPLEMENT_AGENT_COMMAND = process.env.EXCALIDRAW_IMPLEMENT_AGENT || null;
+
+/** Elements with an implementation in flight. One block, one pull request. */
+const implementRunsInFlight = new Set<string>();
+
+app.post('/api/issue-block/:id/implement', async (req: Request, res: Response) => {
+  const elementId = req.params.id ?? '';
+
+  if (!IMPLEMENT_AGENT_COMMAND) {
+    return res.status(404).json({
+      success: false,
+      error: 'Implementing is disabled. Set EXCALIDRAW_IMPLEMENT_AGENT to the agent command to enable it.'
+    });
+  }
+
+  // This agent writes to the repository, which makes reaching this route from the network
+  // strictly worse than reaching the issue route.
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    return res.status(403).json({
+      success: false,
+      error: 'Implementing only runs while the server is bound to loopback.'
+    });
+  }
+
+  const workspaceId = workspaceIdFrom(req);
+  const store = elementsFor(workspaceId);
+  const element = store.get(elementId);
+  if (!element) {
+    return res.status(404).json({ success: false, error: `Element ${elementId} not found` });
+  }
+
+  const custom = (element.customData ?? {}) as Record<string, unknown>;
+  const issueUrl = typeof custom.issueUrl === 'string' ? custom.issueUrl : '';
+  if (!issueUrl) {
+    return res.status(400).json({ success: false, error: 'This block has no issue to implement.' });
+  }
+  if (custom.implementUrl) {
+    // The same reasoning that stops one observation becoming two issues.
+    return res.status(409).json({
+      success: false,
+      error: 'This issue already has an implementation.',
+      implementUrl: custom.implementUrl
+    });
+  }
+  if (implementRunsInFlight.has(elementId)) {
+    return res.status(409).json({ success: false, error: 'An implementation is already in flight for this block.' });
+  }
+
+  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace) {
+    return res.status(400).json({
+      success: false,
+      error: `Workspace "${workspaceId}" is not registered, so there is no project to work in.`
+    });
+  }
+  if (workspace.error) {
+    return res.status(400).json({ success: false, error: `Workspace is unusable: ${workspace.error}` });
+  }
+
+  implementRunsInFlight.add(elementId);
+  const markState = (state: string, extra: Record<string, unknown> = {}) => {
+    const current = store.get(elementId);
+    if (!current) return;
+    const updated: ServerElement = {
+      ...current,
+      customData: { ...(current.customData ?? {}), implementState: state, ...extra },
+      updatedAt: new Date().toISOString(),
+      version: (current.version || 0) + 1
+    };
+    store.set(elementId, updated);
+    broadcast({ type: 'element_updated', element: updated } as ElementUpdatedMessage, workspaceId);
+  };
+
+  markState('running');
+  // Implementing takes longer than researching. Answering now and reporting over the
+  // socket is the only shape that does not look like a hang.
+  res.status(202).json({ success: true, state: 'running', elementId });
+
+  try {
+    const result = await runImplementAgent(workspace, issueUrl, {
+      agentCommand: IMPLEMENT_AGENT_COMMAND
+    });
+    if (result.ok && result.url) {
+      markState('done', { implementUrl: result.url, implementError: null });
+      logger.info(`Issue block ${elementId} implemented at ${result.url}`);
+    } else {
+      markState('failed', { implementError: result.error });
+      logger.warn(`Issue block ${elementId} implementation failed: ${result.error}`);
+    }
+  } catch (error) {
+    markState('failed', { implementError: (error as Error).message });
+  } finally {
+    implementRunsInFlight.delete(elementId);
   }
 });
 
