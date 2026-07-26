@@ -9,7 +9,7 @@ import {
 } from '@excalidraw/excalidraw'
 import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
 import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/mermaidConverter'
-import { ElementDocsPanel, DOCS_SIDEBAR_NAME } from './components/ElementDocsPanel'
+import { ElementDocsPanel, DOCS_SIDEBAR_NAME, CollapsibleTarget } from './components/ElementDocsPanel'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
@@ -347,6 +347,47 @@ function App(): JSX.Element {
   })
   const [docsDocked, setDocsDocked] = useState<boolean>(true)
   const [libraryItems, setLibraryItems] = useState<unknown[]>([])
+  const [collapsible, setCollapsible] = useState<CollapsibleTarget | null>(null)
+
+  /** Thumbnail height for a collapsed image, in scene units. */
+  const COLLAPSED_IMAGE_HEIGHT = 48
+
+  /**
+   * Collapse or expand an image in place.
+   *
+   * The full size is stashed in customData before shrinking, because the element's
+   * own width and height are what we are about to overwrite -- without it, expanding
+   * could only guess, and the image would come back the wrong shape.
+   */
+  const toggleImageCollapse = async (elementId: string): Promise<void> => {
+    if (!excalidrawAPI) return
+    const element = excalidrawAPI.getSceneElements().find((candidate) => candidate.id === elementId) as
+      | (ExcalidrawElement & { customData?: { collapsed?: boolean; fullSize?: { width: number; height: number } } })
+      | undefined
+    if (!element) return
+
+    const isCollapsed = element.customData?.collapsed === true
+    const fullSize = element.customData?.fullSize ?? { width: element.width, height: element.height }
+    const ratio = element.width / (element.height || 1)
+
+    const next = isCollapsed
+      ? { width: fullSize.width, height: fullSize.height }
+      : { width: Math.max(1, Math.round(COLLAPSED_IMAGE_HEIGHT * ratio)), height: COLLAPSED_IMAGE_HEIGHT }
+
+    try {
+      await fetch(apiUrl(`/api/elements/${elementId}`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...next,
+          customData: { ...(element.customData ?? {}), collapsed: !isCollapsed, fullSize }
+        })
+      })
+      setCollapsible({ id: elementId, collapsed: !isCollapsed })
+    } catch (error) {
+      console.error('Could not toggle image collapse:', error)
+    }
+  }
   const lastSelectedIdRef = useRef<string | null>(null)
 
   // Sync state management
@@ -421,13 +462,24 @@ function App(): JSX.Element {
       key: docKey,
       title: typeof element.text === 'string' ? element.text : null
     })
+
+    // Images get a collapse control regardless of whether they carry documentation:
+    // an image is either big enough to read or small enough to stay out of the way.
+    setCollapsible(
+      element.type === 'image'
+        ? { id: element.id, collapsed: (element.customData as { collapsed?: boolean } | undefined)?.collapsed === true }
+        : null
+    )
   }
 
   // Declaring the sidebar is not enough — Excalidraw keeps it closed until asked.
   useEffect(() => {
     if (!excalidrawAPI) return
-    excalidrawAPI.toggleSidebar({ name: DOCS_SIDEBAR_NAME, force: Boolean(selectedDoc.key) })
-  }, [selectedDoc.key, excalidrawAPI])
+    excalidrawAPI.toggleSidebar({
+      name: DOCS_SIDEBAR_NAME,
+      force: Boolean(selectedDoc.key) || Boolean(collapsible)
+    })
+  }, [selectedDoc.key, collapsible, excalidrawAPI])
 
   const applySceneUpdateWithoutAutoSync = (
     api: ExcalidrawImperativeAPI,
@@ -1171,6 +1223,8 @@ function App(): JSX.Element {
               docKey={selectedDoc.key}
               title={selectedDoc.title}
               workspace={activeWorkspace}
+              collapsible={collapsible}
+              onToggleCollapse={toggleImageCollapse}
               docked={docsDocked}
               onDock={setDocsDocked}
             />
