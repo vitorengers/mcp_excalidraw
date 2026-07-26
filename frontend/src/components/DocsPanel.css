@@ -191,3 +191,8 @@
   margin: 8px 0 0;
   white-space: pre-wrap;
 }
+
+/* The action sits above the description, separated from it. */
+.element-docs__implement {
+  margin: 0.75rem 0 0.25rem;
+}

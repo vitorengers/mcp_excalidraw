@@ -399,6 +399,33 @@ function App(): JSX.Element {
     }
   }
 
+  /**
+   * Ask an agent to implement the issue this block produced.
+   *
+   * Same shape as the run that created the issue, and running for the same reason: the
+   * work takes long enough that a block which still looks idle invites a second click,
+   * and two agents writing to one repository is a worse outcome than a slow one.
+   */
+  const implementIssueFromBlock = async (elementId: string): Promise<void> => {
+    setIssue((current) => (current?.id === elementId ? { ...current, implementState: 'running' } : current))
+    try {
+      const response = await fetch(apiUrl(`/api/issue-block/${elementId}/implement`), { method: 'POST' })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        setIssue((current) =>
+          current?.id === elementId
+            ? { ...current, implementState: 'failed', implementError: body?.error ?? `HTTP ${response.status}` }
+            : current)
+      }
+      // Success arrives over the WebSocket as an element update, not here.
+    } catch (error) {
+      setIssue((current) =>
+        current?.id === elementId
+          ? { ...current, implementState: 'failed', implementError: (error as Error).message }
+          : current)
+    }
+  }
+
   /** Thumbnail height for a collapsed image, in scene units. */
   const COLLAPSED_IMAGE_HEIGHT = 48
 
@@ -689,7 +716,10 @@ function App(): JSX.Element {
         issueUrl: (custom.issueUrl as string) ?? null,
         issueError: (custom.issueError as string) ?? null,
         issueTitle: (custom.issueTitle as string) ?? null,
-        observation: (custom.observation as string) ?? null
+        observation: (custom.observation as string) ?? null,
+        implementState: (custom.implementState as IssueTarget['implementState']) ?? null,
+        implementUrl: (custom.implementUrl as string) ?? null,
+        implementError: (custom.implementError as string) ?? null
       })
     }
 
@@ -1353,6 +1383,7 @@ function App(): JSX.Element {
             onToggleCollapse={toggleImageCollapse}
             issue={issue}
             onCreateIssue={createIssueFromBlock}
+            onImplementIssue={implementIssueFromBlock}
           />
         </div>
       </div>
