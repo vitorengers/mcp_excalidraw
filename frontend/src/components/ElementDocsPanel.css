@@ -115,3 +115,15 @@
 .element-docs__collapse:hover {
   background: var(--color-gray-10, #f1f3f5);
 }
+
+.element-docs__issue {
+  margin-bottom: 1rem;
+}
+
+.element-docs__issue-link {
+  display: inline-block;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  color: var(--color-primary, #1971c2);
+  word-break: break-all;
+}

@@ -32,6 +32,7 @@ import WebSocket from 'ws';
 import { isMainModule } from './core/entry.js';
 import { writePidFile, removePidFile } from './core/pidfile.js';
 import { loadWorkspaces } from './core/workspaces.js';
+import { runIssueAgent } from './core/issue-agent.js';
 import {
   elementsFor,
   workspaceIdFrom,
@@ -964,6 +965,108 @@ app.get('/api/workspaces', async (_req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to load workspaces:', error);
     res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+// ─── Issue block ──────────────────────────────────────────────
+//
+// Turns an observation written on the board into a researched GitHub issue by running
+// an agent inside the project. This is the most dangerous thing the server does: it
+// spawns a process with full repository access on an API that has no authentication.
+// Hence three guards — opt-in by env var, loopback only, and one run per element.
+const ISSUE_AGENT_COMMAND = process.env.EXCALIDRAW_ISSUE_AGENT || null;
+
+/** Elements with a run in flight. A second click must not open a second issue. */
+const issueRunsInFlight = new Set<string>();
+
+app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
+  const elementId = req.params.id ?? '';
+
+  if (!ISSUE_AGENT_COMMAND) {
+    return res.status(404).json({
+      success: false,
+      error: 'Issue blocks are disabled. Set EXCALIDRAW_ISSUE_AGENT to the agent command to enable them.'
+    });
+  }
+
+  // Running an agent is remote code execution for anyone who can reach this port.
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    return res.status(403).json({
+      success: false,
+      error: 'Issue blocks only run while the server is bound to loopback.'
+    });
+  }
+
+  const workspaceId = workspaceIdFrom(req);
+  const store = elementsFor(workspaceId);
+  const element = store.get(elementId);
+  if (!element) {
+    return res.status(404).json({ success: false, error: `Element ${elementId} not found` });
+  }
+
+  const custom = (element.customData ?? {}) as Record<string, unknown>;
+  if (custom.issueUrl) {
+    return res.status(409).json({
+      success: false,
+      error: 'This block already has an issue.',
+      issueUrl: custom.issueUrl
+    });
+  }
+  if (issueRunsInFlight.has(elementId)) {
+    return res.status(409).json({ success: false, error: 'A run is already in flight for this block.' });
+  }
+
+  const observation = typeof req.body?.observation === 'string' && req.body.observation.trim()
+    ? req.body.observation.trim()
+    : typeof element.text === 'string' ? element.text.trim() : '';
+  if (!observation) {
+    return res.status(400).json({ success: false, error: 'The block has no observation to work from.' });
+  }
+
+  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace) {
+    return res.status(400).json({
+      success: false,
+      error: `Workspace "${workspaceId}" is not registered, so there is no project to run in.`
+    });
+  }
+  if (workspace.error) {
+    return res.status(400).json({ success: false, error: `Workspace is unusable: ${workspace.error}` });
+  }
+
+  issueRunsInFlight.add(elementId);
+  const markState = (state: string, extra: Record<string, unknown> = {}) => {
+    const current = store.get(elementId);
+    if (!current) return;
+    const updated: ServerElement = {
+      ...current,
+      customData: { ...(current.customData ?? {}), issueState: state, ...extra },
+      updatedAt: new Date().toISOString(),
+      version: (current.version || 0) + 1
+    };
+    store.set(elementId, updated);
+    broadcast({ type: 'element_updated', element: updated } as ElementUpdatedMessage, workspaceId);
+  };
+
+  markState('running');
+  // Answer immediately: an investigation takes minutes, and a request held open that
+  // long looks indistinguishable from a hang. Progress arrives over the socket.
+  res.status(202).json({ success: true, state: 'running', elementId });
+
+  try {
+    const result = await runIssueAgent(workspace, observation, { agentCommand: ISSUE_AGENT_COMMAND });
+    if (result.ok && result.issueUrl) {
+      markState('created', { issueUrl: result.issueUrl, issueError: null });
+      logger.info(`Issue block ${elementId} created ${result.issueUrl}`);
+    } else {
+      markState('failed', { issueError: result.error });
+      logger.warn(`Issue block ${elementId} failed: ${result.error}`);
+    }
+  } catch (error) {
+    markState('failed', { issueError: (error as Error).message });
+  } finally {
+    issueRunsInFlight.delete(elementId);
   }
 });
 
