@@ -77,6 +77,26 @@ const dirty = (scene.elements ?? []).filter((element) =>
 check('elements carry no per-export bookkeeping', dirty.length === 0,
       `${dirty.length} element(s) still have ${volatile.join('/')} — re-run scripts/export-board.mjs`);
 
+console.log('\n6. the library can produce a new functional block');
+// Without this, adding another issue block means an API call. The library is the only way to
+// get one from inside the canvas, and it only works because Excalidraw's restore preserves
+// customData through a library round-trip.
+if (!config.library) {
+  check('board.config.json names a library', false, 'no "library" field');
+} else {
+  const libraryPath = resolve(repoRoot, config.library);
+  check('the library file exists', existsSync(libraryPath), libraryPath);
+  if (existsSync(libraryPath)) {
+    const library = JSON.parse(readFileSync(libraryPath, 'utf8'));
+    const items = library.libraryItems ?? [];
+    check('it is an Excalidraw library', library.type === 'excalidrawlib', `type=${library.type}`);
+    check('every item has elements', items.length > 0 && items.every((item) => item.elements?.length > 0));
+    check('an item carries customData.kind = "issue"',
+          items.some((item) => item.elements?.some((element) => element?.customData?.kind === 'issue')),
+          'dragging in a new issue block would produce an inert shape');
+  }
+}
+
 const unreferenced = existsSync(docsDir)
   ? readdirSync(docsDir).filter((file) => file.endsWith('.md') && !keys.includes(file.slice(0, -3)))
   : [];
