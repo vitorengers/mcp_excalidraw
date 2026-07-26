@@ -11,6 +11,8 @@
  *    open two issues.
  */
 import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
 
@@ -36,6 +38,47 @@ guess presented as fact.
 Create the issue with \`gh\` in this repository, add it to the configured project, and return
 only the issue URL on a line of its own.`;
 
+/**
+ * PATH for the agent, with the GitHub CLI added when it is missing.
+ *
+ * The agent is told to use `gh`, but a server started before the CLI was installed
+ * inherits a PATH without it — and a child process inherits that stale PATH in turn.
+ * The failure reads as the agent being unable to create the issue, which points at
+ * the wrong thing entirely.
+ */
+function agentPath(): string {
+  const current = process.env.PATH ?? '';
+  if (/github cli/i.test(current)) return current;
+
+  // Forward slashes: Windows accepts them, and they cannot be silently eaten as
+  // escape sequences the way a lone backslash before a letter would be.
+  const candidates = [
+    'C:/Program Files/GitHub CLI',
+    'C:/Program Files (x86)/GitHub CLI',
+  ];
+  const found = candidates.find((candidate) => {
+    try {
+      return fs.existsSync(path.join(candidate, 'gh.exe'));
+    } catch {
+      return false;
+    }
+  });
+
+  return found ? `${current}${path.delimiter}${found}` : current;
+}
+
+/**
+ * How long a run may take before it is killed.
+ *
+ * Twenty minutes because a real investigation reads source, checks existing issues
+ * and drafts prose — the first genuine run overran ten minutes having already created
+ * the issue. Override with EXCALIDRAW_ISSUE_AGENT_TIMEOUT (seconds).
+ */
+export const DEFAULT_TIMEOUT_MS = (() => {
+  const configured = Number(process.env.EXCALIDRAW_ISSUE_AGENT_TIMEOUT);
+  return Number.isFinite(configured) && configured > 0 ? configured * 1000 : 1_200_000;
+})();
+
 export interface IssueAgentResult {
   ok: boolean;
   issueUrl: string | null;
@@ -58,8 +101,7 @@ export function extractIssueUrl(output: string): string | null {
  */
 export function buildAgentCommand(
   workspace: Workspace,
-  agentCommand: string,
-  prompt: string
+  agentCommand: string
 ): { command: string; args: string[]; cwd: string | undefined } {
   if (workspace.environment.kind === 'wsl') {
     return {
@@ -67,18 +109,55 @@ export function buildAgentCommand(
       args: [
         '-d', workspace.environment.distro,
         '--cd', workspace.innerPath,
-        '--', 'bash', '-lc', `${agentCommand} ${JSON.stringify(prompt)}`,
+        '--', 'bash', '-lc', agentCommand,
       ],
       // wsl.exe itself runs from wherever; --cd places the agent inside the project.
       cwd: undefined,
     };
   }
 
+  const [command, ...args] = tokenizeCommand(agentCommand);
   return {
-    command: agentCommand,
-    args: [prompt],
+    command: command ?? agentCommand,
+    args,
     cwd: workspace.path,
   };
+}
+
+/**
+ * Split a command line into argv, keeping quoted runs together.
+ *
+ * Splitting on whitespace alone would tear apart a flag whose value contains spaces,
+ * which is exactly the shape of a permission list: --allowedTools "Bash(gh:*) Read".
+ * Quotes are consumed, not passed on — there is no shell here to strip them later.
+ */
+export function tokenizeCommand(input: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let started = false;
+
+  for (const char of input.trim()) {
+    if (quote) {
+      if (char === quote) quote = null;
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (started || current) { tokens.push(current); current = ''; started = false; }
+      continue;
+    }
+    current += char;
+    started = true;
+  }
+  if (started || current) tokens.push(current);
+
+  return tokens;
 }
 
 export async function runIssueAgent(
@@ -87,34 +166,48 @@ export async function runIssueAgent(
   options: { agentCommand: string; timeoutMs?: number }
 ): Promise<IssueAgentResult> {
   const prompt = `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observation}`;
-  const { command, args, cwd } = buildAgentCommand(workspace, options.agentCommand, prompt);
+  const { command, args, cwd } = buildAgentCommand(workspace, options.agentCommand);
 
   logger.info(`Running issue agent for workspace "${workspace.id}"`, { command, cwd });
 
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd,
-      shell: workspace.environment.kind !== 'wsl' && process.platform === 'win32',
+      env: { ...process.env, PATH: agentPath() },
+      // No shell: the prompt arrives over stdin, so nothing has to survive quoting.
+      // Passing multi-line text as an argument breaks on cmd.exe long before the
+      // agent ever sees it.
       windowsHide: true,
     });
+
+    child.stdin?.on('error', () => { /* the agent may exit before reading stdin */ });
+    child.stdin?.end(prompt);
 
     let stdout = '';
     let stderr = '';
     let settled = false;
 
-    // An investigation legitimately takes minutes; without a ceiling a wedged agent
-    // would hold the element in "running" forever with no way back.
+    // An investigation legitimately takes many minutes; the ceiling exists only so a
+    // wedged agent cannot hold the element in "running" forever with no way back.
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
       child.kill();
+
+      // The agent may well have created the issue and then kept working. Reporting a
+      // failure for work that succeeded is worse than reporting a slow success, so
+      // salvage the URL from whatever it printed before the kill.
+      const salvaged = extractIssueUrl(stdout);
       resolve({
-        ok: false,
-        issueUrl: null,
+        ok: Boolean(salvaged),
+        issueUrl: salvaged,
         output: stdout,
-        error: `Agent timed out after ${(options.timeoutMs ?? 600_000) / 1000}s`,
+        error: salvaged
+          ? null
+          : `Agent timed out after ${timeoutMs / 1000}s without returning an issue URL`,
       });
-    }, options.timeoutMs ?? 600_000);
+    }, timeoutMs);
 
     child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
     child.stderr?.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -136,7 +229,9 @@ export async function runIssueAgent(
         issueUrl,
         output: stdout,
         error: code === 0
-          ? (issueUrl ? null : 'Agent finished without returning an issue URL')
+          ? (issueUrl
+              ? null
+              : `Agent finished without returning an issue URL. It said: ${stdout.trim().slice(-600) || '(nothing)'}`)
           : `Agent exited with code ${code}: ${stderr.slice(-500)}`,
       });
     });
