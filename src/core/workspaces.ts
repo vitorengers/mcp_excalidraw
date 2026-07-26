@@ -19,6 +19,7 @@ export interface WorkspaceConfig {
   name?: string;
   docsDir?: string;
   board?: string;
+  library?: string;
   repo?: string;
   githubProject?: string;
 }
@@ -31,6 +32,7 @@ export interface Workspace {
   environment: WorkspaceEnvironment;
   docsDir: string | null;
   boardFile: string | null;
+  libraryFile: string | null;
   repo: string | null;
   githubProject: string | null;
   /** Populated when this workspace could not be fully loaded. */
@@ -79,6 +81,7 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
     environment: resolved.environment,
     docsDir: null,
     boardFile: null,
+    libraryFile: null,
     repo: null,
     githubProject: null,
     error: null,
@@ -104,10 +107,12 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
   // A config pointing outside its own project is treated as a mistake, not honoured.
   const docsDir = config.docsDir ? resolveInWorkspace(resolved, config.docsDir) : null;
   const boardFile = config.board ? resolveInWorkspace(resolved, config.board) : null;
+  const libraryFile = config.library ? resolveInWorkspace(resolved, config.library) : null;
 
   const escaped = [
     config.docsDir && !docsDir ? 'docsDir' : null,
     config.board && !boardFile ? 'board' : null,
+    config.library && !libraryFile ? 'library' : null,
   ].filter(Boolean);
 
   return {
@@ -115,6 +120,7 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
     name: config.name?.trim() || id,
     docsDir,
     boardFile,
+    libraryFile,
     repo: config.repo?.trim() || null,
     githubProject: config.githubProject?.trim() || null,
     error: escaped.length
