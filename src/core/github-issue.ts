@@ -37,12 +37,55 @@ export function isIssueUrl(url: string): boolean {
 }
 
 /**
- * Fetch one issue. Rejects with a message fit to show in the panel — the caller has no
- * better context to add, and a raw `gh` stderr is more useful than "request failed".
+ * How many times to run `gh` before giving up, and how long to wait between tries.
+ *
+ * `gh` intermittently fails here with socket buffer exhaustion and succeeds on the next
+ * attempt seconds later. Without a retry that fault reaches the panel as a hard error,
+ * which reads as a broken block rather than as the blip it is.
+ */
+const ATTEMPTS = 3;
+const BACKOFF_MS = [400, 1200];
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Fetch one issue, retrying a failing `gh`.
+ *
+ * Every failure is retried rather than only the socket error: matching a localised OS
+ * message is not something to depend on, and a genuinely missing issue costs two extra
+ * fast failures. A malformed response is the exception — that is deterministic, so
+ * retrying it would only delay the error.
  */
 export async function fetchIssue(workspace: Workspace, issueUrl: string): Promise<IssueDetail> {
+  let lastError: Error = new Error('gh was never run');
+
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    try {
+      return await runGh(workspace, issueUrl);
+    } catch (error) {
+      if (error instanceof MalformedResponse) throw error;
+      // Report the last failure, not the first: it describes what kept happening.
+      lastError = error as Error;
+      if (attempt < ATTEMPTS - 1) {
+        logger.warn(`gh failed reading ${issueUrl} (attempt ${attempt + 1}/${ATTEMPTS}): ${lastError.message}`);
+        await wait(BACKOFF_MS[attempt] ?? 1200);
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+/** A response `gh` returned but we could not read — never worth retrying. */
+class MalformedResponse extends Error {}
+
+/**
+ * One `gh` run. Rejects with a message fit to show in the panel — the caller has no
+ * better context to add, and a raw `gh` stderr is more useful than "request failed".
+ */
+async function runGh(workspace: Workspace, issueUrl: string): Promise<IssueDetail> {
   if (!isIssueUrl(issueUrl)) {
-    throw new Error(`Not a GitHub issue URL: ${issueUrl}`);
+    throw new MalformedResponse(`Not a GitHub issue URL: ${issueUrl}`);
   }
 
   const { command, args, cwd } = buildAgentCommand(
@@ -100,7 +143,7 @@ export async function fetchIssue(workspace: Workspace, issueUrl: string): Promis
           url: issueUrl,
         });
       } catch (error) {
-        reject(new Error(`Could not parse the gh response: ${(error as Error).message}`));
+        reject(new MalformedResponse(`Could not parse the gh response: ${(error as Error).message}`));
       }
     });
   });

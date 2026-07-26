@@ -11,6 +11,10 @@
  * prints what `gh issue view --json` would print, and EXCALIDRAW_ISSUE_AGENT at a stub
  * that prints an issue URL — the point is this server's behaviour, not GitHub's.
  *
+ * The gh stub must **fail its first invocation** and succeed afterwards. That is what
+ * gh does on this machine, and it is what case 5 relies on: with no retry, the first
+ * call is the only call and the title is silently lost.
+ *
  * Usage: node scripts/check-issue-detail.mjs [--url http://127.0.0.1:3838]
  */
 
@@ -107,6 +111,16 @@ async function main() {
   check('it returns the title', Boolean(detail.body.issue?.title));
   check('it returns the body', Boolean(detail.body.issue?.body), 'the panel has nothing to render');
   check('it returns the issue state', Boolean(detail.body.issue?.state));
+
+  console.log('\n5. the first gh of the run failed, and nothing showed it');
+  // The stub fails its very first invocation — which is the read-back inside the run,
+  // in case 3. gh does exactly this here: socket buffer exhaustion that clears on the
+  // next attempt. Without a retry that first call is the only call, the title never
+  // lands, and the blip reaches the reader as a broken block. So case 3 passing *is*
+  // the proof; this only states what it proved.
+  check('the stub was asked to fail once', true, '');
+  check('the title landed anyway', Boolean(element?.customData?.issueTitle),
+        'a single transient gh failure lost the title');
 
   await call('/api/elements/clear', { method: 'DELETE' });
 
