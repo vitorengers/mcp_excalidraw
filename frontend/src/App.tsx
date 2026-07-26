@@ -9,7 +9,12 @@ import {
 } from '@excalidraw/excalidraw'
 import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
 import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/mermaidConverter'
-import { ElementDocsPanel, DOCS_SIDEBAR_NAME, CollapsibleTarget } from './components/ElementDocsPanel'
+import {
+  ElementDocsPanel,
+  DOCS_SIDEBAR_NAME,
+  CollapsibleTarget,
+  IssueTarget
+} from './components/ElementDocsPanel'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
@@ -348,6 +353,34 @@ function App(): JSX.Element {
   const [docsDocked, setDocsDocked] = useState<boolean>(true)
   const [libraryItems, setLibraryItems] = useState<unknown[]>([])
   const [collapsible, setCollapsible] = useState<CollapsibleTarget | null>(null)
+  const [issue, setIssue] = useState<IssueTarget | null>(null)
+
+  /**
+   * Ask the server to research the observation and open an issue.
+   *
+   * The state flips to running immediately rather than on the response: the run takes
+   * minutes, and a block that looks idle invites a second click — which is exactly how
+   * you end up with two issues for one observation.
+   */
+  const createIssueFromBlock = async (elementId: string): Promise<void> => {
+    setIssue((current) => (current?.id === elementId ? { ...current, state: 'running' } : current))
+    try {
+      const response = await fetch(apiUrl(`/api/issue-block/${elementId}`), { method: 'POST' })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        setIssue((current) =>
+          current?.id === elementId
+            ? { ...current, state: 'failed', issueError: body?.error ?? `HTTP ${response.status}` }
+            : current)
+      }
+      // Success arrives over the WebSocket as an element update, not here.
+    } catch (error) {
+      setIssue((current) =>
+        current?.id === elementId
+          ? { ...current, state: 'failed', issueError: (error as Error).message }
+          : current)
+    }
+  }
 
   /** Thumbnail height for a collapsed image, in scene units. */
   const COLLAPSED_IMAGE_HEIGHT = 48
@@ -465,6 +498,18 @@ function App(): JSX.Element {
 
     // Images get a collapse control regardless of whether they carry documentation:
     // an image is either big enough to read or small enough to stay out of the way.
+    const custom = (element.customData ?? {}) as Record<string, unknown>
+    setIssue(
+      custom.kind === 'issue'
+        ? {
+            id: element.id,
+            state: (custom.issueState as IssueTarget['state']) ?? 'draft',
+            issueUrl: (custom.issueUrl as string) ?? null,
+            issueError: (custom.issueError as string) ?? null
+          }
+        : null
+    )
+
     setCollapsible(
       element.type === 'image'
         ? { id: element.id, collapsed: (element.customData as { collapsed?: boolean } | undefined)?.collapsed === true }
@@ -477,9 +522,9 @@ function App(): JSX.Element {
     if (!excalidrawAPI) return
     excalidrawAPI.toggleSidebar({
       name: DOCS_SIDEBAR_NAME,
-      force: Boolean(selectedDoc.key) || Boolean(collapsible)
+      force: Boolean(selectedDoc.key) || Boolean(collapsible) || Boolean(issue)
     })
-  }, [selectedDoc.key, collapsible, excalidrawAPI])
+  }, [selectedDoc.key, collapsible, issue, excalidrawAPI])
 
   const applySceneUpdateWithoutAutoSync = (
     api: ExcalidrawImperativeAPI,
@@ -1225,6 +1270,8 @@ function App(): JSX.Element {
               workspace={activeWorkspace}
               collapsible={collapsible}
               onToggleCollapse={toggleImageCollapse}
+              issue={issue}
+              onCreateIssue={createIssueFromBlock}
               docked={docsDocked}
               onDock={setDocsDocked}
             />

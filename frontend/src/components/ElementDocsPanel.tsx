@@ -13,6 +13,13 @@ type DocState =
   | { status: 'missing'; key: string }
   | { status: 'error'; key: string; message: string }
 
+export interface IssueTarget {
+  id: string
+  state: 'draft' | 'running' | 'created' | 'failed'
+  issueUrl?: string | null
+  issueError?: string | null
+}
+
 export interface CollapsibleTarget {
   id: string
   collapsed: boolean
@@ -30,6 +37,9 @@ interface Props {
   /** Set when the selected shape is an image that can be collapsed. */
   collapsible?: CollapsibleTarget | null
   onToggleCollapse?: (id: string) => void
+  /** Set when the selected shape is an issue block. */
+  issue?: IssueTarget | null
+  onCreateIssue?: (id: string) => void
 }
 
 /**
@@ -40,7 +50,7 @@ interface Props {
  * reading it never means leaving the board.
  */
 export const ElementDocsPanel: React.FC<Props> = ({
-  docKey, title, workspace, docked, onDock, collapsible, onToggleCollapse
+  docKey, title, workspace, docked, onDock, collapsible, onToggleCollapse, issue, onCreateIssue
 }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
 
@@ -85,6 +95,36 @@ export const ElementDocsPanel: React.FC<Props> = ({
     <Sidebar name={DOCS_SIDEBAR_NAME} docked={docked} onDock={onDock}>
       <Sidebar.Header />
       <div className="element-docs">
+        {issue && (
+          <div className="element-docs__issue">
+            {issue.state === 'created' && issue.issueUrl && (
+              <a className="element-docs__issue-link" href={issue.issueUrl} target="_blank" rel="noreferrer">
+                {issue.issueUrl.replace(/^https:\/\/github\.com\//, '')}
+              </a>
+            )}
+
+            {issue.state === 'running' && (
+              <p className="element-docs__hint">
+                Researching the repository and drafting the issue. This takes minutes.
+              </p>
+            )}
+
+            {issue.state === 'failed' && (
+              <p className="element-docs__error">{issue.issueError ?? 'The run failed.'}</p>
+            )}
+
+            {issue.state !== 'created' && issue.state !== 'running' && onCreateIssue && (
+              <button
+                type="button"
+                className="element-docs__collapse"
+                onClick={() => onCreateIssue(issue.id)}
+              >
+                Research and create the issue
+              </button>
+            )}
+          </div>
+        )}
+
         {collapsible && onToggleCollapse && (
           <button
             type="button"
@@ -95,7 +135,7 @@ export const ElementDocsPanel: React.FC<Props> = ({
           </button>
         )}
 
-        {doc.status === 'empty' && !collapsible && (
+        {doc.status === 'empty' && !collapsible && !issue && (
           <p className="element-docs__hint">Select a shape to see its documentation.</p>
         )}
 
