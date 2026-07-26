@@ -5,16 +5,15 @@ import {
   CaptureUpdateAction,
   ExcalidrawImperativeAPI,
   exportToBlob,
-  exportToSvg
+  exportToSvg,
+  getCommonBounds,
+  sceneCoordsToViewportCoords
 } from '@excalidraw/excalidraw'
 import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
 import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/mermaidConverter'
-import {
-  ElementDocsPanel,
-  DOCS_SIDEBAR_NAME,
-  CollapsibleTarget,
-  IssueTarget
-} from './components/ElementDocsPanel'
+import { CollapsibleTarget, IssueTarget } from './components/DocsPanel'
+import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
+import type { Rect } from '../../src/core/anchored-placement'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
@@ -350,10 +349,26 @@ function App(): JSX.Element {
     key: null,
     title: null
   })
-  const [docsDocked, setDocsDocked] = useState<boolean>(true)
   const [libraryItems, setLibraryItems] = useState<unknown[]>([])
   const [collapsible, setCollapsible] = useState<CollapsibleTarget | null>(null)
   const [issue, setIssue] = useState<IssueTarget | null>(null)
+
+  /**
+   * The shape the card is pinned to, and where that shape currently is on screen.
+   *
+   * The id lives in a ref because it is read inside onChange, which fires far too often
+   * to want a re-render for; the rect lives in state because moving the card *is* the
+   * re-render. They are recomputed together on every change, which is what makes the
+   * card follow a pan, a zoom or a dragged block.
+   */
+  const docsAnchorIdRef = useRef<string | null>(null)
+  const [docsAnchor, setDocsAnchor] = useState<{
+    rect: Rect
+    viewport: { width: number; height: number }
+    suppressed: boolean
+  } | null>(null)
+  /** A card the reader closed. Cleared as soon as the selection moves elsewhere. */
+  const [dismissedAnchorId, setDismissedAnchorId] = useState<string | null>(null)
 
   /**
    * Ask the server to research the observation and open an issue.
@@ -474,12 +489,16 @@ function App(): JSX.Element {
     // no docKey of its own. Fall back to the shape the label sits in: its bound
     // container when there is one, otherwise the smallest shape enclosing it — the
     // smallest so that nesting resolves to the innermost box, not the section behind it.
-    let docKey = keyOf(element)
-    if (!docKey && element.containerId) {
-      docKey = keyOf(sceneElements.find((candidate) => candidate.id === element.containerId))
+    // The card hangs off the shape that *holds* the documentation, not off whatever was
+    // clicked: anchoring to a label would put the card beside the text rather than
+    // beside the box, which is the thing the reader is looking at.
+    let holder: (typeof sceneElements)[number] | undefined = keyOf(element) ? element : undefined
+    if (!holder && element.containerId) {
+      const container = sceneElements.find((candidate) => candidate.id === element.containerId)
+      if (keyOf(container)) holder = container
     }
-    if (!docKey) {
-      const enclosing = sceneElements
+    if (!holder) {
+      holder = sceneElements
         .filter((candidate) =>
           candidate.id !== element.id &&
           keyOf(candidate) &&
@@ -488,8 +507,8 @@ function App(): JSX.Element {
           candidate.x + candidate.width >= element.x + element.width &&
           candidate.y + candidate.height >= element.y + element.height)
         .sort((a, b) => a.width * a.height - b.width * b.height)[0]
-      docKey = keyOf(enclosing)
     }
+    const docKey = keyOf(holder)
 
     setSelectedDoc({
       key: docKey,
@@ -517,16 +536,84 @@ function App(): JSX.Element {
         ? { id: element.id, collapsed: (element.customData as { collapsed?: boolean } | undefined)?.collapsed === true }
         : null
     )
+
+    // A doc anchors to its holder; an issue block or an image anchors to itself.
+    const hasControls = custom.kind === 'issue' || element.type === 'image'
+    const anchorId = docKey && holder ? holder.id : (hasControls ? element.id : null)
+    if (anchorId !== docsAnchorIdRef.current) {
+      docsAnchorIdRef.current = anchorId
+      // Closing a card dismisses that shape's card, not every card from then on.
+      setDismissedAnchorId(null)
+    }
   }
 
-  // Declaring the sidebar is not enough — Excalidraw keeps it closed until asked.
-  useEffect(() => {
-    if (!excalidrawAPI) return
-    excalidrawAPI.toggleSidebar({
-      name: DOCS_SIDEBAR_NAME,
-      force: Boolean(selectedDoc.key) || Boolean(collapsible) || Boolean(issue)
+  /**
+   * Work out where the anchored shape currently sits on screen.
+   *
+   * Runs on every change rather than only on selection, because the card has to follow
+   * the board: a pan, a zoom, a window resize and a dragged block all move the shape
+   * without changing which shape it is. Scene coordinates go through Excalidraw's own
+   * `sceneCoordsToViewportCoords` — the same conversion its hyperlink popup uses — and
+   * `getCommonBounds` gives the axis-aligned box, so a rotated shape still gets a
+   * sensible one.
+   */
+  const syncDocsAnchor = (
+    elements: readonly ExcalidrawElement[] | undefined,
+    appState: Record<string, any> | undefined
+  ): void => {
+    const anchorId = docsAnchorIdRef.current
+    if (!anchorId || !appState || !elements) {
+      setDocsAnchor((current) => (current === null ? current : null))
+      return
+    }
+
+    const element = elements.find((candidate) => candidate.id === anchorId && !candidate.isDeleted)
+    if (!element) {
+      setDocsAnchor((current) => (current === null ? current : null))
+      return
+    }
+
+    const [minX, minY, maxX, maxY] = getCommonBounds([element])
+    const topLeft = sceneCoordsToViewportCoords({ sceneX: minX, sceneY: minY }, appState as any)
+    const bottomRight = sceneCoordsToViewportCoords({ sceneX: maxX, sceneY: maxY }, appState as any)
+
+    // sceneCoordsToViewportCoords returns page coordinates; the card is positioned
+    // inside the canvas area, so the canvas offset comes back off again.
+    const next = {
+      rect: {
+        x: topLeft.x - appState.offsetLeft,
+        y: topLeft.y - appState.offsetTop,
+        width: bottomRight.x - topLeft.x,
+        height: bottomRight.y - topLeft.y
+      },
+      viewport: { width: appState.width, height: appState.height },
+      // While a shape is being dragged, resized or rotated, a card pinned to it would
+      // chase the pointer. Excalidraw's own hyperlink popup hides for the same reason.
+      suppressed: Boolean(
+        appState.selectedElementsAreBeingDragged ||
+        appState.isRotating ||
+        appState.resizingElement ||
+        appState.newElement
+      )
+    }
+
+    // onChange fires on every pointer move; only re-render when something actually moved.
+    setDocsAnchor((current) => {
+      if (
+        current &&
+        current.rect.x === next.rect.x &&
+        current.rect.y === next.rect.y &&
+        current.rect.width === next.rect.width &&
+        current.rect.height === next.rect.height &&
+        current.viewport.width === next.viewport.width &&
+        current.viewport.height === next.viewport.height &&
+        current.suppressed === next.suppressed
+      ) {
+        return current
+      }
+      return next
     })
-  }, [selectedDoc.key, collapsible, issue, excalidrawAPI])
+  }
 
   const applySceneUpdateWithoutAutoSync = (
     api: ExcalidrawImperativeAPI,
@@ -1273,7 +1360,9 @@ function App(): JSX.Element {
           onKeyDownCapture={() => {
             userInteractedRef.current = true
           }}
-          style={{ width: '100%', height: '100%' }}
+          // Relative so the card's absolute position is measured from the canvas area,
+          // which is the box its placement was computed against.
+          style={{ width: '100%', height: '100%', position: 'relative' }}
         >
           <Excalidraw
             excalidrawAPI={(api: ExcalidrawAPIRefValue) => setExcalidrawAPI(api)}
@@ -1287,6 +1376,9 @@ function App(): JSX.Element {
                 }
               }
               syncSelectedDoc(appState)
+              // Order matters: syncSelectedDoc settles which shape is anchored, and this
+              // then works out where that shape is.
+              syncDocsAnchor(_elements, appState as unknown as Record<string, any>)
               scheduleAutoSync()
             }}
             initialData={{
@@ -1295,19 +1387,27 @@ function App(): JSX.Element {
                 theme
               }
             }}
-          >
-            <ElementDocsPanel
-              docKey={selectedDoc.key}
-              title={selectedDoc.title}
-              workspace={activeWorkspace}
-              collapsible={collapsible}
-              onToggleCollapse={toggleImageCollapse}
-              issue={issue}
-              onCreateIssue={createIssueFromBlock}
-              docked={docsDocked}
-              onDock={setDocsDocked}
-            />
-          </Excalidraw>
+          />
+
+          {/* A sibling of the canvas, not a child of it: the card is a DOM overlay, so
+              it never becomes a scene element and never reaches a PNG or SVG export. */}
+          <AnchoredDocsPanel
+            anchor={
+              docsAnchor && docsAnchorIdRef.current !== dismissedAnchorId
+                ? docsAnchor.rect
+                : null
+            }
+            viewport={docsAnchor?.viewport ?? { width: 0, height: 0 }}
+            suppressed={docsAnchor?.suppressed ?? false}
+            onClose={() => setDismissedAnchorId(docsAnchorIdRef.current)}
+            docKey={selectedDoc.key}
+            title={selectedDoc.title}
+            workspace={activeWorkspace}
+            collapsible={collapsible}
+            onToggleCollapse={toggleImageCollapse}
+            issue={issue}
+            onCreateIssue={createIssueFromBlock}
+          />
         </div>
       </div>
     </div>

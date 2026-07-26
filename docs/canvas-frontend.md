@@ -6,7 +6,8 @@
 ## What it adds on top of Excalidraw
 
 - **Workspace tabs** (`WorkspaceTabs.tsx`) — driven by `GET /api/workspaces`
-- **The documentation panel** (`ElementDocsPanel.tsx`) — the Docs block card covers it
+- **The documentation panel** — `DocsPanel.tsx` holds what it shows, `AnchoredDocsPanel.tsx`
+  where it sits; the Docs block card covers both
 - **The collapsible image and issue blocks**, both hung off `customData`
 - **Autosync** back into the active workspace's store
 

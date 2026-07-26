@@ -1,9 +1,49 @@
 /* Docs panel. Colours come from Excalidraw's own theme variables so the panel
    follows the canvas into dark mode instead of staying stubbornly light. */
+
+/* The card the panel lives in, anchored beside the shape it describes.
+   Position comes from the component; everything the reader sees is here. */
+.docs-card {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid var(--color-gray-30, #ced4da);
+  background: var(--island-bg-color, #fff);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  /* A shape is dragged by grabbing it — the card must not become a drag handle for
+     the canvas underneath, but it must remain scrollable and clickable itself. */
+  pointer-events: auto;
+}
+
+.docs-card__close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--color-gray-60, #868e96);
+  font-size: 1.125rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.docs-card__close:hover {
+  background: var(--color-gray-10, #f1f3f5);
+  color: var(--text-primary-color, #1e1e1e);
+}
+
 .element-docs {
-  padding: 0 1rem 1.5rem;
+  padding: 0.875rem 1rem 1rem;
   overflow-y: auto;
-  height: 100%;
   color: var(--text-primary-color);
   font-size: 0.875rem;
   line-height: 1.55;
