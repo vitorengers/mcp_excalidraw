@@ -34,7 +34,7 @@ import { writePidFile, removePidFile } from './core/pidfile.js';
 import { loadWorkspaces } from './core/workspaces.js';
 import { runIssueAgent } from './core/issue-agent.js';
 import { fetchIssue } from './core/github-issue.js';
-import { layoutLabel } from './core/text-layout.js';
+import { layoutLabel, DEFAULT_BOUND_TEXT_FONT_SIZE } from './core/text-layout.js';
 import {
   elementsFor,
   workspaceIdFrom,
@@ -1098,7 +1098,12 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     // refits its container in redrawTextBoundingBox, which runs on its own edit paths —
     // never on an element that arrives from outside. Writing the text alone left a title
     // wider than its box, on one line, in a box still sized for the observation.
-    const fontSize = typeof label.fontSize === 'number' ? label.fontSize : 16;
+    // Excalidraw draws bound text at 20 when the element carries no size of its own, and
+    // laying the title out for 16 produced a box too short for the text and a wrap that
+    // came too late. The size is written back below rather than merely assumed, so the
+    // browser and this calculation use the same number by construction — matching a
+    // default this code does not own would only hold until that default moved.
+    const fontSize = typeof label.fontSize === 'number' ? label.fontSize : DEFAULT_BOUND_TEXT_FONT_SIZE;
     const containerWidth = typeof container.width === 'number' ? container.width : 400;
     const laid = layoutLabel(detail.title, containerWidth, fontSize);
 
@@ -1115,6 +1120,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     const updatedLabel: ServerElement = {
       ...label,
       text: laid.text,
+      fontSize,
       width: laid.width,
       height: laid.height,
       // Centred in the container, the way Excalidraw centres bound text itself.

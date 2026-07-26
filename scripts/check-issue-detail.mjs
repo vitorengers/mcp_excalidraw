@@ -119,6 +119,13 @@ async function main() {
         `box h=${Math.round(box.height)} text h=${Math.round(retitled.height)}`);
   check('the title wrapped rather than running on', retitled.text.includes('\n'),
         `a title this long on one line cannot fit: ${JSON.stringify(retitled.text)}`);
+  // The geometry cases above only check the server's numbers against each other. They
+  // pass even when those numbers were computed for a font size the browser will not use,
+  // which is exactly what happened: laid out for 16, drawn at 20, 5px of text outside the
+  // box. Writing the size settles it by construction rather than by agreement.
+  check('the label carries the font size it was laid out for',
+        typeof retitled.fontSize === 'number',
+        `fontSize=${retitled.fontSize} — the browser will pick its own default instead`);
 
   console.log('\n5. the body is fetched, never stored on the element');
   const custom = element?.customData ?? {};
