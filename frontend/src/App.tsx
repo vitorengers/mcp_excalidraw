@@ -637,6 +637,30 @@ function App(): JSX.Element {
     return () => { cancelled = true }
   }, [activeWorkspace, excalidrawAPI])
 
+  /**
+   * Re-read panel state from an element that changed underneath us.
+   *
+   * Only for the shape currently on screen: refreshing for any element would let a
+   * background update hijack the panel away from what the user has selected.
+   */
+  const refreshPanelStateFrom = (updated: { id: string; customData?: unknown }): void => {
+    if (updated.id !== lastSelectedIdRef.current) return
+    const custom = (updated.customData ?? {}) as Record<string, unknown>
+
+    if (custom.kind === 'issue') {
+      setIssue({
+        id: updated.id,
+        state: (custom.issueState as IssueTarget['state']) ?? 'draft',
+        issueUrl: (custom.issueUrl as string) ?? null,
+        issueError: (custom.issueError as string) ?? null
+      })
+    }
+
+    if (typeof custom.collapsed === 'boolean') {
+      setCollapsible({ id: updated.id, collapsed: custom.collapsed })
+    }
+  }
+
   const loadExistingElements = async (): Promise<void> => {
     try {
       const response = await fetch(apiUrl('/api/elements'))
@@ -783,6 +807,10 @@ function App(): JSX.Element {
             const cleanedUpdatedElement = cleanElementForExcalidraw(data.element)
             // Convert with full scene context so text metrics/container placement can refresh.
             mergeAndApplySceneElements([cleanedUpdatedElement])
+            // The panel reads a shape's state when it is selected, so a block that
+            // finishes while its panel is open would keep claiming to be running.
+            // An issue run is the case that matters: it is the one that takes minutes.
+            refreshPanelStateFrom(data.element)
           }
           break
 

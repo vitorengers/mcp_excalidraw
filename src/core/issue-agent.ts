@@ -58,8 +58,7 @@ export function extractIssueUrl(output: string): string | null {
  */
 export function buildAgentCommand(
   workspace: Workspace,
-  agentCommand: string,
-  prompt: string
+  agentCommand: string
 ): { command: string; args: string[]; cwd: string | undefined } {
   if (workspace.environment.kind === 'wsl') {
     return {
@@ -67,16 +66,18 @@ export function buildAgentCommand(
       args: [
         '-d', workspace.environment.distro,
         '--cd', workspace.innerPath,
-        '--', 'bash', '-lc', `${agentCommand} ${JSON.stringify(prompt)}`,
+        '--', 'bash', '-lc', agentCommand,
       ],
       // wsl.exe itself runs from wherever; --cd places the agent inside the project.
       cwd: undefined,
     };
   }
 
+  // Split on whitespace so the command can carry flags, as in "claude -p".
+  const [command, ...args] = agentCommand.trim().split(/\s+/);
   return {
-    command: agentCommand,
-    args: [prompt],
+    command: command ?? agentCommand,
+    args,
     cwd: workspace.path,
   };
 }
@@ -87,16 +88,21 @@ export async function runIssueAgent(
   options: { agentCommand: string; timeoutMs?: number }
 ): Promise<IssueAgentResult> {
   const prompt = `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observation}`;
-  const { command, args, cwd } = buildAgentCommand(workspace, options.agentCommand, prompt);
+  const { command, args, cwd } = buildAgentCommand(workspace, options.agentCommand);
 
   logger.info(`Running issue agent for workspace "${workspace.id}"`, { command, cwd });
 
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd,
-      shell: workspace.environment.kind !== 'wsl' && process.platform === 'win32',
+      // No shell: the prompt arrives over stdin, so nothing has to survive quoting.
+      // Passing multi-line text as an argument breaks on cmd.exe long before the
+      // agent ever sees it.
       windowsHide: true,
     });
+
+    child.stdin?.on('error', () => { /* the agent may exit before reading stdin */ });
+    child.stdin?.end(prompt);
 
     let stdout = '';
     let stderr = '';
