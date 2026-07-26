@@ -14,6 +14,8 @@ import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/merm
 import { CollapsibleTarget, IssueTarget } from './components/DocsPanel'
 import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
 import type { Rect } from '../../src/core/anchored-placement'
+import { resolvePanelTarget } from '../../src/core/panel-target'
+import type { PanelElement } from '../../src/core/panel-target'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
@@ -463,83 +465,21 @@ function App(): JSX.Element {
     if (selectedId === lastSelectedIdRef.current) return
     lastSelectedIdRef.current = selectedId
 
-    if (!selectedId || !excalidrawAPI) {
-      setSelectedDoc({ key: null, title: null })
-      return
-    }
+    // One answer for the whole panel, including "nothing at all". What this replaced was
+    // a missing clear: the branch that handled an emptied selection cleared the document
+    // and returned, so an issue block stayed fully open and the card kept an anchor
+    // pointing at a shape nobody had selected. Every piece is now written on every pass,
+    // so there is no half-cleared state to forget.
+    const sceneElements = excalidrawAPI
+      ? (excalidrawAPI.getSceneElements() as unknown as PanelElement[])
+      : []
+    const target = resolvePanelTarget(sceneElements, selectedIds)
 
-    const sceneElements = excalidrawAPI.getSceneElements() as (ExcalidrawElement & {
-      customData?: { docKey?: unknown }
-      text?: string
-      containerId?: string | null
-    })[]
+    setSelectedDoc({ key: target?.docKey ?? null, title: target?.title ?? null })
+    setIssue(target?.issue ?? null)
+    setCollapsible(target?.collapsible ?? null)
 
-    const element = sceneElements.find((candidate) => candidate.id === selectedId)
-    if (!element) {
-      setSelectedDoc({ key: null, title: null })
-      return
-    }
-
-    const keyOf = (candidate: { customData?: { docKey?: unknown } } | undefined): string | null => {
-      const value = candidate?.customData?.docKey
-      return typeof value === 'string' && value ? value : null
-    }
-
-    // Clicking a box means clicking its label, which is a separate element and holds
-    // no docKey of its own. Fall back to the shape the label sits in: its bound
-    // container when there is one, otherwise the smallest shape enclosing it — the
-    // smallest so that nesting resolves to the innermost box, not the section behind it.
-    // The card hangs off the shape that *holds* the documentation, not off whatever was
-    // clicked: anchoring to a label would put the card beside the text rather than
-    // beside the box, which is the thing the reader is looking at.
-    let holder: (typeof sceneElements)[number] | undefined = keyOf(element) ? element : undefined
-    if (!holder && element.containerId) {
-      const container = sceneElements.find((candidate) => candidate.id === element.containerId)
-      if (keyOf(container)) holder = container
-    }
-    if (!holder) {
-      holder = sceneElements
-        .filter((candidate) =>
-          candidate.id !== element.id &&
-          keyOf(candidate) &&
-          candidate.x <= element.x &&
-          candidate.y <= element.y &&
-          candidate.x + candidate.width >= element.x + element.width &&
-          candidate.y + candidate.height >= element.y + element.height)
-        .sort((a, b) => a.width * a.height - b.width * b.height)[0]
-    }
-    const docKey = keyOf(holder)
-
-    setSelectedDoc({
-      key: docKey,
-      title: typeof element.text === 'string' ? element.text : null
-    })
-
-    // Images get a collapse control regardless of whether they carry documentation:
-    // an image is either big enough to read or small enough to stay out of the way.
-    const custom = (element.customData ?? {}) as Record<string, unknown>
-    setIssue(
-      custom.kind === 'issue'
-        ? {
-            id: element.id,
-            state: (custom.issueState as IssueTarget['state']) ?? 'draft',
-            issueUrl: (custom.issueUrl as string) ?? null,
-            issueError: (custom.issueError as string) ?? null,
-            issueTitle: (custom.issueTitle as string) ?? null,
-            observation: (custom.observation as string) ?? null
-          }
-        : null
-    )
-
-    setCollapsible(
-      element.type === 'image'
-        ? { id: element.id, collapsed: (element.customData as { collapsed?: boolean } | undefined)?.collapsed === true }
-        : null
-    )
-
-    // A doc anchors to its holder; an issue block or an image anchors to itself.
-    const hasControls = custom.kind === 'issue' || element.type === 'image'
-    const anchorId = docKey && holder ? holder.id : (hasControls ? element.id : null)
+    const anchorId = target?.anchorId ?? null
     if (anchorId !== docsAnchorIdRef.current) {
       docsAnchorIdRef.current = anchorId
       // Closing a card dismisses that shape's card, not every card from then on.
@@ -689,7 +629,13 @@ function App(): JSX.Element {
 
     activeWorkspaceRef.current = workspaceId
     setActiveWorkspace(workspaceId)
+    // Everything the panel holds, not just the document: switching boards with an issue
+    // block selected would otherwise leave its card open over the new board.
     setSelectedDoc({ key: null, title: null })
+    setIssue(null)
+    setCollapsible(null)
+    docsAnchorIdRef.current = null
+    setDismissedAnchorId(null)
     lastSelectedIdRef.current = null
 
     if (excalidrawAPI) {
