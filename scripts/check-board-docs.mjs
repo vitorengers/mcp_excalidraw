@@ -61,9 +61,12 @@ for (const key of keys) {
 
 console.log('\n4. every card has something behind it');
 // A card with no docKey opens an empty panel when it is clicked, which reads as the board
-// being broken rather than as that card simply having no more to say.
-const bare = (scene.elements ?? [])
-  .filter((element) => element.type === 'rectangle' && !element?.customData?.docKey);
+// being broken rather than as that card simply having no more to say. A functional block —
+// an issue block, a collapsible image — is exempt: its panel has controls, not a document.
+const bare = (scene.elements ?? []).filter((element) =>
+  element.type === 'rectangle'
+  && !element?.customData?.docKey
+  && !element?.customData?.kind);
 check('no rectangle is left without a docKey', bare.length === 0,
       `${bare.length} card(s) at ${bare.slice(0, 5).map((e) => `(${e.x},${e.y})`).join(' ')}`);
 
