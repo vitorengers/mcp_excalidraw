@@ -17,6 +17,15 @@
 export const BOUND_TEXT_PADDING = 5;
 
 /**
+ * What Excalidraw draws bound text at when the element carries no size of its own.
+ *
+ * Laying a title out for 16 while the browser drew it at 20 produced a box too short for
+ * its own text and a wrap that came too late — both from this one number. Callers should
+ * write the size they used back onto the element rather than leave it implied.
+ */
+export const DEFAULT_BOUND_TEXT_FONT_SIZE = 20;
+
+/**
  * Character advance as a fraction of font size.
  *
  * Measured against the real thing: the browser laid out a 64-character title at font size
