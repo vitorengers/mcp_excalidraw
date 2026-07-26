@@ -67,6 +67,18 @@ function agentPath(): string {
   return found ? `${current}${path.delimiter}${found}` : current;
 }
 
+/**
+ * How long a run may take before it is killed.
+ *
+ * Twenty minutes because a real investigation reads source, checks existing issues
+ * and drafts prose — the first genuine run overran ten minutes having already created
+ * the issue. Override with EXCALIDRAW_ISSUE_AGENT_TIMEOUT (seconds).
+ */
+export const DEFAULT_TIMEOUT_MS = (() => {
+  const configured = Number(process.env.EXCALIDRAW_ISSUE_AGENT_TIMEOUT);
+  return Number.isFinite(configured) && configured > 0 ? configured * 1000 : 1_200_000;
+})();
+
 export interface IssueAgentResult {
   ok: boolean;
   issueUrl: string | null;
@@ -175,19 +187,27 @@ export async function runIssueAgent(
     let stderr = '';
     let settled = false;
 
-    // An investigation legitimately takes minutes; without a ceiling a wedged agent
-    // would hold the element in "running" forever with no way back.
+    // An investigation legitimately takes many minutes; the ceiling exists only so a
+    // wedged agent cannot hold the element in "running" forever with no way back.
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
       child.kill();
+
+      // The agent may well have created the issue and then kept working. Reporting a
+      // failure for work that succeeded is worse than reporting a slow success, so
+      // salvage the URL from whatever it printed before the kill.
+      const salvaged = extractIssueUrl(stdout);
       resolve({
-        ok: false,
-        issueUrl: null,
+        ok: Boolean(salvaged),
+        issueUrl: salvaged,
         output: stdout,
-        error: `Agent timed out after ${(options.timeoutMs ?? 600_000) / 1000}s`,
+        error: salvaged
+          ? null
+          : `Agent timed out after ${timeoutMs / 1000}s without returning an issue URL`,
       });
-    }, options.timeoutMs ?? 600_000);
+    }, timeoutMs);
 
     child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
     child.stderr?.on('data', (chunk) => { stderr += chunk.toString(); });
