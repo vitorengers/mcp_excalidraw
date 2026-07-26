@@ -967,6 +967,55 @@ app.get('/api/workspaces', async (_req: Request, res: Response) => {
   }
 });
 
+// ─── Library API (shared shapes) ──────────────────────────────
+//
+// Recurring shapes were rebuilt by hand on every board, so consistency depended on
+// repeating literal coordinates and colours. A library turns them into named pieces.
+// A project's own library wins over the shared one, so a project can extend or
+// override the common set without editing it.
+async function readLibrary(filePath: string): Promise<unknown[]> {
+  const parsed = JSON.parse(await fs.readFile(filePath, 'utf-8'));
+  if (!Array.isArray(parsed?.libraryItems)) {
+    throw new Error('Not an .excalidrawlib file: no libraryItems array');
+  }
+  return parsed.libraryItems;
+}
+
+app.get('/api/library', async (req: Request, res: Response) => {
+  const sources: { origin: string; path: string }[] = [];
+
+  if (process.env.EXCALIDRAW_LIBRARY) {
+    sources.push({ origin: 'shared', path: path.resolve(process.env.EXCALIDRAW_LIBRARY) });
+  }
+
+  const workspaceId = workspaceIdFrom(req);
+  if (workspaceId !== DEFAULT_WORKSPACE_ID) {
+    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+    if (workspace?.libraryFile) {
+      sources.push({ origin: 'workspace', path: path.resolve(workspace.libraryFile) });
+    }
+  }
+
+  const libraryItems: unknown[] = [];
+  const errors: string[] = [];
+  for (const source of sources) {
+    try {
+      libraryItems.push(...(await readLibrary(source.path)));
+    } catch (error) {
+      // A broken library must not block the canvas: the board is still usable
+      // without its shapes, and a blank page would hide the real problem.
+      const reason = (error as NodeJS.ErrnoException).code === 'ENOENT'
+        ? `not found: ${source.path}`
+        : (error as Error).message;
+      errors.push(`${source.origin} library ${reason}`);
+      logger.warn(`Library skipped — ${source.origin}: ${reason}`);
+    }
+  }
+
+  res.json({ success: true, libraryItems, errors });
+});
+
 // ─── Docs API (markdown shown for the selected element) ───────
 //
 // A shape can carry `customData.docKey`; this serves the matching markdown so the

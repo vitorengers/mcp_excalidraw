@@ -346,6 +346,7 @@ function App(): JSX.Element {
     title: null
   })
   const [docsDocked, setDocsDocked] = useState<boolean>(true)
+  const [libraryItems, setLibraryItems] = useState<unknown[]>([])
   const lastSelectedIdRef = useRef<string | null>(null)
 
   // Sync state management
@@ -521,6 +522,23 @@ function App(): JSX.Element {
     setIsConnected(false)
     connectWebSocket()
   }
+
+  // Reloaded per board: a project may ship its own shapes on top of the shared set.
+  useEffect(() => {
+    let cancelled = false
+    fetch(apiUrl('/api/library'))
+      .then((response) => response.json())
+      .then((result) => {
+        if (cancelled || !result?.success) return
+        const items = result.libraryItems ?? []
+        setLibraryItems(items)
+        // merge: false so a board never inherits the previous board's shapes.
+        excalidrawAPI?.updateLibrary({ libraryItems: items, merge: false })
+        if (result.errors?.length) console.warn('Library:', result.errors.join('; '))
+      })
+      .catch((error) => console.warn('Could not load library:', error))
+    return () => { cancelled = true }
+  }, [activeWorkspace, excalidrawAPI])
 
   const loadExistingElements = async (): Promise<void> => {
     try {
