@@ -27,9 +27,34 @@ A multiple selection, or a shape with no `docKey`, opens nothing.
 `scripts/check-docs-endpoint.mjs` pins that down, along with the traversal guard that rejects
 `..` and anything outside the key pattern.
 
-## Known limitation
+## Where the card sits
 
-The panel is Excalidraw's `<Sidebar>`, which CSS pins to the window edge. On a wide board the
-selected block can be thousands of pixels from its own documentation. Issue #20 tracks moving
-to an overlay positioned with `sceneCoordsToViewportCoords`, the way Excalidraw's own hyperlink
-popup already works.
+Beside the block, not at the window edge. The panel used to be Excalidraw's `<Sidebar>`, which
+CSS pins to the right of the window with no prop to move it — on a wide board the selected block
+could sit thousands of pixels from its own documentation, and the eye had to cross the whole
+screen to connect the two.
+
+It is now a DOM overlay positioned with `sceneCoordsToViewportCoords`, the same conversion
+Excalidraw's own hyperlink popup uses, from the axis-aligned bounds `getCommonBounds` gives for
+the shape. It anchors to the shape that **holds** the `docKey`, not to whatever was clicked:
+anchoring to a label would put the card beside the text rather than beside the box.
+
+`src/core/anchored-placement.ts` decides where. Sides are tried right, left, below, above, and
+the first with room wins; on the horizontal sides the card is aligned with the top of the shape
+and slid vertically to stay on screen. When no side has room — a shape filling the viewport, or
+a viewport smaller than the card — it is forced on screen and reports `clamped`, because a card
+hanging off the edge is unreadable while one that overlaps is merely in the way. The arithmetic
+lives in its own module so `scripts/check-anchored-placement.mjs` can check the edge cases
+without driving a browser.
+
+Two consequences worth stating:
+
+- **The card is sized in screen pixels**, not scene units. At 40% zoom a card that scaled with
+  the board would be unreadable, and reading is the whole point.
+- **It never reaches an export.** It is a DOM overlay rather than a scene element, and
+  `exportToBlob` / `exportToSvg` render from elements — so a PNG or SVG of the board has the
+  shapes and none of the cards.
+
+While a shape is dragged, resized or rotated the card hides rather than chasing the pointer —
+the hyperlink popup does the same. It hides rather than unmounts, so a nudge to the block does
+not throw away the reader's scroll position and refetch the document.

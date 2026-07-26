@@ -1,10 +1,7 @@
 import React, { useEffect, useState } from 'react'
-import { Sidebar } from '@excalidraw/excalidraw'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import './ElementDocsPanel.css'
-
-export const DOCS_SIDEBAR_NAME = 'element-docs'
+import './DocsPanel.css'
 
 type DocState =
   | { status: 'empty' }
@@ -36,15 +33,13 @@ export interface CollapsibleTarget {
   collapsed: boolean
 }
 
-interface Props {
+export interface DocsPanelBodyProps {
   /** `customData.docKey` of the selected element, or null when nothing is selected. */
   docKey: string | null
   /** Label shown as the panel heading — usually the shape's own text. */
   title?: string | null
   /** Board the shape belongs to; each project serves docs from its own directory. */
   workspace: string
-  docked: boolean
-  onDock: (docked: boolean) => void
   /** Set when the selected shape is an image that can be collapsed. */
   collapsible?: CollapsibleTarget | null
   onToggleCollapse?: (id: string) => void
@@ -54,14 +49,14 @@ interface Props {
 }
 
 /**
- * Side panel showing the markdown attached to the selected shape.
+ * Everything the documentation panel shows, with no opinion about where it sits.
  *
- * A box on the board holds a short label; the reasoning behind it does not fit and
- * does not belong in a drawing. This renders that reasoning next to the canvas so
- * reading it never means leaving the board.
+ * Split out from the panel itself so the fetching, sanitising and the
+ * loading / missing / error / loaded states are written once. What changed when the
+ * panel moved off the window edge was its position, not any of this.
  */
-export const ElementDocsPanel: React.FC<Props> = ({
-  docKey, title, workspace, docked, onDock, collapsible, onToggleCollapse, issue, onCreateIssue
+export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
+  docKey, title, workspace, collapsible, onToggleCollapse, issue, onCreateIssue
 }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
   const [issueDetail, setIssueDetail] = useState<IssueDetailState>({ status: 'idle' })
@@ -144,105 +139,98 @@ export const ElementDocsPanel: React.FC<Props> = ({
   }, [issueId, issueState, workspace])
 
   return (
-    <Sidebar name={DOCS_SIDEBAR_NAME} docked={docked} onDock={onDock}>
-      <Sidebar.Header />
-      <div className="element-docs">
-        {issue && (
-          <div className="element-docs__issue">
-            {issue.state === 'created' && issue.issueUrl && (
-              <>
-                <h2 className="element-docs__title">
-                  {issueDetail.status === 'loaded' ? issueDetail.title : (issue.issueTitle || 'Issue')}
-                </h2>
-                <a className="element-docs__issue-link" href={issue.issueUrl} target="_blank" rel="noreferrer">
-                  {issue.issueUrl.replace(/^https:\/\/github\.com\//, '')}
-                  {issueDetail.status === 'loaded' && issueDetail.state
-                    ? ` · ${issueDetail.state.toLowerCase()}`
-                    : ''}
-                </a>
+    <div className="element-docs">
+      {issue && (
+        <div className="element-docs__issue">
+          {issue.state === 'created' && issue.issueUrl && (
+            <>
+              <h2 className="element-docs__title">
+                {issueDetail.status === 'loaded' ? issueDetail.title : (issue.issueTitle || 'Issue')}
+              </h2>
+              <a className="element-docs__issue-link" href={issue.issueUrl} target="_blank" rel="noreferrer">
+                {issue.issueUrl.replace(/^https:\/\/github\.com\//, '')}
+                {issueDetail.status === 'loaded' && issueDetail.state
+                  ? ` · ${issueDetail.state.toLowerCase()}`
+                  : ''}
+              </a>
 
-                {issueDetail.status === 'loading' && (
-                  <p className="element-docs__hint">Reading the issue…</p>
-                )}
-                {issueDetail.status === 'error' && (
-                  <p className="element-docs__error">Could not read the issue: {issueDetail.message}</p>
-                )}
-                {issueDetail.status === 'loaded' && (
-                  <article
-                    className="element-docs__body"
-                    dangerouslySetInnerHTML={{ __html: issueDetail.html }}
-                  />
-                )}
+              {issueDetail.status === 'loading' && (
+                <p className="element-docs__hint">Reading the issue…</p>
+              )}
+              {issueDetail.status === 'error' && (
+                <p className="element-docs__error">Could not read the issue: {issueDetail.message}</p>
+              )}
+              {issueDetail.status === 'loaded' && (
+                <article
+                  className="element-docs__body"
+                  dangerouslySetInnerHTML={{ __html: issueDetail.html }}
+                />
+              )}
 
-                {issue.observation && (
-                  <details className="element-docs__observation">
-                    <summary>Original observation</summary>
-                    <p>{issue.observation}</p>
-                  </details>
-                )}
-              </>
-            )}
+              {issue.observation && (
+                <details className="element-docs__observation">
+                  <summary>Original observation</summary>
+                  <p>{issue.observation}</p>
+                </details>
+              )}
+            </>
+          )}
 
-            {issue.state === 'running' && (
-              <p className="element-docs__hint">
-                Researching the repository and drafting the issue. This takes minutes.
-              </p>
-            )}
-
-            {issue.state === 'failed' && (
-              <p className="element-docs__error">{issue.issueError ?? 'The run failed.'}</p>
-            )}
-
-            {issue.state !== 'created' && issue.state !== 'running' && onCreateIssue && (
-              <button
-                type="button"
-                className="element-docs__collapse"
-                onClick={() => onCreateIssue(issue.id)}
-              >
-                Research and create the issue
-              </button>
-            )}
-          </div>
-        )}
-
-        {collapsible && onToggleCollapse && (
-          <button
-            type="button"
-            className="element-docs__collapse"
-            onClick={() => onToggleCollapse(collapsible.id)}
-          >
-            {collapsible.collapsed ? 'Expand image' : 'Collapse image'}
-          </button>
-        )}
-
-        {doc.status === 'empty' && !collapsible && !issue && (
-          <p className="element-docs__hint">Select a shape to see its documentation.</p>
-        )}
-
-        {doc.status === 'loading' && (
-          <p className="element-docs__hint">Loading {doc.key}…</p>
-        )}
-
-        {doc.status === 'missing' && (
-          <>
-            <h2 className="element-docs__title">{title || doc.key}</h2>
+          {issue.state === 'running' && (
             <p className="element-docs__hint">
-              No document yet for <code>{doc.key}</code>.
+              Researching the repository and drafting the issue. This takes minutes.
             </p>
-          </>
-        )}
+          )}
 
-        {doc.status === 'error' && (
-          <p className="element-docs__error">Could not load {doc.key}: {doc.message}</p>
-        )}
+          {issue.state === 'failed' && (
+            <p className="element-docs__error">{issue.issueError ?? 'The run failed.'}</p>
+          )}
 
-        {doc.status === 'loaded' && (
-          <article
-            className="element-docs__body"
-            dangerouslySetInnerHTML={{ __html: doc.html }}
-          />
-        )}
-      </div>
-    </Sidebar>
+          {issue.state !== 'created' && issue.state !== 'running' && onCreateIssue && (
+            <button
+              type="button"
+              className="element-docs__collapse"
+              onClick={() => onCreateIssue(issue.id)}
+            >
+              Research and create the issue
+            </button>
+          )}
+        </div>
+      )}
+
+      {collapsible && onToggleCollapse && (
+        <button
+          type="button"
+          className="element-docs__collapse"
+          onClick={() => onToggleCollapse(collapsible.id)}
+        >
+          {collapsible.collapsed ? 'Expand image' : 'Collapse image'}
+        </button>
+      )}
+
+      {doc.status === 'loading' && (
+        <p className="element-docs__hint">Loading {doc.key}…</p>
+      )}
+
+      {doc.status === 'missing' && (
+        <>
+          <h2 className="element-docs__title">{title || doc.key}</h2>
+          <p className="element-docs__hint">
+            No document yet for <code>{doc.key}</code>.
+          </p>
+        </>
+      )}
+
+      {doc.status === 'error' && (
+        <p className="element-docs__error">Could not load {doc.key}: {doc.message}</p>
+      )}
+
+      {doc.status === 'loaded' && (
+        <article
+          className="element-docs__body"
+          dangerouslySetInnerHTML={{ __html: doc.html }}
+        />
+      )}
+    </div>
   )
 }

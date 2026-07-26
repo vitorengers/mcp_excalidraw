@@ -27,7 +27,7 @@ size it already has. Nothing throws; nothing is restored either.
 
 ## Where it lives
 
-The toggle is in `ElementDocsPanel.tsx` (`onToggleCollapse`), because that panel is already what
+The toggle is in `DocsPanel.tsx` (`onToggleCollapse`), because that panel is already what
 opens for a selected shape — a block does not need its own floating control.
 
 Checked by `scripts/check-collapsible-image.mjs`.
