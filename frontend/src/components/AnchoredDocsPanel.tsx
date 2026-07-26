@@ -7,8 +7,15 @@ import {
   Size
 } from '../../../src/core/anchored-placement'
 
-/** Fixed, in screen pixels: the card is a reading column, not a shape on the board. */
-const CARD_WIDTH = 360
+/**
+ * Fixed, in screen pixels: the card is a reading column, not a shape on the board.
+ *
+ * 720 rather than the 360 it started at — these cards routinely hold a whole GitHub
+ * issue now, and at half this width a body of headings, lists and inline code reads as
+ * a ribbon. A wider card fits to the right of a block less often, which is what the
+ * placement fallbacks are for.
+ */
+const CARD_WIDTH = 720
 const MAX_CARD_HEIGHT = 460
 
 export interface AnchoredDocsPanelProps extends DocsPanelBodyProps {
@@ -67,15 +74,20 @@ export const AnchoredDocsPanel: React.FC<AnchoredDocsPanelProps> = ({
       onWheel={(event) => event.stopPropagation()}
       onKeyDown={(event) => event.stopPropagation()}
     >
-      <button
-        type="button"
-        className="docs-card__close"
-        onClick={onClose}
-        aria-label="Close documentation"
-        title="Close"
-      >
-        ×
-      </button>
+      {/* A row of its own rather than a button floated over the content: absolutely
+          positioning it meant nothing else could know it was there, and it landed on
+          top of the first full-width control in the card. */}
+      <div className="docs-card__header">
+        <button
+          type="button"
+          className="docs-card__close"
+          onClick={onClose}
+          aria-label="Close documentation"
+          title="Close"
+        >
+          ×
+        </button>
+      </div>
       <DocsPanelBody {...body} />
     </div>
   )
