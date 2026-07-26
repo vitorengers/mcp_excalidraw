@@ -39,7 +39,11 @@ export interface AnchoredDocsPanelProps extends DocsPanelBodyProps {
 export const AnchoredDocsPanel: React.FC<AnchoredDocsPanelProps> = ({
   anchor, viewport, suppressed, onClose, ...body
 }) => {
-  if (!anchor) return null
+  // The anchor says *where* a card would go; it must not also decide *whether* there is
+  // one. Letting it decide left an empty card with a close button on screen after the
+  // shape was deselected — a shell with nothing in it.
+  const hasSomethingToShow = Boolean(body.docKey || body.issue || body.collapsible)
+  if (!anchor || !hasSomethingToShow) return null
 
   const height = cardHeightFor(viewport, MAX_CARD_HEIGHT)
   const placement = placeCard(anchor, { width: CARD_WIDTH, height }, viewport)
