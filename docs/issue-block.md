@@ -38,9 +38,14 @@ from its surroundings. Nothing in the prompt said otherwise. Now it names Englis
 ## Configuration
 
 ```
-EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob"'
+EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob"'
 EXCALIDRAW_ISSUE_AGENT_TIMEOUT=1200
 ```
+
+**Pin the model and the effort.** Without `--model` and `--effort` the agent inherits whatever
+`~/.claude/settings.json` happens to say, so changing the model of an interactive session
+silently changes who writes the issues — and that is not a change anyone would think to look for
+when an issue comes out worse than usual. The `[1m]` suffix selects the 1M-context variant.
 
 `--allowedTools` is mandatory. In `-p` mode the agent investigates fine, but any command needing
 approval is blocked, so it finishes with exit code 0 and no issue at all. The list is narrow on
