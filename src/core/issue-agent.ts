@@ -186,7 +186,16 @@ export interface AgentRun {
 
 export interface RunAgentOptions {
   agentCommand: string;
-  timeoutMs?: number;
+  /**
+   * Ceiling on the run, or `null` for none.
+   *
+   * A ceiling suits bounded work — researching an issue is reading and drafting, and
+   * twenty minutes was measured against a real run of it. Implementing is not bounded
+   * that way, and killing a working agent partway through a change is worse than
+   * letting it finish. `null` accepts the trade that comes with that: a wedged run has
+   * to be recovered by hand, so something must offer that.
+   */
+  timeoutMs?: number | null;
   /** Which kind of URL counts as the answer. */
   expects: 'issues' | 'pull';
   /** Named in log lines and in the error a caller shows. */
@@ -227,10 +236,9 @@ export async function runAgent(
     let stderr = '';
     let settled = false;
 
-    // Real work legitimately takes many minutes; the ceiling exists only so a wedged
-    // agent cannot hold the element in "running" forever with no way back.
-    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const timeout = setTimeout(() => {
+    // `undefined` means "use the default"; `null` and 0 mean "no ceiling at all".
+    const timeoutMs = options.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : options.timeoutMs;
+    const timeout = timeoutMs ? setTimeout(() => {
       if (settled) return;
       settled = true;
       child.kill();
@@ -245,7 +253,9 @@ export async function runAgent(
         output: stdout,
         error: salvaged ? null : `Agent timed out after ${timeoutMs / 1000}s without returning a ${noun}`,
       });
-    }, timeoutMs);
+    }, timeoutMs) : null;
+
+    const clearIfSet = () => { if (timeout) clearTimeout(timeout); };
 
     child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
     child.stderr?.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -253,14 +263,14 @@ export async function runAgent(
     child.on('error', (error) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
+      clearIfSet();
       resolve({ ok: false, url: null, output: stdout, error: error.message });
     });
 
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
+      clearIfSet();
       const url = extractGithubUrl(stdout, options.expects);
       resolve({
         ok: code === 0 && Boolean(url),

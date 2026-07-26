@@ -59,15 +59,31 @@ going — asking would simply stop the work. Do not touch anything the issue doe
 
 Return only the pull request URL on a line of its own as the last thing you print.`;
 
+/**
+ * How long an implementation may take: by default, as long as it takes.
+ *
+ * Researching an issue is bounded work and keeps its twenty minutes. Implementing one is
+ * not, and a clock that kills a working agent halfway through a change leaves a branch
+ * nobody asked for and no pull request. Set EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT (seconds)
+ * to put a ceiling back.
+ *
+ * The trade is real and is handled elsewhere: with no ceiling a wedged run holds the block
+ * in `running`, so the block offers a reset.
+ */
+export const IMPLEMENT_TIMEOUT_MS: number | null = (() => {
+  const configured = Number(process.env.EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT);
+  return Number.isFinite(configured) && configured > 0 ? configured * 1000 : null;
+})();
+
 export async function runImplementAgent(
   workspace: Workspace,
   issueUrl: string,
-  options: { agentCommand: string; timeoutMs?: number }
+  options: { agentCommand: string; timeoutMs?: number | null }
 ): Promise<AgentRun> {
   const prompt = `${IMPLEMENT_AGENT_PROMPT}\n\n---\n\nThe issue to implement:\n\n${issueUrl}`;
   return runAgent(workspace, prompt, {
     agentCommand: options.agentCommand,
-    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    timeoutMs: options.timeoutMs === undefined ? IMPLEMENT_TIMEOUT_MS : options.timeoutMs,
     expects: 'pull',
     what: 'implement agent',
   });

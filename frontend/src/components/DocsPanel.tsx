@@ -51,6 +51,8 @@ export interface DocsPanelBodyProps {
   issue?: IssueTarget | null
   onCreateIssue?: (id: string) => void
   onImplementIssue?: (id: string) => void
+  /** Clears a `running` state whose agent is gone. Does not stop a live run. */
+  onResetImplement?: (id: string) => void
 }
 
 /**
@@ -61,7 +63,8 @@ export interface DocsPanelBodyProps {
  * panel moved off the window edge was its position, not any of this.
  */
 export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
-  docKey, title, workspace, collapsible, onToggleCollapse, issue, onCreateIssue, onImplementIssue
+  docKey, title, workspace, collapsible, onToggleCollapse, issue, onCreateIssue,
+  onImplementIssue, onResetImplement
 }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
   const [issueDetail, setIssueDetail] = useState<IssueDetailState>({ status: 'idle' })
@@ -175,9 +178,24 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                 )}
 
                 {issue.implementState === 'running' && (
-                  <p className="element-docs__hint">
-                    An agent is implementing this issue in the project. This takes a while.
-                  </p>
+                  <>
+                    <p className="element-docs__hint">
+                      An agent is implementing this issue in the project. There is no time
+                      limit on the run.
+                    </p>
+                    {/* Without a timeout, nothing else ever clears this state. The server
+                        refuses while a run is genuinely in flight, so this is a way back
+                        from an abandoned one rather than a way to interrupt a live one. */}
+                    {onResetImplement && (
+                      <button
+                        type="button"
+                        className="element-docs__collapse"
+                        onClick={() => onResetImplement(issue.id)}
+                      >
+                        Reset — the run was lost
+                      </button>
+                    )}
+                  </>
                 )}
 
                 {issue.implementState === 'failed' && (

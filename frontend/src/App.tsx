@@ -426,6 +426,36 @@ function App(): JSX.Element {
     }
   }
 
+  /**
+   * Clear a `running` implementation whose agent is gone.
+   *
+   * There is no timeout on an implementation, so nothing else ever clears that state.
+   * The server refuses while a run is in flight, which is the case worth refusing — the
+   * element cannot tell a live run from an abandoned one, and the server can.
+   */
+  const resetImplementOnBlock = async (elementId: string): Promise<void> => {
+    try {
+      const response = await fetch(apiUrl(`/api/issue-block/${elementId}/implement`), { method: 'DELETE' })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        setIssue((current) =>
+          current?.id === elementId
+            ? { ...current, implementError: body?.error ?? `HTTP ${response.status}` }
+            : current)
+        return
+      }
+      setIssue((current) =>
+        current?.id === elementId
+          ? { ...current, implementState: null, implementUrl: null, implementError: null }
+          : current)
+    } catch (error) {
+      setIssue((current) =>
+        current?.id === elementId
+          ? { ...current, implementError: (error as Error).message }
+          : current)
+    }
+  }
+
   /** Thumbnail height for a collapsed image, in scene units. */
   const COLLAPSED_IMAGE_HEIGHT = 48
 
@@ -1384,6 +1414,7 @@ function App(): JSX.Element {
             issue={issue}
             onCreateIssue={createIssueFromBlock}
             onImplementIssue={implementIssueFromBlock}
+            onResetImplement={resetImplementOnBlock}
           />
         </div>
       </div>
