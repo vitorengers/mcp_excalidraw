@@ -11,6 +11,8 @@
  *    open two issues.
  */
 import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
 
@@ -35,6 +37,35 @@ guess presented as fact.
 
 Create the issue with \`gh\` in this repository, add it to the configured project, and return
 only the issue URL on a line of its own.`;
+
+/**
+ * PATH for the agent, with the GitHub CLI added when it is missing.
+ *
+ * The agent is told to use `gh`, but a server started before the CLI was installed
+ * inherits a PATH without it — and a child process inherits that stale PATH in turn.
+ * The failure reads as the agent being unable to create the issue, which points at
+ * the wrong thing entirely.
+ */
+function agentPath(): string {
+  const current = process.env.PATH ?? '';
+  if (/github cli/i.test(current)) return current;
+
+  // Forward slashes: Windows accepts them, and they cannot be silently eaten as
+  // escape sequences the way a lone backslash before a letter would be.
+  const candidates = [
+    'C:/Program Files/GitHub CLI',
+    'C:/Program Files (x86)/GitHub CLI',
+  ];
+  const found = candidates.find((candidate) => {
+    try {
+      return fs.existsSync(path.join(candidate, 'gh.exe'));
+    } catch {
+      return false;
+    }
+  });
+
+  return found ? `${current}${path.delimiter}${found}` : current;
+}
 
 export interface IssueAgentResult {
   ok: boolean;
@@ -73,13 +104,48 @@ export function buildAgentCommand(
     };
   }
 
-  // Split on whitespace so the command can carry flags, as in "claude -p".
-  const [command, ...args] = agentCommand.trim().split(/\s+/);
+  const [command, ...args] = tokenizeCommand(agentCommand);
   return {
     command: command ?? agentCommand,
     args,
     cwd: workspace.path,
   };
+}
+
+/**
+ * Split a command line into argv, keeping quoted runs together.
+ *
+ * Splitting on whitespace alone would tear apart a flag whose value contains spaces,
+ * which is exactly the shape of a permission list: --allowedTools "Bash(gh:*) Read".
+ * Quotes are consumed, not passed on — there is no shell here to strip them later.
+ */
+export function tokenizeCommand(input: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let started = false;
+
+  for (const char of input.trim()) {
+    if (quote) {
+      if (char === quote) quote = null;
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (started || current) { tokens.push(current); current = ''; started = false; }
+      continue;
+    }
+    current += char;
+    started = true;
+  }
+  if (started || current) tokens.push(current);
+
+  return tokens;
 }
 
 export async function runIssueAgent(
@@ -95,6 +161,7 @@ export async function runIssueAgent(
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd,
+      env: { ...process.env, PATH: agentPath() },
       // No shell: the prompt arrives over stdin, so nothing has to survive quoting.
       // Passing multi-line text as an argument breaks on cmd.exe long before the
       // agent ever sees it.
@@ -142,7 +209,9 @@ export async function runIssueAgent(
         issueUrl,
         output: stdout,
         error: code === 0
-          ? (issueUrl ? null : 'Agent finished without returning an issue URL')
+          ? (issueUrl
+              ? null
+              : `Agent finished without returning an issue URL. It said: ${stdout.trim().slice(-600) || '(nothing)'}`)
           : `Agent exited with code ${code}: ${stderr.slice(-500)}`,
       });
     });
