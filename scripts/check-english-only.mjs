@@ -5,8 +5,8 @@
  * The convention is that everything a developer reads — code, comments, tests,
  * documentation — is English, while conversation with the maintainer happens in
  * Portuguese. Nothing enforced that boundary, so it leaked: Portuguese fixtures in the
- * check scripts, and an issue agent that mirrored the language of the observation it was
- * given and produced a Portuguese issue.
+ * check scripts, and an issue agent with no instruction about what language to write in,
+ * which took it from the repository it had just read and produced a Portuguese issue.
  *
  * Two cases, both offline — no server, no network, so this can run in CI:
  *
