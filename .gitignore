@@ -17,9 +17,9 @@ public/dist/
 .agent/
 .agents/
 
-# Development artifacts
+# Development artifacts. Scratch exports stay out; this project's own board is the
+# documentation, so it and the docs it points at are tracked.
 *.excalidraw
+!docs/board.excalidraw
 
 .DS_Store
-
-docs/

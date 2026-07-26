@@ -505,7 +505,9 @@ function App(): JSX.Element {
             id: element.id,
             state: (custom.issueState as IssueTarget['state']) ?? 'draft',
             issueUrl: (custom.issueUrl as string) ?? null,
-            issueError: (custom.issueError as string) ?? null
+            issueError: (custom.issueError as string) ?? null,
+            issueTitle: (custom.issueTitle as string) ?? null,
+            observation: (custom.observation as string) ?? null
           }
         : null
     )
@@ -652,7 +654,9 @@ function App(): JSX.Element {
         id: updated.id,
         state: (custom.issueState as IssueTarget['state']) ?? 'draft',
         issueUrl: (custom.issueUrl as string) ?? null,
-        issueError: (custom.issueError as string) ?? null
+        issueError: (custom.issueError as string) ?? null,
+        issueTitle: (custom.issueTitle as string) ?? null,
+        observation: (custom.observation as string) ?? null
       })
     }
 

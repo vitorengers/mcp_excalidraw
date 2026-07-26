@@ -127,3 +127,20 @@
   color: var(--color-primary, #1971c2);
   word-break: break-all;
 }
+
+/* The observation is history once the issue exists — available, not in the way. */
+.element-docs__observation {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--color-gray-60, #868e96);
+}
+
+.element-docs__observation summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.element-docs__observation p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}

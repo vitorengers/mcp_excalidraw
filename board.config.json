@@ -1,6 +1,7 @@
 {
   "name": "Board Tool",
   "docsDir": "docs",
+  "board": "docs/board.excalidraw",
   "repo": "vitorengers/mcp_excalidraw",
   "githubProject": "https://github.com/users/vitorengers/projects/5"
 }
