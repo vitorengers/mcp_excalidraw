@@ -34,6 +34,7 @@ import { writePidFile, removePidFile } from './core/pidfile.js';
 import { loadWorkspaces } from './core/workspaces.js';
 import { runIssueAgent } from './core/issue-agent.js';
 import { fetchIssue } from './core/github-issue.js';
+import { layoutLabel } from './core/text-layout.js';
 import {
   elementsFor,
   workspaceIdFrom,
@@ -1069,12 +1070,16 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   res.status(202).json({ success: true, state: 'running', elementId });
 
   /**
-   * Retitle the block to the issue it produced.
+   * Record the title of the issue the run produced.
    *
-   * The observation is what started the run; once the issue exists, the title is what
-   * the card is *about*, and a board full of raw observations reads like a scratchpad.
-   * The original text is kept in customData rather than discarded — it is the wording
-   * that produced this particular issue, and the panel still shows it.
+   * Only the title is written, not the label: wrapping text to a box and refitting the
+   * box needs font metrics, and the server has none. Writing the label here produced a
+   * 518px title inside a 400px block, on one line, in a box still sized for the
+   * observation. The browser owns geometry — it reads `issueTitle` and relays the block
+   * itself.
+   *
+   * The observation is kept rather than discarded: it is the wording that produced this
+   * particular issue, and the panel still shows it.
    *
    * Best-effort by design: the issue is already created by the time this runs, so a
    * failure here must not turn a successful run into a failed block.
@@ -1086,10 +1091,35 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     markState('created', { issueUrl, issueError: null, issueTitle: detail.title, observation });
 
     const label = store.get(boundText?.id ?? '');
-    if (!label) return;
+    const container = store.get(elementId);
+    if (!label || !container) return;
+
+    // Lay the title out rather than just writing it. Excalidraw wraps bound text and
+    // refits its container in redrawTextBoundingBox, which runs on its own edit paths —
+    // never on an element that arrives from outside. Writing the text alone left a title
+    // wider than its box, on one line, in a box still sized for the observation.
+    const fontSize = typeof label.fontSize === 'number' ? label.fontSize : 16;
+    const containerWidth = typeof container.width === 'number' ? container.width : 400;
+    const laid = layoutLabel(detail.title, containerWidth, fontSize);
+
+    const containerHeight = Math.max(laid.containerHeight, fontSize * 2);
+    const updatedContainer: ServerElement = {
+      ...container,
+      height: containerHeight,
+      updatedAt: new Date().toISOString(),
+      version: (container.version || 0) + 1
+    };
+    store.set(elementId, updatedContainer);
+    broadcast({ type: 'element_updated', element: updatedContainer } as ElementUpdatedMessage, workspaceId);
+
     const updatedLabel: ServerElement = {
       ...label,
-      text: detail.title,
+      text: laid.text,
+      width: laid.width,
+      height: laid.height,
+      // Centred in the container, the way Excalidraw centres bound text itself.
+      x: (updatedContainer.x ?? 0) + (containerWidth - laid.width) / 2,
+      y: (updatedContainer.y ?? 0) + (containerHeight - laid.height) / 2,
       updatedAt: new Date().toISOString(),
       version: (label.version || 0) + 1
     };
