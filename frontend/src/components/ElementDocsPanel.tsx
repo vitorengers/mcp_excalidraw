@@ -18,7 +18,18 @@ export interface IssueTarget {
   state: 'draft' | 'running' | 'created' | 'failed'
   issueUrl?: string | null
   issueError?: string | null
+  /** Kept on the element so the card reads correctly with nothing selected. */
+  issueTitle?: string | null
+  /** The text that produced the issue, preserved when the label was retitled. */
+  observation?: string | null
 }
+
+/** The issue itself, read live when a created block is selected. */
+type IssueDetailState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'loaded'; title: string; html: string; state: string; number: number }
+  | { status: 'error'; message: string }
 
 export interface CollapsibleTarget {
   id: string
@@ -53,6 +64,7 @@ export const ElementDocsPanel: React.FC<Props> = ({
   docKey, title, workspace, docked, onDock, collapsible, onToggleCollapse, issue, onCreateIssue
 }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
+  const [issueDetail, setIssueDetail] = useState<IssueDetailState>({ status: 'idle' })
 
   useEffect(() => {
     if (!docKey) {
@@ -91,6 +103,46 @@ export const ElementDocsPanel: React.FC<Props> = ({
     return () => { cancelled = true }
   }, [docKey, workspace])
 
+  const issueId = issue?.id ?? null
+  const issueState = issue?.state ?? null
+
+  // The issue is read on selection, not stored on the element — so an edit made on
+  // GitHub shows up here without the board being touched.
+  useEffect(() => {
+    if (!issueId || issueState !== 'created') {
+      setIssueDetail({ status: 'idle' })
+      return
+    }
+
+    let cancelled = false
+    setIssueDetail({ status: 'loading' })
+
+    fetch(`/api/issue-block/${encodeURIComponent(issueId)}/issue?workspace=${encodeURIComponent(workspace)}`)
+      .then(async (response) => {
+        const body = await response.json().catch(() => ({}))
+        if (cancelled) return
+        if (!response.ok) {
+          setIssueDetail({ status: 'error', message: body?.error ?? `HTTP ${response.status}` })
+          return
+        }
+        // Issue bodies are written by an agent and by whoever edits them on GitHub —
+        // sanitise for the same reason the docs are sanitised.
+        const html = DOMPurify.sanitize(marked.parse(body.issue?.body ?? '', { async: false }) as string)
+        setIssueDetail({
+          status: 'loaded',
+          title: body.issue?.title ?? '',
+          html,
+          state: body.issue?.state ?? '',
+          number: body.issue?.number ?? 0
+        })
+      })
+      .catch((error: Error) => {
+        if (!cancelled) setIssueDetail({ status: 'error', message: error.message })
+      })
+
+    return () => { cancelled = true }
+  }, [issueId, issueState, workspace])
+
   return (
     <Sidebar name={DOCS_SIDEBAR_NAME} docked={docked} onDock={onDock}>
       <Sidebar.Header />
@@ -98,9 +150,37 @@ export const ElementDocsPanel: React.FC<Props> = ({
         {issue && (
           <div className="element-docs__issue">
             {issue.state === 'created' && issue.issueUrl && (
-              <a className="element-docs__issue-link" href={issue.issueUrl} target="_blank" rel="noreferrer">
-                {issue.issueUrl.replace(/^https:\/\/github\.com\//, '')}
-              </a>
+              <>
+                <h2 className="element-docs__title">
+                  {issueDetail.status === 'loaded' ? issueDetail.title : (issue.issueTitle || 'Issue')}
+                </h2>
+                <a className="element-docs__issue-link" href={issue.issueUrl} target="_blank" rel="noreferrer">
+                  {issue.issueUrl.replace(/^https:\/\/github\.com\//, '')}
+                  {issueDetail.status === 'loaded' && issueDetail.state
+                    ? ` · ${issueDetail.state.toLowerCase()}`
+                    : ''}
+                </a>
+
+                {issueDetail.status === 'loading' && (
+                  <p className="element-docs__hint">Reading the issue…</p>
+                )}
+                {issueDetail.status === 'error' && (
+                  <p className="element-docs__error">Could not read the issue: {issueDetail.message}</p>
+                )}
+                {issueDetail.status === 'loaded' && (
+                  <article
+                    className="element-docs__body"
+                    dangerouslySetInnerHTML={{ __html: issueDetail.html }}
+                  />
+                )}
+
+                {issue.observation && (
+                  <details className="element-docs__observation">
+                    <summary>Original observation</summary>
+                    <p>{issue.observation}</p>
+                  </details>
+                )}
+              </>
             )}
 
             {issue.state === 'running' && (

@@ -46,7 +46,7 @@ only the issue URL on a line of its own.`;
  * The failure reads as the agent being unable to create the issue, which points at
  * the wrong thing entirely.
  */
-function agentPath(): string {
+export function agentPath(): string {
   const current = process.env.PATH ?? '';
   if (/github cli/i.test(current)) return current;
 
