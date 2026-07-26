@@ -13,6 +13,11 @@ type DocState =
   | { status: 'missing'; key: string }
   | { status: 'error'; key: string; message: string }
 
+export interface CollapsibleTarget {
+  id: string
+  collapsed: boolean
+}
+
 interface Props {
   /** `customData.docKey` of the selected element, or null when nothing is selected. */
   docKey: string | null
@@ -22,6 +27,9 @@ interface Props {
   workspace: string
   docked: boolean
   onDock: (docked: boolean) => void
+  /** Set when the selected shape is an image that can be collapsed. */
+  collapsible?: CollapsibleTarget | null
+  onToggleCollapse?: (id: string) => void
 }
 
 /**
@@ -31,7 +39,9 @@ interface Props {
  * does not belong in a drawing. This renders that reasoning next to the canvas so
  * reading it never means leaving the board.
  */
-export const ElementDocsPanel: React.FC<Props> = ({ docKey, title, workspace, docked, onDock }) => {
+export const ElementDocsPanel: React.FC<Props> = ({
+  docKey, title, workspace, docked, onDock, collapsible, onToggleCollapse
+}) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
 
   useEffect(() => {
@@ -75,7 +85,17 @@ export const ElementDocsPanel: React.FC<Props> = ({ docKey, title, workspace, do
     <Sidebar name={DOCS_SIDEBAR_NAME} docked={docked} onDock={onDock}>
       <Sidebar.Header />
       <div className="element-docs">
-        {doc.status === 'empty' && (
+        {collapsible && onToggleCollapse && (
+          <button
+            type="button"
+            className="element-docs__collapse"
+            onClick={() => onToggleCollapse(collapsible.id)}
+          >
+            {collapsible.collapsed ? 'Expand image' : 'Collapse image'}
+          </button>
+        )}
+
+        {doc.status === 'empty' && !collapsible && (
           <p className="element-docs__hint">Select a shape to see its documentation.</p>
         )}
 
