@@ -22,6 +22,16 @@ export interface WorkspaceConfig {
   library?: string;
   repo?: string;
   githubProject?: string;
+  /**
+   * Single-select field the project board's columns come from.
+   *
+   * Overridable because it has to be guessed: a user-owned project has no board view, so
+   * `verticalGroupByFields` is empty and the grouping is not discoverable. `Status` is the
+   * default only because it is what GitHub creates.
+   */
+  projectField?: string;
+  /** Cards a section shows before it starts hiding them. */
+  projectCardLimit?: number;
 }
 
 export interface Workspace {
@@ -35,6 +45,9 @@ export interface Workspace {
   libraryFile: string | null;
   repo: string | null;
   githubProject: string | null;
+  /** Null means "whatever the project board reader defaults to". */
+  projectField: string | null;
+  projectCardLimit: number | null;
   /** Populated when this workspace could not be fully loaded. */
   error: string | null;
 }
@@ -84,6 +97,8 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
     libraryFile: null,
     repo: null,
     githubProject: null,
+    projectField: null,
+    projectCardLimit: null,
     error: null,
   };
 
@@ -123,6 +138,10 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
     libraryFile,
     repo: config.repo?.trim() || null,
     githubProject: config.githubProject?.trim() || null,
+    projectField: config.projectField?.trim() || null,
+    projectCardLimit: Number.isFinite(config.projectCardLimit)
+      ? Number(config.projectCardLimit)
+      : null,
     error: escaped.length
       ? `Config field(s) outside the workspace, ignored: ${escaped.join(', ')}`
       : null,

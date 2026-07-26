@@ -10,6 +10,9 @@ export interface WorkspaceSummary {
   docsDir: string | null
   repo: string | null
   githubProject: string | null
+  /** Null means the project board reader falls back to its own defaults. */
+  projectField: string | null
+  projectCardLimit: number | null
   error: string | null
 }
 

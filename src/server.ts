@@ -31,8 +31,14 @@ import { z } from 'zod';
 import WebSocket from 'ws';
 import { isMainModule } from './core/entry.js';
 import { writePidFile, removePidFile } from './core/pidfile.js';
-import { loadWorkspaces } from './core/workspaces.js';
+import { loadWorkspaces, Workspace } from './core/workspaces.js';
 import { runIssueAgent } from './core/issue-agent.js';
+import {
+  readProjectBoard,
+  moveCard,
+  NoProjectConfigured,
+  NotOnThisBoard
+} from './core/project-board.js';
 import { fetchIssue } from './core/github-issue.js';
 import { runImplementAgent } from './core/implement-agent.js';
 import { layoutLabel, DEFAULT_BOUND_TEXT_FONT_SIZE } from './core/text-layout.js';
@@ -1346,6 +1352,100 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
     res.json({ success: true, issue });
   } catch (error) {
     // 502: the failure is GitHub's or gh's, not the caller's request.
+    res.status(502).json({ success: false, error: (error as Error).message });
+  }
+});
+
+// ─── Project board mirror ─────────────────────────────────────
+//
+// A region of the canvas showing the workspace's GitHub project: one section per option
+// of a single-select field, cards newest-first, and a drag between columns written back.
+// Dormant unless a project says `githubProject`, so a board that has none never grows one.
+//
+// Both directions go through `gh`. It is already required by the issue agent, already
+// carries the `project` scope, and the PATH and WSL traps around it are already paid for.
+
+/** The workspace a project-board request is about, or a reason it is not usable. */
+async function projectWorkspace(req: Request): Promise<{ workspace: Workspace } | { error: string }> {
+  const workspaceId = workspaceIdFrom(req);
+  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace) {
+    return { error: `Workspace "${workspaceId}" is not registered, so it has no GitHub project.` };
+  }
+  if (workspace.error) return { error: `Workspace is unusable: ${workspace.error}` };
+  if (!workspace.githubProject) {
+    return { error: 'This board has no "githubProject" in its board.config.json.' };
+  }
+  return { workspace };
+}
+
+app.get('/api/project-board', async (req: Request, res: Response) => {
+  // Reading is not writing, but it still spawns a process holding the user's gh
+  // credentials — the same reason the issue block's read route is loopback-only.
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    return res.status(403).json({
+      success: false,
+      error: 'The project board only reads while the server is bound to loopback.'
+    });
+  }
+
+  const resolved = await projectWorkspace(req);
+  if ('error' in resolved) {
+    // 404 rather than 400: the feature is absent for this board, not misused.
+    return res.status(404).json({ success: false, error: resolved.error });
+  }
+
+  try {
+    const board = await readProjectBoard(resolved.workspace);
+    res.json({ success: true, board });
+  } catch (error) {
+    if (error instanceof NoProjectConfigured) {
+      return res.status(404).json({ success: false, error: (error as Error).message });
+    }
+    // 502: the failure is GitHub's or gh's, not the caller's request.
+    logger.warn(`Project board read failed: ${(error as Error).message}`);
+    res.status(502).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/**
+ * Move a card to another column.
+ *
+ * Behind the same loopback guard as the issue block's run route, and for a stronger
+ * reason: this one writes. A canvas reachable from the network must not be able to
+ * rearrange somebody's project board.
+ */
+app.post('/api/project-board/move', async (req: Request, res: Response) => {
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    return res.status(403).json({
+      success: false,
+      error: 'The project board only moves cards while the server is bound to loopback.'
+    });
+  }
+
+  const itemId = typeof req.body?.itemId === 'string' ? req.body.itemId.trim() : '';
+  const optionId = typeof req.body?.optionId === 'string' ? req.body.optionId.trim() : '';
+  if (!itemId || !optionId) {
+    return res.status(400).json({ success: false, error: 'A move needs an itemId and an optionId.' });
+  }
+
+  const resolved = await projectWorkspace(req);
+  if ('error' in resolved) {
+    return res.status(404).json({ success: false, error: resolved.error });
+  }
+
+  try {
+    const board = await moveCard(resolved.workspace, itemId, optionId);
+    res.json({ success: true, board });
+  } catch (error) {
+    if (error instanceof NoProjectConfigured) {
+      return res.status(404).json({ success: false, error: (error as Error).message });
+    }
+    if (error instanceof NotOnThisBoard) {
+      return res.status(400).json({ success: false, error: (error as Error).message });
+    }
+    logger.warn(`Project board move failed: ${(error as Error).message}`);
     res.status(502).json({ success: false, error: (error as Error).message });
   }
 });

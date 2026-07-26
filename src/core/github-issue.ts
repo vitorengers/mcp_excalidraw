@@ -11,12 +11,11 @@ import { spawn } from 'child_process';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
 import { agentPath, buildAgentCommand } from './issue-agent.js';
+import { GH_COMMAND } from './gh.js';
 
-/**
- * The `gh` invocation. Overridable for the same reason EXCALIDRAW_ISSUE_AGENT is: a
- * check script has to be able to answer without a real GitHub account behind it.
- */
-export const GH_COMMAND = process.env.EXCALIDRAW_GH_COMMAND || 'gh';
+// Re-exported from where it now lives, so the project board reader and this one cannot
+// disagree about which binary `gh` is.
+export { GH_COMMAND };
 
 /** How long a read may take. Far shorter than an agent run — this is one API call. */
 const TIMEOUT_MS = 30_000;
