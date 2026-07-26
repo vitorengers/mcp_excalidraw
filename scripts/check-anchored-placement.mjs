@@ -37,7 +37,8 @@ function check(name, condition, detail = '') {
 }
 
 const VIEWPORT = { width: 1200, height: 800 };
-const CARD = { width: 360, height: 460 };
+/** The card the component actually renders — a wider one fits to the right less often. */
+const CARD = { width: 720, height: 460 };
 
 /** Is the card wholly inside the viewport, margin included? */
 const inside = (p, card = CARD, viewport = VIEWPORT, margin = DEFAULT_MARGIN) =>
