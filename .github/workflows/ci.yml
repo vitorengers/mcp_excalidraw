@@ -70,3 +70,6 @@ jobs:
 
       - name: Check for TypeScript errors
         run: npm run type-check
+
+      - name: Check development artifacts are in English
+        run: node scripts/check-english-only.mjs

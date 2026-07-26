@@ -45,7 +45,7 @@ async function main() {
     method: 'POST',
     body: JSON.stringify({
       type: 'rectangle', x: 0, y: 0, width: 200, height: 100,
-      text: 'O painel de docs demora a abrir em boards grandes',
+      text: 'The docs panel is slow to open on large boards',
       customData: { kind: 'issue' },
     }),
   });
@@ -97,7 +97,7 @@ async function main() {
   await call('/api/elements', {
     method: 'POST',
     body: JSON.stringify({
-      type: 'text', x: 10, y: 310, text: 'As abas demoram a trocar em boards grandes',
+      type: 'text', x: 10, y: 310, text: 'Switching tabs is slow on large boards',
       containerId: boxedId,
     }),
   });

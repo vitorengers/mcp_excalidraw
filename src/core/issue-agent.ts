@@ -35,6 +35,11 @@ definition of done, and the assumptions you had to make. If the observation is t
 for a good issue, write what you can and list the open questions — never fill a gap with a
 guess presented as fact.
 
+Write the issue in English — title and body. That is fixed: not the language of the
+observation, and not the language of the repository you just read, whose documentation may
+well be in something else. Every development artifact in this project is English. Quote the
+observation verbatim when its exact wording is the evidence; translate everything else.
+
 Create the issue with \`gh\` in this repository, add it to the configured project, and return
 only the issue URL on a line of its own.`;
 
