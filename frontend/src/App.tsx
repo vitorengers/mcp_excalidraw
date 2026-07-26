@@ -16,6 +16,16 @@ import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
 import type { Rect } from '../../src/core/anchored-placement'
 import { resolvePanelTarget } from '../../src/core/panel-target'
 import type { PanelElement } from '../../src/core/panel-target'
+import { layoutLabel } from '../../src/core/text-layout'
+import {
+  layoutBoard,
+  boardWidth,
+  columnAt,
+  MIRROR_KIND,
+  CARD_GAP
+} from '../../src/core/project-board-layout'
+import type { MirrorColumn } from '../../src/core/project-board-layout'
+import type { ProjectBoard } from '../../src/core/project-board-types'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
@@ -61,6 +71,7 @@ interface ServerElement {
   scale?: [number, number];
   angle?: number;
   link?: string | null;
+  customData?: Record<string, unknown> | null;
 }
 
 interface WebSocketMessage {
@@ -95,6 +106,133 @@ interface ApiResponse {
 
 type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';
 const AUTO_SYNC_DEBOUNCE_MS = 1200;
+
+/**
+ * How often the mirror re-reads the project.
+ *
+ * Polled because there is nothing to subscribe to: `projects_v2_item` webhooks are
+ * organisation-scoped, and a user account has no hooks endpoint at all. Twenty seconds is
+ * a compromise between a status changed on GitHub showing up promptly and a `gh` process
+ * being spawned all day.
+ */
+const PROJECT_BOARD_POLL_MS = 20000;
+
+/** Distance between the mirror's right edge and the board's own left edge. */
+const MIRROR_GAP = 120;
+
+/**
+ * The key that jumps the viewport to the mirror.
+ *
+ * `Alt` because Excalidraw owns the bare letters — every tool has one — and much of
+ * `Ctrl+Shift`. Matched on `code` rather than `key` so it survives a keyboard layout
+ * where Alt produces a different character.
+ */
+const MIRROR_HOTKEY_CODE = 'KeyB';
+
+type CustomData = Record<string, unknown> | null | undefined;
+
+const customDataOf = (element: { customData?: CustomData } | undefined): Record<string, unknown> =>
+  (element?.customData ?? {}) as Record<string, unknown>;
+
+/** Elements the mirror owns. Everything else on the canvas is the board's own drawing. */
+const isMirrorElement = (element: { customData?: CustomData }): boolean =>
+  customDataOf(element).kind === MIRROR_KIND;
+
+/**
+ * A block the `+` dropped, waiting for its run to produce a real card.
+ *
+ * Authored rather than mirrored: it is a real issue block, it persists, and it is the
+ * user's until the issue exists. Only the container is marked, so counting drafts cannot
+ * count a label twice.
+ */
+const isDraftBlock = (element: { customData?: CustomData; containerId?: string | null }): boolean =>
+  customDataOf(element).projectBoardDraft === true && !element.containerId;
+
+interface LibraryElement {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text?: string;
+  fontSize?: number;
+  containerId?: string | null;
+  customData?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+/** The library's issue block, or nothing when no library shipped one. */
+const findIssueBlockTemplate = (items: unknown[]): LibraryElement[] | null => {
+  for (const item of items) {
+    const elements = (item as { elements?: LibraryElement[] })?.elements
+    if (Array.isArray(elements) && elements.some((element) => element?.customData?.kind === 'issue')) {
+      return elements
+    }
+  }
+  return null
+}
+
+/**
+ * Make one issue block from the library template, sized to a column.
+ *
+ * From the library rather than built here on purpose: what makes a block functional is
+ * `customData.kind`, and a second definition of that shape would drift from the one the
+ * library ships the moment either changed.
+ */
+const instantiateIssueBlock = (
+  template: LibraryElement[],
+  placement: { x: number; y: number; width: number },
+  sectionOptionId: string,
+  seed: string
+): Partial<ExcalidrawElement>[] => {
+  const shape = template.find((element) => element?.customData?.kind === 'issue')
+  if (!shape) return []
+
+  const shapeId = `pbdraft-${seed}`
+  const labelId = `${shapeId}-label`
+  const labelTemplate = template.find((element) => element.containerId === shape.id)
+  const height = shape.height
+
+  const block = {
+    ...shape,
+    id: shapeId,
+    x: placement.x,
+    y: placement.y,
+    width: placement.width,
+    height,
+    locked: false,
+    boundElements: labelTemplate ? [{ id: labelId, type: 'text' }] : null,
+    customData: {
+      ...(shape.customData ?? {}),
+      kind: 'issue',
+      // What ties the block to a column, and to the card that will replace it.
+      projectBoardDraft: true,
+      sectionOptionId
+    }
+  } as unknown as Partial<ExcalidrawElement>
+
+  if (!labelTemplate) return [block]
+
+  const fontSize = Number(labelTemplate.fontSize ?? 16)
+  const laid = layoutLabel(String(labelTemplate.text ?? ''), placement.width, fontSize)
+  const label = {
+    ...labelTemplate,
+    id: labelId,
+    containerId: shapeId,
+    text: laid.text,
+    originalText: laid.text,
+    fontSize,
+    width: laid.width,
+    height: laid.height,
+    x: placement.x + (placement.width - laid.width) / 2,
+    y: placement.y + (height - laid.height) / 2,
+    boundElements: null,
+    customData: null
+  } as unknown as Partial<ExcalidrawElement>
+
+  return [block, label]
+}
 
 // Helper function to clean elements for Excalidraw
 const cleanElementForExcalidraw = (element: ServerElement): Partial<ExcalidrawElement> => {
@@ -522,6 +660,22 @@ function App(): JSX.Element {
     if (selectedId === lastSelectedIdRef.current) return
     lastSelectedIdRef.current = selectedId
 
+    // The mirror's `+` is a button drawn as a shape, so selecting it is the click. Only a
+    // fresh selection counts, which is what the early return above already guarantees —
+    // otherwise every pointer move over it would drop another block.
+    if (selectedId) {
+      const scene = excalidrawAPI?.getSceneElements() ?? []
+      const clicked = scene.find((candidate) => candidate.id === selectedId)
+      const holder = clicked?.containerId
+        ? scene.find((candidate) => candidate.id === clicked.containerId) ?? clicked
+        : clicked
+      const custom = customDataOf(holder)
+      if (custom.kind === MIRROR_KIND && custom.role === 'add') {
+        addIssueBlockToColumn(String(custom.sectionOptionId ?? ''))
+        return
+      }
+    }
+
     // One answer for the whole panel, including "nothing at all". What this replaced was
     // a missing clear: the branch that handled an emptied selection cleared the document
     // and returned, so an issue block stayed fully open and the card kept an anchor
@@ -623,12 +777,398 @@ function App(): JSX.Element {
     }, 0)
   }
 
+  // ─── The GitHub project mirror ──────────────────────────────
+  //
+  // A region on the left of the board showing the project's own columns, rebuilt from
+  // GitHub rather than restored from a file. Everything it draws is marked
+  // `customData.kind = "project-board"`, which is what keeps it out of the autosync and
+  // out of the export: these shapes are derived, and a derived shape that gets saved
+  // becomes a stale copy the next person has to reconcile by hand.
+
+  /**
+   * The last board read, where its columns landed, and which moves failed.
+   *
+   * A ref rather than state: it is read inside `onChange`, which fires on every pointer
+   * move, and none of it belongs in a render.
+   */
+  const projectBoardRef = useRef<{
+    board: ProjectBoard | null
+    columns: MirrorColumn[]
+    errors: Record<string, string>
+    signature: string
+  }>({ board: null, columns: [], errors: {}, signature: '' })
+
+  /** Whether a drag was in flight on the previous change, so its end can be noticed. */
+  const mirrorDraggingRef = useRef<boolean>(false)
+
+  const clearMirror = (): void => {
+    projectBoardRef.current = { board: null, columns: [], errors: {}, signature: '' }
+    const api = excalidrawAPIRef.current
+    if (!api) return
+    const scene = api.getSceneElementsIncludingDeleted()
+    const remaining = scene.filter((element) => !isMirrorElement(element))
+    if (remaining.length === scene.length) return
+    applySceneUpdateWithoutAutoSync(api, {
+      elements: remaining,
+      captureUpdate: CaptureUpdateAction.NEVER
+    })
+  }
+
+  /**
+   * Draw the mirror for a board that was just read.
+   *
+   * Anchored to the left of whatever else is on the canvas and recomputed every time, so
+   * the region follows a board that grew rather than sitting at a coordinate somebody
+   * once picked. Draft blocks are excluded from that measurement: they live *inside* the
+   * mirror, and measuring against them would walk the region further left on every pass.
+   */
+  const renderMirror = (board: ProjectBoard): void => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+
+    // Tombstones come along untouched. A deletion travels to the server as an element
+    // marked deleted, and a redraw that quietly dropped one would undo it — the mirror
+    // repaints on a timer, which is exactly when nobody would connect the two.
+    const scene = api.getSceneElementsIncludingDeleted()
+    const tombstones = scene.filter((element) => element.isDeleted && !isMirrorElement(element))
+    const own = scene.filter((element) => !element.isDeleted && !isMirrorElement(element))
+    const drafts = own.filter(isDraftBlock)
+    const anchors = own.filter((element) => !isDraftBlock(element)
+      && !(element.containerId && drafts.some((draft) => draft.id === element.containerId)))
+
+    const width = boardWidth(board.sections.length)
+    let origin = { x: -(width + MIRROR_GAP), y: 0 }
+    if (anchors.length > 0) {
+      const [minX, minY] = getCommonBounds(anchors as readonly NonDeletedExcalidrawElement[])
+      origin = { x: minX - MIRROR_GAP - width, y: minY }
+    }
+
+    // Room at the top of a column for the blocks the `+` dropped there, so a mirrored
+    // card cannot land on one.
+    const reservedTop: Record<string, number> = {}
+    for (const draft of drafts) {
+      const column = String(customDataOf(draft).sectionOptionId ?? '')
+      reservedTop[column] = (reservedTop[column] ?? 0) + draft.height + CARD_GAP
+    }
+
+    const layout = layoutBoard(board, origin, {
+      errors: projectBoardRef.current.errors,
+      reservedTop
+    })
+
+    // Drafts are slotted above the cards of their own column, in the space just reserved.
+    const placed = new Map<string, { x: number; y: number; width: number }>()
+    for (const column of layout.columns) {
+      let y = column.cardsTop - (reservedTop[column.optionId] ?? 0)
+      for (const draft of drafts) {
+        if (String(customDataOf(draft).sectionOptionId ?? '') !== column.optionId) continue
+        placed.set(draft.id, { x: column.x, y, width: column.width })
+        y += draft.height + CARD_GAP
+      }
+    }
+
+    const nextOwn = own.map((element) => {
+      const slot = placed.get(element.containerId ?? '') ?? placed.get(element.id)
+      if (!slot) return element
+      // A label moves with its container, and keeps its own centring.
+      const isLabel = Boolean(element.containerId)
+      const container = isLabel ? drafts.find((draft) => draft.id === element.containerId) : element
+      if (!container) return element
+      return {
+        ...element,
+        x: isLabel ? slot.x + (slot.width - element.width) / 2 : slot.x,
+        y: isLabel ? slot.y + (container.height - element.height) / 2 : slot.y,
+        ...(isLabel ? {} : { width: slot.width })
+      }
+    })
+
+    const signature = JSON.stringify([layout.elements, [...placed.entries()]])
+    if (signature === projectBoardRef.current.signature
+        && scene.some((element) => isMirrorElement(element))) {
+      // Nothing moved. Redrawing anyway would fight the reader's selection every poll.
+      projectBoardRef.current = { ...projectBoardRef.current, board, columns: layout.columns }
+      return
+    }
+
+    projectBoardRef.current = {
+      board,
+      columns: layout.columns,
+      errors: projectBoardRef.current.errors,
+      signature
+    }
+
+    applySceneUpdateWithoutAutoSync(api, {
+      elements: [
+        ...convertElementsPreservingImageProps([
+          ...(nextOwn as unknown as Partial<ExcalidrawElement>[]),
+          ...(layout.elements as unknown as Partial<ExcalidrawElement>[])
+        ]),
+        ...tombstones
+      ] as ExcalidrawElement[],
+      captureUpdate: CaptureUpdateAction.NEVER
+    })
+  }
+
+  /**
+   * Drop the draft blocks whose issue now has a card of its own.
+   *
+   * Matched on the issue URL rather than on position or title: the URL is the only thing
+   * the block and the card provably share. A run that failed leaves its block alone —
+   * there is nothing to replace it with, and the observation is still worth keeping.
+   */
+  const reconcileDrafts = async (board: ProjectBoard): Promise<void> => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+
+    const mirrored = new Set(
+      board.sections.flatMap((section) => section.cards.map((card) => card.url).filter(Boolean))
+    )
+    const scene = api.getSceneElementsIncludingDeleted()
+    const done = scene.filter((element) => {
+      if (!isDraftBlock(element)) return false
+      const url = customDataOf(element).issueUrl
+      return typeof url === 'string' && mirrored.has(url)
+    })
+    if (done.length === 0) return
+
+    const doomed = new Set(done.map((element) => element.id))
+    for (const element of scene) {
+      if (element.containerId && doomed.has(element.containerId)) doomed.add(element.id)
+    }
+
+    // Deleted on the server too: the sync never treats absence as a deletion, so a block
+    // removed only from this scene would come straight back on the next connection.
+    await Promise.all([...doomed].map((id) =>
+      fetch(apiUrl(`/api/elements/${id}`), { method: 'DELETE' }).catch(() => undefined)))
+
+    applySceneUpdateWithoutAutoSync(api, {
+      elements: api.getSceneElementsIncludingDeleted().filter((element) => !doomed.has(element.id)),
+      captureUpdate: CaptureUpdateAction.NEVER
+    })
+  }
+
+  /** Re-read the project and redraw. A board with no project configured stays blank. */
+  const refreshProjectBoard = async (): Promise<void> => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+
+    // Never redraw under a pointer or a caret: rebuilding while a card is being dragged
+    // or a label typed into would take the thing being worked on out from under it.
+    const appState = api.getAppState() as unknown as Record<string, unknown>
+    if (appState.selectedElementsAreBeingDragged || appState.editingTextElement
+        || appState.newElement || appState.resizingElement) {
+      return
+    }
+
+    const workspace = activeWorkspaceRef.current
+    try {
+      const response = await fetch(apiUrl('/api/project-board'))
+      // A tab switched while the request was in flight would draw one project's board
+      // over another project's canvas.
+      if (activeWorkspaceRef.current !== workspace) return
+      if (response.status === 404) {
+        clearMirror()
+        return
+      }
+      const body = await response.json().catch(() => ({}))
+      if (!body?.success || !body.board) return
+      await reconcileDrafts(body.board as ProjectBoard)
+      if (activeWorkspaceRef.current !== workspace) return
+      renderMirror(body.board as ProjectBoard)
+    } catch (error) {
+      console.warn('Could not read the project board:', error)
+    }
+  }
+
+  /**
+   * Write a dragged card's new column back to GitHub.
+   *
+   * A failure snaps the card back to where GitHub still says it is and writes the reason
+   * onto it. The snap-back alone would be ambiguous — it reads like a drag that did not
+   * take — so the message is what turns it into an error.
+   */
+  const moveMirrorCard = async (itemId: string, optionId: string): Promise<void> => {
+    const previous = projectBoardRef.current.board
+    try {
+      const response = await fetch(apiUrl('/api/project-board/move'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemId, optionId })
+      })
+      const body = await response.json().catch(() => ({}))
+      if (response.ok && body?.board) {
+        const { [itemId]: _cleared, ...rest } = projectBoardRef.current.errors
+        projectBoardRef.current = { ...projectBoardRef.current, errors: rest, signature: '' }
+        renderMirror(body.board as ProjectBoard)
+        return
+      }
+      projectBoardRef.current = {
+        ...projectBoardRef.current,
+        errors: { ...projectBoardRef.current.errors, [itemId]: body?.error ?? `HTTP ${response.status}` },
+        signature: ''
+      }
+      if (previous) renderMirror(previous)
+    } catch (error) {
+      projectBoardRef.current = {
+        ...projectBoardRef.current,
+        errors: { ...projectBoardRef.current.errors, [itemId]: (error as Error).message },
+        signature: ''
+      }
+      if (previous) renderMirror(previous)
+    }
+  }
+
+  /**
+   * Notice a card that was dropped somewhere else.
+   *
+   * On the *end* of a drag rather than during it: a card crosses columns on its way
+   * anywhere, and writing every crossing back would rewrite the project several times
+   * per gesture. Anything that did not land squarely in another column is put back where
+   * GitHub says it belongs.
+   */
+  const settleMirrorDrag = (
+    elements: readonly ExcalidrawElement[] | undefined,
+    appState: Record<string, unknown> | undefined
+  ): void => {
+    const dragging = Boolean(appState?.selectedElementsAreBeingDragged)
+    const wasDragging = mirrorDraggingRef.current
+    mirrorDraggingRef.current = dragging
+    if (dragging || !wasDragging) return
+
+    const { board, columns } = projectBoardRef.current
+    if (!board || columns.length === 0 || !elements) return
+
+    let strayed = false
+    for (const element of elements) {
+      const custom = customDataOf(element)
+      if (custom.kind !== MIRROR_KIND || custom.role !== 'card') continue
+
+      const column = columnAt(columns, element.x + element.width / 2)
+      if (column && column.optionId === custom.sectionOptionId) continue
+
+      strayed = true
+      if (column && custom.draggable === true && typeof custom.itemId === 'string') {
+        void moveMirrorCard(custom.itemId, column.optionId)
+        return
+      }
+    }
+
+    // Dropped in a gap, or onto a column it cannot be moved to. Put it back.
+    if (strayed) {
+      projectBoardRef.current = { ...projectBoardRef.current, signature: '' }
+      renderMirror(board)
+    }
+  }
+
+  /**
+   * Drop an issue block at the top of a column.
+   *
+   * Only the first column, because that is the only one this can honestly create into:
+   * the project's *Item added to project* workflow is what gives a new issue a status,
+   * and it puts it in the first option. An item that arrives with none shows up in the
+   * No Status section rather than vanishing.
+   */
+  const addIssueBlockToColumn = (sectionOptionId: string): void => {
+    const api = excalidrawAPIRef.current
+    const { board, columns } = projectBoardRef.current
+    if (!api || !board) return
+
+    const column = columns.find((candidate) => candidate.optionId === sectionOptionId) ?? columns[0]
+    if (!column) return
+
+    const template = findIssueBlockTemplate(libraryItems)
+    if (!template) {
+      console.warn('The library ships no issue block, so + has nothing to drop.')
+      return
+    }
+
+    const created = instantiateIssueBlock(
+      template,
+      { x: column.x, y: column.cardsTop, width: column.width },
+      column.optionId,
+      `${Date.now()}`
+    )
+    if (created.length === 0) return
+
+    const shapeId = created[0]?.id as string
+    // Not suppressed: this block is authored, not mirrored, and has to reach the server
+    // the way any other shape the reader adds does.
+    api.updateScene({
+      elements: convertElementsPreservingImageProps([
+        ...(api.getSceneElements() as unknown as Partial<ExcalidrawElement>[]),
+        ...created
+      ]) as ExcalidrawElement[],
+      appState: { selectedElementIds: { [shapeId]: true } },
+      captureUpdate: CaptureUpdateAction.IMMEDIATELY
+    })
+
+    // Redraw so the cards below make room for the block that was just dropped on them.
+    projectBoardRef.current = { ...projectBoardRef.current, signature: '' }
+    renderMirror(board)
+  }
+
   useEffect(() => {
     return () => {
       if (autoSyncTimerRef.current) {
         clearTimeout(autoSyncTimerRef.current)
       }
     }
+  }, [])
+
+  // Polled while the tab is on screen. A background tab spawning a `gh` process every
+  // twenty seconds is pure cost: nobody is looking at the answer.
+  useEffect(() => {
+    if (!excalidrawAPI) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const tick = async (): Promise<void> => {
+      if (cancelled) return
+      if (document.visibilityState === 'visible') await refreshProjectBoard()
+      if (!cancelled) timer = setTimeout(() => { void tick() }, PROJECT_BOARD_POLL_MS)
+    }
+    void tick()
+
+    const onVisible = (): void => { if (document.visibilityState === 'visible') void refreshProjectBoard() }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [activeWorkspace, excalidrawAPI])
+
+  // On `window`, because Excalidraw never sees a key pressed outside its canvas, and the
+  // point of this one is to work from anywhere on the page.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.code !== MIRROR_HOTKEY_CODE || !event.altKey || event.ctrlKey || event.metaKey) return
+
+      // A label being typed into owns the keyboard. Excalidraw edits text in a real
+      // textarea, so what has focus is the honest test — and it is the one that keeps
+      // this from swallowing a keystroke meant for a card's title.
+      const active = document.activeElement as HTMLElement | null
+      if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) {
+        return
+      }
+
+      const api = excalidrawAPIRef.current
+      if (!api) return
+      if ((api.getAppState() as unknown as Record<string, unknown>).editingTextElement) return
+
+      const mirror = api.getSceneElements().filter((element) => isMirrorElement(element))
+      if (mirror.length === 0) return
+
+      event.preventDefault()
+      api.scrollToContent(mirror as unknown as ExcalidrawElement[], {
+        fitToViewport: true,
+        animate: true
+      })
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
   // WebSocket connection
@@ -694,6 +1234,9 @@ function App(): JSX.Element {
     docsAnchorIdRef.current = null
     setDismissedAnchorId(null)
     lastSelectedIdRef.current = null
+    // The mirror belongs to one project. Keeping the last board would let a stale set of
+    // columns decide where a card dragged on the new board was dropped.
+    projectBoardRef.current = { board: null, columns: [], errors: {}, signature: '' }
 
     if (excalidrawAPI) {
       applySceneUpdateWithoutAutoSync(excalidrawAPI, {
@@ -908,6 +1451,14 @@ function App(): JSX.Element {
             // finishes while its panel is open would keep claiming to be running.
             // An issue run is the case that matters: it is the one that takes minutes.
             refreshPanelStateFrom(data.element)
+
+            // A run that just ended is the one moment the project changed for a reason
+            // this canvas knows about, so it need not wait out a poll interval.
+            const finished = (data.element.customData ?? {}) as Record<string, unknown>
+            if (finished.kind === 'issue'
+                && (finished.issueState === 'created' || finished.issueState === 'failed')) {
+              void refreshProjectBoard()
+            }
           }
           break
 
@@ -1211,7 +1762,12 @@ function App(): JSX.Element {
       // 1. Get current elements, deleted ones included. The backend reconciles by
       // version and never treats absence as a deletion, so tombstones have to travel
       // explicitly — otherwise deleting a shape here would leave it alive there.
+      // The project mirror is derived from GitHub and rebuilt from it, so it is not this
+      // board's to save. Left in, it would be stored, re-sent on every connection and
+      // exported into the committed board file — a stale copy of something that already
+      // has one authority.
       const currentElements = api.getSceneElementsIncludingDeleted()
+        .filter((element) => !isMirrorElement(element))
       console.log(`Syncing ${currentElements.length} elements to backend`)
 
       // 3. Convert to backend format
@@ -1385,6 +1941,7 @@ function App(): JSX.Element {
               // Order matters: syncSelectedDoc settles which shape is anchored, and this
               // then works out where that shape is.
               syncDocsAnchor(_elements, appState as unknown as Record<string, any>)
+              settleMirrorDrag(_elements, appState as unknown as Record<string, unknown>)
               scheduleAutoSync()
             }}
             initialData={{

@@ -25,6 +25,17 @@ const OUT = arg('out', 'docs/board.excalidraw');
 /** Server bookkeeping. None of it is Excalidraw's, and all of it churns. */
 const VOLATILE = ['syncedAt', 'source', 'syncTimestamp', 'createdAt', 'updatedAt'];
 
+/**
+ * The GitHub project mirror, which is not this board's to save.
+ *
+ * It is rebuilt from GitHub on every read, so a copy in the board file would be a
+ * snapshot of somebody's Todo column from whenever the export happened to run — stale
+ * on arrival, and churning the diff every time anyone moved a card. The browser already
+ * keeps these out of the autosync; this is the second door, because the store is shared
+ * and only one of the two needs to be missed.
+ */
+const MIRROR_KIND = 'project-board';
+
 const response = await fetch(`${BASE}/api/elements?workspace=${encodeURIComponent(WORKSPACE)}`);
 if (!response.ok) {
   console.error(`GET /api/elements -> HTTP ${response.status}`);
@@ -39,6 +50,7 @@ if (!elements.length) {
 
 const cleaned = elements
   .filter((element) => !element.isDeleted)
+  .filter((element) => element?.customData?.kind !== MIRROR_KIND)
   .map((element) => {
     const copy = { ...element };
     for (const field of VOLATILE) delete copy[field];
