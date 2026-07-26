@@ -61,7 +61,7 @@ async function main() {
   }
 
   // 1. The original bug: an API-created element must outlive a sync that omits it.
-  console.log('\n1. elemento criado pela API sobrevive a um sync que nao o menciona');
+  console.log('\n1. an API-created element survives a sync that never mentions it');
   const created = await api('/api/elements', {
     method: 'POST',
     body: JSON.stringify(shape({ x: 500, y: 500 })),
@@ -69,38 +69,38 @@ async function main() {
   const apiId = created.element.id;
   await sync([shape({ id: 'browser-1' })]);
   let ids = await listIds();
-  check('elemento da API preservado', ids.has(apiId), `${apiId} sumiu`);
-  check('elemento do browser aplicado', ids.has('browser-1'));
+  check('the API element was kept', ids.has(apiId), `${apiId} vanished`);
+  check('the browser element was applied', ids.has('browser-1'));
 
   // 2. Deletion still works — but only when stated, never inferred from absence.
-  console.log('\n2. delecao explicita remove; ausencia nao remove');
+  console.log('\n2. an explicit deletion removes; an absence does not');
   await sync([shape({ id: 'browser-1', version: 2, isDeleted: true })]);
   ids = await listIds();
-  check('tombstone removeu o elemento', !ids.has('browser-1'));
-  check('elemento ausente do payload sobreviveu', ids.has(apiId));
+  check('the tombstone removed the element', !ids.has('browser-1'));
+  check('the element missing from the payload survived', ids.has(apiId));
 
   // 3. Concurrency: the newest version wins, not the last request to arrive.
-  console.log('\n3. edicao concorrente mantem a versao mais nova');
+  console.log('\n3. a concurrent edit keeps the newest version');
   await sync([shape({ id: 'race', version: 5, x: 999 })]);
-  await sync([shape({ id: 'race', version: 3, x: 111 })]);   // chega depois, mas e antiga
+  await sync([shape({ id: 'race', version: 3, x: 111 })]);   // arrives later, but is older
   const race = (await api('/api/elements')).elements.find((e) => e.id === 'race');
-  check('versao 5 prevaleceu sobre a 3 que chegou depois', race?.x === 999, `x=${race?.x}`);
+  check('version 5 beat the version 3 that arrived after it', race?.x === 999, `x=${race?.x}`);
 
   // 4. version must survive: it is what makes the next reconciliation possible.
-  console.log('\n4. version nao e sobrescrito para 1');
-  check('version preservado', race?.version === 5, `version=${race?.version}`);
+  console.log('\n4. version is not overwritten with 1');
+  check('version was kept', race?.version === 5, `version=${race?.version}`);
 
-  console.log('\nlimpando...');
+  console.log('\ncleaning up...');
   await api('/api/elements/clear', { method: 'DELETE' });
 
   if (failures) {
-    console.error(`\n${failures} caso(s) falharam`);
+    console.error(`\n${failures} case(s) failed`);
     process.exit(1);
   }
-  console.log('\ntodos os casos passaram');
+  console.log('\nall cases passed');
 }
 
 main().catch((err) => {
-  console.error(`\nerro: ${err.message}`);
+  console.error(`\nerror: ${err.message}`);
   process.exit(1);
 });
