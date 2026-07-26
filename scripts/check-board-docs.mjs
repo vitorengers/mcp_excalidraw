@@ -59,7 +59,15 @@ for (const key of keys) {
   check(`${key}.md exists`, existsSync(join(docsDir, `${key}.md`)), `expected in ${config.docsDir}/`);
 }
 
-console.log('\n4. no volatile server metadata was committed');
+console.log('\n4. every card has something behind it');
+// A card with no docKey opens an empty panel when it is clicked, which reads as the board
+// being broken rather than as that card simply having no more to say.
+const bare = (scene.elements ?? [])
+  .filter((element) => element.type === 'rectangle' && !element?.customData?.docKey);
+check('no rectangle is left without a docKey', bare.length === 0,
+      `${bare.length} card(s) at ${bare.slice(0, 5).map((e) => `(${e.x},${e.y})`).join(' ')}`);
+
+console.log('\n5. no volatile server metadata was committed');
 const volatile = ['syncedAt', 'source', 'syncTimestamp', 'createdAt', 'updatedAt'];
 const dirty = (scene.elements ?? []).filter((element) =>
   volatile.some((field) => field in element));

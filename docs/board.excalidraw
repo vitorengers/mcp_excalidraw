@@ -99,13 +99,16 @@
     "type": 3
    },
    "seed": 606830424,
-   "version": 2,
+   "version": 3,
    "versionNonce": 580898344,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "rest-api"
+   }
   },
   {
    "id": "ms1ruw6q8pf8aq8mvf8",
@@ -247,13 +250,16 @@
     "type": 3
    },
    "seed": 1843445848,
-   "version": 2,
+   "version": 3,
    "versionNonce": 553622824,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "mcp-server"
+   }
   },
   {
    "id": "ms1ruw6qiijxmsspole",
@@ -425,13 +431,16 @@
     "type": 3
    },
    "seed": 260025384,
-   "version": 2,
+   "version": 3,
    "versionNonce": 231947864,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "cli"
+   }
   },
   {
    "id": "ms1ruw6qopvlnqv60m",
@@ -530,20 +539,20 @@
    "index": "a8",
    "roundness": null,
    "seed": 235398952,
-   "version": 2,
+   "version": 3,
    "versionNonce": 1787409240,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
    "locked": false,
-   "text": "src/bin.ts · npx mcp-excalidraw-server\n21 commands, and it starts the\ncanvas on its own when needed",
+   "text": "src/bin.ts · npx mcp-excalidraw-server\n19 commands, and it starts the\ncanvas on its own when needed",
    "fontSize": 13,
    "fontFamily": 5,
    "textAlign": "left",
    "verticalAlign": "top",
    "containerId": null,
-   "originalText": "src/bin.ts · npx mcp-excalidraw-server\n21 commands, and it starts the\ncanvas on its own when needed",
+   "originalText": "src/bin.ts · npx mcp-excalidraw-server\n19 commands, and it starts the\ncanvas on its own when needed",
    "autoResize": true,
    "lineHeight": 1.25
   },
@@ -983,13 +992,16 @@
     "type": 3
    },
    "seed": 968612184,
-   "version": 2,
+   "version": 3,
    "versionNonce": 963580968,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "delivered"
+   }
   },
   {
    "id": "ms1ruw6r7hpytw406uh",
@@ -1050,13 +1062,16 @@
     "type": 3
    },
    "seed": 1771425624,
-   "version": 2,
+   "version": 3,
    "versionNonce": 1982496296,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "shared-library"
+   }
   },
   {
    "id": "ms1ruw6r7qljgnwakai",
@@ -1154,13 +1169,16 @@
     "type": 3
    },
    "seed": 1381366872,
-   "version": 2,
+   "version": 3,
    "versionNonce": 2065309992,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "canvas-frontend"
+   }
   },
   {
    "id": "ms1ruw6rbeo30kbo3or",
@@ -1644,13 +1662,16 @@
     "type": 3
    },
    "seed": 2691160,
-   "version": 2,
+   "version": 3,
    "versionNonce": 1401703720,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "collapsible-image"
+   }
   },
   {
    "id": "ms1ruw6rvdz1ue3fjb",
@@ -1744,13 +1765,16 @@
     "type": 3
    },
    "seed": 1339121752,
-   "version": 2,
+   "version": 3,
    "versionNonce": 2126052648,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "trap-agent-timeout"
+   }
   },
   {
    "id": "ms1ruw6s20f1r8gvdaq",
@@ -1848,13 +1872,16 @@
     "type": 3
    },
    "seed": 796138280,
-   "version": 2,
+   "version": 3,
    "versionNonce": 303349592,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "trap-gh-path"
+   }
   },
   {
    "id": "ms1ruw6s4gq1a4muoce",
@@ -1878,13 +1905,16 @@
     "type": 3
    },
    "seed": 1366360664,
-   "version": 2,
+   "version": 3,
    "versionNonce": 364215080,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "trap-port-3000"
+   }
   },
   {
    "id": "ms1ruw6s7lzcryyms0o",
@@ -1945,13 +1975,16 @@
     "type": 3
    },
    "seed": 373099560,
-   "version": 2,
+   "version": 3,
    "versionNonce": 4972120,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "trap-export-noise"
+   }
   },
   {
    "id": "ms1ruw6salqxuavz8o",
@@ -2197,13 +2230,16 @@
     "type": 3
    },
    "seed": 1280391256,
-   "version": 2,
+   "version": 3,
    "versionNonce": 504276264,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "whats-next"
+   }
   },
   {
    "id": "ms1ruw6so9fyysedo2t",
@@ -2375,13 +2411,16 @@
     "type": 3
    },
    "seed": 1346880296,
-   "version": 2,
+   "version": 3,
    "versionNonce": 1042519896,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "open-work"
+   }
   },
   {
    "id": "ms1ruw6srtmzz5dip0m",
@@ -2553,13 +2592,16 @@
     "type": 3
    },
    "seed": 533397848,
-   "version": 2,
+   "version": 3,
    "versionNonce": 1870294056,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "trap-allowed-tools"
+   }
   },
   {
    "id": "ms1ruw6stz978k41e2r",
@@ -2583,13 +2625,16 @@
     "type": 3
    },
    "seed": 1145096744,
-   "version": 2,
+   "version": 3,
    "versionNonce": 658636888,
    "isDeleted": false,
    "boundElements": null,
    "updated": 1785068817115,
    "link": null,
-   "locked": false
+   "locked": false,
+   "customData": {
+    "docKey": "trap-stale-server"
+   }
   },
   {
    "id": "ms1ruw6su5qa4v0xekc",
