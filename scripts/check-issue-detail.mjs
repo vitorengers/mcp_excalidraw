@@ -97,10 +97,30 @@ async function main() {
         `observation=${element?.customData?.observation}`);
 
   const retitled = (await call(`/api/elements/${labelId}`)).body.element;
-  check('the label now reads the issue title', retitled?.text === element?.customData?.issueTitle,
+  check('the label now reads the issue title',
+        retitled?.text?.replace(/\n/g, ' ') === element?.customData?.issueTitle,
         `label=${JSON.stringify(retitled?.text)}`);
 
-  console.log('\n4. the body is fetched, never stored on the element');
+  console.log('\n4. the title is laid out inside its block, not just written into it');
+  // Writing the text without laying it out put a 518px title inside a 400px block, on
+  // one line, in a box still sized for the observation that started the run.
+  const box = (await call(`/api/elements/${blockId}`)).body.element;
+  const fits =
+    retitled.x >= box.x &&
+    retitled.y >= box.y &&
+    retitled.x + retitled.width <= box.x + box.width &&
+    retitled.y + retitled.height <= box.y + box.height;
+  check('every edge of the text is inside the box', fits,
+        `text ${Math.round(retitled.x)}..${Math.round(retitled.x + retitled.width)} ` +
+        `x ${Math.round(retitled.y)}..${Math.round(retitled.y + retitled.height)} | ` +
+        `box ${Math.round(box.x)}..${Math.round(box.x + box.width)} ` +
+        `x ${Math.round(box.y)}..${Math.round(box.y + box.height)}`);
+  check('the box is no taller than the text needs', box.height <= retitled.height + 20,
+        `box h=${Math.round(box.height)} text h=${Math.round(retitled.height)}`);
+  check('the title wrapped rather than running on', retitled.text.includes('\n'),
+        `a title this long on one line cannot fit: ${JSON.stringify(retitled.text)}`);
+
+  console.log('\n5. the body is fetched, never stored on the element');
   const custom = element?.customData ?? {};
   check('no body on the element',
         !Object.keys(custom).some((key) => /body/i.test(key)),
@@ -112,7 +132,7 @@ async function main() {
   check('it returns the body', Boolean(detail.body.issue?.body), 'the panel has nothing to render');
   check('it returns the issue state', Boolean(detail.body.issue?.state));
 
-  console.log('\n5. the first gh of the run failed, and nothing showed it');
+  console.log('\n6. the first gh of the run failed, and nothing showed it');
   // The stub fails its very first invocation — which is the read-back inside the run,
   // in case 3. gh does exactly this here: socket buffer exhaustion that clears on the
   // next attempt. Without a retry that first call is the only call, the title never
