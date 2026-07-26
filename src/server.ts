@@ -36,7 +36,8 @@ import {
   elementsFor,
   workspaceIdFrom,
   normalizeWorkspaceId,
-  activeWorkspaceIds
+  activeWorkspaceIds,
+  DEFAULT_WORKSPACE_ID
 } from './core/element-store.js';
 
 // Load environment variables
@@ -981,27 +982,37 @@ const DOCS_DIR = process.env.EXCALIDRAW_DOCS_DIR
 const DOC_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 app.get('/api/docs/:key', async (req: Request, res: Response) => {
-  if (!DOCS_DIR) {
-    return res.status(404).json({
-      success: false,
-      error: 'No docs directory configured. Set EXCALIDRAW_DOCS_DIR to enable this endpoint.'
-    });
-  }
-
   const key = req.params.key ?? '';
   if (!DOC_KEY_PATTERN.test(key) || key.includes('..')) {
     return res.status(400).json({ success: false, error: 'Invalid doc key' });
   }
 
-  const filePath = path.resolve(DOCS_DIR, `${key}.md`);
-  // Defence in depth: even with the pattern above, confirm we stayed inside DOCS_DIR.
-  if (filePath !== DOCS_DIR && !filePath.startsWith(DOCS_DIR + path.sep)) {
+  // Each board reads its own project's docs. The env var stays as the fallback for
+  // single-board setups, which have no registry to resolve a directory from.
+  const workspaceId = workspaceIdFrom(req);
+  let docsDir = DOCS_DIR;
+  if (workspaceId !== DEFAULT_WORKSPACE_ID) {
+    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+    if (workspace?.docsDir) docsDir = path.resolve(workspace.docsDir);
+  }
+
+  if (!docsDir) {
+    return res.status(404).json({
+      success: false,
+      error: 'No docs directory for this board. Set docsDir in board.config.json, or EXCALIDRAW_DOCS_DIR.'
+    });
+  }
+
+  const filePath = path.resolve(docsDir, `${key}.md`);
+  // Defence in depth: even with the pattern above, confirm we stayed inside the root.
+  if (filePath !== docsDir && !filePath.startsWith(docsDir + path.sep)) {
     return res.status(400).json({ success: false, error: 'Invalid doc key' });
   }
 
   try {
     const markdown = await fs.readFile(filePath, 'utf-8');
-    res.json({ success: true, key, markdown });
+    res.json({ success: true, key, workspace: workspaceId, markdown });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return res.status(404).json({ success: false, error: `No doc for key "${key}"` });

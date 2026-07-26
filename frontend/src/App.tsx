@@ -9,7 +9,8 @@ import {
 } from '@excalidraw/excalidraw'
 import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
 import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/mermaidConverter'
-import { ElementDocsPanel } from './components/ElementDocsPanel'
+import { ElementDocsPanel, DOCS_SIDEBAR_NAME } from './components/ElementDocsPanel'
+import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
 // Type definitions
@@ -326,6 +327,19 @@ function App(): JSX.Element {
     return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   })
 
+  // Boards, one per project
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
+  const [activeWorkspace, setActiveWorkspace] = useState<string>('default')
+  // WebSocket handlers close over their creation-time scope, so the ref is what the
+  // async paths read — the state alone would send stale ids after a tab switch.
+  const activeWorkspaceRef = useRef<string>('default')
+
+  /** Append the active workspace to an API path, so no request is ever board-agnostic. */
+  const apiUrl = (path: string): string => {
+    const separator = path.includes('?') ? '&' : '?'
+    return `${path}${separator}workspace=${encodeURIComponent(activeWorkspaceRef.current)}`
+  }
+
   // Documentation panel: which shape's doc is on screen
   const [selectedDoc, setSelectedDoc] = useState<{ key: string | null; title: string | null }>({
     key: null,
@@ -364,18 +378,55 @@ function App(): JSX.Element {
       return
     }
 
-    const element = excalidrawAPI
-      .getSceneElements()
-      .find((candidate) => candidate.id === selectedId) as
-      | (ExcalidrawElement & { customData?: { docKey?: unknown }; text?: string })
-      | undefined
+    const sceneElements = excalidrawAPI.getSceneElements() as (ExcalidrawElement & {
+      customData?: { docKey?: unknown }
+      text?: string
+      containerId?: string | null
+    })[]
 
-    const docKey = element?.customData?.docKey
+    const element = sceneElements.find((candidate) => candidate.id === selectedId)
+    if (!element) {
+      setSelectedDoc({ key: null, title: null })
+      return
+    }
+
+    const keyOf = (candidate: { customData?: { docKey?: unknown } } | undefined): string | null => {
+      const value = candidate?.customData?.docKey
+      return typeof value === 'string' && value ? value : null
+    }
+
+    // Clicking a box means clicking its label, which is a separate element and holds
+    // no docKey of its own. Fall back to the shape the label sits in: its bound
+    // container when there is one, otherwise the smallest shape enclosing it — the
+    // smallest so that nesting resolves to the innermost box, not the section behind it.
+    let docKey = keyOf(element)
+    if (!docKey && element.containerId) {
+      docKey = keyOf(sceneElements.find((candidate) => candidate.id === element.containerId))
+    }
+    if (!docKey) {
+      const enclosing = sceneElements
+        .filter((candidate) =>
+          candidate.id !== element.id &&
+          keyOf(candidate) &&
+          candidate.x <= element.x &&
+          candidate.y <= element.y &&
+          candidate.x + candidate.width >= element.x + element.width &&
+          candidate.y + candidate.height >= element.y + element.height)
+        .sort((a, b) => a.width * a.height - b.width * b.height)[0]
+      docKey = keyOf(enclosing)
+    }
+
     setSelectedDoc({
-      key: typeof docKey === 'string' && docKey ? docKey : null,
-      title: typeof element?.text === 'string' ? element.text : null
+      key: docKey,
+      title: typeof element.text === 'string' ? element.text : null
     })
   }
+
+  // Declaring the sidebar is not enough — Excalidraw keeps it closed until asked.
+  useEffect(() => {
+    if (!excalidrawAPI) return
+    excalidrawAPI.toggleSidebar({ name: DOCS_SIDEBAR_NAME, force: Boolean(selectedDoc.key) })
+  }, [selectedDoc.key, excalidrawAPI])
 
   const applySceneUpdateWithoutAutoSync = (
     api: ExcalidrawImperativeAPI,
@@ -418,9 +469,62 @@ function App(): JSX.Element {
     }
   }, [excalidrawAPI, isConnected])
 
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/workspaces')
+      .then((response) => response.json())
+      .then((result) => {
+        if (cancelled || !result?.success) return
+        const list: WorkspaceSummary[] = result.workspaces ?? []
+        setWorkspaces(list)
+        // The socket opens before this response lands, so it is already watching the
+        // default board. Switching rather than assigning reconnects it, otherwise the
+        // first tab would render highlighted while showing the default board's scene.
+        // With no registry the server keeps using its default store, so leave the
+        // active id alone rather than inventing a workspace that does not exist.
+        if (list.length > 0 && list[0]) {
+          switchWorkspace(list[0].id)
+        }
+      })
+      .catch((error) => console.warn('Could not load workspaces:', error))
+    return () => { cancelled = true }
+  }, [])
+
+  /**
+   * Switch boards.
+   *
+   * The scene is emptied before reconnecting: the new board's elements arrive
+   * asynchronously, and leaving the old ones on screen until they do would show one
+   * project's shapes under another project's tab.
+   */
+  const switchWorkspace = (workspaceId: string): void => {
+    if (workspaceId === activeWorkspaceRef.current) return
+
+    activeWorkspaceRef.current = workspaceId
+    setActiveWorkspace(workspaceId)
+    setSelectedDoc({ key: null, title: null })
+    lastSelectedIdRef.current = null
+
+    if (excalidrawAPI) {
+      applySceneUpdateWithoutAutoSync(excalidrawAPI, {
+        elements: [],
+        captureUpdate: CaptureUpdateAction.NEVER
+      })
+    }
+
+    // A socket belongs to one board for its lifetime, so switching means reconnecting.
+    if (websocketRef.current) {
+      websocketRef.current.onclose = null
+      websocketRef.current.close()
+      websocketRef.current = null
+    }
+    setIsConnected(false)
+    connectWebSocket()
+  }
+
   const loadExistingElements = async (): Promise<void> => {
     try {
-      const response = await fetch('/api/elements')
+      const response = await fetch(apiUrl('/api/elements'))
       const result: ApiResponse = await response.json()
 
       if (result.success && result.elements && result.elements.length > 0) {
@@ -457,7 +561,9 @@ function App(): JSX.Element {
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}`
+    // The socket declares its board once: the server then filters events to it, so a
+    // tab never redraws with another board's shapes.
+    const wsUrl = `${protocol}//${window.location.host}?workspace=${encodeURIComponent(activeWorkspaceRef.current)}`
 
     websocketRef.current = new WebSocket(wsUrl)
 
@@ -872,7 +978,7 @@ function App(): JSX.Element {
       const backendElements = currentElements.map(convertToBackendFormat)
 
       // 4. Send to backend
-      const response = await fetch('/api/elements/sync', {
+      const response = await fetch(apiUrl('/api/elements/sync'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -937,12 +1043,12 @@ function App(): JSX.Element {
     if (excalidrawAPI) {
       try {
         // Get all current elements and delete them from backend
-        const response = await fetch('/api/elements')
+        const response = await fetch(apiUrl('/api/elements'))
         const result: ApiResponse = await response.json()
 
         if (result.success && result.elements) {
           const deletePromises = result.elements.map(element =>
-            fetch(`/api/elements/${element.id}`, { method: 'DELETE' })
+            fetch(apiUrl(`/api/elements/${element.id}`), { method: 'DELETE' })
           )
           await Promise.all(deletePromises)
         }
@@ -965,6 +1071,12 @@ function App(): JSX.Element {
 
   return (
     <div className="app" data-theme={theme}>
+      <WorkspaceTabs
+        workspaces={workspaces}
+        activeId={activeWorkspace}
+        onSelect={switchWorkspace}
+      />
+
       {/* Header */}
       <div className="header">
         <h1>Excalidraw Canvas</h1>
@@ -1040,6 +1152,7 @@ function App(): JSX.Element {
             <ElementDocsPanel
               docKey={selectedDoc.key}
               title={selectedDoc.title}
+              workspace={activeWorkspace}
               docked={docsDocked}
               onDock={setDocsDocked}
             />

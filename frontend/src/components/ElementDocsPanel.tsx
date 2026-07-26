@@ -18,6 +18,8 @@ interface Props {
   docKey: string | null
   /** Label shown as the panel heading — usually the shape's own text. */
   title?: string | null
+  /** Board the shape belongs to; each project serves docs from its own directory. */
+  workspace: string
   docked: boolean
   onDock: (docked: boolean) => void
 }
@@ -29,7 +31,7 @@ interface Props {
  * does not belong in a drawing. This renders that reasoning next to the canvas so
  * reading it never means leaving the board.
  */
-export const ElementDocsPanel: React.FC<Props> = ({ docKey, title, docked, onDock }) => {
+export const ElementDocsPanel: React.FC<Props> = ({ docKey, title, workspace, docked, onDock }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
 
   useEffect(() => {
@@ -43,7 +45,7 @@ export const ElementDocsPanel: React.FC<Props> = ({ docKey, title, docked, onDoc
     let cancelled = false
     setDoc({ status: 'loading', key: docKey })
 
-    fetch(`/api/docs/${encodeURIComponent(docKey)}`)
+    fetch(`/api/docs/${encodeURIComponent(docKey)}?workspace=${encodeURIComponent(workspace)}`)
       .then(async (response) => {
         const body = await response.json().catch(() => ({}))
         if (cancelled) return
@@ -67,7 +69,7 @@ export const ElementDocsPanel: React.FC<Props> = ({ docKey, title, docked, onDoc
       })
 
     return () => { cancelled = true }
-  }, [docKey])
+  }, [docKey, workspace])
 
   return (
     <Sidebar name={DOCS_SIDEBAR_NAME} docked={docked} onDock={onDock}>

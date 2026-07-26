@@ -1,0 +1,56 @@
+.workspace-tabs {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 6px 8px 0;
+  overflow-x: auto;
+  background: var(--island-bg-color, #fff);
+  border-bottom: 1px solid var(--color-gray-30, #ced4da);
+  flex: 0 0 auto;
+}
+
+.workspace-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--text-primary-color, #1e1e1e);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.workspace-tab:hover {
+  background: var(--color-gray-10, #f1f3f5);
+}
+
+.workspace-tab--active {
+  background: var(--color-primary-light, #e7f5ff);
+  border-color: var(--color-gray-30, #ced4da);
+  font-weight: 600;
+}
+
+/* A workspace whose config failed to load is still listed — it just says so. */
+.workspace-tab--broken .workspace-tab__name {
+  text-decoration: underline dotted;
+}
+
+.workspace-tab__badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--color-gray-30, #ced4da);
+  color: var(--color-gray-80, #343a40);
+}
+
+.workspace-tab__warn {
+  color: var(--color-danger, #e03131);
+  font-weight: 700;
+}
