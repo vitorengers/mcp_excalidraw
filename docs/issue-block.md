@@ -68,12 +68,37 @@ anyone would have made on purpose. So it has its own variable and is **off until
 set**:
 
 ```
-EXCALIDRAW_IMPLEMENT_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --allowedTools "Bash Read Write Edit Grep Glob"'
+EXCALIDRAW_IMPLEMENT_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
 ```
+
+`--dangerously-skip-permissions` rather than a list of tools, because an enumerated list is
+also a *deny* list: in `-p` mode there is no prompt to answer, so a tool outside the list is
+simply refused, and an agent stopped from reading a page of documentation has been stopped
+by the configuration rather than by anything it did. The flag's own help says it is
+recommended only for sandboxes with no internet access; using it here is a deliberate
+choice, made by whoever runs the board, to let the agent do the work.
 
 The other guards carry over — loopback only, one run at a time per element — and one is
 added: a block with no issue has nothing to implement, and a block that already produced a
 pull request will not produce a second one.
+
+### No time limit, and the way back
+
+Researching an issue keeps its twenty-minute ceiling: it is bounded work, and that number
+came from a real run. **Implementing has none.** A clock that kills a working agent halfway
+through a change leaves a branch nobody asked for and no pull request, which is worse than
+a run that takes an hour. `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` (seconds) puts a ceiling
+back for anyone who wants one.
+
+The ceiling was not decoration, though — its job was that a wedged run could not hold a
+block in `running` forever. With it gone, that guarantee comes from the card instead: a
+running block offers **Reset — the run was lost**, and `DELETE /api/issue-block/:id/implement`
+clears the state.
+
+That reset clears state; it does not stop an agent. Nothing here can reach into a process
+the server no longer owns. What it does do is refuse — 409 — while a run is in flight *in
+this process*, which is the case that matters: the element cannot tell a live run from an
+abandoned one, and the server can.
 
 ### What the agent is told
 

@@ -1259,6 +1259,49 @@ app.post('/api/issue-block/:id/implement', async (req: Request, res: Response) =
 });
 
 /**
+ * Clear a stuck implementation so the block can be tried again.
+ *
+ * The timeout used to guarantee that a wedged run could not hold a block in `running`
+ * forever. Implementing has no timeout — a clock that kills a working agent halfway
+ * through a change is worse than one that never fires — so that guarantee has to come
+ * from somewhere, and this is it.
+ *
+ * This clears state; it does not stop an agent. Nothing here can reach into a process the
+ * server no longer owns, and a button that claimed to would be lying. What it can do is
+ * refuse while a run is in flight *in this process*, which is the case that actually
+ * matters: the state on the element cannot tell a live run from an abandoned one, and the
+ * server can.
+ */
+app.delete('/api/issue-block/:id/implement', (req: Request, res: Response) => {
+  const elementId = req.params.id ?? '';
+  const workspaceId = workspaceIdFrom(req);
+  const store = elementsFor(workspaceId);
+  const element = store.get(elementId);
+  if (!element) {
+    return res.status(404).json({ success: false, error: `Element ${elementId} not found` });
+  }
+
+  if (implementRunsInFlight.has(elementId)) {
+    return res.status(409).json({
+      success: false,
+      error: 'An implementation is running right now. Resetting would only hide it.'
+    });
+  }
+
+  const { implementState, implementUrl, implementError, ...rest } =
+    (element.customData ?? {}) as Record<string, unknown>;
+  const updated: ServerElement = {
+    ...element,
+    customData: rest,
+    updatedAt: new Date().toISOString(),
+    version: (element.version || 0) + 1
+  };
+  store.set(elementId, updated);
+  broadcast({ type: 'element_updated', element: updated } as ElementUpdatedMessage, workspaceId);
+  res.json({ success: true, element: updated });
+});
+
+/**
  * The issue behind a block, read live.
  *
  * Read at selection time rather than copied onto the element at creation time: the body

@@ -117,6 +117,32 @@ async function main() {
   check('409 with the existing pull request', again.status === 409, `got ${again.status}`);
   check('returns that pull request', Boolean(again.body.implementUrl), JSON.stringify(again.body));
 
+  console.log('\n7. a run that was lost can be cleared, and the block tried again');
+  // There is no timeout on an implementation, so nothing else ever clears this state.
+  const reset = await call(`/api/issue-block/${blockId}/implement`, { method: 'DELETE' });
+  check('the reset is accepted', reset.status === 200, `got ${reset.status}`);
+  const cleared = (await call(`/api/elements/${blockId}`)).body.element;
+  check('the implementation state is gone', !cleared?.customData?.implementState,
+        `state=${cleared?.customData?.implementState}`);
+  check('and the pull request with it', !cleared?.customData?.implementUrl,
+        `url=${cleared?.customData?.implementUrl}`);
+  check('the issue it came from survived the reset', Boolean(cleared?.customData?.issueUrl),
+        'a reset must not throw away the issue');
+
+  const rerun = await call(`/api/issue-block/${blockId}/implement`, { method: 'POST' });
+  check('the block can be implemented again', rerun.status === 202, `got ${rerun.status}`);
+
+  console.log('\n8. a reset cannot hide a run that is actually happening');
+  const duringRun = await call(`/api/issue-block/${blockId}/implement`, { method: 'DELETE' });
+  check('409 while in flight', duringRun.status === 409, `got ${duringRun.status}`);
+  check('says why', /running right now/i.test(duringRun.body.error ?? ''), duringRun.body.error);
+
+  for (let attempt = 0; attempt < 40; attempt++) {
+    await sleep(250);
+    const settled = (await call(`/api/elements/${blockId}`)).body.element;
+    if (settled?.customData?.implementState !== 'running') break;
+  }
+
   await call('/api/elements/clear', { method: 'DELETE' });
 
   if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
