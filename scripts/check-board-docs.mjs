@@ -77,24 +77,27 @@ const dirty = (scene.elements ?? []).filter((element) =>
 check('elements carry no per-export bookkeeping', dirty.length === 0,
       `${dirty.length} element(s) still have ${volatile.join('/')} — re-run scripts/export-board.mjs`);
 
-console.log('\n6. the library can produce a new functional block');
-// Without this, adding another issue block means an API call. The library is the only way to
-// get one from inside the canvas, and it only works because Excalidraw's restore preserves
-// customData through a library round-trip.
-if (!config.library) {
-  check('board.config.json names a library', false, 'no "library" field');
-} else {
-  const libraryPath = resolve(repoRoot, config.library);
-  check('the library file exists', existsSync(libraryPath), libraryPath);
-  if (existsSync(libraryPath)) {
-    const library = JSON.parse(readFileSync(libraryPath, 'utf8'));
-    const items = library.libraryItems ?? [];
-    check('it is an Excalidraw library', library.type === 'excalidrawlib', `type=${library.type}`);
-    check('every item has elements', items.length > 0 && items.every((item) => item.elements?.length > 0));
-    check('an item carries customData.kind = "issue"',
-          items.some((item) => item.elements?.some((element) => element?.customData?.kind === 'issue')),
-          'dragging in a new issue block would produce an inert shape');
-  }
+console.log('\n6. the shipped library can produce a functional block');
+// Adding an issue block from inside the canvas is only possible through the library: what
+// makes a block functional is customData.kind, and no Excalidraw control sets it. This works
+// because restore preserves customData through a library round-trip.
+//
+// Deliberately not referenced from board.config.json. These blocks belong on every board, so
+// EXCALIDRAW_LIBRARY points here — and naming it here as well would serve both sources to this
+// board and duplicate every item.
+const LIBRARY = 'docs/blocks.excalidrawlib';
+const libraryPath = resolve(repoRoot, LIBRARY);
+check('the shipped library exists', existsSync(libraryPath), LIBRARY);
+check('board.config.json does not also claim it', !config.library,
+      'a workspace library plus EXCALIDRAW_LIBRARY duplicates every item');
+if (existsSync(libraryPath)) {
+  const library = JSON.parse(readFileSync(libraryPath, 'utf8'));
+  const items = library.libraryItems ?? [];
+  check('it is an Excalidraw library', library.type === 'excalidrawlib', `type=${library.type}`);
+  check('every item has elements', items.length > 0 && items.every((item) => item.elements?.length > 0));
+  check('an item carries customData.kind = "issue"',
+        items.some((item) => item.elements?.some((element) => element?.customData?.kind === 'issue')),
+        'dragging in a new issue block would produce an inert shape');
 }
 
 const unreferenced = existsSync(docsDir)

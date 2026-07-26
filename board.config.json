@@ -2,7 +2,6 @@
   "name": "Board Tool",
   "docsDir": "docs",
   "board": "docs/board.excalidraw",
-  "library": "docs/board-tool.excalidrawlib",
   "repo": "vitorengers/mcp_excalidraw",
   "githubProject": "https://github.com/users/vitorengers/projects/5"
 }
