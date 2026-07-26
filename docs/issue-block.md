@@ -29,9 +29,11 @@ read the project's documentation before proposing a solution. Then write context
 competing hypotheses, scope, a verifiable definition of done, and the assumptions — and never
 fill a gap with a guess presented as fact.
 
-It also fixes the output language. The observation is typed on the board in the maintainer's own
-language; the issue is a development artifact and those are English. Without that line the agent
-mirrored the observation, which is how issue #20 came out in Portuguese.
+It also fixes the output language, and the reason is less obvious than it looks. Issue #20 came
+out entirely in Portuguese from an observation written in English — the observation's language
+is not what decided it. Step 3 sends the agent to read the project's own documentation before
+proposing anything, and that project documents in Portuguese, so the agent took the language
+from its surroundings. Nothing in the prompt said otherwise. Now it names English outright.
 
 ## Configuration
 
