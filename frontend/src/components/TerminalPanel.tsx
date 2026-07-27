@@ -1,4 +1,6 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
+import { Terminal } from '@xterm/xterm'
+import '@xterm/xterm/css/xterm.css'
 import { TERMINAL_FONT_SIZE } from '../../../src/core/terminal-block'
 import type { Rect } from '../../../src/core/anchored-placement'
 import './TerminalPanel.css'
@@ -10,13 +12,29 @@ export interface TerminalPanelProps {
   zoom: number
   /** True while the block is being dragged or resized, when a DOM overlay would lag it. */
   suppressed: boolean
-  /** The transcript, newest at the end. */
+  /** The transcript, newest at the end — escape sequences and all. */
   output: string
   /** What the session says about itself, or null when none is open. */
-  status: { cwd: string; shell: string; cols: number; rows: number } | null
+  status: { cwd: string; shell: string; mode: string; cols: number; rows: number } | null
   /** Set once the shell has gone, so the block can say so instead of looking idle. */
   ended: string | null
-  onSubmit: (line: string) => void
+  /** Keystrokes, as bytes: `\r` for Enter, `\x03` for Ctrl+C, `ESC [ A` for an arrow. */
+  onInput: (data: string) => void
+}
+
+/**
+ * A monospace stack that exists on the machines this runs on, kept in one place because
+ * `terminal-block.ts` measures a cell against it and the two must not drift.
+ */
+const FONT_FAMILY = "'Cascadia Code', 'Cascadia Mono', Menlo, Consolas, 'Courier New', monospace"
+
+/** The block's own palette, so the emulator and the shape underneath read as one object. */
+const THEME = {
+  background: '#1e1e2e',
+  foreground: '#cdd6f4',
+  cursor: '#a6e3a1',
+  cursorAccent: '#1e1e2e',
+  selectionBackground: '#45475a'
 }
 
 /**
@@ -27,35 +45,121 @@ export interface TerminalPanelProps {
  * shape. It is also what keeps the transcript out of every path that saves a board — an
  * overlay cannot be exported to PNG, synced or committed, because it was never an element.
  *
+ * What is *inside* the overlay is an emulator rather than a `<pre>`, and that is #75's other
+ * half. With a PTY behind the session the stream stops being text: it is cursor moves,
+ * colours, an alternate screen and a program repainting itself into all three. Printed into
+ * a `<pre>` that arrives as the `[33m` the screenshot in the issue showed. So the parsing
+ * happens here, and the block draws a screen rather than a log.
+ *
  * The difference from the documentation card is the zoom. That card is a reading column
  * pinned *next to* a shape and stays the same size on screen at any zoom. This one *is* the
- * shape: it fills the block's own bounds and its font scales with the board, so a terminal
- * zoomed out reads as a small dark box rather than as a giant font in a tiny frame. Alt+T
- * is what brings it back to a size you can read.
+ * shape: the grid is fixed by the block's scene size — the same `cols`×`rows` the shell was
+ * told — and the font scales with the board, so a terminal zoomed out is the same screen
+ * drawn smaller rather than a different number of columns.
  *
- * The body is transparent to the pointer on purpose. Excalidraw owns clicking, dragging and
- * resizing the block underneath — that is what "resizing on the board" means, and an
- * overlay that swallowed pointer events would take the shape's own handles away with it.
- * The cost is that the transcript cannot be scrolled or selected with the mouse yet: it is
- * pinned to the bottom, and a taller block shows more. Only the input row takes the pointer.
+ * The body is transparent to the pointer on purpose, and that survived the emulator. This
+ * is where a terminal in a canvas has to choose: Excalidraw owns clicking, dragging and
+ * resizing the block underneath, and an overlay that took pointer events — which is what
+ * xterm would like — would take the shape's own handles with it. So the pointer stays with
+ * the canvas and only the strip at the bottom takes it, to hand the *keyboard* over. Once
+ * it has been clicked every keystroke goes to the shell, Ctrl+C included; clicking anywhere
+ * on the canvas blurs it and gives the keyboard back. The cost is the one the transcript
+ * already had: no selecting or scrolling with the mouse.
  */
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
-  rect, zoom, suppressed, output, status, ended, onSubmit
+  rect, zoom, suppressed, output, status, ended, onInput
 }) => {
-  const bodyRef = useRef<HTMLPreElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const hostRef = useRef<HTMLDivElement>(null)
+  const terminalRef = useRef<Terminal | null>(null)
+  /** How much of `output` has been handed to the emulator, so a redraw is a delta. */
+  const writtenRef = useRef<string>('')
+  const onInputRef = useRef(onInput)
+  onInputRef.current = onInput
 
-  // Pinned to the newest line. A terminal that shows the top of a transcript while
-  // something is still writing to the bottom of it is showing the wrong end.
-  useEffect(() => {
-    const body = bodyRef.current
-    if (body) body.scrollTop = body.scrollHeight
-  }, [output, rect?.height])
+  const [attached, setAttached] = useState(false)
 
-  if (!rect || !status) return null
-
+  const drawn = Boolean(rect && status)
   const scale = Math.max(0.35, zoom)
   const fontSize = TERMINAL_FONT_SIZE * scale
+  const cols = Math.max(2, status?.cols ?? 80)
+  const rows = Math.max(1, status?.rows ?? 24)
+
+  // Built when there is a block to build it in, and taken apart when there is not. The
+  // transcript survives either way: it lives in `output` above this component, so a block
+  // deleted and brought back replays rather than starts empty.
+  useEffect(() => {
+    const host = hostRef.current
+    if (!drawn || !host) return
+
+    const terminal = new Terminal({
+      fontFamily: FONT_FAMILY,
+      fontSize,
+      // The same 1.35 the block's cell metric is derived from, so `cols`×`rows` fills it.
+      lineHeight: 1.35,
+      cols,
+      rows,
+      cursorBlink: true,
+      theme: THEME
+    })
+    terminal.open(host)
+    terminal.onData((data) => onInputRef.current(data))
+    terminalRef.current = terminal
+    writtenRef.current = ''
+
+    const textarea = terminal.textarea
+    const onFocus = (): void => setAttached(true)
+    const onBlur = (): void => setAttached(false)
+    textarea?.addEventListener('focus', onFocus)
+    textarea?.addEventListener('blur', onBlur)
+
+    return () => {
+      textarea?.removeEventListener('focus', onFocus)
+      textarea?.removeEventListener('blur', onBlur)
+      terminal.dispose()
+      terminalRef.current = null
+      writtenRef.current = ''
+      setAttached(false)
+    }
+    // Deliberately only `drawn`: the size and the font are pushed by the effects below,
+    // and rebuilding the emulator on every zoom would lose the screen it is drawing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawn])
+
+  // The delta, not the whole thing: an emulator is a screen being written to, so handing it
+  // the transcript again on every chunk would print the session over itself. A transcript
+  // that no longer starts with what has been written is a different session — a reload, or
+  // a shell that was replaced — and that is the one case worth a reset.
+  useEffect(() => {
+    const terminal = terminalRef.current
+    if (!terminal) return
+    const written = writtenRef.current
+    if (output === written) return
+    if (output.startsWith(written)) terminal.write(output.slice(written.length))
+    else { terminal.reset(); terminal.write(output) }
+    writtenRef.current = output
+  }, [output, drawn])
+
+  // The grid the *shell* was told, so what it repaints to and what is drawn are one thing.
+  useEffect(() => {
+    const terminal = terminalRef.current
+    if (!terminal) return
+    try { terminal.resize(cols, rows) } catch { /* disposed under us */ }
+  }, [cols, rows, drawn])
+
+  // The font follows the board's zoom; the grid does not. Same screen, drawn smaller.
+  useEffect(() => {
+    const terminal = terminalRef.current
+    if (!terminal) return
+    terminal.options.fontSize = fontSize
+  }, [fontSize, drawn])
+
+  useEffect(() => {
+    const terminal = terminalRef.current
+    if (!terminal || !ended) return
+    terminal.write(`\r\n[${ended}]\r\n`)
+  }, [ended, drawn])
+
+  if (!rect || !status) return null
 
   return (
     <div
@@ -68,43 +172,48 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         fontSize: `${fontSize}px`,
         visibility: suppressed ? 'hidden' : 'visible'
       }}
+      // Every key the emulator has taken stops here. Excalidraw binds bare letters to tools
+      // and listens below this container, so a keystroke that got past would change the
+      // active tool instead of reaching the shell.
+      onKeyDown={(event) => event.stopPropagation()}
+      onKeyUp={(event) => event.stopPropagation()}
     >
       <div className="terminal-card__header">
         <span className="terminal-card__where" title={status.cwd}>{status.cwd}</span>
         <span className="terminal-card__grid">{status.cols}×{status.rows}</span>
+        {/* Which of the two modes this session got. A block that says nothing about it is
+            how the same feature behaves differently on two machines with no way to tell. */}
+        <span
+          className="terminal-card__mode"
+          title={status.mode === 'pty'
+            ? 'A real terminal: full-screen programs work, and so does Ctrl+C.'
+            : 'No PTY on this machine, so the shell is on pipes: one command in, its output back.'}
+        >{status.mode}</span>
       </div>
 
-      <pre className="terminal-card__body" ref={bodyRef}>{output}
-        {ended ? `\n[${ended}]\n` : ''}</pre>
+      <div className="terminal-card__body" ref={hostRef} />
 
-      {/* The one part that takes the pointer, and the only reason this overlay needs to
-          stop events at all: Excalidraw binds every bare letter to a tool, so a keystroke
-          that reached the canvas would change the active tool instead of typing a command. */}
-      <form
+      {/* The one part that takes the pointer, and the only reason this overlay stops events
+          at all. Clicking it hands the keyboard to the shell; clicking the canvas takes it
+          back, which is also what leaves the block draggable and resizable underneath. */}
+      <div
         className="terminal-card__prompt"
-        onSubmit={(event) => {
+        onPointerDown={(event) => {
+          event.stopPropagation()
           event.preventDefault()
-          const input = inputRef.current
-          if (!input) return
-          onSubmit(input.value)
-          input.value = ''
+          terminalRef.current?.focus()
         }}
-        onPointerDown={(event) => event.stopPropagation()}
-        onKeyDown={(event) => event.stopPropagation()}
         onWheel={(event) => event.stopPropagation()}
       >
         <span className="terminal-card__caret">❯</span>
-        <input
-          ref={inputRef}
-          className="terminal-card__input"
-          type="text"
-          autoComplete="off"
-          spellCheck={false}
-          disabled={Boolean(ended)}
-          placeholder={ended ? 'the shell has gone' : 'a command, then Enter'}
-          style={{ fontSize: `${fontSize}px` }}
-        />
-      </form>
+        <span className="terminal-card__hint">
+          {ended
+            ? `the shell has gone — ${ended}`
+            : attached
+              ? 'typing goes to the shell — click the canvas to give the keyboard back'
+              : 'click here to type'}
+        </span>
+      </div>
     </div>
   )
 }

@@ -52,6 +52,30 @@ const containsPath = (haystack, needle) =>
     .includes(String(needle ?? '').replace(/\\/g, '/').toLowerCase());
 
 /**
+ * The transcript with its escape sequences taken out.
+ *
+ * A shell on a terminal colours its own prompt, moves the cursor and sets the window title,
+ * so a chunk that is one word of output is a dozen bytes of instructions around it. What
+ * those instructions mean is `check-terminal-ansi-browser.mjs`'s question; here they are
+ * noise, and a case about *what the shell said* has to read past them.
+ */
+const plain = (text) => String(text ?? '')
+  .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, '')
+  .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
+  .replace(/\u001b[()#%][0-9A-Za-z]/g, '')
+  .replace(/\u001b[=>ME78]/g, '');
+
+/**
+ * What Enter is, on the wire.
+ *
+ * A terminal sends a carriage return, and a shell reading a pipe reads lines ending in a
+ * newline. The two are not interchangeable: PowerShell's line editor takes a bare `\n` as
+ * "continue this command on the next line" and prints `>>` rather than running anything.
+ * Set once the session says which mode it is in.
+ */
+let ENTER = '\n';
+
+/**
  * A module from `dist`, or nothing.
  *
  * Nothing rather than an exit: run against the code as it stands, none of these modules
@@ -170,13 +194,26 @@ async function waitForHealth(base, server) {
   throw new Error(`the canvas server never answered on ${base}:\n${server.read()}`);
 }
 
+/**
+ * One request, with two more goes at the connection.
+ *
+ * Not a retry of the case — a 404 comes straight back, which is most of what this file
+ * asserts. This is for the socket itself, which on this machine occasionally refuses with
+ * `fetch failed` while three canvas servers are up at once.
+ */
 async function call(base, path, options = {}) {
   const glue = path.includes('?') ? '&' : '?';
-  const response = await fetch(`${base}${path}${glue}workspace=${WORKSPACE}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
-  return { status: response.status, body: await response.json().catch(() => ({})) };
+  let last;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetch(`${base}${path}${glue}workspace=${WORKSPACE}`, {
+        headers: { 'Content-Type': 'application/json' },
+        ...options,
+      });
+      return { status: response.status, body: await response.json().catch(() => ({})) };
+    } catch (error) { last = error; await sleep(250); }
+  }
+  throw last;
 }
 
 async function waitFor(predicate, what, attempts = 120) {
@@ -306,7 +343,11 @@ try {
 
   // ─── 3. Unset means the routes do not exist ─────────────────
   console.log('\n3. with EXCALIDRAW_TERMINAL unset the routes refuse, and nothing is spawned');
-  const disabled = startCanvas(DISABLED_PORT);
+  // Explicitly empty rather than merely absent: this check runs on machines where the
+  // feature is switched on for the board being worked on, and `startCanvas` inherits the
+  // environment. Left to chance, the case that proves the routes do not exist is the one
+  // most likely to be answered by a server that had them all along.
+  const disabled = startCanvas(DISABLED_PORT, { EXCALIDRAW_TERMINAL: '' });
   const DISABLED_BASE = `http://127.0.0.1:${DISABLED_PORT}`;
   await waitForHealth(DISABLED_BASE, disabled);
 
@@ -356,34 +397,57 @@ try {
         samePath(open.body?.session?.cwd, projectDir),
         `${open.body?.session?.cwd} vs ${projectDir}`);
   check('and reports the shell it started', Boolean(open.body?.session?.shell), JSON.stringify(open.body?.session));
+  check('and which mode it got', ['pty', 'pipe'].includes(open.body?.session?.mode),
+        String(open.body?.session?.mode));
   const pid = open.body?.session?.pid;
   check('and a live process', alive(pid), `pid ${pid}`);
 
-  await call(BASE, '/api/terminal/input', { method: 'POST', body: JSON.stringify({ data: 'pwd\n' }) });
-  await waitFor(() => viewer.output().some((message) => containsPath(message.data, projectDir)),
-                'pwd to report the workspace root');
-  check('pwd reports the workspace root',
-        viewer.output().some((message) => containsPath(message.data, projectDir)),
-        viewer.output().map((message) => message.data).join('|').slice(-300));
-  check('what was typed is in the transcript too',
-        viewer.output().some((message) => String(message.data).includes('pwd')),
-        viewer.output().map((message) => message.data).join('|').slice(-300));
+  ENTER = open.body?.session?.mode === 'pty' ? '\r' : '\n';
+
+  // A shell on a terminal has a REPL to start before it can read anything, and a command
+  // written into a PowerShell that is still starting is a command nobody runs. A reader
+  // waits for the prompt to appear; so does this. A piped shell prints no prompt at all,
+  // so there is nothing there to wait for.
+  if (ENTER === '\r') {
+    await waitFor(() => viewer.output().length > 0, 'the shell to print its first prompt');
+    await sleep(500);
+  }
+
+  // Everything after this point, and not the prompt before it: a shell on a terminal prints
+  // its working directory in the prompt, so "the path is somewhere in the transcript" would
+  // be true before `pwd` had been typed at all.
+  const beforePwd = viewer.output().length;
+  const sincePwd = () => plain(viewer.output().slice(beforePwd).map((message) => message.data).join(''));
+  await call(BASE, '/api/terminal/input', { method: 'POST', body: JSON.stringify({ data: `pwd${ENTER}` }) });
+
+  // Typed once and shown once: the shell echoes for itself on a terminal, and the session
+  // echoes for it on a pipe. Either way it is there, and `check-terminal-pty.mjs` is what
+  // holds the two apart.
+  await waitFor(() => sincePwd().includes('pwd'), 'the shell to take the command');
+  check('what was typed is in the transcript too', sincePwd().includes('pwd'), sincePwd().slice(-300));
+
+  // Not "on a line of its own": PowerShell's `pwd` is `Get-Location`, which prints a table
+  // and puts the next prompt where the cursor moves say rather than after a newline, so the
+  // lines a reader sees are made by escapes this has just stripped.
+  const answered = () => containsPath(sincePwd(), projectDir);
+  await waitFor(answered, 'pwd to report the workspace root');
+  check('pwd reports the workspace root', answered(), sincePwd().slice(-300));
 
   // ─── 6. Incremental, which is the whole point ───────────────
   console.log('\n6. output arrives while the command is still running, not once it exits');
   const before = viewer.output().length;
-  await call(BASE, '/api/terminal/input', { method: 'POST', body: JSON.stringify({ data: `${script.twoBursts}\n` }) });
+  await call(BASE, '/api/terminal/input', { method: 'POST', body: JSON.stringify({ data: `${script.twoBursts}${ENTER}` }) });
 
-  await waitFor(() => viewer.output().slice(before).some((message) => String(message.data).includes('first')),
+  await waitFor(() => viewer.output().slice(before).some((message) => plain(message.data).includes('first')),
                 'the first burst');
   const firstAt = Date.now();
   const exitedEarly = viewer.messages.some((message) => message.type === 'terminal_exit');
-  await waitFor(() => viewer.output().slice(before).some((message) => String(message.data).includes('second')),
+  await waitFor(() => viewer.output().slice(before).some((message) => plain(message.data).includes('second')),
                 'the second burst');
 
   const burst = viewer.output().slice(before);
-  const firstIndex = burst.findIndex((message) => String(message.data).includes('first'));
-  const secondIndex = burst.findIndex((message) => String(message.data).includes('second'));
+  const firstIndex = burst.findIndex((message) => plain(message.data).includes('first'));
+  const secondIndex = burst.findIndex((message) => plain(message.data).includes('second'));
   check('both halves arrived', firstIndex >= 0 && secondIndex >= 0,
         burst.map((message) => JSON.stringify(message.data)).join(' '));
   check('as two messages, not one buffered at the end', firstIndex !== secondIndex,
@@ -397,12 +461,15 @@ try {
 
   // ─── 7. A command typed in comes back ───────────────────────
   console.log('\n7. a command typed into the block runs and its output comes back');
-  const typed = await call(BASE, '/api/terminal/input', { method: 'POST', body: JSON.stringify({ data: `${script.banana}\n` }) });
+  const typed = await call(BASE, '/api/terminal/input', { method: 'POST', body: JSON.stringify({ data: `${script.banana}${ENTER}` }) });
   check('the input is accepted', typed.status === 202, `got ${typed.status} ${JSON.stringify(typed.body)}`);
-  await waitFor(() => viewer.output().some((message) => String(message.data).includes('banana')), 'the output');
+  await waitFor(() => viewer.output().some((message) => plain(message.data).includes('banana')), 'the output');
+  // A line of its own, once the escapes are out of the way: what the shell printed, not a
+  // word that happens to be inside a prompt or an echo of the command that produced it.
   check('the output came back',
-        viewer.output().some((message) => String(message.data).trim() === 'banana'),
-        viewer.output().map((message) => JSON.stringify(message.data)).join(' ').slice(-300));
+        viewer.output().some((message) => plain(message.data).split(/\r?\n/)
+          .some((line) => line.trim() === 'banana')),
+        viewer.output().map((message) => JSON.stringify(plain(message.data))).join(' ').slice(-300));
 
   const empty = await call(BASE, '/api/terminal/input', { method: 'POST', body: JSON.stringify({}) });
   check('input with nothing in it is a 400', empty.status === 400, `got ${empty.status}`);
@@ -487,7 +554,7 @@ try {
   // ─── 12. Closing takes the tree with it ────────────────────
   console.log('\n12. closing a session leaves nothing running');
   await call(BASE, '/api/terminal/input', { method: 'POST',
-    body: JSON.stringify({ data: `node "${tickScript.replace(/\\/g, '/')}"\n` }) });
+    body: JSON.stringify({ data: `node "${tickScript.replace(/\\/g, '/')}"${ENTER}` }) });
   const ticks = () => (existsSync(tickFile) ? statSync(tickFile).size : 0);
   const ticking = await waitFor(() => ticks() > 3, 'the grandchild to start ticking');
 
@@ -521,7 +588,20 @@ try {
   console.log('\n14. and a server going down does not leave a shell behind');
   const survivor = reopened.body?.session?.pid;
   canvas.child.kill('SIGTERM');
-  await waitFor(() => !alive(survivor), 'the shell to go with its server', 60);
+  // Longer than it used to need. A piped shell went the instant its stdin closed, which is
+  // the same moment the server did. A shell on a terminal goes when the terminal does, and
+  // on Windows `kill` is a hard terminate — no handler of the server's runs, so what takes
+  // the shell down is the operating system tearing the pseudoconsole apart, a second or two
+  // later. A shutdown the server is allowed to see still takes the tree itself, which is
+  // case 12.
+  await waitFor(() => !alive(survivor), 'the shell to go with its server', 200);
+  if (alive(survivor) && isWindows) {
+    console.error(spawnSync('tasklist', ['/FI', `PID eq ${survivor}`], { encoding: 'utf8' }).stdout);
+    console.error(spawnSync('powershell.exe', ['-NoProfile', '-Command',
+      `Get-CimInstance Win32_Process -Filter "ProcessId=${survivor}" | Select-Object ProcessId,ParentProcessId,CommandLine | Format-List`],
+      { encoding: 'utf8' }).stdout);
+    console.error('SERVER LOG:', canvas.read().slice(-2000));
+  }
   check('the shell went with the server', !alive(survivor), `pid ${survivor} outlived the server`);
 
   viewer.close();
@@ -560,10 +640,14 @@ try {
     check('and reports the inner path as its directory', wslOpen.body?.session?.cwd === innerPath,
           String(wslOpen.body?.session?.cwd));
 
-    await call(WSL_BASE, '/api/terminal/input', { method: 'POST', body: JSON.stringify({ data: 'pwd\n' }) });
-    await waitFor(() => wslViewer.output().some((message) => String(message.data).includes(innerPath)),
+    if (ENTER === '\r') {
+      await waitFor(() => wslViewer.output().length > 0, 'the shell inside the distro to start');
+      await sleep(500);
+    }
+    await call(WSL_BASE, '/api/terminal/input', { method: 'POST', body: JSON.stringify({ data: `pwd${ENTER}` }) });
+    await waitFor(() => wslViewer.output().some((message) => plain(message.data).includes(innerPath)),
                   'pwd inside the distro');
-    const said = wslViewer.output().map((message) => String(message.data)).join('');
+    const said = wslViewer.output().map((message) => plain(message.data)).join('');
     check('pwd answers with the path the distro names', said.includes(innerPath), said.slice(-200));
     check('and nothing in the transcript is a UNC path', !/wsl\.localhost|wsl\$/i.test(said), said.slice(-200));
 
