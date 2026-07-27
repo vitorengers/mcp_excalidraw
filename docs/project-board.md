@@ -211,10 +211,27 @@ it. Delete the option and the `+` moves onto `Todo`, where observations and real
 column again, while every block still carrying the old id names a column the board no longer has —
 placed nowhere, counted by nothing, overlapped by the next redraw.
 
-Blocks naming a column that is gone are **rehomed into the notes column** (`layoutMirror`), which
-is the one rule #97 reverses rather than adds. `layoutBoard` still leaves such a block where it
-sits: none of the project's columns is where it *belongs*, only where it might be guessed to. The
-notes column is where it belongs by construction — every draft was written as an observation.
+**Every draft is drawn in the notes column, and the stamp it carries decides nothing**
+(`layoutMirror`). That is the one rule #97 reverses rather than adds. `layoutBoard` still leaves a
+block where its `sectionOptionId` says: none of the project's columns is where it *belongs*, only
+where it might be guessed to. The notes column is where it belongs by construction — every draft
+was written as an observation.
+
+Keyed on "the board no longer has this column" for one release, which caught half the population
+and missed the half that is harder to see. A block carries whichever column the `+` was on when it
+was clicked, written once and never again, so while that column was an ordinary option any change
+to the project's **ordering** stranded every block already written — with a stamp naming an option
+that is still perfectly real. Adding `My Notes` in front of `Todo` did exactly that on project 5:
+three observations written beforehand kept `f75ad846` and were drawn among the issues in `Todo`,
+where the whole contract is that a card is an issue that exists. Nothing could move them either —
+`settleMirrorDrag` rewrites a column for mirrored cards and nothing else, so dragging one moved it
+until the next relayout and no further. That is #117.
+
+So `sectionOptionId` on a draft is now **vestigial**: written by the `+`, overruled by the layout,
+and read by nothing that decides anything. It is left on the element rather than rewritten there,
+because a correction that had to be *written* is a correction that can fail, be refused, or lose a
+race with the autosync — and this one cannot. Nothing about a draft's column has to reach the
+server to be true on screen.
 
 The name `My Notes` is the one column name in this repository that is a constant, and it has to
 be: every other name is GitHub's because every other column is GitHub's.

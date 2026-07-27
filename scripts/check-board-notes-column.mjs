@@ -250,6 +250,65 @@ check('no column the project declared grew for it',
         headerLabel(stale, optionId) === headerLabel(laid, optionId)),
       [FIRST, SECOND, THIRD].map((optionId) => headerLabel(stale, optionId)).join(' | '));
 
+// ─── 3b. And the blocks stamped with an option that is still there ────
+
+/**
+ * The other half of the same population, and the half that is harder to see.
+ *
+ * A block carries whichever column the `+` was on when it was clicked, written once and
+ * never again. When the notes column was an ordinary option, the `+` moved every time the
+ * project's *ordering* changed — so a project that gained a column in front of the old
+ * first one left every observation written before that stamped with an option that is
+ * still perfectly real. Project 5 did exactly this: three blocks written while `Todo` was
+ * first kept `f75ad846` when `My Notes` was added in front, and were drawn among the
+ * issues in `Todo` ever since, in a column whose whole contract is that its cards are
+ * issues that exist.
+ *
+ * Section 3 does not catch it. Rehoming keyed on "the board no longer has this column",
+ * and this column it does have — so the draft was placed exactly where it said, which is
+ * the defect. The rule that catches both is the simpler one: **a draft is an observation,
+ * and observations are in the notes column.** Nothing else may hold one, whether or not
+ * GitHub still declares it.
+ *
+ * There is no way out of it by hand either, which is what makes it a defect rather than an
+ * untidiness: `settleMirrorDrag` rewrites a column for mirrored cards and nothing else, so
+ * dragging such a block moves it until the next relayout and no further.
+ */
+console.log('\n3b. and one naming an option the board still has lands there too');
+
+const misfiled = layMirror(board(), ORIGIN, {
+  drafts: [draft('pbdraft-misfiled', FIRST, 3000, 140), draft('pbdraft-own', NOTES, 1000)],
+});
+
+check('it is not left in the project column it names',
+      placementOf(misfiled, 'pbdraft-misfiled')?.x !== columnOf(misfiled, FIRST)?.x,
+      `draft x=${placementOf(misfiled, 'pbdraft-misfiled')?.x}, ${NAMES[0]} x=${columnOf(misfiled, FIRST)?.x}`);
+check('it is in the notes column, with the blocks that were already right',
+      placementOf(misfiled, 'pbdraft-misfiled')?.x === columnOf(misfiled, NOTES)?.x,
+      `${placementOf(misfiled, 'pbdraft-misfiled')?.x} vs ${columnOf(misfiled, NOTES)?.x}`);
+check('newest on top, the way every other draft stacks',
+      placementOf(misfiled, 'pbdraft-misfiled')?.y === columnOf(misfiled, NOTES)?.draftsTop
+      && (placementOf(misfiled, 'pbdraft-own')?.y ?? 0)
+         >= (placementOf(misfiled, 'pbdraft-misfiled')?.y ?? 0) + 140,
+      JSON.stringify(misfiled.drafts));
+check('the notes header counts both', headerLabel(misfiled, NOTES)?.endsWith('(2)'),
+      JSON.stringify(headerLabel(misfiled, NOTES)));
+check('and the column it used to be drawn in counts exactly what it did before — one card',
+      headerLabel(misfiled, FIRST) === headerLabel(laid, FIRST),
+      `${headerLabel(misfiled, FIRST)} vs ${headerLabel(laid, FIRST)}`);
+check('so its cards did not have to give up any room',
+      cardsOf(misfiled, FIRST).every((element, index) => element.y === cardsOf(laid, FIRST)[index]?.y),
+      `${cardsOf(misfiled, FIRST).map((c) => c.y).join(',')} vs ${cardsOf(laid, FIRST).map((c) => c.y).join(',')}`);
+
+// A rename mints new option ids, so the two halves are one population a day apart. Neither
+// spelling of the stamp may decide where an observation is drawn.
+const renamedAway = layMirror(board(['Backlog', 'Doing', 'Landed']), ORIGIN, {
+  drafts: [draft('pbdraft-misfiled', FIRST, 3000, 140)],
+});
+check('and renaming the columns changes none of it',
+      placementOf(renamedAway, 'pbdraft-misfiled')?.x === columnOf(renamedAway, NOTES)?.x,
+      JSON.stringify(renamedAway.drafts));
+
 // ─── 4. What the notes header says ────────────────────────────
 
 console.log('\n4. the notes header is a draft count, because a draft is all it can hold');
