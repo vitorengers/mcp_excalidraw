@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Checks the terminal the canvas hosts on the right of the board.
+ * Checks the terminal the canvas hosts on the far left of the board.
  *
  * The feature spawns a shell with full access to a repository on an API that has no
  * authentication, so most of these cases are about the guards rather than about the shell:
@@ -278,20 +278,65 @@ const stubCommand = `node "${stubShell.replace(/\\/g, '/')}"`;
 
 try {
   // ─── 1. The block's placement, before any of it runs ────────
-  console.log('1. the block is placed by the mirror\'s rule with the sign flipped');
+  //
+  // The block is placed once and then left alone, so it has to sit on the edge the board
+  // does *not* grow into. The documentation is the only thing here that grows, and it grows
+  // right; so the block goes on the far left, past the mirror, which repaints on a timer and
+  // can therefore afford to be in the way of something.
+  console.log('1. the block is placed to the left of the mirror, on the edge nothing grows into');
   const block = await importDist(join('core', 'terminal-block.js'), 'the terminal block module');
   if (block) {
     const { TERMINAL_KIND, TERMINAL_GAP, TERMINAL_SIZE, terminalOrigin, terminalBlockElement, terminalGrid } = block;
 
     check('the kind is "terminal"', TERMINAL_KIND === 'terminal', String(TERMINAL_KIND));
+
+    // What the two regions look like on a board that has a project: the content, and the
+    // mirror one gap to the left of it with its own width. The numbers are `renderMirror`'s
+    // arithmetic worked out by hand, so this case cannot drift with it silently.
     const bounds = { minX: -400, minY: 120, maxX: 900, maxY: 700 };
-    const origin = terminalOrigin(bounds);
-    check('anchored to the right edge of the content, not to a fixed column',
-          origin.x === bounds.maxX + TERMINAL_GAP, `${JSON.stringify(origin)} for ${JSON.stringify(bounds)}`);
-    check('and to the top of it, the way the mirror is', origin.y === bounds.minY, String(origin.y));
-    const moved = terminalOrigin({ ...bounds, maxX: bounds.maxX + 1000 });
-    check('a board that grew moves the block with it', moved.x === origin.x + 1000, `${origin.x} → ${moved.x}`);
-    check('an empty board still gets an origin', Number.isFinite(terminalOrigin(null).x));
+    const mirror = { minX: -1000, minY: 120, maxX: -520, maxY: 940 };
+
+    const origin = terminalOrigin(bounds, mirror);
+    check('anchored to the mirror\'s left edge, not to a fixed column',
+          origin.x === mirror.minX - TERMINAL_GAP - TERMINAL_SIZE.width,
+          `${JSON.stringify(origin)} for a mirror at ${mirror.minX}`);
+    check('and to the top of it, the way the mirror is level with the content',
+          origin.y === mirror.minY, String(origin.y));
+    check('so the block is clear of the mirror rather than under it',
+          origin.x + TERMINAL_SIZE.width <= mirror.minX,
+          `block ends at ${origin.x + TERMINAL_SIZE.width}, mirror starts at ${mirror.minX}`);
+
+    // The point of the whole arrangement: the documentation grows rightward, and the block
+    // that is never re-anchored is no longer on that edge.
+    const grewRight = terminalOrigin({ ...bounds, maxX: bounds.maxX + 1000 }, mirror);
+    check('a board that grew rightward leaves the block exactly where it was',
+          grewRight.x === origin.x, `${origin.x} → ${grewRight.x}`);
+
+    // And the parenthesis in the observation: growing leftward walks the mirror left on the
+    // next poll, so the block has to be measured from the mirror and not from the content.
+    const grewLeft = terminalOrigin({ ...bounds, minX: bounds.minX - 1000 },
+                                    { ...mirror, minX: mirror.minX - 1000 });
+    check('a board that grew leftward walks the mirror left, and the block with it',
+          grewLeft.x === origin.x - 1000, `${origin.x} → ${grewLeft.x}`);
+    check('and the block is still clear of the mirror that moved',
+          grewLeft.x + TERMINAL_SIZE.width <= mirror.minX - 1000,
+          `block ends at ${grewLeft.x + TERMINAL_SIZE.width}, mirror starts at ${mirror.minX - 1000}`);
+
+    // A board with no `githubProject` grows no mirror at all, so the slot the mirror would
+    // have had is free and the block takes it.
+    const noMirror = terminalOrigin(bounds, null);
+    check('with no mirror the block takes the mirror\'s own slot',
+          noMirror.x === bounds.minX - TERMINAL_GAP - TERMINAL_SIZE.width,
+          `${JSON.stringify(noMirror)} for content starting at ${bounds.minX}`);
+    check('level with the content\'s top', noMirror.y === bounds.minY, String(noMirror.y));
+    check('and it is the same call with the mirror left out, not a second rule',
+          terminalOrigin(bounds).x === noMirror.x,
+          `${terminalOrigin(bounds).x} vs ${noMirror.x}`);
+
+    check('an empty board still gets a finite origin', Number.isFinite(terminalOrigin(null).x));
+    check('an empty board that already has a mirror is measured against it',
+          terminalOrigin(null, mirror).x === mirror.minX - TERMINAL_GAP - TERMINAL_SIZE.width,
+          String(terminalOrigin(null, mirror).x));
 
     const element = terminalBlockElement(origin, TERMINAL_SIZE);
     check('the block is marked derived', element.customData?.kind === TERMINAL_KIND,

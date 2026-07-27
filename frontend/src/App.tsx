@@ -39,6 +39,7 @@ import {
   terminalGrid,
   terminalOrigin
 } from '../../src/core/terminal-block'
+import type { Bounds } from '../../src/core/terminal-block'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
@@ -159,6 +160,22 @@ const TERMINAL_HOTKEY_CODE = 'KeyT';
 const TERMINAL_RESIZE_DEBOUNCE_MS = 400;
 
 /**
+ * The mark on a terminal block that was placed before the mirror had been drawn.
+ *
+ * The block is anchored to the mirror's left edge, and a session opens well before the first
+ * poll comes back: `POST /api/terminal` spawns a shell, `GET /api/project-board` spawns a
+ * `gh`. So on a board that has a project, the block is placed against a mirror that is not
+ * there yet, lands in the slot the mirror is about to take, and — being placed once and never
+ * re-anchored — stays under it.
+ *
+ * This is what lets `renderMirror` move it out of the way exactly once. The mark comes off
+ * with the move, so no later poll ever touches the block again and the reader's own dragging
+ * is safe. A block already dragged is left alone even on that one pass: it is only rescued
+ * while it is still standing where it was put.
+ */
+const TERMINAL_AWAITING_MIRROR = 'awaitingMirror';
+
+/**
  * How long to wait before putting an erased block back.
  *
  * Not immediately: the erase arrives as a scene change, and re-placing the block inside the
@@ -201,6 +218,19 @@ const isTerminalElement = (element: { customData?: CustomData }): boolean =>
  */
 const isDerivedElement = (element: { customData?: CustomData }): boolean =>
   isMirrorElement(element) || isTerminalElement(element);
+
+/**
+ * The rectangle a set of elements covers, or nothing when there are none.
+ *
+ * `getCommonBounds` answers an empty set with infinities, and arithmetic on those produces a
+ * coordinate no viewport will ever reach. Nothing is the honest answer, and saying it in one
+ * place is what keeps each caller from having to remember.
+ */
+const boundsOf = (elements: readonly { isDeleted?: boolean }[]): Bounds | null => {
+  if (elements.length === 0) return null;
+  const [minX, minY, maxX, maxY] = getCommonBounds(elements as readonly NonDeletedExcalidrawElement[]);
+  return { minX, minY, maxX, maxY };
+};
 
 /**
  * A block the `+` dropped, waiting for its run to produce a real card.
@@ -1347,8 +1377,10 @@ function App(): JSX.Element {
     const own = scene.filter((element) => !element.isDeleted && !isMirrorElement(element))
     const drafts = own.filter(isDraftBlock)
     // The terminal is left out of the measurement for the reason the drafts are: it is
-    // placed *from* the board's own bounds, on the other side, so measuring against it
-    // would walk the mirror further left every time the terminal moved right.
+    // placed *from* this region's own left edge, so measuring against it would walk the
+    // mirror left onto the block, and the block left again, on every pass. Since #96 the
+    // two sit side by side on the same side of the content, which makes this load bearing
+    // rather than merely tidy.
     const anchors = own.filter((element) => !isDraftBlock(element)
       && !isTerminalElement(element)
       && !(element.containerId && drafts.some((draft) => draft.id === element.containerId)))
@@ -1378,7 +1410,40 @@ function App(): JSX.Element {
     // what makes happen.
     const frozen = editingDraftId(api)
 
+    // A terminal block placed before this board landed is standing in the slot the mirror is
+    // about to take — the no-mirror fallback, chosen when there was no mirror to see. Move it
+    // out of the way, once, and take the mark off with it: a block is placed once and never
+    // re-anchored, and this pass is the one exception, not a second cadence.
+    //
+    // Only while it is still exactly where it was put. A reader who dragged it in the seconds
+    // before the first poll has said where it goes, and that outranks the arithmetic — as has
+    // a block detached beside another, or restored at a geometry it remembers, neither of
+    // which is ever at this origin.
+    const marked = own.filter((element) => isTerminalElement(element)
+      && customDataOf(element)[TERMINAL_AWAITING_MIRROR] === true)
+    const placedAt = marked.length > 0
+      ? terminalOrigin(boundsOf(own.filter((element) => !isTerminalElement(element))), null)
+      : null
+    const rescue = placedAt
+      ? terminalOrigin(null, { minX: origin.x, minY: origin.y,
+                               maxX: origin.x + layout.bounds.width,
+                               maxY: origin.y + layout.bounds.height })
+      : null
+    const strandedIds = new Set(marked.map((element) => element.id))
+
     const nextOwn = own.map((element) => {
+      if (isTerminalElement(element)) {
+        // The mark comes off whether or not the block moved, so this can never fire twice.
+        if (!strandedIds.has(element.id)) return element
+        const { [TERMINAL_AWAITING_MIRROR]: _placedBlind, ...rest } = customDataOf(element)
+        const moved = rescue && placedAt
+          && element.x === placedAt.x && element.y === placedAt.y
+          ? rescue
+          : {}
+        // Excalidraw reconciles by version, so a shape whose only change is its `customData`
+        // and whose version stands still is one it may keep as it was.
+        return { ...element, ...moved, version: (element.version ?? 1) + 1, customData: rest }
+      }
       if (frozen && (element.id === frozen || element.containerId === frozen)) return element
       const slot = placed.get(element.containerId ?? '') ?? placed.get(element.id)
       if (!slot) return element
@@ -1396,8 +1461,10 @@ function App(): JSX.Element {
 
     // `frozen` is part of the signature because it changes what gets written: the pass that
     // left a block alone must not let the one after the editor closed, which puts it back
-    // in its slot, be skipped as "nothing moved".
-    const signature = JSON.stringify([layout.elements, layout.drafts, frozen])
+    // in its slot, be skipped as "nothing moved". A pending rescue is in it for the same
+    // reason — the mirror itself may be identical to the last pass, and the terminal still
+    // has to be moved out from under it.
+    const signature = JSON.stringify([layout.elements, layout.drafts, frozen, [...strandedIds], rescue])
     if (signature === projectBoardRef.current.signature
         && scene.some((element) => isMirrorElement(element))) {
       // Nothing moved. Redrawing anyway would fight the reader's selection every poll.
@@ -1949,9 +2016,9 @@ function App(): JSX.Element {
    * Three placements, and they answer different questions. `beside` is a detach — the new
    * block goes next to the one the tab came out of. `at` is a **restore**: the block was
    * erased and putting it back means putting it *back*, at the size and position the reader
-   * had it, because a restore that re-anchored it to the right of the board would answer an
-   * accidental erase by also undoing a drag. Neither is where a terminal *goes*, which is
-   * the last case: one gap right of what the board has authored.
+   * had it, because a restore that re-anchored it past the mirror would answer an accidental
+   * erase by also undoing a drag. Neither is where a terminal *goes*, which is the last case:
+   * one gap left of the mirror, or of the content on a board that has no mirror.
    */
   const newTerminalBlock = (
     api: ExcalidrawImperativeAPI,
@@ -1961,6 +2028,20 @@ function App(): JSX.Element {
       at?: { x: number; y: number; width: number; height: number }
     } = {}
   ): Record<string, unknown> => {
+    const scene = api.getSceneElementsIncludingDeleted().filter((element) => !element.isDeleted)
+
+    // The mirror is what the block clears when the board has one, and its left edge is read
+    // from the shapes themselves rather than recomputed: `renderMirror` is the authority on
+    // where the region went, and two derivations of one number is how they come to disagree.
+    const mirror = boundsOf(scene.filter(isMirrorElement))
+
+    // No mirror drawn *yet* is not the same as a board that has none, and from here the two
+    // are indistinguishable: the poll that draws it spawns a `gh` and takes seconds, while a
+    // session opens on a `POST` that spawns a shell. So a block placed while there is none to
+    // see is marked, and `renderMirror` moves it out of the mirror's slot on the first board
+    // that lands — once, and only if it is still standing at the origin below.
+    const blind = mirror ? {} : { [TERMINAL_AWAITING_MIRROR]: true }
+
     const beside = where.beside
     if (beside) {
       return terminalBlockElement(
@@ -1975,22 +2056,22 @@ function App(): JSX.Element {
       return terminalBlockElement(
         { x: where.at.x, y: where.at.y },
         { width: where.at.width, height: where.at.height },
-        { sessions, active: sessions[0] ?? '' }
+        // Marked, because the geometry being restored may itself have been chosen blind — a
+        // block erased in the seconds before the first poll is put back in the mirror's slot.
+        // It costs nothing when it was not: the move is refused for any block that is not at
+        // that origin, and the mark comes off either way.
+        { sessions, active: sessions[0] ?? '', ...blind }
       )
     }
-    // "The right side" measured against what this board authored, which is neither the
-    // mirror on the left nor a terminal block that is on its way out.
-    const anchors = api.getSceneElementsIncludingDeleted()
-      .filter((element) => !element.isDeleted && !isDerivedElement(element))
-    const bounds = anchors.length > 0
-      ? (() => {
-        const [minX, minY, maxX, maxY] = getCommonBounds(anchors as readonly NonDeletedExcalidrawElement[])
-        return { minX, minY, maxX, maxY }
-      })()
-      : null
-    return terminalBlockElement(terminalOrigin(bounds), TERMINAL_SIZE, {
+
+    // What this board authored, which is neither the mirror nor a terminal block. Only used
+    // when there is no mirror to measure against.
+    const bounds = boundsOf(scene.filter((element) => !isDerivedElement(element)))
+
+    return terminalBlockElement(terminalOrigin(bounds, mirror), TERMINAL_SIZE, {
       sessions,
-      active: sessions[0] ?? ''
+      active: sessions[0] ?? '',
+      ...blind
     })
   }
 

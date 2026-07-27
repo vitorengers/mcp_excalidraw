@@ -1,8 +1,8 @@
 # The terminal
 
-Shells running in the project, drawn as blocks on the **right** of the board — opposite the
-GitHub project mirror on the left. Type into one and its output arrives as it is produced. A
-block carries a **strip of tabs**, one per shell, and a tab can be given a block of its own.
+Shells running in the project, drawn as blocks on the **far left** of the board, one gap beyond
+the GitHub project mirror. Type into one and its output arrives as it is produced. A block
+carries a **strip of tabs**, one per shell, and a tab can be given a block of its own.
 
 This spawns a process that runs **whatever arrives over an API with no authentication**. The
 issue block, which `docs/issue-block.md` calls the most dangerous thing this server does, at
@@ -236,15 +236,35 @@ neither has ever been an element.
 
 ## Where it sits, and how it is drawn
 
-"The right side" is a rule, not a pixel column: `maxX + 120`, level with the top of whatever the
-board has authored. That is the mirror's own arithmetic with the sign flipped — the mirror is
-`minX - gap - width` (`src/core/project-board-layout.ts`) — and it means both regions follow a
-board that grew instead of sitting at a coordinate somebody once picked. The mirror and the
-terminal are each left out of the other's measurement, or they would walk away from the content
-in opposite directions on every pass.
+Left to right the canvas reads **terminal | mirror | content**. "The far left" is a rule, not a
+pixel column: the block is `left - 120 - width` of the region it has to clear, level with the
+top of it — the mirror's own arithmetic, applied a second time. With a `githubProject` the
+region to clear is the mirror; with none the mirror stays dormant, its slot is free, and the
+block takes it, one gap left of the content. So every region follows a board that grew instead
+of sitting at a coordinate somebody once picked, and the mirror and the terminal are each left
+out of the other's measurement, or each pass would walk them further apart.
 
 Placed **once**, unlike the mirror, which repaints on a timer: this one is expected to be moved
 and resized, and a redraw that re-anchored it every twenty seconds would undo that.
+
+**Which side follows from that.** Placed once means the block never moves aside, so it cannot
+sit on the edge the board grows into — and the documentation, the only thing here that grows,
+grows down and right. It was on the right until #96, and anything authored past the right edge
+as it stood when the session opened ran straight into a block that would not budge. The mirror
+never had that problem because it repaints; putting the place-once shape behind it puts it on
+the edge nothing runs into.
+
+The invariant this depends on is the other half of the same reading: **the documentation grows
+down and right.** Growing it leftward walks the mirror left on the next poll, and the mirror
+walks into the terminal — so content that has to extend leftward should be moved right instead.
+
+**One exception to "placed once."** A session opens on a `POST` that spawns a shell; the mirror
+arrives on a poll that spawns a `gh`. On a board that has a project the block is therefore
+placed before there is a mirror to anchor it to, lands in the mirror's own slot, and would sit
+under it for the rest of the session. It is marked `customData.awaitingMirror` when that
+happens, and the first board that lands moves it aside and takes the mark off — once, and only
+while the block is still exactly where it was put, so a reader who has already dragged it keeps
+their own placement.
 
 The block itself is a plain rectangle, and everything that reads as a terminal is a DOM overlay
 positioned over its bounds (`frontend/src/components/TerminalPanel.tsx`). Inside that overlay is
@@ -346,9 +366,9 @@ The block is not `locked`, and `locked` is the only thing Excalidraw's eraser re
 corner resize that *are* the interface here, so the block stays erasable and **the erase is
 undone instead**: the board notices, in `syncTerminalBlocks`, that it has lost a block whose
 shells are still running, and puts one back where the reader had it — the size and the position
-it was erased at, not re-anchored to the right of the board. A block with two tabs comes back as
-one block with two tabs, because what is remembered is per session and the restore groups the
-orphans by the geometry they share.
+it was erased at, not re-anchored past the mirror. A block with two tabs comes back as one block
+with two tabs, because what is remembered is per session and the restore groups the orphans by
+the geometry they share.
 
 That is the only answer that keeps the shells reachable. Nothing in the erase path kills one:
 `DELETE /api/terminal` is never sent by the frontend for an erase, so a block that stayed gone

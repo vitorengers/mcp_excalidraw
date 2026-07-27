@@ -7,8 +7,10 @@
  * that never opened, a race in tab initialisation, a click landing on the label instead of
  * the box. All three compiled and type-checked.
  *
- * So the questions here are the ones only a browser can answer. Is the block on the right
- * of the board? Does Alt+T bring it into view? Does a click reach the *shape* through the
+ * So the questions here are the ones only a browser can answer. Is the block on the far left
+ * of the board, clear of the mirror it is anchored to — including when the session opened
+ * before the first poll drew that mirror, which is the ordering a reload actually produces?
+ * Does Alt+T bring it into view, and Alt+B still reach the mirror? Does a click reach the *shape* through the
  * overlay, which is what leaves Excalidraw's own resize handles usable — and does dragging
  * one really tell the server a new size? Does a command typed into the block run, without
  * `p`, `w` and `d` being taken as Excalidraw's freedraw, then its diamond tool? And is the
@@ -89,11 +91,48 @@ const WORKSPACE = 'terminal-project';
 writeFileSync(registryPath, JSON.stringify({
   workspaces: [{ id: WORKSPACE, path: projectDir.replace(/\\/g, '/') }],
 }), 'utf8');
-// No githubProject: the mirror stays dormant, so nothing else is drawing on this board.
+// A `githubProject`, because since #96 the mirror is what the block is anchored to. Fed by
+// a stub `gh`, so the region is drawn from a fixture rather than from a network this check
+// must not need — the same arrangement `check-board-drafts-browser.mjs` uses.
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Terminal Project',
   repo: 'vitorengers/mcp_excalidraw',
+  githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
+
+const TODO = { id: 'f75ad846', name: 'Todo' };
+const DONE = { id: '98236657', name: 'Done' };
+const fixturePath = join(workDir, 'fixture.json');
+writeFileSync(fixturePath, JSON.stringify({
+  data: { owner: { projectV2: {
+    id: 'PVT_terminal',
+    title: 'mcp_excalidraw',
+    url: 'https://github.com/users/vitorengers/projects/5',
+    field: { id: 'PVTSSF_status', name: 'Status', options: [TODO, DONE] },
+    items: { pageInfo: { hasNextPage: false }, nodes: [{
+      id: 'PVTI_a',
+      type: 'ISSUE',
+      fieldValueByName: { optionId: TODO.id, name: TODO.name },
+      content: {
+        __typename: 'Issue',
+        number: 96,
+        title: 'A card, so the mirror has a height worth clearing',
+        url: 'https://github.com/vitorengers/mcp_excalidraw/issues/96',
+        createdAt: '2026-07-27T10:00:00Z',
+        state: 'OPEN',
+        repository: { nameWithOwner: 'vitorengers/mcp_excalidraw' },
+      },
+    }] },
+  } } },
+}), 'utf8');
+
+const stubPath = join(workDir, 'stub-gh.mjs');
+writeFileSync(stubPath, `#!/usr/bin/env node
+import { readFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+if (args.includes('graphql')) process.stdout.write(readFileSync(process.env.STUB_GH_FIXTURE, 'utf8'));
+else process.stdout.write('{}\\n');
+`, 'utf8');
 
 const PORT = 35100 + (process.pid % 300);
 const CDP_PORT = PORT + 400;
@@ -110,6 +149,8 @@ const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_TERMINAL: '1',
+    EXCALIDRAW_GH_COMMAND: `node "${stubPath.replace(/\\/g, '/')}"`,
+    STUB_GH_FIXTURE: fixturePath,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -252,14 +293,27 @@ const PROBE = `(() => {
   const api = window.__terminalCheckApi;
   if (!api) return { error: 'no api handle' };
   const out = { block: null, authored: [] };
+  const mirror = [];
   for (const element of api.getSceneElements()) {
     const custom = element.customData || {};
     if (custom.kind === 'terminal') {
-      out.block = { id: element.id, x: element.x, y: element.y, w: element.width, h: element.height };
+      out.block = { id: element.id, x: element.x, y: element.y, w: element.width, h: element.height,
+                    awaitingMirror: custom.awaitingMirror === true };
+    } else if (custom.kind === 'project-board') {
+      mirror.push(element);
     } else if (!custom.kind) {
       out.authored.push({ id: element.id, x: element.x, y: element.y, w: element.width, h: element.height });
     }
   }
+  // The region the block is anchored to, as a rectangle. Infinities would not survive the
+  // trip back over the protocol, so an undrawn mirror is null rather than an empty box.
+  out.mirror = mirror.length === 0 ? null : {
+    count: mirror.length,
+    minX: Math.min(...mirror.map((element) => element.x)),
+    minY: Math.min(...mirror.map((element) => element.y)),
+    maxX: Math.max(...mirror.map((element) => element.x + element.width)),
+    maxY: Math.max(...mirror.map((element) => element.y + element.height)),
+  };
   const state = api.getAppState();
   out.view = { scrollX: state.scrollX, scrollY: state.scrollY, zoom: state.zoom.value,
                offsetLeft: state.offsetLeft, offsetTop: state.offsetTop,
@@ -331,19 +385,51 @@ try {
   await send('Runtime.enable');
   await waitFor(() => evaluate(GRAB_API), 'the Excalidraw API handle');
 
-  console.log('1. the block lands on the right of the board, with the session drawn in it');
+  console.log('1. the block lands on the far left, clear of the mirror, with the session drawn in it');
   await waitFor(async () => (await evaluate(PROBE)).block, 'the terminal block to be placed');
   await waitFor(async () => (await evaluate(PROBE)).card, 'the overlay to render');
+
+  // The ordering a reload really produces, and the one the placement has to survive: the
+  // session opens on a `POST` that spawns a shell, the mirror arrives on a poll that spawns
+  // a `gh`, so the block is placed before there is a mirror to anchor it to. It is put in
+  // the mirror's own slot — the fallback for a board that has no project — and moved out of
+  // the way by the first board that lands. Both halves are asserted, in that order.
+  const placedBlind = await evaluate(PROBE);
+  await waitFor(async () => (await evaluate(PROBE)).mirror, 'the mirror to be drawn');
+  await waitFor(async () => {
+    const probed = await evaluate(PROBE);
+    return probed.mirror && probed.block && !probed.block.awaitingMirror;
+  }, 'the block to be anchored to the mirror');
+
   let scene = await evaluate(PROBE);
   await shot('01-placed');
 
   const authored = scene.authored.find((element) => element.w === 200);
   check('the authored shape is there to measure against', Boolean(authored), JSON.stringify(scene.authored));
-  check('the block is one gap right of it',
-        Boolean(authored) && Math.abs(scene.block.x - (authored.x + authored.w + 120)) < 1,
-        `block at ${scene.block?.x}, content ends at ${authored && authored.x + authored.w}`);
-  check('and level with its top', Boolean(authored) && Math.abs(scene.block.y - authored.y) < 1,
-        `${scene.block?.y} vs ${authored?.y}`);
+  check('the mirror is drawn, so there is a region to sit to the left of',
+        Boolean(scene.mirror) && scene.mirror.count > 1, JSON.stringify(scene.mirror));
+  check('the block is one gap left of the mirror',
+        Boolean(scene.mirror) && Math.abs(scene.block.x - (scene.mirror.minX - 120 - scene.block.w)) < 1,
+        `block at ${scene.block?.x} (${scene.block?.w} wide), mirror starts at ${scene.mirror?.minX}`);
+  check('and level with its top',
+        Boolean(scene.mirror) && Math.abs(scene.block.y - scene.mirror.minY) < 1,
+        `${scene.block?.y} vs ${scene.mirror?.minY}`);
+  check('so it is clear of the mirror rather than under it',
+        Boolean(scene.mirror) && scene.block.x + scene.block.w <= scene.mirror.minX,
+        `block ends at ${scene.block.x + scene.block.w}, mirror starts at ${scene.mirror?.minX}`);
+  check('and left of everything the board authored, which is the edge that grows',
+        Boolean(authored) && scene.block.x + scene.block.w < authored.x,
+        `block ends at ${scene.block.x + scene.block.w}, content starts at ${authored?.x}`);
+
+  // The race itself. If the session had happened to open after the first poll this would be
+  // vacuous, so it is asserted as "either it was already right, or it was corrected" — and
+  // the correction is what the second half proves either way.
+  check('a block placed before the first poll was moved off the mirror\'s slot, not left under it',
+        !placedBlind.block?.awaitingMirror || placedBlind.block.x !== scene.block.x,
+        `placed at ${placedBlind.block?.x} (awaiting: ${placedBlind.block?.awaitingMirror}), now at ${scene.block.x}`);
+  check('and it carries no mark any more, so no later poll will move it again',
+        scene.block.awaitingMirror === false, String(scene.block.awaitingMirror));
+
   check('the overlay is drawn over the block, not somewhere else',
         Math.abs(scene.card.left - toViewport(scene, scene.block.x, scene.block.y).x) < 2
         && Math.abs(scene.card.top - toViewport(scene, scene.block.x, scene.block.y).y) < 2,
@@ -358,9 +444,33 @@ try {
   check('the transcript is transparent to the pointer, so the shape underneath is still the shape',
         scene.card.pointerEvents === 'none', scene.card.pointerEvents);
 
-  console.log('\n2. Alt+T brings it into view');
-  // Scrolled well away first, so "it is in view" is not just where the board happened to be.
-  await evaluate('window.__terminalCheckApi.updateScene({ appState: { scrollX: 2600, scrollY: 1800, zoom: { value: 0.4 } } })');
+  // The whole arrangement in one frame — terminal, then mirror, then the board's own
+  // content — because the subject of this case is a layout, and a coordinate is a poor way
+  // to look at one. `CLAUDE.md` is explicit that compiling is not seeing.
+  await evaluate('window.__terminalCheckApi.scrollToContent(window.__terminalCheckApi.getSceneElements(), { fitToViewport: true })');
+  await sleep(400);
+  await shot('01-wide');
+
+  console.log('\n2. Alt+B still reaches the mirror, and Alt+T brings the block into view');
+  // Alt+B first, while nothing is selected and the viewport is where the board opened: the
+  // block is now the leftmost thing on the canvas, so this key has something in front of the
+  // mirror for the first time. Alt+T is left last because the cases below drag the block's
+  // bottom-right handle, and they need the viewport that fitting the *block* produces.
+  await pressKey('KeyB', 'b', 1, 66);
+  await sleep(1400);
+  scene = await evaluate(PROBE);
+  await shot('02-alt-b');
+  const mirrorMiddle = toViewport(scene, (scene.mirror.minX + scene.mirror.maxX) / 2,
+                                  (scene.mirror.minY + scene.mirror.maxY) / 2);
+  check('Alt+B puts the mirror in the viewport, past the block that is now in front of it',
+        mirrorMiddle.x > 0 && mirrorMiddle.x < scene.view.width
+        && mirrorMiddle.y > 0 && mirrorMiddle.y < scene.view.height,
+        JSON.stringify(mirrorMiddle));
+
+  // Scrolled well away, so "it is in view" is not just where the board happened to be.
+  // Away to the *right* now: the block is on the far left, and the old scroll would have
+  // left it on screen, which would have made this case pass without asserting anything.
+  await evaluate('window.__terminalCheckApi.updateScene({ appState: { scrollX: -2600, scrollY: -1800, zoom: { value: 0.4 } } })');
   await sleep(500);
   scene = await evaluate(PROBE);
   const offScreen = toViewport(scene, scene.block.x, scene.block.y);
@@ -421,6 +531,16 @@ try {
   console.log('\n4. the block resizes on the board, and the session is told');
   const [gridBefore] = (await (await api('/api/terminal')).json())?.sessions ?? [];
   const before = { w: scene.block.w, h: scene.block.h };
+
+  // A viewport of this case's own, rather than the one Alt+T fitted. Fitting puts the block's
+  // bottom-right corner hard against the bottom of the window, and the corner is where both
+  // the resize handle and the overlay's prompt strip end — so which of the two takes the
+  // press is decided by a pixel, and a press that lands on the shape *moves* the block
+  // instead of resizing it, which is a case failing for a reason that is not about the code.
+  // Placed at a known spot, zoomed out, there is room to grab the handle and room to drag it.
+  await evaluate(`window.__terminalCheckApi.updateScene({ appState: { scrollX: ${375 - scene.block.x}, scrollY: ${76.25 - scene.block.y}, zoom: { value: 0.8 } } })`);
+  await sleep(400);
+  scene = await evaluate(PROBE);
 
   // A click at the block's centre has to select the *shape*: the overlay is on top of it,
   // and if it took the click there would be no selection and no resize handles at all.
