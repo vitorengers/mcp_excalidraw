@@ -31,7 +31,14 @@ import { z } from 'zod';
 import WebSocket from 'ws';
 import { isMainModule } from './core/entry.js';
 import { writePidFile, removePidFile } from './core/pidfile.js';
-import { loadWorkspaces, Workspace } from './core/workspaces.js';
+import {
+  addWorkspace,
+  loadWorkspaces,
+  readWorkspaceConfig,
+  writeWorkspaceConfig,
+  Workspace
+} from './core/workspaces.js';
+import { listDirectories } from './core/directory-browse.js';
 import { runIssueAgent } from './core/issue-agent.js';
 import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
 import {
@@ -1016,6 +1023,97 @@ app.get('/api/workspaces', async (_req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to load workspaces:', error);
     res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/**
+ * The guard every route below shares.
+ *
+ * These write files this machine owns, and one of them lists its directories, so reaching
+ * them from the network would be strictly worse than reaching the routes that only read a
+ * project. Same shape as the issue block's guard, and for the same reason.
+ */
+function offLoopback(res: Response, what: string): boolean {
+  if (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost') return false;
+  res.status(403).json({
+    success: false,
+    error: `${what} only while the server is bound to loopback.`
+  });
+  return true;
+}
+
+/**
+ * Add a project to the registry.
+ *
+ * The registry is re-read per request, so an appended entry is live on the next call with
+ * no restart — which is what makes a `+` on the tab strip cheap rather than a feature with
+ * a server bounce in the middle of it.
+ */
+app.post('/api/workspaces', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Projects are added')) return;
+
+  try {
+    const result = await addWorkspace(process.env.EXCALIDRAW_WORKSPACES, {
+      path: typeof req.body?.path === 'string' ? req.body.path : '',
+      ...(typeof req.body?.id === 'string' ? { id: req.body.id } : {}),
+      ...(typeof req.body?.distro === 'string' ? { distro: req.body.distro } : {})
+    });
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, error: result.error });
+    }
+    logger.info(`Workspace "${result.workspace.id}" added at ${result.workspace.path}`);
+    res.status(201).json({ success: true, workspace: result.workspace, workspaces: result.workspaces });
+  } catch (error) {
+    logger.error('Failed to add a workspace:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/** A project's config as it is on disk, which is what an editor has to start from. */
+app.get('/api/workspaces/:id/config', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Project settings are read')) return;
+
+  try {
+    const result = await readWorkspaceConfig(process.env.EXCALIDRAW_WORKSPACES, req.params.id ?? '');
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, error: result.error });
+    }
+    res.json({ success: true, config: result.config });
+  } catch (error) {
+    logger.error('Failed to read a workspace config:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.put('/api/workspaces/:id/config', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Project settings are saved')) return;
+
+  try {
+    const result = await writeWorkspaceConfig(
+      process.env.EXCALIDRAW_WORKSPACES,
+      req.params.id ?? '',
+      req.body?.config
+    );
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, error: result.error });
+    }
+    res.json({ success: true, workspace: result.workspace, workspaces: result.workspaces });
+  } catch (error) {
+    logger.error('Failed to write a workspace config:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/** The project picker's other half — see `src/core/directory-browse.ts` for why. */
+app.get('/api/fs/directories', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Directories are listed')) return;
+
+  const asked = typeof req.query.path === 'string' ? req.query.path : '';
+  try {
+    const listing = await listDirectories(asked);
+    res.json({ success: true, ...listing });
+  } catch (error) {
+    res.status(400).json({ success: false, error: `Cannot list ${asked || 'the roots'}: ${(error as Error).message}` });
   }
 });
 

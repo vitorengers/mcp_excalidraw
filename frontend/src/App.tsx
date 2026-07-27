@@ -35,6 +35,7 @@ import {
   terminalOrigin
 } from '../../src/core/terminal-block'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
+import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
 // Type definitions
@@ -196,6 +197,15 @@ const editingDraftId = (api: ExcalidrawImperativeAPI): string => {
     { id?: string; containerId?: string | null } | null | undefined;
   if (!editing) return '';
   return String(editing.containerId ?? editing.id ?? '');
+};
+
+/** Whether the label editor that is open belongs to an issue block. */
+const editingIssueBlock = (api: ExcalidrawImperativeAPI): boolean => {
+  const editing = editingDraftId(api);
+  if (!editing) return false;
+  return api.getSceneElements().some(
+    (element) => element.id === editing && customDataOf(element).kind === 'issue'
+  );
 };
 
 /**
@@ -572,6 +582,15 @@ function App(): JSX.Element {
   // Boards, one per project
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [activeWorkspace, setActiveWorkspace] = useState<string>('default')
+  /**
+   * Whether a registry exists at all, which is not the same as it having projects in it.
+   *
+   * An empty registry is a board waiting for its first project and has to show the `+`
+   * that adds one; no registry at all has nowhere to put it.
+   */
+  const [workspacesConfigured, setWorkspacesConfigured] = useState<boolean>(false)
+  /** Which dialog is open, if any: the project picker or one project's settings. */
+  const [workspaceDialog, setWorkspaceDialog] = useState<'add' | 'config' | null>(null)
   // WebSocket handlers close over their creation-time scope, so the ref is what the
   // async paths read — the state alone would send stale ids after a tab switch.
   const activeWorkspaceRef = useRef<string>('default')
@@ -1854,6 +1873,65 @@ function App(): JSX.Element {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  /**
+   * Enter finishes writing an issue block.
+   *
+   * Writing an observation is typing into Excalidraw's own bound-label editor, and that
+   * editor commits on exactly two keys: Escape, and Ctrl/Cmd+Enter. Plain Enter matches
+   * neither, falls through to the textarea and inserts a newline — so the one key a reader
+   * reaches for to say "done" is the one key that does not. There is no prop or callback
+   * that changes it; the handler is `editable.onkeydown`, assigned as an element property
+   * inside `textWysiwyg`.
+   *
+   * On `document`, in the capture phase, for the same reason the panel's Ctrl+V is: an
+   * element-property handler runs at the target phase, so capturing at `document` is what
+   * gets there first, and stopping the event is what keeps the newline from being typed.
+   *
+   * **So a selected issue block changes what Enter does on the canvas**, exactly as it
+   * changes what Ctrl+V does, and the bounds are drawn to match:
+   *
+   * - only an issue block — every other label on the board keeps Enter as a newline;
+   * - Shift+Enter is left alone, which is where the line break went;
+   * - Escape and Ctrl/Cmd+Enter are left alone; removing a keystroke people already have
+   *   in their fingers buys nothing;
+   * - a composition in progress is left alone, or Enter-to-confirm an IME candidate would
+   *   close the editor mid-word.
+   *
+   * **It finishes the edit; it does not start the run.** Starting the agent is an
+   * unattended process with repository access, and inferring that from a key that means
+   * "done writing" would be a guess with consequences. The button on the card stays the
+   * only way in.
+   *
+   * The finish is a synthetic Escape dispatched at the textarea rather than a `blur()`,
+   * because `onSubmit` re-selects the container only when the submit came from the
+   * keyboard: blurring commits the text and leaves nothing selected, which closes the card
+   * the reader wants next. It does not bubble — the editor's own handler is all this needs
+   * to reach, and an Escape loose on the page is a different keystroke with its own
+   * meanings.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Enter') return
+      if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return
+      if (event.isComposing || event.keyCode === 229) return
+
+      const target = event.target as HTMLElement | null
+      if (!target || target.tagName !== 'TEXTAREA' || !target.classList.contains('excalidraw-wysiwyg')) return
+
+      const api = excalidrawAPIRef.current
+      if (!api || !editingIssueBlock(api)) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      target.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: false, cancelable: true
+      } as KeyboardEventInit))
+    }
+
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => { document.removeEventListener('keydown', onKeyDown, true) }
+  }, [])
+
   // WebSocket connection
   useEffect(() => {
     connectWebSocket()
@@ -1884,6 +1962,7 @@ function App(): JSX.Element {
         if (cancelled || !result?.success) return
         const list: WorkspaceSummary[] = result.workspaces ?? []
         setWorkspaces(list)
+        setWorkspacesConfigured(Boolean(result.configured))
         // The socket opens before this response lands, so it is already watching the
         // default board. Switching rather than assigning reconnects it, otherwise the
         // first tab would render highlighted while showing the default board's scene.
@@ -1936,6 +2015,21 @@ function App(): JSX.Element {
     }
     setIsConnected(false)
     connectWebSocket()
+  }
+
+  /**
+   * A project the `+` has just registered.
+   *
+   * The list is replaced from the response rather than re-fetched, and the board switches
+   * to the new tab in the same turn: the registry is read per request, so the entry is
+   * already live, and a reload here would throw away every unsynced shape on the board
+   * that was open.
+   */
+  const adoptWorkspace = (workspace: WorkspaceSummary, list: WorkspaceSummary[]): void => {
+    setWorkspaces(list)
+    setWorkspacesConfigured(true)
+    setWorkspaceDialog(null)
+    switchWorkspace(workspace.id)
   }
 
   // Reloaded per board: a project may ship its own shapes on top of the shared set.
@@ -2630,8 +2724,28 @@ function App(): JSX.Element {
       <WorkspaceTabs
         workspaces={workspaces}
         activeId={activeWorkspace}
+        configured={workspacesConfigured}
         onSelect={switchWorkspace}
+        onAdd={() => setWorkspaceDialog('add')}
+        onConfigure={() => setWorkspaceDialog('config')}
       />
+
+      {workspaceDialog === 'add' && (
+        <AddWorkspaceDialog
+          onClose={() => setWorkspaceDialog(null)}
+          onAdded={adoptWorkspace}
+        />
+      )}
+
+      {workspaceDialog === 'config' && (
+        <WorkspaceConfigDialog
+          workspaceId={activeWorkspace}
+          onClose={() => setWorkspaceDialog(null)}
+          // Only the list is replaced: the board is already showing this project, so
+          // switching to it again would empty the scene and reconnect for nothing.
+          onSaved={(_workspace, list) => { setWorkspaces(list); setWorkspaceDialog(null) }}
+        />
+      )}
 
       {/* Header */}
       <div className="header">

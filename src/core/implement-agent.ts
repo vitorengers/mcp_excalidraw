@@ -13,7 +13,7 @@
  */
 import { AgentUsage } from './agent-usage.js';
 import { ImplementWorktree } from './implement-worktree.js';
-import { AgentRun, runAgent } from './issue-agent.js';
+import { applyAgentSettings, AgentRun, runAgent } from './issue-agent.js';
 import { Workspace } from './workspaces.js';
 
 /**
@@ -35,6 +35,14 @@ import { Workspace } from './workspaces.js';
  * and the tools to reconcile that itself, and was already doing so unprompted — but the
  * instruction not to widen the scope reads, to a literal agent, as a reason not to touch
  * the change that just landed. So the carve-out is explicit: reconciling is finishing.
+ *
+ * The research half of step 2 is the same kind of carve-out, arrived at from the opposite
+ * direction. The issue agent has been ordered to research since its prompt was written;
+ * this one never was, and "check the issue's claims against the code" reads as though the
+ * code is where every claim is settled. It is not — a library's API, a tool's flag, an
+ * external service's behaviour are all off-repository facts a change can rest on, and a
+ * remembered one compiles exactly as well as a correct one. Step 4's "compiling is not
+ * working" is about the same failure a step earlier, so this is where it belongs.
  */
 export const IMPLEMENT_AGENT_PROMPT = `You will implement a GitHub issue in this repository, end to end.
 
@@ -56,6 +64,11 @@ Then:
 2. Investigate before you change anything. Check the issue's claims against the code. An
    issue can be wrong, out of date, or already fixed — if it is, say so and stop rather
    than implementing something nobody needs. That is a good outcome, not a failed run.
+   Not every fact the change rests on is settled by the repository. A library's API, a
+   tool's flag, an external service's behaviour — those live outside it, and the web is
+   available to you: search for the documentation and read the page, or run the
+   \`--help\`. Confirm such a fact against its source rather than inventing it or trusting
+   what you remember. A remembered API compiles exactly as well as a correct one.
 3. Implement the smallest change that satisfies the definition of done. Do not widen the
    scope. If you find adjacent problems, write them down for a separate issue instead of
    folding them in.
@@ -159,9 +172,15 @@ export async function runImplementAgent(
   const worktree = options.worktree ?? null;
   const prompt = `${IMPLEMENT_AGENT_PROMPT}\n\n---\n\nThe issue to implement:\n\n${issueUrl}`
     + worktreeSection(worktree);
+  // Workspace first, environment second. `IMPLEMENT_TIMEOUT_MS` stays what it always was:
+  // the board's own default, now the value a project falls back to rather than the only
+  // value there is.
+  const settings = workspace.agents?.implement ?? null;
   return runAgent(workspace, prompt, {
-    agentCommand: options.agentCommand,
-    timeoutMs: options.timeoutMs === undefined ? IMPLEMENT_TIMEOUT_MS : options.timeoutMs,
+    agentCommand: applyAgentSettings(options.agentCommand, settings),
+    timeoutMs: options.timeoutMs === undefined
+      ? settings?.timeoutMs ?? IMPLEMENT_TIMEOUT_MS
+      : options.timeoutMs,
     expects: 'pull',
     what: 'implement agent',
     directory: worktree,

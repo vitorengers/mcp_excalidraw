@@ -15,7 +15,7 @@ import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
 import { AgentUsage, streamsUsage, UsageMeter } from './agent-usage.js';
-import { Workspace } from './workspaces.js';
+import { AgentSettings, Workspace } from './workspaces.js';
 
 /** Default instruction. Investigation first, evidence over guesswork, URL last. */
 export const ISSUE_AGENT_PROMPT = `You will receive an observation about this project and turn it into a GitHub issue.
@@ -174,6 +174,37 @@ export function buildAgentCommand(
     args,
     cwd: directory?.path ?? workspace.path,
   };
+}
+
+/**
+ * The project's own model and effort on the end of the operator's command — or nothing.
+ *
+ * Nothing is the important half again: a project that configures neither must spawn the
+ * command line it spawned before any of this existed, byte for byte, which is the rule
+ * `worktreeSection` and `imageReferenceSection` already keep about the prompt.
+ *
+ * Appended rather than substituted, and appended rather than prepended, because the last
+ * flag is the one the CLI keeps. That is not assumed: `claude --model sonnet --model
+ * definitely-not-a-model -p hi` complains about the second one, so a project's setting
+ * placed after the operator's wins. Nothing else in the operator's command is touched —
+ * the alternative, a whole per-workspace command string, would be a project granting
+ * itself an agent rather than retuning the one the board already allows.
+ */
+export function applyAgentSettings(
+  agentCommand: string,
+  settings: AgentSettings | null | undefined
+): string {
+  if (!settings) return agentCommand;
+
+  // Quoted only when it has to be: `tokenizeCommand` consumes quotes, and a bare value is
+  // what somebody reading the log would have typed.
+  const value = (raw: string) => (/\s/.test(raw) ? `"${raw}"` : raw);
+  const flags = [
+    settings.model ? `--model ${value(settings.model)}` : null,
+    settings.effort ? `--effort ${value(settings.effort)}` : null,
+  ].filter(Boolean);
+
+  return flags.length ? `${agentCommand} ${flags.join(' ')}` : agentCommand;
 }
 
 /**
@@ -387,9 +418,16 @@ export async function runIssueAgent(
 ): Promise<IssueAgentResult> {
   const prompt = `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observation}`
     + imageReferenceSection(options.imagePaths ?? []);
+  // Per run, not per process: one board runs several projects, and the model, the effort
+  // and the ceiling are each the project's to retune. A caller that names a ceiling still
+  // wins — that is the route asking for one, not a default being applied.
+  const settings = workspace.agents?.issue ?? null;
+  const timeoutMs = options.timeoutMs !== undefined
+    ? options.timeoutMs
+    : settings?.timeoutMs ?? undefined;
   const run = await runAgent(workspace, prompt, {
-    agentCommand: options.agentCommand,
-    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    agentCommand: applyAgentSettings(options.agentCommand, settings),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     expects: 'issues',
     what: 'issue agent',
   });

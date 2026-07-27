@@ -241,10 +241,28 @@ function label(
   };
 }
 
-function headerText(section: BoardSection): string {
+/**
+ * What a section header says it holds.
+ *
+ * Two populations sit under one header and the count used to see one of them: the mirrored
+ * cards. The blocks the `+` dropped were laid out by this same function and counted by
+ * nothing, so a first column holding three drafts and no cards read `Todo (0)` — every
+ * observation waiting to be researched invisible to the only number above it.
+ *
+ * `drafts / cards`, in that order, because that is the order the request put them in: what
+ * was written by hand, and then what already exists as an issue. The **last** number is
+ * always the mirrored items, which is what the single number has always meant — so a column
+ * with no drafts keeps drawing exactly one, rather than a `/ 0` that is zero by
+ * construction. The `+` is on the first column only, so every other column would otherwise
+ * carry a permanent zero for a population it can never hold.
+ *
+ * `, N hidden` still qualifies the card side, the only side a cap applies to.
+ */
+function headerText(section: BoardSection, drafts: number): string {
   const count = section.cards.length + section.hidden;
+  const written = drafts ? `${drafts} / ` : '';
   const hidden = section.hidden ? `, ${section.hidden} hidden` : '';
-  return `${section.name} (${count}${hidden})`;
+  return `${section.name} (${written}${count}${hidden})`;
 }
 
 function cardText(title: string, number: number | null, error: string | undefined): string {
@@ -299,6 +317,10 @@ export function layoutBoard(
 
   board.sections.forEach((section, index) => {
     const x = origin.x + PADDING + index * (COLUMN_WIDTH + COLUMN_GAP);
+    // Read once, for the header above the column and for the slots inside it. A draft
+    // naming a column the board no longer has is in neither: it is counted by no header
+    // for the same reason it is placed nowhere.
+    const columnDrafts = drafts.get(section.optionId) ?? [];
     const stroke = section.optionId === NO_STATUS_OPTION_ID
       ? NO_STATUS_STROKE
       : (COLUMN_STROKES[index % COLUMN_STROKES.length] as string);
@@ -318,7 +340,7 @@ export function layoutBoard(
       locked: true,
       customData: { kind: MIRROR_KIND, role: 'section', sectionOptionId: section.optionId },
     });
-    elements.push(header, label(header, headerText(section), HEADER_FONT_SIZE, stroke));
+    elements.push(header, label(header, headerText(section, columnDrafts.length), HEADER_FONT_SIZE, stroke));
 
     // `+` on the first column only. Which column that is comes from the project, not from
     // a name written here: GitHub's *Item added to project* workflow puts a new issue in
@@ -344,7 +366,7 @@ export function layoutBoard(
     // column the board no longer has is left out here and gets no placement: rehoming it
     // into a column it was never in would be a worse answer than leaving it where it is.
     let y = cardsTop;
-    for (const draft of drafts.get(section.optionId) ?? []) {
+    for (const draft of columnDrafts) {
       placements.push({ id: draft.id, x, y, width: COLUMN_WIDTH, height: draft.height });
       y += draft.height + CARD_GAP;
     }

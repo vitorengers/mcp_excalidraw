@@ -24,6 +24,53 @@ A second click while a run is in flight gets 409. So does a block that already h
 There is no time limit on the run, and a block stuck in `running` can be reset —
 [No time limit, and the way back](#no-time-limit-and-the-way-back) covers both agents.
 
+## Writing the observation
+
+Writing into a block is typing into Excalidraw's own bound-label editor, and that editor
+commits on exactly two keys: **Escape**, and **Ctrl/Cmd+Enter**. Plain Enter matched neither,
+fell through to the textarea and inserted a newline — so the one key a reader reaches for to
+say *done* was the one key that did not finish. There is no prop, option or callback that
+changes it; the handler is `editable.onkeydown`, assigned as an element property inside
+`textWysiwyg`.
+
+So the board takes the key before that handler runs, with a capture-phase `keydown` listener
+on `document` — the same manoeuvre the paste path makes, for the same reason: an
+element-property handler runs at the target phase, so capturing at `document` is what gets
+there first, and stopping the event is what keeps the newline from being typed.
+
+- **Enter** finishes the edit. The text is committed to the label and the block stays
+  selected, so the card is still on screen.
+- **Shift+Enter** breaks the line. That is where the newline went, and the interception is
+  written so as not to swallow it.
+- **Escape** and **Ctrl/Cmd+Enter** are untouched. They already finished, and removing a
+  keystroke people have in their fingers buys nothing.
+- **Every other label on the board** is untouched too. Enter still inserts a newline there;
+  the listener fires only when the open editor belongs to a shape carrying
+  `customData.kind === "issue"`.
+- **A composition in progress** is let through, or Enter-to-confirm an IME candidate would
+  close the editor mid-word.
+
+**A selected issue block therefore changes what Enter does on the canvas, the way it already
+changes what Ctrl+V does**, and the card says so for the same reason — a keystroke nothing on
+screen mentions is a keystroke nobody tries.
+
+Two decisions inside it are worth naming.
+
+**Enter finishes the edit; it does not start the run.** Starting the agent is an unattended
+process with repository access, and inferring that from a key that means "done writing" would
+be a guess with consequences. The button on the card stays the only way in.
+
+**The finish is a synthetic Escape at the textarea, not a `blur()`.** `onSubmit` re-selects
+the container *only when the submit came from the keyboard*, so blurring commits the text and
+leaves nothing selected — which closes the card the reader wants next. The synthetic event
+does not bubble: the editor's own handler is all it needs to reach, and an Escape loose on the
+page is a different keystroke with its own meanings.
+
+`scripts/check-issue-block-enter-browser.mjs` drives a real Chrome, because which of two
+handlers wins is not a question a type check can be asked. It presses Enter with its text
+(`\r`) attached rather than as a bare key: a newline in a textarea is the *default action* of
+the keypress, so a key event with no text would pass every case while inserting nothing.
+
 ## Reference images
 
 A block can carry images as well as text. Select it and either press **Ctrl+V** with a
@@ -474,6 +521,25 @@ change that merged mid-run is not widening the scope, it is finishing.
 through the real composition path. It is a lint over instructions and says so: it cannot show that
 an agent obeys, only fail when the guidance is dropped or reworded away.
 
+### Facts the repository does not settle
+
+The two agents had opposite halves of the same gap. The issue agent was ordered to research and
+denied the tools — that is the `--allowedTools` half, fixed in **Configuration** above. This one
+is the mirror image: the implement agent is denied nothing, and nothing asked it to research.
+Step 2 said "check the issue's claims against the code", which reads as though the code is where
+every claim is settled, and step 4's *compiling is not working* arrives a step too late to help.
+
+A library's API, a tool's flag, an external service's behaviour are none of them in the tree, and
+a remembered one compiles exactly as well as a correct one. So step 2 now names that kind of fact,
+says the web is there, and asks for it to be confirmed against its source rather than invented —
+the same instruction the issue agent has carried since it was written, in the same words as far as
+the two prompts allow.
+
+`scripts/check-agent-research.mjs` holds **both** prompts to it, for the reason the gap existed at
+all: the rationale had only ever been written down on one side. Same shape as the two lints above,
+same disclaimer — captured over stdin through the real composition path, and unable to show that
+any agent looks anything up.
+
 ## No time limit, and the way back
 
 **Neither agent has a ceiling by default.** Implementing never did: a clock that kills a
@@ -584,7 +650,7 @@ its block has no surface to show them on.
 ## Configuration
 
 ```
-EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob"'
+EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob WebFetch WebSearch"'
 EXCALIDRAW_IMPLEMENT_CONCURRENCY=4
 EXCALIDRAW_ISSUE_MEMO_MS=30000
 ```
@@ -604,6 +670,23 @@ approval is blocked, so it finishes with exit code 0 and no issue at all. The li
 purpose — `gh`, `git`, and reading. No `Write`, no `Edit`, no open `Bash`: the agent opens
 issues, it does not touch the repository.
 
+**`WebFetch` and `WebSearch` are part of reading.** The prompt has always ordered the agent to
+research what the repository does not settle — "research it — do not invent it" — and until
+these were added, the list denied it the only tools that do. `-p` turns that omission into a
+silent refusal: the run gets `Claude requested permissions to use WebFetch, but you haven't
+granted it yet`, exits 0, and reads afterwards as an agent that chose not to look anything up.
+Both halves of that were observed rather than reasoned about: under the old list both calls are
+refused, under this one both succeed, and **the exit code is 0 either way**. The narrowness this
+does not weaken is the narrowness about *writes* — a read-only fetch adds nothing to what the
+agent can change.
+
+Unrestricted on purpose, not by omission. `WebFetch(domain:host)` is the documented way to scope
+it — `WebFetch(domain:*.example.com)` for subdomains, a bare `WebFetch` for every domain — and an
+allowlist of documentation hosts is the more conservative setting. It is not the default here
+because it reinstates exactly this defect for anything off the list: an agent that needs a page
+on a host nobody predicted is refused silently and exits 0. Scope it if the trade is worth it —
+a fetch is read-only but can still carry repository content outward in the URL it requests.
+
 **Add `--output-format stream-json --verbose` to the implement command to get token counts.**
 Nothing else turns them on, and nothing else is needed. It changes what the agent prints, not
 what it does: the pull request URL is still found in the output, and the salvage a firing
@@ -613,3 +696,47 @@ degraded state.
 
 A WSL-backed project runs through `wsl.exe --cd <innerPath>`, because the agent has to see the
 repository the way `git` and `gh` inside that distro do.
+
+### What is per-project, and what stays global
+
+One board runs several projects, and until #82 every setting above applied to all of them: the
+two command lines were module constants read once at startup, so retuning one project meant
+editing `start-board.ps1` and restarting the board for every other project too.
+
+A project's own `board.config.json` can now say three things per agent, under
+`agents.issue` and `agents.implement` — see [workspaces.md](workspaces.md) for the shape:
+
+| Setting | Per-project | Global |
+| --- | --- | --- |
+| `model` | `agents.<kind>.model` → appended as `--model` | `--model` in the command line |
+| `effort` | `agents.<kind>.effort` → appended as `--effort` | `--effort` in the command line |
+| time limit | `agents.<kind>.timeoutSeconds` | `EXCALIDRAW_ISSUE_AGENT_TIMEOUT`, `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` |
+| the command itself | **never** | `EXCALIDRAW_ISSUE_AGENT`, `EXCALIDRAW_IMPLEMENT_AGENT` |
+| `--allowedTools`, `--output-format` | **never** | the command line |
+| concurrency, memo window | **never** | `EXCALIDRAW_IMPLEMENT_CONCURRENCY`, `EXCALIDRAW_ISSUE_MEMO_MS` |
+
+**A project may retune what the operator granted; it may never grant it.** Agents stay off
+unless the environment sets their command, which is why a command is not a field a project may
+set at all — `board.config.json` lives inside a registered project, so a project that could
+supply one would mean editing a JSON file to start an unattended agent with
+`--dangerously-skip-permissions` on a board where nobody allowed one. The config surface refuses
+an `agents.<kind>.command` by name rather than ignoring it.
+
+The model and the effort are **appended** to the operator's command rather than substituted into
+it, which works because the last flag is the one the CLI keeps — checked against the CLI rather
+than assumed: `claude --model sonnet --model definitely-not-a-model -p hi` complains about the
+second one. Nothing else in that command line is rewritten, which is the line `agent-usage.ts`
+already draws about `--output-format`.
+
+**A project that configures nothing spawns the command line it spawned before any of this
+existed, byte for byte.** That is the same rule `worktreeSection` and `imageReferenceSection`
+keep about the prompt, and `scripts/check-workspace-settings.mjs` asserts it against a stub agent
+that reports its own argv.
+
+Not done here, and deliberately: the multi-stage workflow the observation behind #82 sketched —
+plan with one model, implement with another, review with a third. That is a new execution model
+rather than a setting (the board spawns **once** per implementation, and `ImplementRecord` holds
+one start, one end, one pull request), so it needs its own issue. Per-run resolution of model and
+effort is its precondition, which is what landed here. The `ultracode` keyword belongs to that
+issue too: it is not a CLI flag but a prompt-level opt-in, and the implement prompt is kept free
+of per-project content on purpose.

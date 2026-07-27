@@ -197,6 +197,46 @@ deleted — matched on the URL because that is the only thing the block and the 
 A run that failed leaves its block alone: there is nothing to replace it with, and the observation
 is still worth keeping.
 
+## What a section header counts
+
+Two populations sit under one header, and the number above them used to see one:
+
+```
+Icebox (2 / 3)          two blocks dropped by the +, three issues that already exist
+Underway (1)            one issue, and nothing hand-written under it
+Shipped (12, 9 hidden)  twelve issues, nine of them left out by projectCardLimit
+Icebox (2 / 12, 9 hidden)
+```
+
+**Drafts first, mirrored items last.** That is the order the request used — what was written by
+hand, then what already exists — and it leaves the last number meaning exactly what the single
+number has always meant. So a column with no drafts still draws one number rather than a `/ 0`:
+the `+` is on the first column only, so every other column would otherwise carry a zero for a
+population it can never hold. A column holding drafts and no cards reads `(3 / 0)`, which is the
+honest form of the same rule, and is the case that started this: three observations waiting to be
+researched under a header that said `Todo (0)`.
+
+There is no total. Two numbers were asked for, and a third in a 300px header that also carries
+`, N hidden` buys nothing. The cap applies to the mirrored items alone, so `, N hidden` qualifies
+that side and no other.
+
+The draft count comes from the same `options.drafts` that decides where the blocks go, so the
+header and the column cannot disagree, and it moves on the click that drops a block rather than on
+the next poll. Nothing new is read from GitHub and nothing new is stored. **Which drafts belong to
+a column is decided by `sectionOptionId`, never by a name** — a draft naming a column the board no
+longer has is counted by no header, for the same reason it is placed nowhere.
+
+Splitting the *mirrored* side by who created the issue is a different feature and is not this one:
+the provenance does not exist anywhere durable. The agent runs `gh` under the maintainer's own
+login, there is no label convention, and the local trace is deleted on purpose when the card
+appears. It would have to be introduced — a label written by the server where the created URL
+first exists — before anything could count it.
+
+`scripts/check-board-counts.mjs` pins the format down on a fixture whose sections are named
+`Icebox` / `Underway` / `Shipped`, and renames them again, so nothing may key on `Todo`.
+`scripts/check-board-drafts-browser.mjs` reads the header back out of a real scene after a click,
+because a drop that moved the cards and left the header stale compiles just as well.
+
 ## A card is an issue block
 
 Selecting a card opens the same panel an authored block opens: the issue title, its state, its
