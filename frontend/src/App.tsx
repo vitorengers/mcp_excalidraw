@@ -199,6 +199,15 @@ const editingDraftId = (api: ExcalidrawImperativeAPI): string => {
   return String(editing.containerId ?? editing.id ?? '');
 };
 
+/** Whether the label editor that is open belongs to an issue block. */
+const editingIssueBlock = (api: ExcalidrawImperativeAPI): boolean => {
+  const editing = editingDraftId(api);
+  if (!editing) return false;
+  return api.getSceneElements().some(
+    (element) => element.id === editing && customDataOf(element).kind === 'issue'
+  );
+};
+
 /**
  * The timestamp a draft's id was built from, for blocks that carry no field.
  *
@@ -1793,6 +1802,65 @@ function App(): JSX.Element {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  /**
+   * Enter finishes writing an issue block.
+   *
+   * Writing an observation is typing into Excalidraw's own bound-label editor, and that
+   * editor commits on exactly two keys: Escape, and Ctrl/Cmd+Enter. Plain Enter matches
+   * neither, falls through to the textarea and inserts a newline — so the one key a reader
+   * reaches for to say "done" is the one key that does not. There is no prop or callback
+   * that changes it; the handler is `editable.onkeydown`, assigned as an element property
+   * inside `textWysiwyg`.
+   *
+   * On `document`, in the capture phase, for the same reason the panel's Ctrl+V is: an
+   * element-property handler runs at the target phase, so capturing at `document` is what
+   * gets there first, and stopping the event is what keeps the newline from being typed.
+   *
+   * **So a selected issue block changes what Enter does on the canvas**, exactly as it
+   * changes what Ctrl+V does, and the bounds are drawn to match:
+   *
+   * - only an issue block — every other label on the board keeps Enter as a newline;
+   * - Shift+Enter is left alone, which is where the line break went;
+   * - Escape and Ctrl/Cmd+Enter are left alone; removing a keystroke people already have
+   *   in their fingers buys nothing;
+   * - a composition in progress is left alone, or Enter-to-confirm an IME candidate would
+   *   close the editor mid-word.
+   *
+   * **It finishes the edit; it does not start the run.** Starting the agent is an
+   * unattended process with repository access, and inferring that from a key that means
+   * "done writing" would be a guess with consequences. The button on the card stays the
+   * only way in.
+   *
+   * The finish is a synthetic Escape dispatched at the textarea rather than a `blur()`,
+   * because `onSubmit` re-selects the container only when the submit came from the
+   * keyboard: blurring commits the text and leaves nothing selected, which closes the card
+   * the reader wants next. It does not bubble — the editor's own handler is all this needs
+   * to reach, and an Escape loose on the page is a different keystroke with its own
+   * meanings.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Enter') return
+      if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return
+      if (event.isComposing || event.keyCode === 229) return
+
+      const target = event.target as HTMLElement | null
+      if (!target || target.tagName !== 'TEXTAREA' || !target.classList.contains('excalidraw-wysiwyg')) return
+
+      const api = excalidrawAPIRef.current
+      if (!api || !editingIssueBlock(api)) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      target.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: false, cancelable: true
+      } as KeyboardEventInit))
+    }
+
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => { document.removeEventListener('keydown', onKeyDown, true) }
   }, [])
 
   // WebSocket connection
