@@ -132,6 +132,17 @@ The other guards carry over — loopback only, one run at a time per element —
 added: a block with no issue has nothing to implement, and a block that already produced a
 pull request will not produce a second one.
 
+### The card moves when the run starts
+
+If the workspace has a project, starting a run moves that issue's card to **In Progress** and the
+mirror picks it up on its next poll. The write is the server's, made where the run is started, so
+it happens whether the click came from an authored block or from a mirrored card — and it does not
+depend on an agent obeying an instruction it might die before reaching.
+
+It is best-effort by design: no project, no such column, an issue that is not on the board, or a
+`gh` that fails are all logged and nothing more. The run still starts. `docs/project-board.md` has
+the column-resolution rule and `projectInProgressColumn`.
+
 ### No time limit, and the way back
 
 Researching an issue keeps its twenty-minute ceiling: it is bounded work, and that number
