@@ -21,6 +21,56 @@ own text, or from a text element bound to it. State lands back on the element as
 
 A second click while a run is in flight gets 409. So does a block that already has an issue.
 
+## Reference images
+
+A block can carry images as well as text. Select it, pick them with **Attach reference
+images** in the panel, and the agent looks at them while it investigates — a screenshot of
+the thing that is wrong says in one image what a paragraph gets approximately.
+
+**They are reference material, not issue content, and that boundary is forced rather than
+chosen.** `gh issue create` has no attachment flag, and the endpoint GitHub's own web client
+uploads to is not public API, so an image cannot reach the issue itself without being hosted
+somewhere first. The prompt therefore tells the agent what the images are for: read them,
+and write out in words whatever the issue depends on.
+
+The ids live on the block as `customData.issueImages`, an explicit list. Excalidraw binds
+text to a container but not images, so "the images in this block" had to be invented — and a
+list was preferred over group membership because a group is a user-facing concept: grouping a
+card with its neighbours for layout would silently change what the agent sees, and ungrouping
+would silently take it away.
+
+The bytes go to the file store (`POST /api/files`), not onto the element. An element carrying
+dataURLs would ride in every autosync payload and every export of the board. `GET /api/files/:id`
+reads one back, which is what draws the thumbnails in the panel.
+
+### How they reach the agent
+
+The prompt is one string on stdin and there is no second channel — base64 pasted into it
+would be megabytes the agent cannot decode. What it does have is `Read`, which renders an
+image. So each attached dataURL is decoded to a file **inside the project**, under
+`.excalidraw-issue-images/<element id>/`, and the prompt names the paths.
+
+Inside the project for two reasons. A WSL-backed project runs through `wsl.exe`, and a
+Windows temp path has no spelling that distro can open — but the project has one, `innerPath`,
+which is the translation the prompt carries. And a file under the working directory is one the
+agent is unambiguously allowed to read; in `-p` mode a refused tool call is silent, so an
+image outside the project would fail as an agent that merely ignored it.
+
+The directory exists only while the run does. It is removed when the run ends, on the failure
+path as well as the success one, and the empty parent goes with it.
+
+Three things are deliberate:
+
+- **A block with nothing attached sends the prompt it sent before this existed, byte for
+  byte.** A feature nobody used must not change what every block already does.
+- **A dead id costs nothing.** A `fileId` with no image behind it is skipped and the run
+  goes ahead — losing an investigation over a missing image would be the worse trade.
+- **The store is in memory.** Files are not written to disk and not exported with the board,
+  so an attachment does not survive a restart of the server. Attach and run in one sitting.
+
+Attaching is offered only before the run. Once a block has an issue there is nothing left for
+an image to inform, and attaching one does not make the block runnable again.
+
 ## After the issue exists
 
 The block is retitled to the issue it produced: `customData.issueTitle` is stored and the bound

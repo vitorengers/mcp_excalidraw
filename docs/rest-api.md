@@ -10,7 +10,7 @@ browser does, and everything this board was built with, goes through here.
 | Elements | `GET/POST /api/elements`, `PUT/DELETE /api/elements/:id`, `GET /api/elements/:id`, `GET /api/elements/search`, `DELETE /api/elements/clear`, `POST /api/elements/batch`, `POST /api/elements/from-mermaid`, `POST /api/elements/sync` |
 | Project | `GET /api/workspaces`, `GET /api/docs/:key`, `GET /api/library`, `POST /api/issue-block/:id` |
 | Project board | `GET /api/project-board`, `POST /api/project-board/move` |
-| Files | `GET/POST /api/files`, `DELETE /api/files/:id` |
+| Files | `GET/POST /api/files`, `GET/DELETE /api/files/:id` |
 | Browser round-trips | `POST /api/export/image` and `/result`, `POST /api/viewport` and `/result` |
 | Snapshots | `POST/GET /api/snapshots`, `GET /api/snapshots/:name` |
 | Health | `GET /`, `GET /health`, `GET /api/sync/status` |

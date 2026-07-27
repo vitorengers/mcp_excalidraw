@@ -196,3 +196,60 @@
 .element-docs__implement {
   margin: 0.75rem 0 0.25rem;
 }
+
+/* Reference images, shown while the block is still an observation. */
+.element-docs__image-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.element-docs__image {
+  position: relative;
+  width: 88px;
+  height: 88px;
+  border: 1px solid var(--color-gray-30, #ced4da);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--color-gray-10, #f1f3f5);
+}
+
+.element-docs__image img {
+  width: 100%;
+  height: 100%;
+  /* Contain rather than cover: a screenshot cropped to a square stops being evidence. */
+  object-fit: contain;
+}
+
+.element-docs__image-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-size: 11px;
+  color: var(--color-gray-60, #868e96);
+}
+
+.element-docs__image-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* The picker is a label wrapping the input, so the input itself must not be seen. */
+.element-docs__attach input[type="file"] {
+  display: none;
+}
