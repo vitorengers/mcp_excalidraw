@@ -21,6 +21,13 @@ browser does, and everything this board was built with, goes through here.
 field, or the `x-workspace-id` header. Omitting it is not an error; it means the `default`
 store.
 
+**`GET /api/files` answers with one board's files.** The store behind it is not per-board — a
+file is content-addressed by id, and two boards may legitimately reference the same one — so the
+scoping is by reference: the ids the workspace's own image elements and issue blocks name. It
+used to hand back every dataURL the process held, for every board, on every page load and every
+socket connect, which on a board full of screenshots is megabytes fetched to draw a canvas that
+needed none of them.
+
 **The `/result` routes are the browser answering back.** Exporting an image or reading the
 viewport needs a real Excalidraw instance, which only exists in an open tab. The server asks over
 the WebSocket, the browser does the work and POSTs the answer to the matching `/result` route.
