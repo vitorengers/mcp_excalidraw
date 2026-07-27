@@ -65,8 +65,13 @@ export function terminalBlockData(customData: unknown): TerminalBlockData {
  *
  * The same 120 the mirror leaves between itself and the board. Both regions are
  * `left - gap - width`, so the canvas reads terminal | mirror | content from the left and
- * every region follows content that grew instead of sitting at a coordinate somebody
- * once picked.
+ * every region is placed from content rather than from a coordinate somebody once picked.
+ *
+ * Both are placed *once* and then kept — the mirror since #99, where re-measuring it on every
+ * poll turned out to be what let it drift away from the board on its own. That is what makes
+ * the order above safe to stand on: this block is anchored to the mirror's **left** edge, and
+ * that is the edge #99 pins, so a column added on GitHub grows the region to the right, into
+ * the gap it keeps from the board, rather than leftward onto this block.
  */
 export const TERMINAL_GAP = 120;
 
