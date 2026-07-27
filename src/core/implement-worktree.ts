@@ -133,12 +133,49 @@ async function baseRef(workspace: Workspace): Promise<string> {
 }
 
 /**
+ * Copy a tree as hard links: same file contents, separate directory entries.
+ *
+ * Cheap in both senses — no bytes are copied, and deleting a link deletes only that link.
+ * That second property is the whole reason this exists.
+ */
+function mirrorAsHardLinks(source: string, target: string): void {
+  fs.mkdirSync(target, { recursive: true });
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const from = path.join(source, entry.name);
+    const to = path.join(target, entry.name);
+    if (entry.isDirectory()) {
+      mirrorAsHardLinks(from, to);
+    } else if (entry.isSymbolicLink()) {
+      // Copied as a link of its own; following it could walk out of the tree entirely.
+      try {
+        fs.symlinkSync(fs.readlinkSync(from), to);
+      } catch { /* a link that cannot be recreated is not worth failing the run over */ }
+    } else {
+      fs.linkSync(from, to);
+    }
+  }
+}
+
+/**
  * Give the worktree the dependencies it needs to verify anything.
  *
  * `node_modules` is not tracked, so a fresh checkout has none, and an agent told to run the
- * build finds no compiler there. A link rather than an install: the two checkouts are the
- * same repository at nearly the same commit, and an install per run would cost minutes and
- * gigabytes to arrive at the same tree.
+ * build finds no compiler there. Installing per run would cost minutes and gigabytes to
+ * arrive at the same tree, so the project's own is shared.
+ *
+ * **Shared as hard links, not as one junction to the directory.** A junction is what this
+ * did first, and it made `node_modules` a single mutable resource behind four supposedly
+ * isolated checkouts: anything an agent ran that removed its own `node_modules` — an
+ * `npm ci`, an `rm -rf` — reached through the junction and emptied the project's. It
+ * happened twice in one afternoon, and the failure is silent until the next thing that
+ * needs a compiler, which by then looks unrelated.
+ *
+ * Hard links make each checkout's `node_modules` its own directory entries over the same
+ * bytes. Deleting one deletes links; the project's copy is untouched, and an agent that
+ * really does install gets its own files. ~20k links here, a few seconds, once per worktree.
+ *
+ * The trade is that a file *edited in place* is edited for everyone — much rarer than
+ * deletion, and much less destructive when it happens.
  */
 async function linkDependencies(workspace: Workspace, worktree: AgentDirectory): Promise<void> {
   const name = 'node_modules';
@@ -146,21 +183,33 @@ async function linkDependencies(workspace: Workspace, worktree: AgentDirectory):
     if (workspace.environment.kind === 'wsl') {
       const source = `${workspace.innerPath}/${name}`;
       const link = `${worktree.innerPath}/${name}`;
+      // `cp -al` is the same idea, and is one process rather than twenty thousand calls
+      // across the WSL boundary.
       await exec('wsl.exe', [
         '-d', workspace.environment.distro, '--',
-        'bash', '-lc', `[ -e ${JSON.stringify(source)} ] && [ ! -e ${JSON.stringify(link)} ] && ln -s ${JSON.stringify(source)} ${JSON.stringify(link)} || true`,
+        'bash', '-lc', `[ -d ${JSON.stringify(source)} ] && [ ! -e ${JSON.stringify(link)} ] && cp -al ${JSON.stringify(source)} ${JSON.stringify(link)} || true`,
       ]);
       return;
     }
 
     const source = path.join(workspace.path, name);
-    const link = path.join(worktree.path, name);
-    if (!fs.existsSync(source) || fs.existsSync(link)) return;
-    // A junction, not a symlink: creating a symlink on Windows needs a privilege an
-    // ordinary account does not have, and a junction needs none.
-    fs.symlinkSync(source, link, process.platform === 'win32' ? 'junction' : 'dir');
+    const target = path.join(worktree.path, name);
+    if (!fs.existsSync(source) || fs.existsSync(target)) return;
+
+    const started = Date.now();
+    try {
+      mirrorAsHardLinks(source, target);
+      logger.info(`Linked ${name} into ${worktree.path} in ${Date.now() - started}ms`);
+    } catch (error) {
+      // A hard link cannot cross volumes and needs no privilege; when it fails anyway,
+      // a junction is still better than a checkout with no compiler in it. Partial work
+      // is cleared first so resolution does not find half a tree.
+      fs.rmSync(target, { recursive: true, force: true });
+      logger.warn(`Could not hard-link ${name} (${(error as Error).message}); falling back to a junction, which is shared`);
+      fs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
+    }
   } catch (error) {
-    logger.warn(`Could not link ${name} into ${worktree.path}: ${(error as Error).message}`);
+    logger.warn(`Could not provide ${name} in ${worktree.path}: ${(error as Error).message}`);
   }
 }
 

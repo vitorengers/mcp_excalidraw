@@ -159,6 +159,20 @@ weaker key, and an id is the one field anything on the canvas is free to rewrite
 before that field existed carries none; those keep the order the scene holds them in, below the
 dated ones, so an old scene still lays out the same way twice running.
 
+That field does not survive the browser, so the id is read as a fallback. `draftCreatedAt` is
+written on every block and comes back from `POST /api/elements` unchanged, but by the time a block
+is in the scene its `customData` holds `kind`, `projectBoardDraft` and `sectionOptionId` — written
+in the same object literal — and not this one. Something between `instantiateIssueBlock` and the
+scene drops it. Without the fallback every column sorted by arrival instead:
+`(b.createdAt ?? 0) - (a.createdAt ?? 0)` is zero for every pair, the sort is stable, and the
+newest block landed at the bottom. The weak key that survives beats the strong one that does not.
+
+This was invisible for a while because the check that covers it could not click the `+` at all:
+its server ran without `EXCALIDRAW_LIBRARY`, the library came back empty, and
+`addIssueBlockToColumn` warns to the console and returns when no template carries
+`customData.kind === "issue"`. Every click was a silent no-op, so the ordering assertions never
+reached the thing they were about.
+
 A block grows as its title is typed, because an Excalidraw container grows to fit the text bound
 to it, and everything below it in the column moves down as it does — on the keystroke, not on the
 next poll. The block under the caret is the one thing a relayout leaves alone: rewriting a

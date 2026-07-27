@@ -168,13 +168,39 @@ const editingDraftId = (api: ExcalidrawImperativeAPI): string => {
  * carries none; the layout keeps those in the order they arrive, so an old scene still
  * lays out the same way twice running.
  */
+/**
+ * The timestamp a draft's id was built from, for when the field is gone.
+ *
+ * `draftCreatedAt` is written onto every block the `+` drops, and it survives the server
+ * intact — a round trip through `POST /api/elements` returns it unchanged. It does not
+ * survive the browser: by the time the block is in the scene its `customData` holds `kind`,
+ * `projectBoardDraft` and `sectionOptionId` — written in the same object literal — and not
+ * this one.
+ *
+ * Reading the stamp back off the id was rejected when this was written, on the grounds that
+ * a timestamp seeded into an id is a weak key. That reasoning still holds, which is why this
+ * is a fallback and the field is still written and still preferred. But a weak key that
+ * survives beats a strong one that does not: with neither, `(b.createdAt ?? 0) - (a.createdAt
+ * ?? 0)` is zero for every pair, the sort is stable, and the newest block lands at the bottom
+ * of the column instead of the top.
+ */
+const createdAtFromId = (id: string): number | null => {
+  const stamp = /^pbdraft-(\d+)/.exec(id)?.[1];
+  if (!stamp) return null;
+  const value = Number(stamp);
+  return Number.isFinite(value) ? value : null;
+};
+
 const draftBlockOf = (element: { id: string; height: number; customData?: CustomData }): DraftBlock => {
   const custom = customDataOf(element);
+  const createdAt = typeof custom.draftCreatedAt === 'number'
+    ? custom.draftCreatedAt
+    : createdAtFromId(element.id);
   return {
     id: element.id,
     sectionOptionId: String(custom.sectionOptionId ?? ''),
     height: element.height,
-    ...(typeof custom.draftCreatedAt === 'number' ? { createdAt: custom.draftCreatedAt } : {})
+    ...(createdAt === null ? {} : { createdAt })
   };
 };
 
