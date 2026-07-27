@@ -38,6 +38,16 @@ export interface RunGhOptions {
   what: string;
   /** Set to 1 for a call whose failure is deterministic and not worth repeating. */
   attempts?: number;
+  /**
+   * Text written to `gh`'s stdin, for a flag that reads one — `--body-file -`.
+   *
+   * This is the only way free text can reach `gh` from here. The command line is a string
+   * that a WSL workspace runs through `bash -lc`, so a comment containing `$(echo hi)`
+   * interpolated into it would be executed rather than posted; stdin is a byte stream with
+   * no shell anywhere near it. Every attempt writes it again, which is what makes a retry
+   * a repeat rather than an empty call.
+   */
+  stdin?: string;
 }
 
 /**
@@ -47,6 +57,9 @@ export interface RunGhOptions {
  * workspace runs it through `bash -lc`, so anything interpolated into it has to be
  * validated by the caller rather than escaped here. Every caller in this project
  * interpolates only ids matched against a pattern first.
+ *
+ * Text that cannot be validated that way — anything a person typed — goes in
+ * `options.stdin` instead, paired with the flag that reads it.
  */
 export async function runGh(
   workspace: Workspace,
@@ -84,6 +97,13 @@ function runOnce(workspace: Workspace, commandLine: string, options: RunGhOption
       env: { ...process.env, PATH: agentPath() },
       windowsHide: true,
     });
+
+    if (options.stdin !== undefined) {
+      // `gh` may exit before it reads any of this — a refused command, say — and an
+      // EPIPE from that must not become the error the caller reports.
+      child.stdin?.on('error', () => { /* nothing left to write to */ });
+      child.stdin?.end(options.stdin);
+    }
 
     let stdout = '';
     let stderr = '';

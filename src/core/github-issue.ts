@@ -11,7 +11,7 @@ import { spawn } from 'child_process';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
 import { agentPath, buildAgentCommand } from './issue-agent.js';
-import { GH_COMMAND } from './gh.js';
+import { GH_COMMAND, runGh as runGhCommand } from './gh.js';
 
 // Re-exported from where it now lives, so the project board reader and this one cannot
 // disagree about which binary `gh` is.
@@ -23,12 +23,34 @@ const TIMEOUT_MS = 30_000;
 /** Issue URLs come from our own extraction, but this is what gets handed to a shell-less spawn. */
 const ISSUE_URL = /^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/issues\/\d+$/;
 
+/**
+ * One comment on the issue.
+ *
+ * Only the four fields the panel renders. `gh` returns a good deal more per comment —
+ * reaction groups, minimisation, viewer flags — and none of it is worth carrying through
+ * to a card that is showing an issue at a glance.
+ */
+export interface IssueComment {
+  author: string;
+  body: string;
+  createdAt: string;
+  url: string;
+}
+
 export interface IssueDetail {
   number: number;
   title: string;
   body: string;
   state: string;
   url: string;
+  /**
+   * The conversation under the body.
+   *
+   * Read with the issue rather than on demand: it is one `--json` field on a call that is
+   * already being made, and an observation added from the panel is only worth adding if
+   * it can be seen afterwards.
+   */
+  comments: IssueComment[];
 }
 
 export function isIssueUrl(url: string): boolean {
@@ -79,6 +101,61 @@ export async function fetchIssue(workspace: Workspace, issueUrl: string): Promis
 class MalformedResponse extends Error {}
 
 /**
+ * The comment list out of a `gh` payload, narrowed to what the panel shows.
+ *
+ * Tolerant on purpose: an issue with no comments, a `gh` too old to know the field, and a
+ * comment whose author has since been deleted all mean "nothing to render here", not "the
+ * issue could not be read".
+ */
+function readComments(raw: unknown): IssueComment[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const comment = (entry ?? {}) as Record<string, unknown>;
+    const author = (comment.author ?? {}) as Record<string, unknown>;
+    return {
+      author: String(author.login ?? ''),
+      body: String(comment.body ?? ''),
+      createdAt: String(comment.createdAt ?? ''),
+      url: String(comment.url ?? ''),
+    };
+  });
+}
+
+/**
+ * Add a comment to an issue.
+ *
+ * The board's way of answering a question the issue agent left open, or of adding what was
+ * forgotten when the observation was written. A GitHub comment rather than an edit to the
+ * body: it is the one place both a human reviewer and the implement agent can read it, and
+ * it cannot damage a body an agent spent twenty minutes on.
+ *
+ * `--body-file -` and `options.stdin`, never the command line. The body is free text and a
+ * WSL workspace runs the command line through `bash -lc`, so a comment containing
+ * `$(echo hi)` would be executed rather than posted. The URL is the only thing interpolated
+ * and it is pattern-matched first.
+ *
+ * Retried like every other `gh` call here, which for a write is a deliberate trade: the
+ * failure this machine actually produces is socket buffer exhaustion at connect time, where
+ * a retry is the difference between a lost comment and none. A duplicate is the price if a
+ * call ever fails after GitHub accepted it.
+ */
+export async function commentOnIssue(
+  workspace: Workspace,
+  issueUrl: string,
+  body: string
+): Promise<void> {
+  if (!isIssueUrl(issueUrl)) {
+    throw new MalformedResponse(`Not a GitHub issue URL: ${issueUrl}`);
+  }
+
+  await runGhCommand(workspace, `issue comment ${issueUrl} --body-file -`, {
+    what: 'the issue comment',
+    timeoutMs: TIMEOUT_MS,
+    stdin: body,
+  });
+}
+
+/**
  * One `gh` run. Rejects with a message fit to show in the panel — the caller has no
  * better context to add, and a raw `gh` stderr is more useful than "request failed".
  */
@@ -89,7 +166,7 @@ async function runGh(workspace: Workspace, issueUrl: string): Promise<IssueDetai
 
   const { command, args, cwd } = buildAgentCommand(
     workspace,
-    `${GH_COMMAND} issue view ${issueUrl} --json number,title,body,state`
+    `${GH_COMMAND} issue view ${issueUrl} --json number,title,body,state,comments`
   );
 
   logger.info(`Reading ${issueUrl} for workspace "${workspace.id}"`);
@@ -133,13 +210,14 @@ async function runGh(workspace: Workspace, issueUrl: string): Promise<IssueDetai
       }
 
       try {
-        const parsed = JSON.parse(stdout) as Partial<IssueDetail>;
+        const parsed = JSON.parse(stdout) as Record<string, unknown>;
         resolve({
           number: Number(parsed.number ?? 0),
           title: String(parsed.title ?? ''),
           body: String(parsed.body ?? ''),
           state: String(parsed.state ?? ''),
           url: issueUrl,
+          comments: readComments(parsed.comments),
         });
       } catch (error) {
         reject(new MalformedResponse(`Could not parse the gh response: ${(error as Error).message}`));

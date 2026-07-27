@@ -41,7 +41,7 @@ import {
   NoProjectConfigured,
   NotOnThisBoard
 } from './core/project-board.js';
-import { fetchIssue, isIssueUrl } from './core/github-issue.js';
+import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
 import { runImplementAgent } from './core/implement-agent.js';
 import {
   ImplementRecord,
@@ -1620,6 +1620,72 @@ app.get('/api/issue', async (req: Request, res: Response) => {
   } catch (error) {
     // 502: the failure is GitHub's or gh's, not the caller's request.
     res.status(502).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/**
+ * Add an observation to an issue that already exists.
+ *
+ * Between the two agent runs there was nothing to say anything with. The issue agent is
+ * told to end with the questions it could not answer, and the implement agent is told to
+ * decide them alone because nobody can answer mid-run — so an answer, or anything the
+ * observation missed, had to be typed on github.com in another window.
+ *
+ * Keyed by URL for the same reason implementing is: the panel also serves a mirrored card
+ * the server has never seen, which has no element id to name it by.
+ *
+ * The loopback guard and nothing else. This writes to GitHub, so a canvas reachable from
+ * the network must not reach it — but it starts no agent and touches no repository, so
+ * `POST /api/project-board/move` is the precedent rather than the implement routes' opt-in
+ * environment variable.
+ */
+app.post('/api/issue/comment', async (req: Request, res: Response) => {
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    return res.status(403).json({
+      success: false,
+      error: 'Issues only take comments while the server is bound to loopback.'
+    });
+  }
+
+  const issueUrl = typeof req.body?.url === 'string' ? req.body.url : '';
+  if (!isIssueUrl(issueUrl)) {
+    return res.status(400).json({ success: false, error: `Not a GitHub issue URL: ${issueUrl}` });
+  }
+
+  // Posted as typed, trailing newlines and all — the point of this route is that the text
+  // arrives unchanged. Only "is there anything here at all" is judged, and an accidental
+  // click on an empty box must not become an empty comment on somebody's issue.
+  const body = typeof req.body?.body === 'string' ? req.body.body : '';
+  if (!body.trim()) {
+    return res.status(400).json({ success: false, error: 'An empty observation has nothing to add.' });
+  }
+
+  const workspaceId = workspaceIdFrom(req);
+  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace || workspace.error) {
+    return res.status(400).json({
+      success: false,
+      error: workspace?.error ?? `Workspace "${workspaceId}" is not registered.`
+    });
+  }
+
+  try {
+    await commentOnIssue(workspace, issueUrl, body);
+  } catch (error) {
+    // 502: the failure is GitHub's or gh's, not the caller's request.
+    return res.status(502).json({ success: false, error: (error as Error).message });
+  }
+
+  // Read back so the panel can show the comment without a reload. Deliberately after the
+  // post has been reported as succeeding: a read that fails is not a comment that failed,
+  // and telling the reader otherwise would invite a second one.
+  try {
+    const issue = await fetchIssue(workspace, issueUrl);
+    res.json({ success: true, issue });
+  } catch (error) {
+    logger.warn(`Commented on ${issueUrl} but could not read it back: ${(error as Error).message}`);
+    res.json({ success: true, issue: null });
   }
 });
 
