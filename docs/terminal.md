@@ -158,6 +158,12 @@ on its own terms it looks authored. Both doors drop anything whose container is 
 without that, a text element whose container the store has never heard of ends up in the
 committed board file.
 
+There is a third place that rule has to be stated, and #99 is where it was missing: the mirror's
+own measurement (`mirrorAnchors` in `src/core/project-board-layout.ts`). It left the block out
+and took its label in, so binding a title to the one block the reader is expected to drag, and
+then dragging it, moved the *other* region. All three now say the same thing about a label as
+about its container.
+
 Nothing about the PTY changed this. The emulator is DOM, the transcript is the server's, and
 neither has ever been an element.
 
@@ -165,13 +171,20 @@ neither has ever been an element.
 
 "The right side" is a rule, not a pixel column: `maxX + 120`, level with the top of whatever the
 board has authored. That is the mirror's own arithmetic with the sign flipped — the mirror is
-`minX - gap - width` (`src/core/project-board-layout.ts`) — and it means both regions follow a
-board that grew instead of sitting at a coordinate somebody once picked. The mirror and the
-terminal are each left out of the other's measurement, or they would walk away from the content
-in opposite directions on every pass.
+`minX - gap - width` (`src/core/project-board-layout.ts`) — so each region is placed from the
+board's own bounds, on its own side. Each is left out of the other's measurement, or they would
+walk away from the content in opposite directions.
 
-Placed **once**, unlike the mirror, which repaints on a timer: this one is expected to be moved
-and resized, and a redraw that re-anchored it every twenty seconds would undo that.
+Placed **once**, and since #99 the mirror is too. That used to be the difference between them:
+this block is expected to be moved and resized, and a redraw that re-anchored it every twenty
+seconds would undo that, while the mirror repainted on the timer and re-measured every time. The
+re-measuring is what let the mirror drift away from the board on its own, so both regions now
+resolve an origin the first time there is something to measure against and keep it.
+`docs/project-board.md` has which edge the mirror pins and what that costs.
+
+What still differs is what happens next. This block is the reader's to drag, and where it was
+dragged is remembered and preferred over the rule above; the mirror has no such gesture, being
+repainted from GitHub, so its origin only ever comes from the measurement.
 
 The block itself is a plain rectangle, and everything that reads as a terminal is a DOM overlay
 positioned over its bounds (`frontend/src/components/TerminalPanel.tsx`). Inside that overlay is
