@@ -142,7 +142,18 @@ const api = (path, options = {}) => request(`${BASE}${path}${path.includes('?') 
   ...options,
 });
 
-const terminalState = async () => (await (await api('/api/terminal')).json());
+/**
+ * The board's one session, in the shape this file was written against.
+ *
+ * `GET /api/terminal` lists sessions since #94, because a board may hold several. Nothing
+ * here opens a second one, so the first is *the* session — and `session: null` still means
+ * "none", which is what most of the cases below turn on.
+ */
+const terminalState = async () => {
+  const body = await (await api('/api/terminal')).json();
+  const [session] = body?.sessions ?? [];
+  return { session: session ?? null, scrollback: session?.scrollback ?? '' };
+};
 
 // ─── Talking to Chrome ────────────────────────────────────────
 
@@ -508,11 +519,20 @@ try {
         Math.abs(drawn.card.left - toViewport(drawn, drawn.block.x, drawn.block.y).x) < 2
         && Math.abs(drawn.card.top - toViewport(drawn, drawn.block.x, drawn.block.y).y) < 2,
         `card at ${drawn.card.left},${drawn.card.top}`);
-  check('and it is in the viewport, because the key scrolls to it as well',
-        toViewport(drawn, drawn.block.x + drawn.block.w / 2, drawn.block.y + drawn.block.h / 2).x > 0
-        && toViewport(drawn, drawn.block.x + drawn.block.w / 2, drawn.block.y + drawn.block.h / 2).x < drawn.view.width,
-        JSON.stringify(toViewport(drawn, drawn.block.x + drawn.block.w / 2, drawn.block.y + drawn.block.h / 2)));
-  check('and nothing reloaded to get there', drawn.sentinel === 'kept-after-reload');
+  // Waited for rather than read the moment the block appears. The key scrolls with
+  // `animate: true`, and since #96 the block is far enough from where a board opens that
+  // half way through the animation it is still off screen — it used to land a few hundred
+  // units from the origin, close enough that the assertion held before the scroll had
+  // finished. A block that never arrives still fails this, on the timeout.
+  const arrived = await waitFor(async () => {
+    const probe = await evaluate(PROBE);
+    if (!probe.block) return null;
+    const centre = toViewport(probe, probe.block.x + probe.block.w / 2, probe.block.y + probe.block.h / 2);
+    return centre.x > 0 && centre.x < probe.view.width ? probe : null;
+  }, 'Alt+T to scroll the block into view');
+  check('and it is in the viewport, because the key scrolls to it as well', Boolean(arrived),
+        JSON.stringify(arrived && toViewport(arrived, arrived.block.x, arrived.block.y)));
+  check('and nothing reloaded to get there', arrived.sentinel === 'kept-after-reload');
   await shot('07-opened-from-nothing');
 } catch (error) {
   failures++;

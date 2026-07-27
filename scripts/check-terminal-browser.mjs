@@ -529,7 +529,7 @@ try {
         String(scene.card.screen).slice(-200));
 
   console.log('\n4. the block resizes on the board, and the session is told');
-  const gridBefore = (await (await api('/api/terminal')).json())?.session;
+  const [gridBefore] = (await (await api('/api/terminal')).json())?.sessions ?? [];
   const before = { w: scene.block.w, h: scene.block.h };
 
   // A viewport of this case's own, rather than the one Alt+T fitted. Fitting puts the block's
@@ -562,7 +562,7 @@ try {
         `card ${scene.card.width}×${scene.card.height} for block ${scene.block.w}×${scene.block.h}`);
 
   const gridAfter = await waitFor(async () => {
-    const session = (await (await api('/api/terminal')).json())?.session;
+    const [session] = (await (await api('/api/terminal')).json())?.sessions ?? [];
     return session && session.cols > (gridBefore?.cols ?? 0) ? session : null;
   }, 'the new grid to reach the server');
   check('and the session was told the new size',

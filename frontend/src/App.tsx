@@ -34,6 +34,7 @@ import {
   TERMINAL_KIND,
   TERMINAL_SIZE,
   clampTerminalFont,
+  terminalBlockData,
   terminalBlockElement,
   terminalGrid,
   terminalOrigin
@@ -1411,29 +1412,37 @@ function App(): JSX.Element {
 
     // A terminal block placed before this board landed is standing in the slot the mirror is
     // about to take — the no-mirror fallback, chosen when there was no mirror to see. Move it
-    // out of the way, once, and take the mark off with it: the block is placed once and never
+    // out of the way, once, and take the mark off with it: a block is placed once and never
     // re-anchored, and this pass is the one exception, not a second cadence.
     //
     // Only while it is still exactly where it was put. A reader who dragged it in the seconds
-    // before the first poll has said where it goes, and that outranks the arithmetic.
-    const stranded = own.find((element) => isTerminalElement(element)
+    // before the first poll has said where it goes, and that outranks the arithmetic — as has
+    // a block detached beside another, or restored at a geometry it remembers, neither of
+    // which is ever at this origin.
+    const marked = own.filter((element) => isTerminalElement(element)
       && customDataOf(element)[TERMINAL_AWAITING_MIRROR] === true)
-    const placedAt = stranded
+    const placedAt = marked.length > 0
       ? terminalOrigin(boundsOf(own.filter((element) => !isTerminalElement(element))), null)
       : null
-    const rescue = stranded && placedAt
-      && stranded.x === placedAt.x && stranded.y === placedAt.y
+    const rescue = placedAt
       ? terminalOrigin(null, { minX: origin.x, minY: origin.y,
                                maxX: origin.x + layout.bounds.width,
                                maxY: origin.y + layout.bounds.height })
       : null
+    const strandedIds = new Set(marked.map((element) => element.id))
 
     const nextOwn = own.map((element) => {
       if (isTerminalElement(element)) {
         // The mark comes off whether or not the block moved, so this can never fire twice.
-        if (!stranded || element.id !== stranded.id) return element
+        if (!strandedIds.has(element.id)) return element
         const { [TERMINAL_AWAITING_MIRROR]: _placedBlind, ...rest } = customDataOf(element)
-        return { ...element, ...(rescue ?? {}), customData: rest }
+        const moved = rescue && placedAt
+          && element.x === placedAt.x && element.y === placedAt.y
+          ? rescue
+          : {}
+        // Excalidraw reconciles by version, so a shape whose only change is its `customData`
+        // and whose version stands still is one it may keep as it was.
+        return { ...element, ...moved, version: (element.version ?? 1) + 1, customData: rest }
       }
       if (frozen && (element.id === frozen || element.containerId === frozen)) return element
       const slot = placed.get(element.containerId ?? '') ?? placed.get(element.id)
@@ -1455,7 +1464,7 @@ function App(): JSX.Element {
     // in its slot, be skipped as "nothing moved". A pending rescue is in it for the same
     // reason — the mirror itself may be identical to the last pass, and the terminal still
     // has to be moved out from under it.
-    const signature = JSON.stringify([layout.elements, layout.drafts, frozen, Boolean(stranded), rescue])
+    const signature = JSON.stringify([layout.elements, layout.drafts, frozen, [...strandedIds], rescue])
     if (signature === projectBoardRef.current.signature
         && scene.some((element) => isMirrorElement(element))) {
       // Nothing moved. Redrawing anyway would fight the reader's selection every poll.
@@ -1757,11 +1766,18 @@ function App(): JSX.Element {
 
   // ─── The terminal ───────────────────────────────────────────
   //
-  // A block on the right of the board, mirroring the mirror: the project's own columns on
-  // one side, a shell running in the project on the other. The shape is derived, like the
-  // mirror's cards — it is rebuilt whenever a session is there to draw it, and it is stripped
-  // before the autosync and before the export, because a saved terminal is a dead frame
-  // around a session that has ended.
+  // Blocks on the right of the board, mirroring the mirror: the project's own columns on
+  // one side, the shells running in the project on the other. The shapes are derived, like
+  // the mirror's cards — they are rebuilt whenever a session is there to draw, and they are
+  // stripped before the autosync and before the export, because a saved terminal is a dead
+  // frame around a session that has ended.
+  //
+  // One block held one session until #94. Now a block holds a *strip* of them and names
+  // which in `customData.sessions`, and a tab detached from one block becomes a block of its
+  // own — which makes splitting a drag and joining a button, both of them geometry
+  // Excalidraw already owns. What is not saved with the arrangement is the arrangement: the
+  // shapes are derived, so a reload puts every live session back into one block. The sessions
+  // are the server's and survive; the tab layout is this page's and does not.
 
   interface TerminalStatus {
     cwd: string
@@ -1772,60 +1788,91 @@ function App(): JSX.Element {
     rows: number
   }
 
-  const [terminal, setTerminal] = useState<{
+  interface TerminalSessionState {
     status: TerminalStatus | null
     output: string
-    /** Why the block is inert, once it is: the shell exited, or the server refused. */
+    /** Why the tab is inert, once it is: the shell exited, or the server refused. */
     ended: string | null
-  }>({ status: null, output: '', ended: null })
+  }
 
   /**
-   * Whether a session is open, for the paths that cannot read state.
+   * Every session this board knows about, by id.
    *
-   * The WebSocket handlers are attached at mount and close over a scope where this is still
-   * its initial value, and the scene-replacing paths run from inside them. Same reason
-   * `activeWorkspaceRef` exists.
+   * The ref is the authority and the state is the copy that renders. The WebSocket handlers
+   * are attached at mount and close over a scope where the state is still its initial value,
+   * and the scene-replacing paths run from inside them — same reason `activeWorkspaceRef`
+   * exists. Writing both in one place is what keeps a chunk of output from being applied to
+   * the set of sessions as it was several messages ago.
    */
-  const terminalOpenRef = useRef<boolean>(false)
+  const terminalSessionsRef = useRef<Record<string, TerminalSessionState>>({})
+  const [terminalSessions, setTerminalSessions] = useState<Record<string, TerminalSessionState>>({})
+  /** The server's cap, so the strip's `+` can refuse rather than ask and be told 409. */
+  const terminalLimitRef = useRef<number>(0)
+  const [terminalLimit, setTerminalLimit] = useState<number>(0)
+  /** The board this page has already opened its first shell for. */
+  const terminalAutoOpenedRef = useRef<string | null>(null)
 
-  /**
-   * Whether the shell behind the open session has gone, for the same paths.
-   *
-   * It is not the opposite of `terminalOpenRef`: a session that ended leaves the block on
-   * the board saying so, so the block is still drawn and the overlay still has state. What
-   * it changes is what the key does — start another shell rather than scroll to a dead one
-   * — and whether an erase is undone, because there is nothing left to protect once the
-   * shell has exited.
-   */
-  const terminalEndedRef = useRef<string | null>(null)
+  const writeTerminalSessions = (
+    mutate: (current: Record<string, TerminalSessionState>) => Record<string, TerminalSessionState>
+  ): void => {
+    const next = mutate(terminalSessionsRef.current)
+    terminalSessionsRef.current = next
+    setTerminalSessions(next)
+  }
 
-  /**
-   * Where the block was last seen, so putting it back is putting it *back*.
-   *
-   * The reader is expected to move and resize this one, and a restore that re-anchored it
-   * past the mirror would answer an accidental erase by also undoing that. Reset on a board
-   * switch: the next board's block is not this one's.
-   *
-   * `awaitingMirror` comes along because it is a fact about *this* placement — a block put
-   * down before the first poll is standing in the mirror's slot, and an erase and a restore
-   * in that window must not lose the mark that gets it out again.
-   */
-  const terminalPlacementRef = useRef<
-    { x: number; y: number; width: number; height: number; awaitingMirror: boolean } | null
-  >(null)
+  const terminalStatusOf = (session: Record<string, any> | null | undefined): TerminalStatus | null =>
+    session
+      ? {
+        cwd: session.cwd,
+        shell: session.shell,
+        mode: session.mode ?? 'pipe',
+        cols: session.cols,
+        rows: session.rows
+      }
+      : null
 
-  /** A restore already scheduled, so a burst of scene changes queues one and not thirty. */
-  const terminalRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const [terminalRect, setTerminalRect] = useState<{
+  /** One block on screen: where it is, and which of its tabs is on top. */
+  interface TerminalView {
+    elementId: string
     rect: Rect
     zoom: number
     suppressed: boolean
-  } | null>(null)
+    sessions: string[]
+    active: string
+  }
 
-  /** The grid last reported, so a pan or a re-render does not re-report the same size. */
-  const terminalGridRef = useRef<string>('')
-  const terminalResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [terminalViews, setTerminalViews] = useState<TerminalView[]>([])
+  /** What was last rendered, so a pan that changes nothing does not re-render every block. */
+  const terminalViewsRef = useRef<string>('')
+
+  /** The grid last reported per session, so a pan or a re-render does not re-report a size. */
+  const terminalGridRef = useRef<Map<string, string>>(new Map())
+  const terminalResizeTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
+  /**
+   * Every block's scene geometry and what it is holding, from the last time it was drawn.
+   *
+   * Two things read it. A font change is a resize the reader did not drag — the block kept
+   * its size and the screen inside it did not — so the grid has to be re-derived from a
+   * shape nothing is about to report about. And a block that is *gone* has to be put back
+   * where it was (#93/#98), which needs the geometry after the shape has stopped existing.
+   */
+  const terminalGeometryRef = useRef<Map<string, {
+    x: number; y: number; width: number; height: number; sessions: string[]
+  }>>(new Map())
+
+  /**
+   * Where each session's block last was, kept per session rather than per block.
+   *
+   * A block erased takes its id with it, and what has to be restored is *those tabs, there*.
+   * Keyed by session, the restore groups the orphans by the geometry they remember and puts
+   * a block back around each group — which for the ordinary case of one erased block is one
+   * block, at its own size and position.
+   */
+  const terminalHomesRef = useRef<Map<string, { x: number; y: number; width: number; height: number }>>(new Map())
+
+  /** A restore already scheduled, so a burst of scene changes queues one and not thirty. */
+  const terminalRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   /**
    * How big the terminal's text is, before the board's zoom multiplies it.
@@ -1849,77 +1896,280 @@ function App(): JSX.Element {
   const terminalFontRef = useRef<number>(terminalFont)
 
   /**
-   * Put the block on the board, if a session is open and it is not there already.
+   * Write an arrangement of the blocks into the scene, if it is a different one.
    *
-   * Placed once and then left alone, unlike the mirror, which repaints on a timer: the
-   * reader is expected to move and resize this one, and a redraw that re-anchored it every
-   * twenty seconds would undo that. What does bring it back is a scene that was replaced
-   * wholesale — a reload, a tab switch — the hotkey, and the board noticing it has gone
-   * while the shell is still running (`scheduleTerminalRestore` below).
+   * Every operation on the strip — switching, adding, closing, detaching, merging, and the
+   * reconciliation that follows a scene being replaced — comes through here, because they
+   * are all the same edit: which sessions each block holds, and which of them is on top. A
+   * block left holding none is removed rather than left as an empty frame.
    *
-   * Placed once is also why it goes on the *far left*, past the mirror: the documentation is
-   * the only thing on this board that grows, it grows down and right, and a shape that never
-   * moves aside cannot be the one sitting on that edge.
+   * The comparison at the end is not an optimisation. `onChange` runs the sync that reads
+   * these blocks, and an update that wrote the same arrangement back would be a loop.
    */
-  const ensureTerminalBlock = (options: { scroll?: boolean } = {}): void => {
+  const commitTerminalLayout = (
+    layout: Map<string, { sessions: string[]; active: string }>,
+    added: Record<string, unknown>[] = []
+  ): void => {
     const api = excalidrawAPIRef.current
-    if (!api || !terminalOpenRef.current) return
+    if (!api) return
 
-    // The live scene, deliberately: what goes back into `updateScene` runs through
-    // `convertToExcalidrawElements`, which rebuilds each element from its skeleton and has
-    // no `isDeleted` to rebuild from. Handed the tombstones, it returns them alive — so a
-    // block placed one tick after an erase used to put back everything else the eraser had
-    // just taken, including the shapes the reader meant to remove.
-    const scene = api.getSceneElements()
-    const existing = scene.find((element) => isTerminalElement(element))
-    if (existing) {
-      if (options.scroll) {
-        api.scrollToContent([existing] as unknown as ExcalidrawElement[], { fitToViewport: true, animate: true })
+    const scene = api.getSceneElementsIncludingDeleted()
+
+    // One session, one tab, and the first block that claims it keeps it. Two paths add a
+    // tab for a session that has just opened — the response to the request that opened it,
+    // and the announcement the socket makes to every viewer of the board, this one
+    // included — so a layout that took both at face value would list it twice. Drawn twice
+    // it would be two emulators writing one transcript, with a keystroke going to whichever
+    // had the keyboard.
+    const seen = new Set<string>()
+    for (const element of scene) {
+      if (element.isDeleted || !isTerminalElement(element)) continue
+      const entry = layout.get(element.id)
+      if (!entry) continue
+      const unique: string[] = []
+      for (const sessionId of entry.sessions) {
+        if (seen.has(sessionId)) continue
+        seen.add(sessionId)
+        unique.push(sessionId)
       }
-      return
+      entry.sessions = unique
+      if (!entry.sessions.includes(entry.active)) entry.active = entry.sessions[0] ?? ''
     }
 
-    // Where it was, if this board has had it on screen. Only a block that has never been
-    // placed is measured against the mirror: the arithmetic answers where a terminal *goes*,
-    // not where this one was dragged to before it was erased. The mark travels with the
-    // remembered placement, because a block erased before the first poll landed is still
-    // standing in the mirror's slot and still has to be moved out of it.
-    const remembered = terminalPlacementRef.current
-    const block = remembered
-      ? terminalBlockElement(
-        { x: remembered.x, y: remembered.y },
-        { width: remembered.width, height: remembered.height },
-        remembered.awaitingMirror ? { [TERMINAL_AWAITING_MIRROR]: true } : {}
-      )
-      : (() => {
-        // What this board authored, which is neither the mirror nor a terminal block that is
-        // on its way out. Only used when there is no mirror to measure against.
-        const bounds = boundsOf(scene.filter((element) => !isDerivedElement(element)))
+    const dropped = new Set<string>()
+    for (const element of scene) {
+      if (element.isDeleted || !isTerminalElement(element)) continue
+      if ((layout.get(element.id)?.sessions.length ?? 0) === 0) dropped.add(element.id)
+    }
+    // A label Excalidraw bound to a block goes when the block does. Left behind it is a text
+    // element whose container nothing has heard of — and worse, the sync's test for "derived"
+    // reads the container off the scene, so an orphan label would stop looking derived and
+    // start being stored.
+    for (const element of scene) {
+      if (element.containerId && dropped.has(element.containerId)) dropped.add(element.id)
+    }
 
-        // The mirror is what the block clears when the board has one, and its left edge is
-        // read from the shapes themselves rather than recomputed: `renderMirror` is the
-        // authority on where it went, and two derivations of one number is how they come to
-        // disagree.
-        const mirror = boundsOf(scene.filter(isMirrorElement))
+    let changed = added.length > 0 || dropped.size > 0
+    const next = scene
+      .filter((element) => !dropped.has(element.id) && !element.isDeleted)
+      .map((element) => {
+        if (!isTerminalElement(element)) return element
+        const entry = layout.get(element.id)
+        if (!entry) return element
+        const current = terminalBlockData(element.customData)
+        if (current.sessions.join(',') === entry.sessions.join(',')
+          && current.active === entry.active) {
+          return element
+        }
+        changed = true
+        return {
+          ...element,
+          // Excalidraw reconciles by version, so a shape whose only change is its
+          // `customData` and whose version stands still is a shape it may keep as it was.
+          version: (element.version ?? 1) + 1,
+          customData: {
+            ...customDataOf(element),
+            kind: TERMINAL_KIND,
+            sessions: entry.sessions,
+            active: entry.active
+          }
+        }
+      })
 
-        return terminalBlockElement(
-          terminalOrigin(bounds, mirror),
-          TERMINAL_SIZE,
-          // Placed against a mirror that has not been polled yet, so it is standing in the
-          // mirror's own slot. `renderMirror` moves it aside on the first board that lands.
-          mirror ? {} : { [TERMINAL_AWAITING_MIRROR]: true }
-        )
-      })()
+    if (!changed) return
+    // The tombstones go back in **around** the conversion rather than through it.
+    // `convertToExcalidrawElements` rebuilds each element from a skeleton and has no
+    // `isDeleted` to rebuild from, so anything deleted that is handed to it comes back
+    // alive — which is how a block restored one tick after an eraser drag used to resurrect
+    // everything else the drag had taken (#98). Dropping them instead is not the answer
+    // either: the sync sends deleted elements on purpose, because the store never treats
+    // absence as a deletion, so a tombstone lost here is a shape that stays alive on the
+    // server. So they are set aside, and appended untouched.
+    const tombstones = scene.filter((element) => element.isDeleted && !dropped.has(element.id))
     applySceneUpdateWithoutAutoSync(api, {
-      elements: convertElementsPreservingImageProps([
-        ...(scene as unknown as Partial<ExcalidrawElement>[]),
-        block as unknown as Partial<ExcalidrawElement>
-      ]) as ExcalidrawElement[],
+      elements: [
+        ...convertElementsPreservingImageProps(
+          [...next, ...added] as unknown as Partial<ExcalidrawElement>[]
+        ),
+        ...tombstones
+      ] as ExcalidrawElement[],
       captureUpdate: CaptureUpdateAction.NEVER
     })
+  }
+
+  /** What each block holds right now, read off the scene. */
+  const terminalLayoutOf = (
+    blocks: readonly ExcalidrawElement[]
+  ): Map<string, { sessions: string[]; active: string }> =>
+    new Map(blocks.map((block) => {
+      const data = terminalBlockData(block.customData)
+      return [block.id, { sessions: [...data.sessions], active: data.active }]
+    }))
+
+  const terminalBlocksOf = (api: ExcalidrawImperativeAPI): ExcalidrawElement[] =>
+    api.getSceneElementsIncludingDeleted()
+      .filter((element) => !element.isDeleted && isTerminalElement(element)) as ExcalidrawElement[]
+
+  /**
+   * A block for sessions that have nowhere to be.
+   *
+   * Three placements, and they answer different questions. `beside` is a detach — the new
+   * block goes next to the one the tab came out of. `at` is a **restore**: the block was
+   * erased and putting it back means putting it *back*, at the size and position the reader
+   * had it, because a restore that re-anchored it past the mirror would answer an accidental
+   * erase by also undoing a drag. Neither is where a terminal *goes*, which is the last case:
+   * one gap left of the mirror, or of the content on a board that has no mirror.
+   */
+  const newTerminalBlock = (
+    api: ExcalidrawImperativeAPI,
+    sessions: string[],
+    where: {
+      beside?: { x: number; y: number; width: number; height: number }
+      at?: { x: number; y: number; width: number; height: number }
+    } = {}
+  ): Record<string, unknown> => {
+    const scene = api.getSceneElementsIncludingDeleted().filter((element) => !element.isDeleted)
+
+    // The mirror is what the block clears when the board has one, and its left edge is read
+    // from the shapes themselves rather than recomputed: `renderMirror` is the authority on
+    // where the region went, and two derivations of one number is how they come to disagree.
+    const mirror = boundsOf(scene.filter(isMirrorElement))
+
+    // No mirror drawn *yet* is not the same as a board that has none, and from here the two
+    // are indistinguishable: the poll that draws it spawns a `gh` and takes seconds, while a
+    // session opens on a `POST` that spawns a shell. So a block placed while there is none to
+    // see is marked, and `renderMirror` moves it out of the mirror's slot on the first board
+    // that lands — once, and only if it is still standing at the origin below.
+    const blind = mirror ? {} : { [TERMINAL_AWAITING_MIRROR]: true }
+
+    const beside = where.beside
+    if (beside) {
+      return terminalBlockElement(
+        // Beside the block it came out of, not on top of it. Where it goes from there is the
+        // reader's business — it is an ordinary shape and the canvas moves it.
+        { x: beside.x + beside.width + 40, y: beside.y },
+        { width: beside.width, height: beside.height },
+        { sessions, active: sessions[0] ?? '' }
+      )
+    }
+    if (where.at) {
+      return terminalBlockElement(
+        { x: where.at.x, y: where.at.y },
+        { width: where.at.width, height: where.at.height },
+        // Marked, because the geometry being restored may itself have been chosen blind — a
+        // block erased in the seconds before the first poll is put back in the mirror's slot.
+        // It costs nothing when it was not: the move is refused for any block that is not at
+        // that origin, and the mark comes off either way.
+        { sessions, active: sessions[0] ?? '', ...blind }
+      )
+    }
+
+    // What this board authored, which is neither the mirror nor a terminal block. Only used
+    // when there is no mirror to measure against.
+    const bounds = boundsOf(scene.filter((element) => !isDerivedElement(element)))
+
+    return terminalBlockElement(terminalOrigin(bounds, mirror), TERMINAL_SIZE, {
+      sessions,
+      active: sessions[0] ?? '',
+      ...blind
+    })
+  }
+
+  /**
+   * Make the blocks agree with the sessions the server has.
+   *
+   * The two drift for ordinary reasons and in both directions: a shell exits and its tab has
+   * to go, a scene is replaced wholesale and every block with it, a session opened in another
+   * window arrives over the socket with no block to be in, an eraser is dragged across a
+   * block and takes it. So this is written as "what should the strip be", not as a patch —
+   * it drops tabs for sessions that have gone, drops a block left with none, and gives every
+   * session with nowhere to be a home.
+   *
+   * It is also where #93's answer lives, generalised. Excalidraw's eraser respects exactly
+   * one thing — `locked` — and locking a terminal block would take away the selection, the
+   * drag and the corner resize that *are* the interface here. So the block stays erasable
+   * and the erase is undone: an orphan whose shell is still alive is put back in a block at
+   * the geometry it remembers. Nothing in the erase path kills a shell, so a block that
+   * stayed gone would leave a live process with no way to Ctrl+C it — the keyboard reaches
+   * the shell only through the overlay.
+   *
+   * A tab whose shell has already **exited** is not restored, and is forgotten instead. Once
+   * the shell has gone the tab is a notice, and a notice the reader clears stays cleared.
+   */
+  const reconcileTerminalBlocks = (options: { scroll?: boolean } = {}): void => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+
+    const known = terminalSessionsRef.current
+    const live = Object.keys(known)
+    const blocks = terminalBlocksOf(api)
+    const layout = terminalLayoutOf(blocks)
+
+    // A session belongs to exactly one block. Two claiming it would draw one shell twice and
+    // put its keystrokes wherever the second copy happened to be focused.
+    const claimed = new Set<string>()
+    for (const block of blocks) {
+      const entry = layout.get(block.id)
+      if (!entry) continue
+      entry.sessions = entry.sessions.filter((id) => live.includes(id) && !claimed.has(id))
+      entry.sessions.forEach((id) => claimed.add(id))
+      if (!entry.sessions.includes(entry.active)) entry.active = entry.sessions[0] ?? ''
+    }
+
+    const orphans = live.filter((id) => !claimed.has(id))
+    const cleared = orphans.filter((id) => known[id]?.ended)
+    const homeless = orphans.filter((id) => !known[id]?.ended)
+    const added: Record<string, unknown>[] = []
+
+    // Grouped by the geometry they remember, so an erased block with two tabs comes back as
+    // one block with two tabs rather than as two blocks in the same place.
+    const restoring = new Map<string, string[]>()
+    const stray: string[] = []
+    for (const sessionId of homeless) {
+      const home = terminalHomesRef.current.get(sessionId)
+      if (!home) { stray.push(sessionId); continue }
+      const key = `${home.x},${home.y},${home.width},${home.height}`
+      restoring.set(key, [...(restoring.get(key) ?? []), sessionId])
+    }
+    for (const [key, sessions] of restoring) {
+      const [x, y, width, height] = key.split(',').map(Number)
+      added.push(newTerminalBlock(api, sessions, { at: { x, y, width, height } }))
+    }
+
+    // Never on the board before — opened in another window, or the first of them all. It
+    // goes into a block that is already there, or into one placed where a terminal goes.
+    if (stray.length > 0) {
+      const host = blocks.find((block) => (layout.get(block.id)?.sessions.length ?? 0) > 0)
+      if (host) {
+        const entry = layout.get(host.id)!
+        entry.sessions = [...entry.sessions, ...stray]
+        if (!entry.active) entry.active = entry.sessions[0]
+      } else if (added.length > 0) {
+        // A block is already being placed this pass; the strays join it rather than getting
+        // a second one beside it.
+        const first = added[0] as { customData: { sessions: string[]; active: string } }
+        first.customData.sessions = [...first.customData.sessions, ...stray]
+      } else {
+        added.push(newTerminalBlock(api, stray))
+      }
+    }
+
+    if (cleared.length > 0) {
+      writeTerminalSessions((current) => {
+        const next = { ...current }
+        for (const sessionId of cleared) delete next[sessionId]
+        return next
+      })
+      for (const sessionId of cleared) {
+        terminalHomesRef.current.delete(sessionId)
+        terminalGridRef.current.delete(sessionId)
+      }
+    }
+
+    commitTerminalLayout(layout, added)
 
     if (options.scroll) {
-      const placed = api.getSceneElements().filter((element) => isTerminalElement(element))
+      const placed = terminalBlocksOf(api)
       if (placed.length > 0) {
         api.scrollToContent(placed as unknown as ExcalidrawElement[], { fitToViewport: true, animate: true })
       }
@@ -1927,88 +2177,210 @@ function App(): JSX.Element {
   }
 
   /**
-   * Put the block back after the board loses it while the shell is still running.
-   *
-   * Excalidraw's eraser respects exactly one thing — `locked` — and locking the block would
-   * take away the selection, the drag and the corner resize that *are* the interface here.
-   * So the block stays erasable and the erase is undone instead, which is also the only
-   * answer that keeps the shell reachable: nothing in the erase path kills it, so a block
-   * that stayed gone left a live process with the one-per-board slot taken, its output going
-   * into state nothing drew, and no way to Ctrl+C it — the keyboard reaches the shell only
-   * through the overlay.
-   *
-   * Only while there is something to protect. Once the shell has exited the block is a
-   * notice, and a notice the reader clears should stay cleared; Alt+T starts another.
+   * Reconcile shortly, once, after the board has been seen to lose a block.
    *
    * On a timer rather than at once, because this is noticed from inside the scene-change
-   * handler and the pointer that erased it may still be down.
+   * handler and the pointer that erased it may still be down. One timer for a burst of
+   * changes, so an eraser dragged across the canvas queues one restore and not thirty.
    */
   const scheduleTerminalRestore = (): void => {
     if (terminalRestoreTimerRef.current) return
     terminalRestoreTimerRef.current = setTimeout(() => {
       terminalRestoreTimerRef.current = null
-      if (!terminalOpenRef.current || terminalEndedRef.current) return
-      ensureTerminalBlock()
+      reconcileTerminalBlocks()
     }, TERMINAL_RESTORE_DELAY_MS)
   }
 
   /**
-   * Open a session for the active board, or adopt the one that is already running.
+   * Adopt whatever the board already has, and open one if it has none.
    *
-   * 409 is not a failure here: a reload, a second window or a tab switched away and back
-   * all arrive at a server that still owns the shell, and the right answer to "there is
-   * already one" is to draw it rather than to start another. 404 and 403 are the guards —
-   * the feature is off, or the server is reachable from the network — and both mean no
-   * block at all.
+   * A reload, a second window or a tab switched away and back all arrive at a server that
+   * still owns the shells, and the right answer is to draw them rather than to start more.
+   * A 404 or a 403 is one of the guards — the feature is off, or the server is reachable
+   * from the network — and both mean no block at all.
    */
-  const openTerminal = async (): Promise<void> => {
+  const adoptTerminalSessions = async (workspace: string): Promise<void> => {
     try {
-      const response = await fetch(apiUrl('/api/terminal'), { method: 'POST' })
+      const response = await fetch(apiUrl('/api/terminal'))
+      if (!response.ok) return
       const body = await response.json().catch(() => ({}))
-      if (!response.ok && response.status !== 409) {
-        terminalOpenRef.current = false
-        terminalEndedRef.current = null
-        setTerminal({ status: null, output: '', ended: null })
+
+      terminalLimitRef.current = Number(body?.limit) || 0
+      setTerminalLimit(terminalLimitRef.current)
+
+      const listed: Record<string, any>[] = Array.isArray(body?.sessions) ? body.sessions : []
+      if (listed.length === 0) {
+        // Once per board per page, and marked before the request rather than after it. The
+        // effect below runs again whenever the board settles, and two runs that both read
+        // "no sessions" before either had opened one would open two — which the 409 used to
+        // make impossible and the cap no longer does.
+        if (terminalAutoOpenedRef.current === workspace) return
+        terminalAutoOpenedRef.current = workspace
+        await openTerminalSession()
         return
       }
 
-      const session = body?.session ?? null
-      // A session that was already running has a transcript, and the socket only replays it
-      // on connect — which for this tab already happened. Read once, and only in that case:
-      // a session that has just started has nothing to catch up on.
-      const caught = response.status === 409
-        ? await fetch(apiUrl('/api/terminal')).then((r) => r.json()).catch(() => null)
-        : null
-      terminalOpenRef.current = true
-      // Set here as well as by the effect that follows `terminal.ended`: a shell that has
-      // just replaced one that exited must not be treated as ended for the frame or two
-      // before React commits, and the restore reads this ref rather than the state.
-      terminalEndedRef.current = null
-      setTerminal({
-        status: session
-          ? {
-            cwd: session.cwd,
-            shell: session.shell,
-            mode: session.mode ?? 'pipe',
-            cols: session.cols,
-            rows: session.rows
-          }
-          : null,
-        output: typeof caught?.scrollback === 'string' ? caught.scrollback : '',
-        ended: null
-      })
-      ensureTerminalBlock()
+      writeTerminalSessions(() => Object.fromEntries(listed.map((session) => [session.id, {
+        status: terminalStatusOf(session),
+        output: typeof session.scrollback === 'string' ? session.scrollback : '',
+        ended: session.exitCode === null || session.exitCode === undefined
+          ? null
+          : `the shell exited with code ${session.exitCode}`
+      }])))
+      reconcileTerminalBlocks()
+    } catch (error) {
+      console.warn('Could not read the terminal sessions:', error)
+    }
+  }
+
+  /**
+   * Open one more shell, and put its tab where it was asked for.
+   *
+   * The 409 is the cap now rather than "there is already one", and it is still not a failure
+   * worth throwing away: the strip's `+` refuses on its own once the cap is reached, so this
+   * only sees one when another window got there first.
+   */
+  const openTerminalSession = async (blockId?: string): Promise<void> => {
+    try {
+      const response = await fetch(apiUrl('/api/terminal'), { method: 'POST' })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        if (response.status === 409) console.warn(body?.error)
+        return
+      }
+
+      const session = body?.session
+      if (!session?.id) return
+      writeTerminalSessions((current) => ({
+        ...current,
+        [session.id]: { status: terminalStatusOf(session), output: '', ended: null }
+      }))
+
+      // The block that asked, or any block already holding tabs. Either way the new session
+      // becomes the tab on top: opening a shell is a request to look at it, and a board
+      // whose last shell had exited would otherwise answer Alt+T by leaving the dead tab
+      // drawn and the new one behind it.
+      const api = excalidrawAPIRef.current
+      const blocks = api ? terminalBlocksOf(api) : []
+      const host = blockId
+        ? blocks.find((block) => block.id === blockId)
+        : blocks.find((block) => terminalBlockData(block.customData).sessions.length > 0)
+      if (api && host) {
+        const layout = terminalLayoutOf(terminalBlocksOf(api))
+        // Taken off every block before it is put on this one. The socket's announcement of
+        // this same session may already have arrived and given it a home; what was asked for
+        // is a tab in *this* block, and moving it there is what that means.
+        for (const entry of layout.values()) {
+          entry.sessions = entry.sessions.filter((id) => id !== session.id)
+        }
+        const entry = layout.get(host.id)!
+        entry.sessions = [...entry.sessions, session.id]
+        entry.active = session.id
+        commitTerminalLayout(layout)
+      } else {
+        reconcileTerminalBlocks()
+      }
     } catch (error) {
       console.warn('Could not open a terminal:', error)
     }
   }
 
-  /** Keystrokes waiting to be sent, and whether something is already sending them. */
-  const terminalInputRef = useRef<string>('')
-  const terminalSendingRef = useRef<boolean>(false)
+  /** End a shell and take its tab with it. The block goes too if that was its last one. */
+  const closeTerminalSession = async (sessionId: string): Promise<void> => {
+    try {
+      await fetch(apiUrl(`/api/terminal?sessionId=${encodeURIComponent(sessionId)}`), { method: 'DELETE' })
+    } catch (error) {
+      console.warn('Could not close the terminal session:', error)
+    }
+    // Locally regardless of what the request said: a session the server no longer has is one
+    // this board must stop drawing, and the `terminal_exit` that confirms it may never come
+    // if the request is what failed.
+    writeTerminalSessions((current) => {
+      const next = { ...current }
+      delete next[sessionId]
+      return next
+    })
+    terminalGridRef.current.delete(sessionId)
+    reconcileTerminalBlocks()
+  }
+
+  /** Which tab is on top of a block. */
+  const selectTerminalTab = (blockId: string, sessionId: string): void => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+    const layout = terminalLayoutOf(terminalBlocksOf(api))
+    const entry = layout.get(blockId)
+    if (!entry || !entry.sessions.includes(sessionId)) return
+    entry.active = sessionId
+    commitTerminalLayout(layout)
+  }
 
   /**
-   * Send what is queued, in order, and do not lose a keystroke to a refused socket.
+   * Take a tab out of its block and give it a block of its own.
+   *
+   * This is the whole of "split", and it is deliberately the cheap reading of it: the second
+   * block is an ordinary shape, so moving it, resizing it and putting it beside the first
+   * are all things the canvas already does. A splitter *inside* one block would have been a
+   * drag handle competing with the shape's own — which is the collision this overlay has
+   * been avoiding since it was written.
+   */
+  const detachTerminalSession = (blockId: string, sessionId: string): void => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+    const blocks = terminalBlocksOf(api)
+    const source = blocks.find((block) => block.id === blockId)
+    const layout = terminalLayoutOf(blocks)
+    const entry = source ? layout.get(source.id) : null
+    if (!source || !entry || !entry.sessions.includes(sessionId)) return
+    // A block with one tab is already its own block; detaching it would drop the block it is
+    // in and add an identical one beside it.
+    if (entry.sessions.length < 2) return
+
+    entry.sessions = entry.sessions.filter((id) => id !== sessionId)
+    if (entry.active === sessionId) entry.active = entry.sessions[0] ?? ''
+    commitTerminalLayout(layout, [newTerminalBlock(api, [sessionId], { beside: source })])
+  }
+
+  /**
+   * Put a block's tabs into the nearest other terminal block, and drop the block.
+   *
+   * "Nearest" rather than a chosen target, because the choosing is the drag: the reader puts
+   * the block beside the one they mean and presses this. Dragging the *tab* onto another
+   * block's strip was the other reading, and it would have meant the strip taking drag
+   * events across the whole width of the block — more pointer than this overlay may take
+   * without costing the shape its handles.
+   */
+  const mergeTerminalBlock = (blockId: string): void => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+    const blocks = terminalBlocksOf(api)
+    const source = blocks.find((block) => block.id === blockId)
+    if (!source) return
+
+    const centre = (block: ExcalidrawElement): { x: number; y: number } =>
+      ({ x: block.x + block.width / 2, y: block.y + block.height / 2 })
+    const from = centre(source)
+    const target = blocks
+      .filter((block) => block.id !== blockId)
+      .map((block) => ({ block, distance: Math.hypot(centre(block).x - from.x, centre(block).y - from.y) }))
+      .sort((a, b) => a.distance - b.distance)[0]?.block
+    if (!target) return
+
+    const layout = terminalLayoutOf(blocks)
+    const moving = layout.get(source.id)?.sessions ?? []
+    const into = layout.get(target.id)!
+    into.sessions = [...into.sessions, ...moving]
+    if (!into.active) into.active = into.sessions[0] ?? ''
+    layout.set(source.id, { sessions: [], active: '' })
+    commitTerminalLayout(layout)
+  }
+
+  /** Keystrokes waiting to be sent, per session, and which queues are already sending. */
+  const terminalInputRef = useRef<Map<string, string>>(new Map())
+  const terminalSendingRef = useRef<Set<string>>(new Set())
+
+  /**
+   * Send what is queued for one session, in order, and do not lose a keystroke.
    *
    * Both halves of that matter now and neither did before. A line at a time, one request
    * carried the whole command and a failure was visible — nothing ran. A keystroke at a
@@ -2016,21 +2388,26 @@ function App(): JSX.Element {
    * that fails silently makes it `pd`. So they are queued and sent one after another, and
    * whatever accumulated while a request was in flight goes out as a single write — which
    * is what a fast typist or a paste looks like anyway.
+   *
+   * A queue per session rather than one for the board: two tabs being typed into share
+   * nothing but the network, and a single queue would make one tab's slow request hold the
+   * other's keystrokes — while a single *in-flight* flag would let them interleave into the
+   * wrong shell.
    */
-  const flushTerminalInput = async (): Promise<void> => {
-    if (terminalSendingRef.current) return
-    terminalSendingRef.current = true
+  const flushTerminalInput = async (sessionId: string): Promise<void> => {
+    if (terminalSendingRef.current.has(sessionId)) return
+    terminalSendingRef.current.add(sessionId)
     try {
-      while (terminalInputRef.current) {
-        const data = terminalInputRef.current
-        terminalInputRef.current = ''
+      while (terminalInputRef.current.get(sessionId)) {
+        const data = terminalInputRef.current.get(sessionId) ?? ''
+        terminalInputRef.current.delete(sessionId)
         let sent = false
         for (let attempt = 0; attempt < 3 && !sent; attempt++) {
           try {
             sent = (await fetch(apiUrl('/api/terminal/input'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ data })
+              body: JSON.stringify({ sessionId, data })
             })).ok
           } catch {
             sent = false
@@ -2040,151 +2417,188 @@ function App(): JSX.Element {
         if (!sent) console.warn('Could not send to the terminal; those keystrokes were dropped')
       }
     } finally {
-      terminalSendingRef.current = false
+      terminalSendingRef.current.delete(sessionId)
     }
   }
 
   /**
-   * Queue keystrokes for the shell, exactly as they were pressed.
+   * Queue keystrokes for one shell, exactly as they were pressed.
    *
    * Bytes rather than a line, and nothing appended: what the emulator hands over is already
    * what a terminal sends — `\r` for Enter, `\x03` for Ctrl+C, `ESC [ A` for an arrow — and
    * a newline added to any of those would turn a keystroke into something else. The echo
    * comes back over the socket, from the shell, like any other output.
+   *
+   * The session is named on every write. It is the whole of what a strip of tabs needs from
+   * this route: without it the server would resolve "whichever one is open", and a board
+   * with two tabs would type into whichever the map happened to yield first.
    */
-  const sendTerminalInput = (data: string): void => {
-    terminalInputRef.current += data
-    void flushTerminalInput()
+  const sendTerminalInput = (sessionId: string, data: string): void => {
+    terminalInputRef.current.set(sessionId, (terminalInputRef.current.get(sessionId) ?? '') + data)
+    void flushTerminalInput(sessionId)
   }
 
   /**
-   * Follow the block: where it is on screen, and what size it now stands for.
+   * Follow the blocks: where each is on screen, and what size it now stands for.
    *
-   * The rect is in viewport coordinates, the same arithmetic the documentation card uses,
-   * so the overlay pans and zooms with the shape. The grid is in *scene* units, so a pinch
+   * The rects are in viewport coordinates, the same arithmetic the documentation card uses,
+   * so an overlay pans and zooms with its shape. The grid is in *scene* units, so a pinch
    * is not a resize — what the reader resized is the block, and that is what the server is
    * told about.
+   *
+   * Every session in a block is told, not just the tab on top. They all draw into the same
+   * frame, so a background tab left at the size it had when it was hidden would repaint to
+   * the wrong width the moment it came back.
    */
-  const syncTerminalBlock = (
+  const syncTerminalBlocks = (
     elements: readonly ExcalidrawElement[] | undefined,
     appState: Record<string, any> | undefined
   ): void => {
-    if (!appState || !elements || !terminalOpenRef.current) {
-      setTerminalRect((current) => (current === null ? current : null))
+    if (!appState || !elements) {
+      if (terminalViewsRef.current !== '') { terminalViewsRef.current = ''; setTerminalViews([]) }
       return
     }
 
-    const element = elements.find((candidate) => !candidate.isDeleted && isTerminalElement(candidate))
-    if (!element) {
-      setTerminalRect((current) => (current === null ? current : null))
-      // This is where the block going missing is first noticed — an erase, a delete, a
-      // selection cleared with the rest of the canvas — and while a shell is running it is
-      // undone rather than reported.
-      scheduleTerminalRestore()
-      return
+    const suppressed = Boolean(
+      appState.selectedElementsAreBeingDragged ||
+      appState.isRotating ||
+      appState.resizingElement
+    )
+    const zoom = appState.zoom?.value ?? 1
+
+    const views: TerminalView[] = []
+    for (const element of elements) {
+      if (element.isDeleted || !isTerminalElement(element)) continue
+      const data = terminalBlockData(element.customData)
+      if (data.sessions.length === 0) continue
+
+      const [minX, minY, maxX, maxY] = getCommonBounds([element])
+      const topLeft = sceneCoordsToViewportCoords({ sceneX: minX, sceneY: minY }, appState as any)
+      const bottomRight = sceneCoordsToViewportCoords({ sceneX: maxX, sceneY: maxY }, appState as any)
+      views.push({
+        elementId: element.id,
+        rect: {
+          x: topLeft.x - appState.offsetLeft,
+          y: topLeft.y - appState.offsetTop,
+          width: bottomRight.x - topLeft.x,
+          height: bottomRight.y - topLeft.y
+        },
+        zoom,
+        // Hidden mid-gesture, the way the documentation card is: a DOM overlay lags a shape
+        // being dragged by a frame, which reads as the terminal coming loose from its block.
+        suppressed,
+        sessions: data.sessions,
+        active: data.active
+      })
+
+      // Where this block is, kept for the two paths that need a shape's size after nothing
+      // is about to report about it: a font change, and a block that has been erased.
+      const geometry = { x: element.x, y: element.y, width: element.width, height: element.height }
+      terminalGeometryRef.current.set(element.id, { ...geometry, sessions: data.sessions })
+      for (const sessionId of data.sessions) terminalHomesRef.current.set(sessionId, geometry)
+
+      reportTerminalGrid(element.id, geometry, data.sessions)
     }
 
-    // Where the reader has it, kept so a restore is a restore rather than a re-anchoring.
-    terminalPlacementRef.current = {
-      x: element.x, y: element.y, width: element.width, height: element.height,
-      awaitingMirror: customDataOf(element)[TERMINAL_AWAITING_MIRROR] === true
+    // Blocks that were on the board a moment ago and are not now. An eraser dragged across
+    // one is the case this exists for; a delete and a select-all-and-clear are the same
+    // event as far as this is concerned.
+    const drawn = new Set(views.map((view) => view.elementId))
+    let lost = false
+    for (const elementId of terminalGeometryRef.current.keys()) {
+      if (drawn.has(elementId)) continue
+      terminalGeometryRef.current.delete(elementId)
+      lost = true
     }
+    // Also a session that has never had a block: one opened in another window arrives over
+    // the socket, and the reconcile that follows it is the same reconcile.
+    const homed = new Set(views.flatMap((view) => view.sessions))
+    const stranded = Object.entries(terminalSessionsRef.current)
+      .some(([sessionId, session]) => !session.ended && !homed.has(sessionId))
+    if (lost || stranded) scheduleTerminalRestore()
 
-    const [minX, minY, maxX, maxY] = getCommonBounds([element])
-    const topLeft = sceneCoordsToViewportCoords({ sceneX: minX, sceneY: minY }, appState as any)
-    const bottomRight = sceneCoordsToViewportCoords({ sceneX: maxX, sceneY: maxY }, appState as any)
-    const next = {
-      rect: {
-        x: topLeft.x - appState.offsetLeft,
-        y: topLeft.y - appState.offsetTop,
-        width: bottomRight.x - topLeft.x,
-        height: bottomRight.y - topLeft.y
-      },
-      zoom: appState.zoom?.value ?? 1,
-      // Hidden mid-gesture, the way the documentation card is: a DOM overlay lags a shape
-      // being dragged by a frame, which reads as the terminal coming loose from its block.
-      suppressed: Boolean(
-        appState.selectedElementsAreBeingDragged ||
-        appState.isRotating ||
-        appState.resizingElement
-      )
-    }
-
-    setTerminalRect((current) => {
-      if (
-        current &&
-        current.rect.x === next.rect.x &&
-        current.rect.y === next.rect.y &&
-        current.rect.width === next.rect.width &&
-        current.rect.height === next.rect.height &&
-        current.zoom === next.zoom &&
-        current.suppressed === next.suppressed
-      ) {
-        return current
-      }
-      return next
-    })
-
-    reportTerminalGrid({ width: element.width, height: element.height })
+    const signature = JSON.stringify(views)
+    if (signature === terminalViewsRef.current) return
+    terminalViewsRef.current = signature
+    setTerminalViews(views)
   }
 
   /**
-   * Tell the shell what grid the block now stands for.
+   * Tell the shells in one block what grid it now stands for.
    *
-   * Two things move it: the corner being dragged, and the `+` and `-` on the header. They
-   * are the same event as far as the shell is concerned — the screen it repaints into got
-   * bigger or smaller — so they share one route, one debounce and one retry.
+   * Three things move it: the corner being dragged, the `+` and `-` on the header, and a tab
+   * arriving in a block of a different size. They are the same event as far as a shell is
+   * concerned — the screen it repaints into got bigger or smaller — so they share one route,
+   * one debounce and one retry.
    *
    * Reported on the end of the gesture rather than during it: a resize crosses every size
    * between where it started and where it lands, and reporting each one would be a request
    * per frame. A run of clicks on `+` coalesces the same way.
    *
-   * A report that does not land is undone rather than forgotten. The signature stands for
-   * "the server knows this size", so leaving it set after a failed request would mean the
-   * block never mentions that size again — and with a PTY behind the session that is not a
-   * stale label any more, it is a shell repainting to a width the block no longer has.
+   * Every session in the block, not just the tab on top. They all draw into the same frame,
+   * so a background tab left at the size it had when it was hidden would repaint to the
+   * wrong width the moment it came back.
    */
-  const reportTerminalGrid = (size: { width: number; height: number }): void => {
+  const reportTerminalGrid = (
+    elementId: string,
+    size: { width: number; height: number },
+    sessions: string[]
+  ): void => {
     const grid = terminalGrid(size, terminalFontRef.current)
     const signature = `${grid.cols}x${grid.rows}`
-    if (signature === terminalGridRef.current) return
-    terminalGridRef.current = signature
-    if (terminalResizeTimerRef.current) clearTimeout(terminalResizeTimerRef.current)
+    const stale = sessions.filter((id) => terminalGridRef.current.get(id) !== signature)
+    if (stale.length === 0) return
+    stale.forEach((id) => terminalGridRef.current.set(id, signature))
 
+    const pending = terminalResizeTimersRef.current.get(elementId)
+    if (pending) clearTimeout(pending)
+
+    // A report that does not land is undone rather than forgotten. The signature stands
+    // for "the server knows this size", so leaving it set after a failed request would
+    // mean the block never mentions that size again — and with a PTY behind the session
+    // that is not a stale label any more, it is a shell repainting to a width the block no
+    // longer has.
     const report = (attempt: number): void => {
-      terminalResizeTimerRef.current = null
-      fetch(apiUrl('/api/terminal/resize'), {
+      terminalResizeTimersRef.current.delete(elementId)
+      Promise.all(stale.map((sessionId) => fetch(apiUrl('/api/terminal/resize'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(grid)
+        body: JSON.stringify({ sessionId, ...grid })
       }).then((response) => {
-        if (response.ok) return
-        throw new Error(`the terminal refused the new size: ${response.status}`)
-      }).catch(() => {
+        if (!response.ok) throw new Error(`the terminal refused the new size: ${response.status}`)
+      }))).catch(() => {
         // Only while this is still the size being reported: a later gesture has its own
         // request, and retrying an overtaken one would report a size nobody is looking at.
-        if (terminalGridRef.current !== signature) return
-        if (attempt >= 2) { terminalGridRef.current = ''; return }
-        terminalResizeTimerRef.current = setTimeout(() => report(attempt + 1), TERMINAL_RESIZE_DEBOUNCE_MS)
+        if (stale.some((id) => terminalGridRef.current.get(id) !== signature)) return
+        if (attempt >= 2) { stale.forEach((id) => terminalGridRef.current.delete(id)); return }
+        terminalResizeTimersRef.current.set(
+          elementId,
+          setTimeout(() => report(attempt + 1), TERMINAL_RESIZE_DEBOUNCE_MS)
+        )
       })
     }
-    terminalResizeTimerRef.current = setTimeout(() => report(1), TERMINAL_RESIZE_DEBOUNCE_MS)
+    terminalResizeTimersRef.current.set(
+      elementId,
+      setTimeout(() => report(1), TERMINAL_RESIZE_DEBOUNCE_MS)
+    )
   }
 
   /**
-   * The reader moved the text, from the buttons on the block's header.
+   * The reader moved the text, from the buttons on a block's header.
    *
    * Clamped here, once, rather than in the arithmetic: `terminalGrid` answers about the
    * font it is given, and holding a size down inside it would report a grid nobody chose.
+   * The size is one preference for the page rather than one per block — it is about the
+   * reader's eyes, and the same eyes read every tab.
    */
   const changeTerminalFont = (next: number): void => {
     const size = clampTerminalFont(next)
     setTerminalFont((current) => (current === size ? current : size))
   }
 
-  // Remembered, and the grid re-derived from the block it is already on. A font change is a
-  // resize the reader did not drag: the block kept its size and the screen inside it did
-  // not, so the shell has to be told the same way a corner drag tells it.
+  // Remembered, and every block's grid re-derived from the shape it is already on. A font
+  // change is a resize the reader did not drag: the blocks kept their size and the screens
+  // inside them did not, so the shells have to be told the way a corner drag tells them.
   useEffect(() => {
     terminalFontRef.current = terminalFont
     try {
@@ -2192,40 +2606,40 @@ function App(): JSX.Element {
     } catch (error) {
       console.warn('Failed to save the terminal font size to localStorage:', error)
     }
-    // The block's own size, from where the restore path already keeps it: a font change is
-    // a resize the reader did not drag, so it re-derives the grid from the same shape.
-    const placement = terminalPlacementRef.current
-    if (placement) reportTerminalGrid(placement)
-    // Only the font: this is what the reader changed, and the block's own size arrives
-    // through `syncTerminalBlock` with its own report.
+    for (const [elementId, block] of terminalGeometryRef.current) {
+      reportTerminalGrid(elementId, block, block.sessions)
+    }
+    // Only the font: this is what the reader changed, and a block's own size arrives
+    // through `syncTerminalBlocks` with its own report.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminalFont])
 
-  // One session per board, opened when the board is shown. Nothing is closed on the way
-  // out: a terminal you switched away from keeps its shell and its transcript, and the
-  // server closes every session when it goes down.
+  // The board's sessions are adopted when the board is shown, and one is opened if it has
+  // none. Nothing is closed on the way out: a terminal you switched away from keeps its
+  // shells and their transcripts, and the server closes every session when it goes down.
+  //
+  // Behind `boardReady` for the reason that flag exists: until the board has been resolved
+  // this runs as `default`, and opening a shell for a board nobody asked for is worse here
+  // than the wasted socket it was introduced for — it is a process.
   useEffect(() => {
-    if (!excalidrawAPI) return
-    terminalOpenRef.current = false
-    terminalEndedRef.current = null
-    terminalGridRef.current = ''
-    // The next board's block is not this one's, and a restore there must measure the
-    // content rather than reuse where the reader had dragged a different project's.
-    terminalPlacementRef.current = null
-    setTerminal({ status: null, output: '', ended: null })
-    setTerminalRect(null)
-    void openTerminal()
-  }, [activeWorkspace, excalidrawAPI])
-
-  // The state is what the block draws; the ref is what the handlers read. Both paths that
-  // set `ended` go through here, including the socket's `terminal_exit`.
-  useEffect(() => {
-    terminalEndedRef.current = terminal.ended
-  }, [terminal.ended])
+    if (!excalidrawAPI || !boardReady) return
+    terminalGridRef.current.clear()
+    // The next board's blocks are not this one's, and a restore there must measure the
+    // content rather than reuse where the reader dragged a different project's.
+    terminalGeometryRef.current.clear()
+    terminalHomesRef.current.clear()
+    writeTerminalSessions(() => ({}))
+    terminalViewsRef.current = ''
+    setTerminalViews([])
+    // The ref, not the state: it is what `apiUrl` puts on every request, so it is the board
+    // the guard has to be about.
+    void adoptTerminalSessions(activeWorkspaceRef.current)
+  }, [activeWorkspace, excalidrawAPI, boardReady])
 
   useEffect(() => {
     return () => {
-      if (terminalResizeTimerRef.current) clearTimeout(terminalResizeTimerRef.current)
+      for (const timer of terminalResizeTimersRef.current.values()) clearTimeout(timer)
+      terminalResizeTimersRef.current.clear()
       if (terminalRestoreTimerRef.current) clearTimeout(terminalRestoreTimerRef.current)
     }
   }, [])
@@ -2249,17 +2663,18 @@ function App(): JSX.Element {
 
       event.preventDefault()
 
-      // The key used to stand down here, which made it inert in the two cases a reader
-      // actually reaches for it: a shell that exited, and a board whose own attempt to open
-      // one failed. Both are answered by asking for a session — `openTerminal` adopts a 409,
-      // so a key pressed while one is quietly already running draws that one instead of
-      // starting a second.
-      if (!terminalOpenRef.current || terminalEndedRef.current) {
-        void openTerminal().then(() => ensureTerminalBlock({ scroll: true }))
+      // The key answers every way the terminal can be absent, which is what #93 asked of it
+      // and what the tabs added one more of: never opened, every shell exited, the last tab
+      // closed and the block gone with it, or a board whose own attempt to open one failed.
+      // All of them are answered by asking for a session — and it never stands down on a
+      // count it read once, because a key that is inert exactly when a reader reaches for it
+      // is the complaint itself.
+      const running = Object.values(terminalSessionsRef.current).some((session) => !session.ended)
+      if (!running) {
+        void openTerminalSession().then(() => reconcileTerminalBlocks({ scroll: true }))
         return
       }
-
-      ensureTerminalBlock({ scroll: true })
+      reconcileTerminalBlocks({ scroll: true })
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -2643,9 +3058,9 @@ function App(): JSX.Element {
             elements: convertedElements,
             captureUpdate: CaptureUpdateAction.NEVER
           })
-          // The store holds no terminal block — it is derived and never synced — and this
+          // The store holds no terminal block — they are derived and never synced — and this
           // just replaced the scene with what the store holds.
-          ensureTerminalBlock()
+          reconcileTerminalBlocks()
           finishBoardSwitch()
         }
       }
@@ -2851,9 +3266,9 @@ function App(): JSX.Element {
             filesFromSocketRef.current = sceneKey()
           }
           if (landingOnANewBoard) finishBoardSwitch()
-          // The scene was just replaced wholesale, and the terminal's block is derived, so
-          // the store this arrived from has never heard of it. Put it back.
-          ensureTerminalBlock()
+          // The scene was just replaced wholesale, and the terminal's blocks are derived, so
+          // the store this arrived from has never heard of them. Put them back.
+          reconcileTerminalBlocks()
           break
         }
 
@@ -3141,61 +3556,101 @@ function App(): JSX.Element {
         // The only messages here that carry bytes rather than shapes. They are per-board,
         // like every element event, because a shell belongs to one project.
 
-        case 'terminal_session': {
-          const session = (data as any).session ?? null
-          terminalOpenRef.current = Boolean(session)
-          setTerminal({
-            status: session
-              ? {
-                cwd: session.cwd,
-                shell: session.shell,
-                mode: session.mode ?? 'pipe',
-                cols: session.cols,
-                rows: session.rows
-              }
-              : null,
-            // The replay, whole: this arrives on connect for a session that was already
-            // running, so it is a transcript rather than an increment.
-            output: typeof (data as any).scrollback === 'string' ? (data as any).scrollback : '',
-            ended: null
-          })
-          ensureTerminalBlock()
+        // Every live session, sent the moment this socket connected. Authoritative rather
+        // than additive: a session that ended while the tab was disconnected is absent from
+        // this list, and reconciling against it is what takes its tab off the block.
+        case 'terminal_sessions': {
+          const listed: Record<string, any>[] = Array.isArray((data as any).sessions)
+            ? (data as any).sessions
+            : []
+          writeTerminalSessions((current) => Object.fromEntries(listed.map((entry) => {
+            const session = entry?.session ?? {}
+            const output = typeof entry?.scrollback === 'string' ? entry.scrollback : ''
+            return [session.id, {
+              status: terminalStatusOf(session),
+              // The replay, whole: it is a transcript rather than an increment. Kept only
+              // when this tab has nothing longer of its own, which it does when the socket
+              // dropped and came back while output was still arriving.
+              output: (current[session.id]?.output ?? '').startsWith(output)
+                ? current[session.id]!.output
+                : output,
+              ended: current[session.id]?.ended ?? null
+            }]
+          })))
+          reconcileTerminalBlocks()
           break
         }
 
-        case 'terminal_output':
-          setTerminal((current) => (
-            current.status === null
-              ? current
-              : { ...current, output: `${current.output}${(data as any).data ?? ''}` }
-          ))
+        case 'terminal_session': {
+          const session = (data as any).session ?? null
+          if (!session?.id) break
+          writeTerminalSessions((current) => ({
+            ...current,
+            [session.id]: {
+              status: terminalStatusOf(session),
+              output: typeof (data as any).scrollback === 'string' ? (data as any).scrollback : '',
+              ended: null
+            }
+          }))
+          reconcileTerminalBlocks()
           break
+        }
 
-        case 'terminal_resized':
-          setTerminal((current) => (
-            current.status === null
+        case 'terminal_output': {
+          const sessionId = (data as any).sessionId
+          writeTerminalSessions((current) => (
+            current[sessionId] === undefined
               ? current
               : {
                 ...current,
-                status: {
-                  ...current.status,
-                  cols: (data as any).cols ?? current.status.cols,
-                  rows: (data as any).rows ?? current.status.rows
+                [sessionId]: {
+                  ...current[sessionId]!,
+                  output: `${current[sessionId]!.output}${(data as any).data ?? ''}`
                 }
               }
           ))
           break
+        }
 
-        case 'terminal_exit':
-          // The block stays on the board and says what happened. Removing it would answer
-          // a shell that exited by taking the evidence away.
-          setTerminal((current) => ({
-            ...current,
-            ended: `the shell exited${(data as any).code === null || (data as any).code === undefined
-              ? ''
-              : ` with code ${(data as any).code}`}`
-          }))
+        case 'terminal_resized': {
+          const sessionId = (data as any).sessionId
+          writeTerminalSessions((current) => {
+            const session = current[sessionId]
+            if (!session?.status) return current
+            return {
+              ...current,
+              [sessionId]: {
+                ...session,
+                status: {
+                  ...session.status,
+                  cols: (data as any).cols ?? session.status.cols,
+                  rows: (data as any).rows ?? session.status.rows
+                }
+              }
+            }
+          })
           break
+        }
+
+        case 'terminal_exit': {
+          // The tab stays on the block and says what happened. Removing it would answer a
+          // shell that exited by taking the evidence away; the `x` is how it goes.
+          const sessionId = (data as any).sessionId
+          writeTerminalSessions((current) => (
+            current[sessionId] === undefined
+              ? current
+              : {
+                ...current,
+                [sessionId]: {
+                  ...current[sessionId]!,
+                  ended: `the shell exited${(data as any).code === null || (data as any).code === undefined
+                    ? ''
+                    : ` with code ${(data as any).code}`}`
+                }
+              }
+          ))
+          break
+        }
 
         default:
           console.log('Unknown WebSocket message type:', data.type)
@@ -3485,9 +3940,9 @@ function App(): JSX.Element {
               // Order matters: syncSelectedDoc settles which shape is anchored, and this
               // then works out where that shape is.
               syncDocsAnchor(_elements, appState as unknown as Record<string, any>)
-              // Same arithmetic, its own overlay: the terminal follows its block wherever
-              // the board is panned, zoomed or the shape dragged to.
-              syncTerminalBlock(_elements, appState as unknown as Record<string, any>)
+              // Same arithmetic, one overlay per block: each terminal follows its own shape
+              // wherever the board is panned, zoomed or that shape dragged to.
+              syncTerminalBlocks(_elements, appState as unknown as Record<string, any>)
               settleMirrorDrag(_elements, appState as unknown as Record<string, unknown>)
               // After settling a drag, so a card that just changed column is not re-slotted
               // against the board it is about to leave.
@@ -3528,19 +3983,31 @@ function App(): JSX.Element {
             onAddComment={addObservationToIssue}
           />
 
-          {/* Also a sibling of the canvas, and for the same reason: the transcript is not a
-              scene element, so it cannot be exported, synced or committed. */}
-          <TerminalPanel
-            rect={terminalRect?.rect ?? null}
-            zoom={terminalRect?.zoom ?? 1}
-            suppressed={terminalRect?.suppressed ?? false}
-            output={terminal.output}
-            status={terminal.status}
-            ended={terminal.ended}
-            onInput={sendTerminalInput}
-            fontSize={terminalFont}
-            onFontSize={changeTerminalFont}
-          />
+          {/* Also siblings of the canvas, and for the same reason: a transcript is not a
+              scene element, so it cannot be exported, synced or committed. One per block,
+              because a block is a strip of tabs and there may be several on the board. */}
+          {terminalViews.map((view) => (
+            <TerminalPanel
+              key={view.elementId}
+              rect={view.rect}
+              zoom={view.zoom}
+              suppressed={view.suppressed}
+              tabs={view.sessions
+                .filter((sessionId) => terminalSessions[sessionId])
+                .map((sessionId) => ({ id: sessionId, ...terminalSessions[sessionId]! }))}
+              activeId={view.active}
+              canAdd={Object.keys(terminalSessions).length < terminalLimit}
+              canMerge={terminalViews.length > 1}
+              onSelect={(sessionId) => selectTerminalTab(view.elementId, sessionId)}
+              onAdd={() => { void openTerminalSession(view.elementId) }}
+              onClose={(sessionId) => { void closeTerminalSession(sessionId) }}
+              onDetach={(sessionId) => detachTerminalSession(view.elementId, sessionId)}
+              onMerge={() => mergeTerminalBlock(view.elementId)}
+              onInput={sendTerminalInput}
+              fontSize={terminalFont}
+              onFontSize={changeTerminalFont}
+            />
+          ))}
         </div>
       </div>
     </div>
