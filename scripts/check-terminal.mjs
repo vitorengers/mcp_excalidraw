@@ -474,13 +474,25 @@ try {
   const empty = await call(BASE, '/api/terminal/input', { method: 'POST', body: JSON.stringify({}) });
   check('input with nothing in it is a 400', empty.status === 400, `got ${empty.status}`);
 
-  // ─── 8. One session per workspace ───────────────────────────
-  console.log('\n8. a second session for the same board is refused, not spawned');
+  // ─── 8. A second session is a second shell, and the first is untouched ──
+  //
+  // This used to be the 409 case. The cap moved from 1 to N (#94) and
+  // `scripts/check-terminal-tabs.mjs` owns what that means; what is still this file's
+  // business is that the session it has been driving all along is not disturbed by another
+  // one appearing beside it. Closed again straight away, because the cases below address the
+  // routes without naming a session, which is only unambiguous while there is one.
+  console.log('\n8. a second session is a second shell, and the first is left alone');
   const second = await call(BASE, '/api/terminal', { method: 'POST' });
-  check('409 Conflict', second.status === 409, `got ${second.status} ${JSON.stringify(second.body)}`);
+  check('202 Accepted', second.status === 202, `got ${second.status} ${JSON.stringify(second.body)}`);
+  check('with a process of its own', alive(second.body?.session?.pid) && second.body?.session?.pid !== pid,
+        `${pid} → ${second.body?.session?.pid}`);
   const status = await call(BASE, '/api/terminal');
-  check('and the one session is untouched', Boolean(pid) && status.body?.session?.pid === pid,
-        `${status.body?.session?.pid} vs ${pid}`);
+  check('and the first session is untouched',
+        Boolean(pid) && (status.body?.sessions ?? []).some((one) => one.pid === pid),
+        JSON.stringify((status.body?.sessions ?? []).map((one) => one.pid)));
+  await call(BASE, `/api/terminal?sessionId=${second.body?.session?.id}`, { method: 'DELETE' });
+  await waitFor(async () => ((await call(BASE, '/api/terminal')).body?.sessions ?? []).length === 1,
+                'the second session to go again');
 
   // ─── 9. Resizing ───────────────────────────────────────────
   console.log('\n9. the block\'s size reaches the session');
@@ -490,8 +502,8 @@ try {
         JSON.stringify(resized.body?.session));
   const afterResize = await call(BASE, '/api/terminal');
   check('so a later reader sees it too',
-        afterResize.body?.session?.cols === 132 && afterResize.body?.session?.rows === 43,
-        JSON.stringify(afterResize.body?.session));
+        afterResize.body?.sessions?.[0]?.cols === 132 && afterResize.body?.sessions?.[0]?.rows === 43,
+        JSON.stringify(afterResize.body?.sessions));
   check('every viewer hears about it',
         viewer.messages.some((message) => message.type === 'terminal_resized' && message.cols === 132),
         JSON.stringify(viewer.messages.filter((message) => message.type === 'terminal_resized')));
@@ -502,9 +514,10 @@ try {
   console.log('\n10. a socket that connects late replays the scrollback');
   const late = watch(PORT);
   await late.open;
-  await waitFor(() => late.messages.some((message) => message.type === 'terminal_session'),
-                'the session to be announced to a new socket');
-  const announced = late.messages.find((message) => message.type === 'terminal_session');
+  await waitFor(() => late.messages.some((message) => message.type === 'terminal_sessions'),
+                'the live sessions to be announced to a new socket');
+  // The whole live set, so a viewer can reconcile rather than merely add to what it has.
+  const announced = late.messages.find((message) => message.type === 'terminal_sessions')?.sessions?.[0];
   check('the session is announced', Boolean(announced?.session), JSON.stringify(announced ?? null));
   check('with the scrollback that was already produced',
         containsPath(announced?.scrollback, projectDir) && String(announced?.scrollback).includes('banana'),
@@ -571,7 +584,7 @@ try {
         `${ticksAfterClose} → ${ticks()} bytes, so it kept ticking`);
 
   const gone = await call(BASE, '/api/terminal');
-  check('no session is reported any more', !gone.body?.session, JSON.stringify(gone.body));
+  check('no session is reported any more', (gone.body?.sessions ?? []).length === 0, JSON.stringify(gone.body));
   const closeAgain = await call(BASE, '/api/terminal', { method: 'DELETE' });
   check('closing what is already closed is a 404', closeAgain.status === 404, `got ${closeAgain.status}`);
 
@@ -582,8 +595,8 @@ try {
   check('with a process of its own', reopened.body?.session?.pid !== pid && alive(reopened.body?.session?.pid),
         `${pid} → ${reopened.body?.session?.pid}`);
   check('and an empty transcript',
-        !String((await call(BASE, '/api/terminal')).body?.scrollback ?? '').includes('banana'),
-        String((await call(BASE, '/api/terminal')).body?.scrollback ?? '').slice(-200));
+        !String((await call(BASE, '/api/terminal')).body?.sessions?.[0]?.scrollback ?? '').includes('banana'),
+        String((await call(BASE, '/api/terminal')).body?.sessions?.[0]?.scrollback ?? '').slice(-200));
 
   console.log('\n14. and a server going down does not leave a shell behind');
   const survivor = reopened.body?.session?.pid;

@@ -548,7 +548,7 @@ Yes — that's the recommended path for coding agents: `npx -y mcp-excalidraw-se
 - **CLI exit code 4** (browser required): screenshots, image export, viewport, and mermaid conversion render in the frontend — open `http://127.0.0.1:3000` in a browser and retry.
 - **Canvas not updating**: confirm `EXPRESS_SERVER_URL` points at the running canvas server (`status` shows the URL in use).
 - **Updates/deletes fail after batch creation**: ensure you are on a build that includes the batch id preservation fix (merged via PR #34).
-- **The terminal block is missing from the canvas** (boards running with `EXCALIDRAW_TERMINAL`): press **Alt+T**. One key covers all three ways it can be absent — it scrolls to the block, places one if the board has none, and opens a session if none is running. Erasing the block while its shell is alive undoes itself, because nothing in that gesture kills the shell. See [docs/terminal.md](docs/terminal.md).
+- **The terminal block is missing from the canvas** (boards running with `EXCALIDRAW_TERMINAL`): press **Alt+T**. One key covers every way it can be absent — it scrolls to the blocks, places one if the board has none, and opens a session if none is running, including after the last tab was closed. Erasing a block while its shells are alive undoes itself, because nothing in that gesture kills a shell. A block carries a strip of tabs: `+` opens another shell, `×` ends one, `⧉` gives a tab a block of its own and `⇥` puts it back. See [docs/terminal.md](docs/terminal.md).
 
 ## Known Issues / TODO
 

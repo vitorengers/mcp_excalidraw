@@ -153,7 +153,9 @@ const api = (path, options = {}) => request(`${BASE}${path}${path.includes('?') 
   ...options,
 });
 
-const session = async () => (await (await api('/api/terminal')).json())?.session ?? null;
+// The board's one session: `GET /api/terminal` lists them since #94, and nothing here opens
+// a second, so the first is the one every case below is about.
+const session = async () => ((await (await api('/api/terminal')).json())?.sessions ?? [])[0] ?? null;
 
 // ─── Talking to Chrome ────────────────────────────────────────
 
