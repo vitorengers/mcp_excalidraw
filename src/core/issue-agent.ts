@@ -109,22 +109,41 @@ export function extractIssueUrl(output: string): string | null {
 }
 
 /**
+ * A directory named twice: once for this process, once for the agent's own environment.
+ *
+ * They differ for a WSL-backed project, where this process reads through a UNC share and
+ * the agent sees a POSIX path. Handing the wrong one to a tool inside the distro gives it
+ * a working directory it cannot act on.
+ */
+export interface AgentDirectory {
+  /** Path usable by this process. */
+  path: string;
+  /** The same directory as the workspace's own environment names it. */
+  innerPath: string;
+}
+
+/**
  * Build the command for a workspace.
  *
  * A WSL-backed project runs through wsl.exe with the project's inner path, because the
  * agent has to see the repository the way git and gh inside that distro do — a Windows
  * UNC path would give it a working directory those tools cannot act on.
+ *
+ * `directory` overrides where the agent starts, and is how an implementation is put in a
+ * worktree of its own rather than in the one directory every run used to share. Omitted,
+ * the agent starts in the project itself, which is what reading a repository wants.
  */
 export function buildAgentCommand(
   workspace: Workspace,
-  agentCommand: string
+  agentCommand: string,
+  directory?: AgentDirectory | null
 ): { command: string; args: string[]; cwd: string | undefined } {
   if (workspace.environment.kind === 'wsl') {
     return {
       command: 'wsl.exe',
       args: [
         '-d', workspace.environment.distro,
-        '--cd', workspace.innerPath,
+        '--cd', directory?.innerPath ?? workspace.innerPath,
         '--', 'bash', '-lc', agentCommand,
       ],
       // wsl.exe itself runs from wherever; --cd places the agent inside the project.
@@ -136,7 +155,7 @@ export function buildAgentCommand(
   return {
     command: command ?? agentCommand,
     args,
-    cwd: workspace.path,
+    cwd: directory?.path ?? workspace.path,
   };
 }
 
@@ -200,6 +219,8 @@ export interface RunAgentOptions {
   expects: 'issues' | 'pull';
   /** Named in log lines and in the error a caller shows. */
   what: string;
+  /** Where to start the agent, when that is not the project directory itself. */
+  directory?: AgentDirectory | null;
 }
 
 /**
@@ -214,7 +235,7 @@ export async function runAgent(
   prompt: string,
   options: RunAgentOptions
 ): Promise<AgentRun> {
-  const { command, args, cwd } = buildAgentCommand(workspace, options.agentCommand);
+  const { command, args, cwd } = buildAgentCommand(workspace, options.agentCommand, options.directory);
   const noun = options.expects === 'pull' ? 'pull request URL' : 'issue URL';
 
   logger.info(`Running ${options.what} for workspace "${workspace.id}"`, { command, cwd });

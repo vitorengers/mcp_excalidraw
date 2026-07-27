@@ -46,9 +46,16 @@ import {
   ImplementRecord,
   clearImplement,
   isImplementing,
+  listImplement,
   readImplement,
+  runningImplements,
   writeImplement
 } from './core/implement-state.js';
+import {
+  ImplementWorktree,
+  ensureWorktree,
+  releaseWorktree
+} from './core/implement-worktree.js';
 import { layoutLabel, DEFAULT_BOUND_TEXT_FONT_SIZE } from './core/text-layout.js';
 import {
   elementsFor,
@@ -1198,6 +1205,22 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
 const IMPLEMENT_AGENT_COMMAND = process.env.EXCALIDRAW_IMPLEMENT_AGENT || null;
 
 /**
+ * How many implementations one workspace may have in flight at once.
+ *
+ * It used to be unlimited, and unlimited by accident: nothing counted runs, because the
+ * only guard was per issue. Now that each run has a checkout of its own, several at once
+ * are safe rather than merely tolerated — so the default is a number greater than one, and
+ * a small one, because every run is a whole coding agent building and testing on this
+ * machine. `0` means no cap; `1` serialises.
+ */
+const IMPLEMENT_CONCURRENCY = (() => {
+  const configured = process.env.EXCALIDRAW_IMPLEMENT_CONCURRENCY;
+  if (configured === undefined || configured.trim() === '') return 4;
+  const parsed = Number(configured);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 4;
+})();
+
+/**
  * Write an implementation's state everywhere it is shown.
  *
  * The record against the issue URL is the truth. The copy on the elements is a convenience
@@ -1268,6 +1291,20 @@ async function beginImplement(res: Response, workspaceId: string, issueUrl: stri
     return;
   }
 
+  // Different issues no longer collide, so this is a budget rather than a safety guard —
+  // but a board that can start runs faster than a machine can finish them still needs one,
+  // and a refusal has to say which run is holding the slot to be worth reading.
+  const inFlight = runningImplements(workspaceId);
+  if (IMPLEMENT_CONCURRENCY > 0 && inFlight.length >= IMPLEMENT_CONCURRENCY) {
+    res.status(409).json({
+      success: false,
+      error: `This workspace already has ${inFlight.length} implementation(s) running, which is the limit `
+        + `set by EXCALIDRAW_IMPLEMENT_CONCURRENCY. In flight: ${inFlight.map((run) => run.issueUrl).join(', ')}`,
+      running: inFlight.map((run) => run.issueUrl)
+    });
+    return;
+  }
+
   const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
@@ -1282,24 +1319,68 @@ async function beginImplement(res: Response, workspaceId: string, issueUrl: stri
     return;
   }
 
-  recordImplement(workspaceId, issueUrl, { state: 'running', url: null, error: null });
+  recordImplement(workspaceId, issueUrl, { state: 'running', url: null, error: null, worktree: null });
   res.status(202).json({ success: true, state: 'running', issueUrl });
 
+  let worktree: ImplementWorktree | null = null;
   try {
+    worktree = await ensureWorktree(workspace, issueUrl);
+    if (worktree) {
+      recordImplement(workspaceId, issueUrl, {
+        state: 'running', url: null, error: null, worktree: worktree.path
+      });
+    }
+
     const result = await runImplementAgent(workspace, issueUrl, {
-      agentCommand: IMPLEMENT_AGENT_COMMAND as string
+      agentCommand: IMPLEMENT_AGENT_COMMAND as string,
+      worktree
     });
+    const kept = await releaseWorktreeFor(workspace, worktree, issueUrl);
+
     if (result.ok && result.url) {
-      recordImplement(workspaceId, issueUrl, { state: 'done', url: result.url, error: null });
+      recordImplement(workspaceId, issueUrl, {
+        state: 'done', url: result.url, error: null, worktree: kept
+      });
       logger.info(`${issueUrl} implemented at ${result.url}`);
     } else {
-      recordImplement(workspaceId, issueUrl, { state: 'failed', url: null, error: result.error ?? null });
+      recordImplement(workspaceId, issueUrl, {
+        state: 'failed', url: null, error: result.error ?? null, worktree: kept
+      });
       logger.warn(`${issueUrl} implementation failed: ${result.error}`);
     }
   } catch (error) {
     recordImplement(workspaceId, issueUrl, {
-      state: 'failed', url: null, error: (error as Error).message
+      state: 'failed',
+      url: null,
+      error: (error as Error).message,
+      worktree: await releaseWorktreeFor(workspace, worktree, issueUrl)
     });
+  }
+}
+
+/**
+ * Tidy up after a run, and report what could not be tidied.
+ *
+ * A worktree holding uncommitted changes is kept, because those changes are the only copy
+ * of themselves — an agent that died partway through a change leaves exactly that, and a
+ * server that swept it away would be destroying the only evidence of what went wrong. It
+ * is a warning in the log and a path on the record, so the run that failed is recoverable
+ * by hand.
+ */
+async function releaseWorktreeFor(
+  workspace: Workspace,
+  worktree: ImplementWorktree | null,
+  issueUrl: string
+): Promise<string | null> {
+  if (!worktree) return null;
+  try {
+    const released = await releaseWorktree(workspace, worktree);
+    if (released.removed) return null;
+    logger.warn(`Worktree kept for ${issueUrl}: uncommitted work at ${released.path}`);
+    return released.path;
+  } catch (error) {
+    logger.warn(`Could not release the worktree for ${issueUrl}: ${(error as Error).message}`);
+    return worktree.path;
   }
 }
 
@@ -1410,13 +1491,24 @@ app.delete('/api/issue-block/:id/implement', (req: Request, res: Response) => {
  * A card with a run in flight has to find out when it finishes, and it cannot be told:
  * there is no element for the socket to update. So it asks — and asking must not cost a
  * `gh` process each time, which is what reading through /api/issue would.
+ *
+ * With no `url`, every record for the workspace instead. Once several runs can be in
+ * flight at once, "what is running right now" is a real question, and it used to have no
+ * answer: the state was reachable only one issue at a time, by a caller who already knew
+ * which issue to ask about. Finished runs come back too — one of the things worth knowing
+ * is which run left a worktree behind.
  */
 app.get('/api/implement', (req: Request, res: Response) => {
+  const workspaceId = workspaceIdFrom(req);
   const issueUrl = typeof req.query.url === 'string' ? req.query.url : '';
   if (!issueUrl) {
-    return res.status(400).json({ success: false, error: 'No issue URL was given.' });
+    return res.json({
+      success: true,
+      runs: listImplement(workspaceId),
+      concurrency: IMPLEMENT_CONCURRENCY
+    });
   }
-  res.json({ success: true, implement: readImplement(workspaceIdFrom(req), issueUrl) });
+  res.json({ success: true, implement: readImplement(workspaceId, issueUrl) });
 });
 
 /** The same reset, for a mirrored card with no element behind it. */

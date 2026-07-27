@@ -11,6 +11,7 @@
  * The rest of the guards carry over — loopback only, one run per element — plus one more:
  * only a block that already has an issue has anything to implement.
  */
+import { ImplementWorktree } from './implement-worktree.js';
 import { AgentRun, runAgent } from './issue-agent.js';
 import { Workspace } from './workspaces.js';
 
@@ -75,16 +76,42 @@ export const IMPLEMENT_TIMEOUT_MS: number | null = (() => {
   return Number.isFinite(configured) && configured > 0 ? configured * 1000 : null;
 })();
 
+/**
+ * Where the run is happening, or nothing at all.
+ *
+ * Nothing at all is the important half: a workspace that is not a git repository gets no
+ * worktree, and must send the prompt it sent before this existed, byte for byte.
+ *
+ * This is not the project's workflow — that stays out of the prompt on purpose — it is a
+ * fact about the process the agent has been started in, and one it cannot discover on its
+ * own without going looking. Without it an agent reads its memory, finds "branch off the
+ * default branch", and cuts a second branch inside a checkout that already is one. That
+ * still isolates, but it leaves the branch the pull request is expected on unused.
+ */
+export function worktreeSection(worktree: ImplementWorktree | null | undefined): string {
+  if (!worktree) return '';
+
+  return `\n\n---\n\nYou are already in a git worktree made for this issue: a checkout of this
+repository of its own, at ${worktree.innerPath}, on the fresh branch ${worktree.branch} cut
+from the default branch. Work here and commit here. Other implementations may be running in
+their own worktrees at the same time, so do not switch this checkout to another branch and do
+not reach into theirs. Anything you leave uncommitted keeps the worktree alive after the run;
+a worktree with nothing outstanding is removed when the run ends.`;
+}
+
 export async function runImplementAgent(
   workspace: Workspace,
   issueUrl: string,
-  options: { agentCommand: string; timeoutMs?: number | null }
+  options: { agentCommand: string; timeoutMs?: number | null; worktree?: ImplementWorktree | null }
 ): Promise<AgentRun> {
-  const prompt = `${IMPLEMENT_AGENT_PROMPT}\n\n---\n\nThe issue to implement:\n\n${issueUrl}`;
+  const worktree = options.worktree ?? null;
+  const prompt = `${IMPLEMENT_AGENT_PROMPT}\n\n---\n\nThe issue to implement:\n\n${issueUrl}`
+    + worktreeSection(worktree);
   return runAgent(workspace, prompt, {
     agentCommand: options.agentCommand,
     timeoutMs: options.timeoutMs === undefined ? IMPLEMENT_TIMEOUT_MS : options.timeoutMs,
     expects: 'pull',
     what: 'implement agent',
+    directory: worktree,
   });
 }
