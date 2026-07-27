@@ -43,6 +43,7 @@ import {
   terminalOrigin
 } from '../../src/core/terminal-block'
 import type { Bounds } from '../../src/core/terminal-block'
+import { terminalLineBox } from './terminal-metrics'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
@@ -2573,7 +2574,11 @@ function App(): JSX.Element {
     size: { width: number; height: number },
     sessions: string[]
   ): void => {
-    const grid = terminalGrid(size, terminalFontRef.current)
+    // Measured here rather than remembered: a row is the font's own line box times the line
+    // height the emulator was given, and only the browser that resolved the font knows the
+    // first of those. See `frontend/src/terminal-metrics.ts`.
+    const font = terminalFontRef.current
+    const grid = terminalGrid(size, font, terminalLineBox(font))
     const signature = `${grid.cols}x${grid.rows}`
     const stale = sessions.filter((id) => terminalGridRef.current.get(id) !== signature)
     if (stale.length === 0) return

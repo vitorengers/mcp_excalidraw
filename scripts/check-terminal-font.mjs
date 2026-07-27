@@ -45,6 +45,8 @@ const {
   TERMINAL_FONT_SIZE,
   TERMINAL_FONT_RANGE,
   TERMINAL_SIZE,
+  TERMINAL_LINE_BOX,
+  TERMINAL_LINE_HEIGHT,
   terminalCell,
   terminalChrome,
   terminalGrid,
@@ -89,10 +91,22 @@ if (has('clampTerminalFont', clampTerminalFont) && TERMINAL_FONT_RANGE) {
 console.log('\n2. the cell and the frame are that font size, measured');
 if (has('terminalCell', terminalCell)) {
   const cell = terminalCell(TERMINAL_FONT_SIZE);
-  // The numbers the block was drawn against: a little under 0.6em wide, a 1.35em line box.
-  check('the cell at the default is the one the block was measured with',
-        Math.abs(cell.width - 7.6) < 0.001 && Math.abs(cell.height - 17.5) < 0.001,
+  // Width: a little under 0.6em, and linear — this stack advances 0.5859px per font pixel at
+  // every size in the range, so 7.6 at 13 is a shade conservative and the columns fit.
+  //
+  // Height: the fallback, and 21.06 rather than the 17.5 this was written with. #104 is what
+  // moved it. 17.5 was `1.35 × the font`, which is the `lineHeight` xterm is *given* — but
+  // xterm multiplies that by the font's own measured line box rather than by the font size,
+  // so a real row was nearer 1.55 × the font and the block claimed rows it had no room to
+  // draw. There is no honest constant for it, so this one is only the floor-of-last-resort
+  // and it is rounded up: too tall costs a row, too short costs rows nobody can reach.
+  check('the cell at the default is the width it was measured at, and the fallback height',
+        Math.abs(cell.width - 7.6) < 0.001
+        && Math.abs(cell.height - TERMINAL_FONT_SIZE * TERMINAL_LINE_BOX * TERMINAL_LINE_HEIGHT) < 0.001,
         JSON.stringify(cell));
+  check('and that fallback is taller than the 1.35 × font it used to be',
+        cell.height > TERMINAL_FONT_SIZE * TERMINAL_LINE_HEIGHT,
+        `${cell.height} vs ${TERMINAL_FONT_SIZE * TERMINAL_LINE_HEIGHT}`);
   const doubled = terminalCell(TERMINAL_FONT_SIZE * 2);
   check('twice the font is twice the cell',
         Math.abs(doubled.width - cell.width * 2) < 0.001
@@ -100,6 +114,26 @@ if (has('terminalCell', terminalCell)) {
         JSON.stringify(doubled));
   check('and no argument means the default', JSON.stringify(terminalCell()) === JSON.stringify(cell),
         JSON.stringify(terminalCell()));
+
+  // The measured line box, which is what the browser passes and what a row really is. The
+  // arithmetic is xterm's own — `floor(ceil(lineBox) × lineHeight)` in
+  // `DomRenderer._updateDimensions` — so the block divides by the cell the emulator drew.
+  const measured = terminalCell(TERMINAL_FONT_SIZE, 15);
+  check('a measured line box is xterm\'s own arithmetic, not this module\'s guess',
+        measured.height === Math.floor(15 * TERMINAL_LINE_HEIGHT),
+        `${measured.height} from a 15px line box`);
+  check('and it leaves the width alone, which was never the problem',
+        Math.abs(measured.width - cell.width) < 0.001, JSON.stringify(measured));
+  check('a measurement the browser could not make falls back rather than dividing by nothing',
+        terminalCell(TERMINAL_FONT_SIZE, null).height === cell.height
+        && terminalCell(TERMINAL_FONT_SIZE, 0).height === cell.height
+        && terminalCell(TERMINAL_FONT_SIZE, Number.NaN).height === cell.height,
+        `${terminalCell(TERMINAL_FONT_SIZE, null).height}, ${terminalCell(TERMINAL_FONT_SIZE, 0).height}`);
+  // The staircase the constant could not follow: whole-pixel metrics, so the ratio is 1.5 at
+  // 8px and 1.6 at 20px on one machine and something else on the next.
+  check('two line boxes a pixel apart are two different cells',
+        terminalCell(TERMINAL_FONT_SIZE, 15).height < terminalCell(TERMINAL_FONT_SIZE, 16).height,
+        `${terminalCell(TERMINAL_FONT_SIZE, 15).height} → ${terminalCell(TERMINAL_FONT_SIZE, 16).height}`);
 }
 if (has('terminalChrome', terminalChrome)) {
   // 84 rather than the 62 this was written with: #94 added the tab strip, which is `em` like
@@ -186,6 +220,18 @@ if (has('terminalGrid', terminalGrid)) {
   check('the frame is taken out at the new font as well, not at the old one',
         doubled.cols < Math.floor(base.cols / 2) && doubled.rows < Math.floor(base.rows / 2),
         `${base.cols}×${base.rows} at ${TERMINAL_FONT_SIZE} → ${doubled.cols}×${doubled.rows} at ${TERMINAL_FONT_SIZE * 2}`);
+
+  // And the line box reaches the grid, which is the whole of #104: a taller row measured off
+  // the real font is fewer rows told to the shell, and the columns are untouched.
+  const tall = terminalGrid(TERMINAL_SIZE, TERMINAL_FONT_SIZE, 15);
+  const short = terminalGrid(TERMINAL_SIZE, TERMINAL_FONT_SIZE, 11);
+  check('a measured line box moves the rows', tall.rows < short.rows,
+        `${short.rows} at an 11px line box → ${tall.rows} at 15px`);
+  check('and only the rows', tall.cols === short.cols && tall.cols === base.cols,
+        `${base.cols}, ${short.cols}, ${tall.cols}`);
+  check('the grid with no measurement is the grid at the fallback cell',
+        JSON.stringify(terminalGrid(TERMINAL_SIZE, TERMINAL_FONT_SIZE, null)) === JSON.stringify(base),
+        JSON.stringify(terminalGrid(TERMINAL_SIZE, TERMINAL_FONT_SIZE, null)));
 
   // A block dragged to nothing is still a grid a shell can repaint into, at any font.
   const tiny = terminalGrid({ width: 0, height: 0 }, TERMINAL_FONT_RANGE?.max ?? 24);
