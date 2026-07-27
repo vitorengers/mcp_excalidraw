@@ -16,6 +16,8 @@ import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
 import type { Rect } from '../../src/core/anchored-placement'
 import { resolvePanelTarget } from '../../src/core/panel-target'
 import type { PanelElement } from '../../src/core/panel-target'
+import { describeIgnoredClaims, resolveBoardSectionHotkeys } from '../../src/core/board-sections'
+import type { BoardSectionElement } from '../../src/core/board-sections'
 import { referenceImageName } from '../../src/core/pasted-images'
 import { layoutLabel } from '../../src/core/text-layout'
 import {
@@ -35,6 +37,7 @@ import {
   terminalOrigin
 } from '../../src/core/terminal-block'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
+import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
 // Type definitions
@@ -581,6 +584,15 @@ function App(): JSX.Element {
   // Boards, one per project
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [activeWorkspace, setActiveWorkspace] = useState<string>('default')
+  /**
+   * Whether a registry exists at all, which is not the same as it having projects in it.
+   *
+   * An empty registry is a board waiting for its first project and has to show the `+`
+   * that adds one; no registry at all has nowhere to put it.
+   */
+  const [workspacesConfigured, setWorkspacesConfigured] = useState<boolean>(false)
+  /** Which dialog is open, if any: the project picker or one project's settings. */
+  const [workspaceDialog, setWorkspaceDialog] = useState<'add' | 'config' | null>(null)
   // WebSocket handlers close over their creation-time scope, so the ref is what the
   // async paths read — the state alone would send stale ids after a tab switch.
   const activeWorkspaceRef = useRef<string>('default')
@@ -923,6 +935,26 @@ function App(): JSX.Element {
   const syncInFlightRef = useRef<boolean>(false)
   const suppressAutoSyncCountRef = useRef<number>(0)
   const userInteractedRef = useRef<boolean>(false)
+
+  /** The last set of rejected hotkey claims that was printed, so it is printed once. */
+  const sectionClaimsRef = useRef<string>('')
+
+  /**
+   * Say once when a section asked for a key it cannot have.
+   *
+   * A reserved or duplicated claim is ignored rather than honoured, and an ignored claim
+   * with nothing said is a key that silently does nothing — the drawing looks right and
+   * the board looks broken. Printed from `onChange`, which is also where the board is
+   * edited, and guarded by the last thing printed because `onChange` fires on every
+   * pointer move.
+   */
+  const reportSectionClaims = (elements: readonly unknown[]): void => {
+    const { ignored } = resolveBoardSectionHotkeys(elements as unknown as BoardSectionElement[])
+    const signature = describeIgnoredClaims(ignored)
+    if (signature === sectionClaimsRef.current) return
+    sectionClaimsRef.current = signature
+    if (signature) console.warn(`Board section hotkey ignored: ${signature}`)
+  }
 
   /**
    * Track which selected shape the docs panel should describe.
@@ -1482,6 +1514,8 @@ function App(): JSX.Element {
   interface TerminalStatus {
     cwd: string
     shell: string
+    /** `pty` or `pipe` — which of the two the server got, so the block can say so. */
+    mode: string
     cols: number
     rows: number
   }
@@ -1590,7 +1624,13 @@ function App(): JSX.Element {
       terminalOpenRef.current = true
       setTerminal({
         status: session
-          ? { cwd: session.cwd, shell: session.shell, cols: session.cols, rows: session.rows }
+          ? {
+            cwd: session.cwd,
+            shell: session.shell,
+            mode: session.mode ?? 'pipe',
+            cols: session.cols,
+            rows: session.rows
+          }
           : null,
         output: typeof caught?.scrollback === 'string' ? caught.scrollback : '',
         ended: null
@@ -1601,13 +1641,58 @@ function App(): JSX.Element {
     }
   }
 
-  /** Send one line to the shell. The echo comes back over the socket, like any other output. */
-  const sendTerminalInput = (line: string): void => {
-    void fetch(apiUrl('/api/terminal/input'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: `${line}\n` })
-    }).catch((error) => console.warn('Could not send to the terminal:', error))
+  /** Keystrokes waiting to be sent, and whether something is already sending them. */
+  const terminalInputRef = useRef<string>('')
+  const terminalSendingRef = useRef<boolean>(false)
+
+  /**
+   * Send what is queued, in order, and do not lose a keystroke to a refused socket.
+   *
+   * Both halves of that matter now and neither did before. A line at a time, one request
+   * carried the whole command and a failure was visible — nothing ran. A keystroke at a
+   * time, `pwd` is three requests: fired off in parallel they can arrive as `pdw`, and one
+   * that fails silently makes it `pd`. So they are queued and sent one after another, and
+   * whatever accumulated while a request was in flight goes out as a single write — which
+   * is what a fast typist or a paste looks like anyway.
+   */
+  const flushTerminalInput = async (): Promise<void> => {
+    if (terminalSendingRef.current) return
+    terminalSendingRef.current = true
+    try {
+      while (terminalInputRef.current) {
+        const data = terminalInputRef.current
+        terminalInputRef.current = ''
+        let sent = false
+        for (let attempt = 0; attempt < 3 && !sent; attempt++) {
+          try {
+            sent = (await fetch(apiUrl('/api/terminal/input'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ data })
+            })).ok
+          } catch {
+            sent = false
+          }
+          if (!sent) await new Promise((resolve) => setTimeout(resolve, 120))
+        }
+        if (!sent) console.warn('Could not send to the terminal; those keystrokes were dropped')
+      }
+    } finally {
+      terminalSendingRef.current = false
+    }
+  }
+
+  /**
+   * Queue keystrokes for the shell, exactly as they were pressed.
+   *
+   * Bytes rather than a line, and nothing appended: what the emulator hands over is already
+   * what a terminal sends — `\r` for Enter, `\x03` for Ctrl+C, `ESC [ A` for an arrow — and
+   * a newline added to any of those would turn a keystroke into something else. The echo
+   * comes back over the socket, from the shell, like any other output.
+   */
+  const sendTerminalInput = (data: string): void => {
+    terminalInputRef.current += data
+    void flushTerminalInput()
   }
 
   /**
@@ -1671,19 +1756,35 @@ function App(): JSX.Element {
     // Reported on the end of the gesture rather than during it: a resize crosses every size
     // between where it started and where it lands, and reporting each one would be a
     // request per frame.
+    //
+    // A report that does not land is undone rather than forgotten. The signature stands for
+    // "the server knows this size", so leaving it set after a failed request would mean the
+    // block never mentions that size again — and with a PTY behind the session that is not
+    // a stale label any more, it is a shell repainting to a width the block no longer has.
     const grid = terminalGrid({ width: element.width, height: element.height })
     const signature = `${grid.cols}x${grid.rows}`
     if (signature === terminalGridRef.current) return
     terminalGridRef.current = signature
     if (terminalResizeTimerRef.current) clearTimeout(terminalResizeTimerRef.current)
-    terminalResizeTimerRef.current = setTimeout(() => {
+
+    const report = (attempt: number): void => {
       terminalResizeTimerRef.current = null
-      void fetch(apiUrl('/api/terminal/resize'), {
+      fetch(apiUrl('/api/terminal/resize'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(grid)
-      }).catch(() => undefined)
-    }, TERMINAL_RESIZE_DEBOUNCE_MS)
+      }).then((response) => {
+        if (response.ok) return
+        throw new Error(`the terminal refused the new size: ${response.status}`)
+      }).catch(() => {
+        // Only while this is still the size being reported: a later gesture has its own
+        // request, and retrying an overtaken one would report a size nobody is looking at.
+        if (terminalGridRef.current !== signature) return
+        if (attempt >= 2) { terminalGridRef.current = ''; return }
+        terminalResizeTimerRef.current = setTimeout(() => report(attempt + 1), TERMINAL_RESIZE_DEBOUNCE_MS)
+      })
+    }
+    terminalResizeTimerRef.current = setTimeout(() => report(1), TERMINAL_RESIZE_DEBOUNCE_MS)
   }
 
   // One session per board, opened when the board is shown. Nothing is closed on the way
@@ -1794,6 +1895,49 @@ function App(): JSX.Element {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  // The board's own keys — one per section it has drawn a mark around.
+  //
+  // Alt+B and Alt+T above are constants because a mirror and a terminal are features of
+  // every board. Sections are not: they are how one project chose to cut its own
+  // documentation, so the key is read off the shape (`src/core/board-sections.ts`) and a
+  // board that draws no sections binds nothing at all. Same guards as Alt+B, and the same
+  // reason for `window`: a key pressed outside the canvas is one Excalidraw never sees.
+  //
+  // Resolved on the keypress rather than kept in state: a section is a shape like any
+  // other, so it can be drawn, retitled or deleted while the page is open, and one pass
+  // over the scene per Alt+key costs nothing next to being wrong about what is on it.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!event.altKey || event.ctrlKey || event.metaKey) return
+
+      const active = document.activeElement as HTMLElement | null
+      if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) {
+        return
+      }
+
+      const api = excalidrawAPIRef.current
+      if (!api) return
+      if ((api.getAppState() as unknown as Record<string, unknown>).editingTextElement) return
+
+      const elements = api.getSceneElements()
+      const { bindings } = resolveBoardSectionHotkeys(elements as unknown as BoardSectionElement[])
+      const bound = bindings.find((binding) => binding.code === event.code)
+      if (!bound) return
+
+      const section = elements.find((element) => element.id === bound.elementId)
+      if (!section) return
+
+      event.preventDefault()
+      api.scrollToContent([section] as unknown as ExcalidrawElement[], {
+        fitToViewport: true,
+        animate: true
+      })
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   /**
    * Enter finishes writing an issue block.
    *
@@ -1883,6 +2027,7 @@ function App(): JSX.Element {
         if (cancelled || !result?.success) return
         const list: WorkspaceSummary[] = result.workspaces ?? []
         setWorkspaces(list)
+        setWorkspacesConfigured(Boolean(result.configured))
         // The socket opens before this response lands, so it is already watching the
         // default board. Switching rather than assigning reconnects it, otherwise the
         // first tab would render highlighted while showing the default board's scene.
@@ -1935,6 +2080,21 @@ function App(): JSX.Element {
     }
     setIsConnected(false)
     connectWebSocket()
+  }
+
+  /**
+   * A project the `+` has just registered.
+   *
+   * The list is replaced from the response rather than re-fetched, and the board switches
+   * to the new tab in the same turn: the registry is read per request, so the entry is
+   * already live, and a reload here would throw away every unsynced shape on the board
+   * that was open.
+   */
+  const adoptWorkspace = (workspace: WorkspaceSummary, list: WorkspaceSummary[]): void => {
+    setWorkspaces(list)
+    setWorkspacesConfigured(true)
+    setWorkspaceDialog(null)
+    switchWorkspace(workspace.id)
   }
 
   // Reloaded per board: a project may ship its own shapes on top of the shared set.
@@ -2408,7 +2568,13 @@ function App(): JSX.Element {
           terminalOpenRef.current = Boolean(session)
           setTerminal({
             status: session
-              ? { cwd: session.cwd, shell: session.shell, cols: session.cols, rows: session.rows }
+              ? {
+                cwd: session.cwd,
+                shell: session.shell,
+                mode: session.mode ?? 'pipe',
+                cols: session.cols,
+                rows: session.rows
+              }
               : null,
             // The replay, whole: this arrives on connect for a session that was already
             // running, so it is a transcript rather than an increment.
@@ -2623,8 +2789,28 @@ function App(): JSX.Element {
       <WorkspaceTabs
         workspaces={workspaces}
         activeId={activeWorkspace}
+        configured={workspacesConfigured}
         onSelect={switchWorkspace}
+        onAdd={() => setWorkspaceDialog('add')}
+        onConfigure={() => setWorkspaceDialog('config')}
       />
+
+      {workspaceDialog === 'add' && (
+        <AddWorkspaceDialog
+          onClose={() => setWorkspaceDialog(null)}
+          onAdded={adoptWorkspace}
+        />
+      )}
+
+      {workspaceDialog === 'config' && (
+        <WorkspaceConfigDialog
+          workspaceId={activeWorkspace}
+          onClose={() => setWorkspaceDialog(null)}
+          // Only the list is replaced: the board is already showing this project, so
+          // switching to it again would empty the scene and reconnect for nothing.
+          onSaved={(_workspace, list) => { setWorkspaces(list); setWorkspaceDialog(null) }}
+        />
+      )}
 
       {/* Header */}
       <div className="header">
@@ -2691,6 +2877,7 @@ function App(): JSX.Element {
                 }
               }
               syncSelectedDoc(appState)
+              reportSectionClaims(_elements)
               // Order matters: syncSelectedDoc settles which shape is anchored, and this
               // then works out where that shape is.
               syncDocsAnchor(_elements, appState as unknown as Record<string, any>)
@@ -2746,7 +2933,7 @@ function App(): JSX.Element {
             output={terminal.output}
             status={terminal.status}
             ended={terminal.ended}
-            onSubmit={sendTerminalInput}
+            onInput={sendTerminalInput}
           />
         </div>
       </div>

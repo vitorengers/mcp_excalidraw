@@ -708,3 +708,47 @@ degraded state.
 
 A WSL-backed project runs through `wsl.exe --cd <innerPath>`, because the agent has to see the
 repository the way `git` and `gh` inside that distro do.
+
+### What is per-project, and what stays global
+
+One board runs several projects, and until #82 every setting above applied to all of them: the
+two command lines were module constants read once at startup, so retuning one project meant
+editing `start-board.ps1` and restarting the board for every other project too.
+
+A project's own `board.config.json` can now say three things per agent, under
+`agents.issue` and `agents.implement` — see [workspaces.md](workspaces.md) for the shape:
+
+| Setting | Per-project | Global |
+| --- | --- | --- |
+| `model` | `agents.<kind>.model` → appended as `--model` | `--model` in the command line |
+| `effort` | `agents.<kind>.effort` → appended as `--effort` | `--effort` in the command line |
+| time limit | `agents.<kind>.timeoutSeconds` | `EXCALIDRAW_ISSUE_AGENT_TIMEOUT`, `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` |
+| the command itself | **never** | `EXCALIDRAW_ISSUE_AGENT`, `EXCALIDRAW_IMPLEMENT_AGENT` |
+| `--allowedTools`, `--output-format` | **never** | the command line |
+| concurrency, memo window | **never** | `EXCALIDRAW_IMPLEMENT_CONCURRENCY`, `EXCALIDRAW_ISSUE_MEMO_MS` |
+
+**A project may retune what the operator granted; it may never grant it.** Agents stay off
+unless the environment sets their command, which is why a command is not a field a project may
+set at all — `board.config.json` lives inside a registered project, so a project that could
+supply one would mean editing a JSON file to start an unattended agent with
+`--dangerously-skip-permissions` on a board where nobody allowed one. The config surface refuses
+an `agents.<kind>.command` by name rather than ignoring it.
+
+The model and the effort are **appended** to the operator's command rather than substituted into
+it, which works because the last flag is the one the CLI keeps — checked against the CLI rather
+than assumed: `claude --model sonnet --model definitely-not-a-model -p hi` complains about the
+second one. Nothing else in that command line is rewritten, which is the line `agent-usage.ts`
+already draws about `--output-format`.
+
+**A project that configures nothing spawns the command line it spawned before any of this
+existed, byte for byte.** That is the same rule `worktreeSection` and `imageReferenceSection`
+keep about the prompt, and `scripts/check-workspace-settings.mjs` asserts it against a stub agent
+that reports its own argv.
+
+Not done here, and deliberately: the multi-stage workflow the observation behind #82 sketched —
+plan with one model, implement with another, review with a third. That is a new execution model
+rather than a setting (the board spawns **once** per implementation, and `ImplementRecord` holds
+one start, one end, one pull request), so it needs its own issue. Per-run resolution of model and
+effort is its precondition, which is what landed here. The `ultracode` keyword belongs to that
+issue too: it is not a CLI flag but a prompt-level opt-in, and the implement prompt is kept free
+of per-project content on purpose.

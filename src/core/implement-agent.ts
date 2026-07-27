@@ -13,7 +13,7 @@
  */
 import { AgentUsage } from './agent-usage.js';
 import { ImplementWorktree } from './implement-worktree.js';
-import { AgentRun, runAgent } from './issue-agent.js';
+import { applyAgentSettings, AgentRun, runAgent } from './issue-agent.js';
 import { Workspace } from './workspaces.js';
 
 /**
@@ -172,9 +172,15 @@ export async function runImplementAgent(
   const worktree = options.worktree ?? null;
   const prompt = `${IMPLEMENT_AGENT_PROMPT}\n\n---\n\nThe issue to implement:\n\n${issueUrl}`
     + worktreeSection(worktree);
+  // Workspace first, environment second. `IMPLEMENT_TIMEOUT_MS` stays what it always was:
+  // the board's own default, now the value a project falls back to rather than the only
+  // value there is.
+  const settings = workspace.agents?.implement ?? null;
   return runAgent(workspace, prompt, {
-    agentCommand: options.agentCommand,
-    timeoutMs: options.timeoutMs === undefined ? IMPLEMENT_TIMEOUT_MS : options.timeoutMs,
+    agentCommand: applyAgentSettings(options.agentCommand, settings),
+    timeoutMs: options.timeoutMs === undefined
+      ? settings?.timeoutMs ?? IMPLEMENT_TIMEOUT_MS
+      : options.timeoutMs,
     expects: 'pull',
     what: 'implement agent',
     directory: worktree,
