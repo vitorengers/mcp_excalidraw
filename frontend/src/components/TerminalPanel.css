@@ -56,24 +56,111 @@
   opacity: 0.8;
 }
 
+/* The tabs, one per shell in this block.
+
+   The row itself stays transparent to the pointer and only the chips take it. That is not
+   tidiness: the row spans the card, the card is the block, and a full-width strip that took
+   the pointer would sit over the block's own top edge and swallow the resize handles there.
+   The chips are inset from the left edge for the same reason — Excalidraw's handles reach a
+   few pixels either side of the shape's outline. */
+.terminal-card__tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.25em;
+  margin-top: 0.25em;
+  padding: 0 0.6em;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 0.85em;
+}
+
+.terminal-card__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.05em 0.15em 0.05em 0.5em;
+  border: 1px solid rgb(205 214 244 / 18%);
+  border-radius: 0.4em;
+  background: rgb(205 214 244 / 6%);
+  color: #a6adc8;
+  /* The chips are the pointer-taking part, and the only one in this row. */
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.terminal-card__tab--active {
+  border-color: #a6e3a1;
+  background: rgb(166 227 161 / 14%);
+  color: #cdd6f4;
+}
+
+/* A shell that has gone still has a tab — the transcript is the evidence — but it should not
+   read as one you can type into. */
+.terminal-card__tab--ended {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.terminal-card__tab-close {
+  padding: 0 0.25em;
+  border-radius: 0.3em;
+  color: #6c7086;
+}
+
+.terminal-card__tab-close:hover {
+  background: rgb(243 139 168 / 25%);
+  color: #f38ba8;
+}
+
+.terminal-card__control {
+  padding: 0.05em 0.4em;
+  border-radius: 0.4em;
+  color: #a6adc8;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.terminal-card__control:hover {
+  background: rgb(205 214 244 / 14%);
+  color: #cdd6f4;
+}
+
+/* Still there, still saying what it is for, and refusing rather than disappearing: a `+`
+   that vanishes at the cap looks like a feature that broke. */
+.terminal-card__control--off {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 /* The emulator's host. It keeps `pointer-events: none` from the card, which is the whole
    bargain: xterm would happily take clicks for selection, and taking them would take
    Excalidraw's resize handles for the block underneath. */
 .terminal-card__body {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   margin: 0.3em 0 0;
   overflow: hidden;
 }
 
+/* Every session in the block has one of these, stacked, and all but the active one is
+   hidden with `visibility` rather than `display`: an emulator opened into a box of no size
+   measures its cell against nothing and stays the wrong size once it is shown. */
+.terminal-card__screen {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
 /* xterm sizes itself in pixels from the grid it was given; the block is the frame around
    that, and anything the frame cannot hold is clipped rather than scrolled — the viewport
    cannot be reached with a pointer that belongs to the canvas. */
-.terminal-card__body .xterm {
+.terminal-card__screen .xterm {
   height: 100%;
 }
 
-.terminal-card__body .xterm-viewport {
+.terminal-card__screen .xterm-viewport {
   overflow: hidden !important;
 }
 

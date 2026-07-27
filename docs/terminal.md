@@ -1,7 +1,8 @@
 # The terminal
 
-A shell running in the project, drawn as a block on the **right** of the board — opposite the
-GitHub project mirror on the left. Type into it and its output arrives as it is produced.
+Shells running in the project, drawn as blocks on the **right** of the board — opposite the
+GitHub project mirror on the left. Type into one and its output arrives as it is produced. A
+block carries a **strip of tabs**, one per shell, and a tab can be given a block of its own.
 
 This spawns a process that runs **whatever arrives over an API with no authentication**. The
 issue block, which `docs/issue-block.md` calls the most dangerous thing this server does, at
@@ -11,7 +12,15 @@ guards and the copy is deliberate:
 - it only exists when `EXCALIDRAW_TERMINAL` is set — unset, every route is a 404, not a 403 and
   not an empty session;
 - it refuses unless the server is bound to loopback;
-- **one session per board.** A second request gets 409 rather than a second shell.
+- **at most eight sessions per board.** The ninth request gets 409, and the refusal names the
+  cap.
+
+That third guard used to read "one session per board", and the change is a **relaxation rather
+than a removal**. A count is what stops a page that can ask in a loop from asking for as many
+shells as it likes, so the cap is a number rather than "unbounded":
+`TERMINAL_SESSION_LIMIT` in `src/core/terminal-session.ts`. Eight is more tabs than anyone
+opens on one board and still a number the machine notices — at the scrollback ceiling below it
+is a worst case of 1.6 MB of transcript held server-side.
 
 ## Turning it on
 
@@ -92,11 +101,20 @@ pauses and prints again arrives as two messages while the process is still alive
 
 | | |
 |---|---|
-| `POST /api/terminal` | open a session — **202** with the session, **409** if one is open |
-| `GET /api/terminal` | the session and its scrollback, or `session: null` |
-| `POST /api/terminal/input` | `{ data }` written to the shell — **202** |
-| `POST /api/terminal/resize` | `{ cols, rows }` the block now stands for |
-| `DELETE /api/terminal` | close it, and take what it was running with it |
+| `POST /api/terminal` | open one more session — **202** with the session, **409** past the cap |
+| `GET /api/terminal` | `sessions`, each with its own scrollback, and the `limit` |
+| `POST /api/terminal/input` | `{ sessionId, data }` written to that shell — **202** |
+| `POST /api/terminal/resize` | `{ sessionId, cols, rows }` the block now stands for |
+| `DELETE /api/terminal?sessionId=` | close that one, and take what it was running with it |
+
+**Every route that addresses a session takes its id**, and that is the whole of what a strip of
+tabs needed from the server: `input`, `resize` and `DELETE` used to resolve *the* session from
+the workspace, so on a board with two of them they would have addressed whichever one the map
+yielded first.
+
+The id is optional, and its absence is never guessed at. With one session open there is nothing
+to be ambiguous between and the routes stay scriptable by hand; with several, an unnamed request
+is a **400 that lists them**. An id that names no session is a 404.
 
 `input` carries **keystrokes, not lines**, and nothing is appended to them. What a terminal
 sends for Enter is a carriage return, `\r`; Ctrl+C is `\x03`; an arrow is `ESC [ A`. A route
@@ -105,15 +123,27 @@ it by hand, that is the one thing to know: send `pwd\r`, not `pwd\n` — PowerSh
 takes a bare `\n` as "continue this command on the next line".
 
 Output travels on the existing per-workspace WebSocket as `terminal_output`, alongside
-`terminal_session`, `terminal_resized` and `terminal_exit`. Per workspace, like every element
-event: a shell belongs to one project and its output must not reach another board.
+`terminal_sessions`, `terminal_session`, `terminal_resized` and `terminal_exit`. Per workspace,
+like every element event: a shell belongs to one project and its output must not reach another
+board. **Each of the three streaming messages names its `sessionId`**, for the same reason the
+routes do.
+
+`terminal_sessions` is the connect-time replay and it carries **every live session**, empty list
+included. It is what a viewer reconciles its tabs against, so a session that ended while the tab
+was disconnected has to be absent from a list rather than merely unmentioned — otherwise the
+block would keep a tab for a shell that has gone. It is sent only when the feature is switched
+on, so a board that never turned it on is told nothing at all about it.
 
 ## Scrollback lives on the server
 
-Bounded at 200,000 characters and replayed to any socket that connects while a session is
-running — a reload, a tab switched away and back, a second window. It is held there rather than
-on the shape because the shape is derived (below): a transcript in `customData` would be
-synced, exported and committed.
+Bounded at 200,000 characters **per session** and replayed to any socket that connects while a
+session is running — a reload, a tab switched away and back, a second window. It is held there
+rather than on the shape because the shape is derived (below): a transcript in `customData`
+would be synced, exported and committed.
+
+Per session rather than a per-board budget, and that is a decision rather than an oversight. A
+shared budget would let one noisy tab eat another's history, so how far back a board remembered
+would depend on which tab had been busy. The cap on sessions is what bounds the total.
 
 **The ceiling is trimmed between escape sequences, not through one.** On a plain byte stream any
 offset is a boundary, which is what `buffer.slice(-LIMIT)` assumed. On a stream from a PTY it is
@@ -143,10 +173,53 @@ done. It exits the moment the shell does, which for an ordinary close is immedia
 A session that ends on its own — `exit`, or a crash — frees the slot too, and the block says so
 rather than sitting there looking idle.
 
+## Tabs, and a tab that becomes a block
+
+A block holds a **strip of tabs**, one per shell, labelled with the session's id — `s1`, `s2` —
+which is short and readable because a tab strip is no place for a generated id. The tab on top
+is the one being drawn and the one the keyboard goes to; clicking another switches to it, and
+the keyboard follows the click.
+
+**One emulator per session, all of them alive.** Switching does not dispose the screen you left
+and rebuild it on the way back: an emulator is a screen being written to rather than a log being
+displayed, so a rebuild would replay the transcript into a fresh parser and a `vim` left open in
+a background tab would come back as its own scrollback. The screens are stacked and the ones
+that are not on top are hidden with `visibility` rather than `display`, because an emulator
+opened into a box of no size measures its cell against nothing and stays the wrong size.
+
+Four controls sit at the end of the strip:
+
+| | |
+|---|---|
+| `+` | one more shell in this block. Greyed out, not hidden, once the board is at the cap |
+| `×` | on each tab: end that shell, with the tree-kill semantics below, and drop the tab |
+| `⧉` | give the tab on top a **block of its own**, placed beside this one |
+| `⇥` | put this block's tabs into the **nearest other** terminal block, and drop this block |
+
+`⧉` and `⇥` are what "separate" and "join" turned out to mean here, and the choice was between
+that and split panes inside one block. A detached tab becomes an ordinary shape, so moving it,
+resizing it and putting it where you want it are all things the canvas already does; a splitter
+inside a block would have been a drag handle competing with the shape's own. The same reasoning
+picks the buttons over dragging a tab from one strip to another: dragging would mean the strip
+taking drag events across the width of the block, which is more pointer than this overlay may
+take (below). "Nearest" is not a guess either — the choosing *is* the drag. Put the block beside
+the one you mean and press `⇥`.
+
+**Closing the last tab takes the block with it**, and `Alt+T` opens a fresh session when there
+are none. That is also the answer to something this document used to list as missing: a shell
+that had exited could only be replaced by reloading the tab.
+
+**The arrangement is not saved, and the sessions are.** Which tab is in which block lives in
+`customData` on a derived shape, so it is stripped at both doors along with everything else
+about the block — a tab list in the committed board file would name sessions that stopped
+existing when the server did. A reload therefore puts every live session back into one block.
+The shells, their transcripts and their sizes are the server's and come back exactly as they
+were.
+
 ## The block is derived
 
-The shape carries `customData.kind = "terminal"`, and that mark is load bearing in the same
-three places the mirror's is:
+The shape carries `customData.kind = "terminal"` — beside `sessions` and `active`, which are the
+strip — and that mark is load bearing in the same three places the mirror's is:
 
 - the browser strips it before `POST /api/elements/sync`, so it is never stored;
 - `scripts/export-board.mjs` strips it again, so it never reaches `docs/board.excalidraw`;
@@ -196,11 +269,18 @@ debounced so a drag is one request rather than one per frame.
 That is the collision an emulator brings, and this is how it is resolved: **the pointer stays
 with the canvas, and only the keyboard is handed over.** xterm would like the pointer, for
 selection and for scrolling, and taking it would cost the block its handles. So the strip along
-the bottom is the one part of the overlay that takes a click, and what the click does is focus
-the terminal. From then on every keystroke goes to the shell — Ctrl+C, arrows, Escape included —
-and none of them reach Excalidraw, which binds every bare letter to a tool. Clicking anywhere on
-the canvas blurs it and gives the keyboard back. The strip says which of the two states it is
-in.
+the bottom is one of only two parts of the overlay that take a click, and what the click does is
+focus the terminal. From then on every keystroke goes to the shell — Ctrl+C, arrows, Escape
+included — and none of them reach Excalidraw, which binds every bare letter to a tool. Clicking
+anywhere on the canvas blurs it and gives the keyboard back. The strip says which of the two
+states it is in.
+
+The other is the tab strip, and it is **the chips rather than the row they sit in**. The row
+spans the card, the card is the block, and a full-width strip that took the pointer would sit
+over the block's own top edge and swallow the resize handles along it. The chips are inset from
+the card's edges for the same reason — Excalidraw's handles reach a few pixels either side of
+the outline. `scripts/check-terminal-tabs-browser.mjs` drags a corner after everything else it
+does, which is what that paragraph is worth without a browser.
 
 ## The hotkey
 
@@ -211,26 +291,35 @@ different character and works from anywhere on the page. It stands down while te
 edited — including while the terminal has the keyboard, where Alt+T has to be a keystroke the
 shell receives rather than a jump.
 
-It does one thing more than Alt+B: with no block on the board it places one first. The shape is
-derived and is restored from nowhere, so deleting it would otherwise be permanent for the rest
-of the session.
+It does two things more than Alt+B. With no block on the board it places one first — the shape
+is derived and is restored from nowhere, so deleting it would otherwise be permanent for the
+rest of the session. And with **no sessions at all** it opens one, which is the way back from
+closing the last tab.
 
 ## Checked
 
 - `scripts/check-terminal.mjs` — the guards, the workspace root, incremental output, input,
-  409, the orphan, the replay, the export. Self-contained: it builds a throwaway workspace,
+  the orphan, the replay, the export. Self-contained: it builds a throwaway workspace,
   starts its own servers and kills them.
+- `scripts/check-terminal-tabs.mjs` — two sessions in one board, input reaching the one it
+  names and no other, a resize likewise, closing one leaving the other running, the cap
+  answering 409 and naming itself, and a socket connecting late being given both transcripts.
+  The cases that matter are the ones an ignored id would still pass a naive test on.
 - `scripts/check-terminal-pty.mjs` — that the shell sees a tty, that the echo moved with it,
   that a resize reaches the child, that the scrollback is cut between sequences, and that with
   no binding the server still starts and says `pipe`.
 - `scripts/check-terminal-browser.mjs` — the block, in Chrome over the DevTools protocol.
   Placement, Alt+T, a command typed with real keystrokes, a corner dragged with a real pointer,
   and the store still holding none of it.
+- `scripts/check-terminal-tabs-browser.mjs` — also in Chrome: the strip rendering, `+` and `×`,
+  switching tabs showing *that* session's screen rather than a replay into one emulator, a tab
+  detaching into a second block, a detached tab re-joining a strip, and the block's corner still
+  resizing it afterwards.
 - `scripts/check-terminal-ansi-browser.mjs` — also in Chrome: an SGR escape drawn as a colour
   rather than as four characters, a real Ctrl+C interrupting a running command, and the block's
   corner still resizing it afterwards.
 
-All four were written first and seen to fail against the code as it stood.
+All six were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.
@@ -248,8 +337,14 @@ browser does.
   because it repaints rather than scrolls.
 - **Alt+T fits the block to the viewport, which puts its top edge under Excalidraw's toolbar.**
   The path in the header reads through it awkwardly. Alt+B has the same shape of problem.
-- **One session per board, and no way to restart one from the canvas.** A shell that exited is
-  reported on the block; getting another means reloading the tab.
+- **A tab is moved between blocks by a button, not by dragging it.** `⧉` detaches the tab on
+  top and `⇥` merges into the nearest block, so the geometry is a block drag rather than a tab
+  drag. Dragging a chip onto another block's strip would read better and would cost this
+  overlay more pointer than it may take; if it is ever worth it, it is worth its own issue.
+- **The tab layout does not survive a reload.** The blocks are derived, so which session was in
+  which block is not saved, and a reload puts every live session back into one block.
+- **A tab that has ended keeps its transcript but cannot be restarted in place.** `×` then `+`
+  is a new session with an empty screen, in the same block.
 - **Whether a shell inside WSL gets a tty of its own has not been established.**
   `scripts/check-terminal.mjs` runs a real WSL-backed session through `wsl.exe` under the
   ConPTY and it behaves — the prompt is there, `pwd` answers with the inner path — but nothing

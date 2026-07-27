@@ -25,8 +25,11 @@ already receives the chunks (`src/core/issue-agent.ts`), and today it accumulate
 the result once the process exits, which is exactly why a block can say a run is `running` and
 nothing more. Broadcasting them makes the agent a second producer on a surface that exists.
 
-The open question is whose terminal it is. One session per board is the current rule, and an
-agent writing into the session somebody is typing in would interleave with them.
+The open question was whose terminal it is, and #94 answered most of it: a board holds up to
+eight sessions, each addressable by id on every route and in every message, so an agent gets a
+**tab of its own** rather than interleaving with the session somebody is typing in. What is left
+is narrower — a session the server opened for an agent is one nothing typed into, so it wants a
+tab that says so rather than an `s4` indistinguishable from a shell the reader started.
 
 ## Two smaller things the map turned up
 
