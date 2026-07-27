@@ -1581,9 +1581,10 @@ async function beginImplement(res: Response, workspaceId: string, issueUrl: stri
     return;
   }
 
-  // Different issues no longer collide, so this is a budget rather than a safety guard —
-  // but a board that can start runs faster than a machine can finish them still needs one,
-  // and a refusal has to say which run is holding the slot to be worth reading.
+  // A board that can start runs faster than a machine can finish them needs a budget, and a
+  // refusal has to say which run is holding the slot to be worth reading. It is not only a
+  // budget: a cap that leaks puts two `git worktree add` in the same instant, and they
+  // collide on the shared `.git/config`.
   const inFlight = runningImplements(workspaceId);
   if (IMPLEMENT_CONCURRENCY > 0 && inFlight.length >= IMPLEMENT_CONCURRENCY) {
     res.status(409).json({
@@ -1595,22 +1596,14 @@ async function beginImplement(res: Response, workspaceId: string, issueUrl: stri
     return;
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
-  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
-  if (!workspace) {
-    res.status(400).json({
-      success: false,
-      error: `Workspace "${workspaceId}" is not registered, so there is no project to work in.`
-    });
-    return;
-  }
-  if (workspace.error) {
-    res.status(400).json({ success: false, error: `Workspace is unusable: ${workspace.error}` });
-    return;
-  }
-
-  // The one write of the start time. Everything after it carries this instant forward, and
-  // everything showing a duration subtracts from it rather than being told a duration.
+  // The slot is claimed here, before the first `await`, and that placement is the whole
+  // guard. Counting and claiming have to be one uninterrupted step: while this write sat
+  // below the registry read, two clicks arriving together both counted before either
+  // claimed, both passed, and the cap was exceeded by however many fitted in the window.
+  // Nothing between the count above and this line yields, so there is no window left.
+  //
+  // This is also the one write of the start time. Everything after it carries this instant
+  // forward, and everything showing a duration subtracts from it rather than being told one.
   recordImplement(workspaceId, issueUrl, {
     state: 'running',
     url: null,
@@ -1620,6 +1613,34 @@ async function beginImplement(res: Response, workspaceId: string, issueUrl: stri
     endedAt: null,
     usage: null
   });
+
+  /**
+   * Give the slot back, for a run refused after it was claimed.
+   *
+   * The cost of claiming first is that the refusals below now have something to undo, and a
+   * slot held by a run that never started would shrink the cap until the server restarts —
+   * the same defect pointing the other way. What was there before the claim is put back
+   * rather than cleared, so a previous failure's error survives an attempt that got no
+   * further than the registry.
+   */
+  const releaseSlot = (): void => recordImplement(workspaceId, issueUrl, existing);
+
+  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace) {
+    releaseSlot();
+    res.status(400).json({
+      success: false,
+      error: `Workspace "${workspaceId}" is not registered, so there is no project to work in.`
+    });
+    return;
+  }
+  if (workspace.error) {
+    releaseSlot();
+    res.status(400).json({ success: false, error: `Workspace is unusable: ${workspace.error}` });
+    return;
+  }
+
   res.status(202).json({ success: true, state: 'running', issueUrl });
 
   // The board says Todo until something says otherwise, and starting the run is the
