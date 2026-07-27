@@ -560,6 +560,95 @@ const convertElementsPreservingImageProps = (
   return recenterBoundShapeTextElements([...restoredNonImageElements, ...imageElements, ...freedrawElements])
 }
 
+/** Where the board a browser was last looking at is kept. */
+const WORKSPACE_STORAGE_KEY = 'excalidraw-canvas-workspace'
+
+/**
+ * The board this load should open, decided before anything connects.
+ *
+ * Two answers were possible and both are here, in this order. `?workspace=` wins, so a
+ * board has a URL: two can be open side by side in two tabs, and a link to one is a link
+ * to that one rather than to whatever the reader last clicked. Failing that it is the
+ * board this browser was last on, so a plain refresh returns where the reader was instead
+ * of to the first tab in a registry they did not order.
+ *
+ * Both are validated against the registry the server just sent. A board that has been
+ * removed from it, or a hand-typed id, must not strand the canvas on a store nothing
+ * writes to — the first tab is the fallback, as it was before any of this.
+ *
+ * Null means "leave the default alone": with no registry the server keeps using its
+ * default store, and naming a workspace it has never heard of would open an empty board.
+ */
+function resolveInitialWorkspace(list: WorkspaceSummary[]): string | null {
+  if (list.length === 0 || !list[0]) return null
+  const known = new Set(list.map((workspace) => workspace.id))
+
+  const hints: (string | null)[] = []
+  try {
+    hints.push(new URLSearchParams(window.location.search).get('workspace'))
+  } catch (error) {
+    console.warn('Could not read the workspace from the URL:', error)
+  }
+  try {
+    hints.push(window.localStorage?.getItem(WORKSPACE_STORAGE_KEY) ?? null)
+  } catch (error) {
+    console.warn('Could not read the last workspace:', error)
+  }
+
+  return hints.find((id): id is string => Boolean(id) && known.has(id as string)) ?? list[0].id
+}
+
+/**
+ * Write the board down, in both places it can be read back from.
+ *
+ * The URL is rewritten rather than pushed: which board is open is where you *are*, not
+ * somewhere you navigated to, and a history entry per tab click would make Back mean
+ * something nobody asked for.
+ */
+function rememberWorkspace(workspaceId: string): void {
+  try {
+    window.localStorage?.setItem(WORKSPACE_STORAGE_KEY, workspaceId)
+  } catch (error) {
+    console.warn('Could not remember the workspace:', error)
+  }
+  try {
+    const url = new URL(window.location.href)
+    if (url.searchParams.get('workspace') !== workspaceId) {
+      url.searchParams.set('workspace', workspaceId)
+      window.history.replaceState(null, '', url.toString())
+    }
+  } catch (error) {
+    console.warn('Could not put the workspace in the URL:', error)
+  }
+}
+
+/** What the pill is allowed to say. A socket that has never been up is not a failure. */
+type ConnectionState = 'connecting' | 'connected' | 'disconnected'
+
+/** First retry is immediate; from then on it doubles from here. */
+const RECONNECT_BASE_MS = 250
+const RECONNECT_CAP_MS = 5000
+/**
+ * Failed attempts tolerated as "connecting" before the pill admits the board is offline.
+ * Four covers a server restart — 0, 250, 500 and 1000 ms of it — which is the common case
+ * and is not worth alarming anyone about.
+ */
+const RECONNECT_PATIENCE = 4
+
+/**
+ * How often the page asks its socket whether it is still there.
+ *
+ * A browser cannot send a protocol ping, so the check is an application message the server
+ * answers with `pong`. Without it a half-open socket — the laptop that slept, the tunnel
+ * that died — keeps reading Connected until TCP gives up, which is minutes. The answer is
+ * due before the next ping goes out; missing it closes the socket, which puts it on the
+ * reconnect path instead of leaving a dead one on screen looking alive.
+ */
+const HEARTBEAT_INTERVAL_MS = 10000
+
+/** Ceiling on holding autosync off during a board switch, if the new scene never lands. */
+const BOARD_SWITCH_HOLD_MS = 8000
+
 function App(): JSX.Element {
   const [excalidrawAPI, setExcalidrawAPI] = useState<ExcalidrawAPIRefValue | null>(null)
   // Ref so WS message handlers (captured in stale closures) always see the latest API instance
@@ -567,8 +656,21 @@ function App(): JSX.Element {
   useEffect(() => {
     excalidrawAPIRef.current = excalidrawAPI
   }, [excalidrawAPI])
-  const [isConnected, setIsConnected] = useState<boolean>(false)
+  // Starts *connecting*, not disconnected: on the first paint the socket has not failed,
+  // it has not been opened yet, and telling the reader their board is offline while it is
+  // still being resolved is the whole complaint this distinction answers.
+  const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
+  const isConnected = connectionState === 'connected'
   const websocketRef = useRef<WebSocket | null>(null)
+  const reconnectAttemptsRef = useRef<number>(0)
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const awaitingPongRef = useRef<boolean>(false)
+  /** Bumped per socket, so the loader can run once per board per connection. */
+  const connectionGenerationRef = useRef<number>(0)
+  const loadedSceneKeyRef = useRef<string | null>(null)
+  /** Set when the socket's own initial message already delivered this board's files. */
+  const filesFromSocketRef = useRef<string | null>(null)
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window === 'undefined') return 'light'
@@ -596,6 +698,18 @@ function App(): JSX.Element {
   // WebSocket handlers close over their creation-time scope, so the ref is what the
   // async paths read — the state alone would send stale ids after a tab switch.
   const activeWorkspaceRef = useRef<string>('default')
+  /**
+   * Whether the board this load is for has been decided.
+   *
+   * Nothing that names a board may run before this: the socket used to be opened on
+   * `default` and then switched, which cost a second connection and a blank canvas on
+   * every single load. The state is what the per-board effects wait on; the ref is what
+   * the connect path reads, because it is called from handlers that never re-render.
+   */
+  const [boardReady, setBoardReady] = useState<boolean>(false)
+  const boardReadyRef = useRef<boolean>(false)
+  /** The board whose first scene is still on its way, while the previous one is on screen. */
+  const pendingSceneWorkspaceRef = useRef<string | null>(null)
 
   /** Append the active workspace to an API path, so no request is ever board-agnostic. */
   const apiUrl = (path: string): string => {
@@ -1088,6 +1202,32 @@ function App(): JSX.Element {
     setTimeout(() => {
       suppressAutoSyncCountRef.current = Math.max(0, suppressAutoSyncCountRef.current - 1)
     }, 0)
+  }
+
+  /**
+   * Hold autosync off for the length of a board switch.
+   *
+   * The scene now stays on screen until the new board's elements land, which means there
+   * is a window where the canvas shows one board while `activeWorkspaceRef` already names
+   * another. An autosync in that window would write the board you left into the store of
+   * the board you went to. The timer is a floor, not the mechanism: the hold is released
+   * when the new scene arrives, and only expires if it never does.
+   */
+  const autoSyncHoldRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const holdAutoSyncForSwitch = (): void => {
+    if (autoSyncHoldRef.current) return
+    suppressAutoSyncCountRef.current += 1
+    autoSyncHoldRef.current = setTimeout(() => { finishBoardSwitch() }, BOARD_SWITCH_HOLD_MS)
+  }
+
+  /** The new board is on screen (or never will be): let autosync go again. */
+  const finishBoardSwitch = (): void => {
+    pendingSceneWorkspaceRef.current = null
+    if (!autoSyncHoldRef.current) return
+    clearTimeout(autoSyncHoldRef.current)
+    autoSyncHoldRef.current = null
+    suppressAutoSyncCountRef.current = Math.max(0, suppressAutoSyncCountRef.current - 1)
   }
 
   // ─── The GitHub project mirror ──────────────────────────────
@@ -1997,62 +2137,90 @@ function App(): JSX.Element {
     return () => { document.removeEventListener('keydown', onKeyDown, true) }
   }, [])
 
-  // WebSocket connection
-  useEffect(() => {
-    connectWebSocket()
-    return () => {
-      if (websocketRef.current) {
-        websocketRef.current.close()
-      }
-    }
-  }, [])
-
-  // Load existing elements when Excalidraw API becomes available
-  useEffect(() => {
-    if (excalidrawAPI) {
-      loadExistingElements()
-
-      // Ensure WebSocket is connected for real-time updates
-      if (!isConnected) {
-        connectWebSocket()
-      }
-    }
-  }, [excalidrawAPI, isConnected])
-
+  /**
+   * Which board, and only then the socket.
+   *
+   * The order is the point. The socket used to be opened on mount, before anything knew
+   * which boards existed, so it declared `?workspace=default` — a board nobody is looking
+   * at. `/api/workspaces` then landed and *switched*, which meant a second connection, a
+   * second round of loading, and a canvas that went blank in between. Every load paid it.
+   *
+   * A registry that cannot be read is not a reason to sit there: the board falls back to
+   * the default store, which is exactly what a single-board setup runs on anyway.
+   */
   useEffect(() => {
     let cancelled = false
-    fetch('/api/workspaces')
-      .then((response) => response.json())
-      .then((result) => {
-        if (cancelled || !result?.success) return
-        const list: WorkspaceSummary[] = result.workspaces ?? []
-        setWorkspaces(list)
-        setWorkspacesConfigured(Boolean(result.configured))
-        // The socket opens before this response lands, so it is already watching the
-        // default board. Switching rather than assigning reconnects it, otherwise the
-        // first tab would render highlighted while showing the default board's scene.
-        // With no registry the server keeps using its default store, so leave the
-        // active id alone rather than inventing a workspace that does not exist.
-        if (list.length > 0 && list[0]) {
-          switchWorkspace(list[0].id)
+
+    const openTheBoard = async (): Promise<void> => {
+      let list: WorkspaceSummary[] = []
+      let configured = false
+      try {
+        const result = await (await fetch('/api/workspaces')).json()
+        if (result?.success) {
+          list = result.workspaces ?? []
+          configured = Boolean(result.configured)
         }
-      })
-      .catch((error) => console.warn('Could not load workspaces:', error))
-    return () => { cancelled = true }
+      } catch (error) {
+        console.warn('Could not load workspaces:', error)
+      }
+      if (cancelled) return
+
+      setWorkspaces(list)
+      setWorkspacesConfigured(configured)
+      const resolved = resolveInitialWorkspace(list)
+      if (resolved) {
+        activeWorkspaceRef.current = resolved
+        setActiveWorkspace(resolved)
+        rememberWorkspace(resolved)
+      }
+      boardReadyRef.current = true
+      setBoardReady(true)
+      connectWebSocket()
+    }
+
+    void openTheBoard()
+
+    return () => {
+      cancelled = true
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
+      stopHeartbeat()
+      if (websocketRef.current) {
+        // 1000, and the handler dropped first: an unmount is not a dropped connection,
+        // and letting the close path run would schedule a reconnect for a page that is
+        // no longer there.
+        websocketRef.current.onclose = null
+        websocketRef.current.close(1000)
+        websocketRef.current = null
+      }
+    }
   }, [])
+
+  // The socket's own initial message is what normally fills the canvas; this covers the
+  // case where it arrived before Excalidraw was mounted to receive it. It is a no-op once
+  // this board has been loaded on this connection, which is what keeps a refresh to one
+  // round of requests instead of the five it used to make.
+  useEffect(() => {
+    if (!excalidrawAPI || !boardReady) return
+    void loadExistingElements()
+  }, [excalidrawAPI, boardReady, activeWorkspace, isConnected])
 
   /**
    * Switch boards.
    *
-   * The scene is emptied before reconnecting: the new board's elements arrive
-   * asynchronously, and leaving the old ones on screen until they do would show one
-   * project's shapes under another project's tab.
+   * The scene used to be emptied here, on the reasoning that the new board's elements
+   * arrive asynchronously and one project's shapes must not sit under another project's
+   * tab. The cost was a canvas that went blank for the length of a reconnect, and a blank
+   * canvas reads as data loss — which is how this arrived as a bug report. So the previous
+   * board stays up until the new one lands, the pill says *Connecting*, and the swap is a
+   * single replacement rather than an empty gap. What the old blanking was really
+   * protecting against is autosync, and that is held off by name instead.
    */
   const switchWorkspace = (workspaceId: string): void => {
     if (workspaceId === activeWorkspaceRef.current) return
 
     activeWorkspaceRef.current = workspaceId
     setActiveWorkspace(workspaceId)
+    rememberWorkspace(workspaceId)
     // Everything the panel holds, not just the document: switching boards with an issue
     // block selected would otherwise leave its card open over the new board.
     setSelectedDoc({ key: null, title: null })
@@ -2065,12 +2233,8 @@ function App(): JSX.Element {
     // columns decide where a card dragged on the new board was dropped.
     projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, signature: '' }
 
-    if (excalidrawAPI) {
-      applySceneUpdateWithoutAutoSync(excalidrawAPI, {
-        elements: [],
-        captureUpdate: CaptureUpdateAction.NEVER
-      })
-    }
+    pendingSceneWorkspaceRef.current = workspaceId
+    holdAutoSyncForSwitch()
 
     // A socket belongs to one board for its lifetime, so switching means reconnecting.
     if (websocketRef.current) {
@@ -2078,7 +2242,13 @@ function App(): JSX.Element {
       websocketRef.current.close()
       websocketRef.current = null
     }
-    setIsConnected(false)
+    stopHeartbeat()
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
+    }
+    reconnectAttemptsRef.current = 0
+    setConnectionState('connecting')
     connectWebSocket()
   }
 
@@ -2098,7 +2268,10 @@ function App(): JSX.Element {
   }
 
   // Reloaded per board: a project may ship its own shapes on top of the shared set.
+  // Waits for the board to be resolved, or it would fetch the default board's library
+  // first and the real one a moment later, every load.
   useEffect(() => {
+    if (!boardReady) return
     let cancelled = false
     fetch(apiUrl('/api/library'))
       .then((response) => response.json())
@@ -2112,7 +2285,7 @@ function App(): JSX.Element {
       })
       .catch((error) => console.warn('Could not load library:', error))
     return () => { cancelled = true }
-  }, [activeWorkspace, excalidrawAPI])
+  }, [activeWorkspace, excalidrawAPI, boardReady])
 
   /**
    * Re-read panel state from an element that changed underneath us.
@@ -2146,7 +2319,23 @@ function App(): JSX.Element {
     }
   }
 
+  /** What one run of the loader is for: this board, over this connection. */
+  const sceneKey = (): string => `${activeWorkspaceRef.current}#${connectionGenerationRef.current}`
+
+  /**
+   * Pull the board over HTTP.
+   *
+   * The socket's own `initial_elements` is what normally fills the canvas; this exists for
+   * the case where that message arrived before Excalidraw was mounted to receive it. It
+   * used to run on every change of either `excalidrawAPI` or `isConnected` *and* on every
+   * `onopen`, which came to roughly five pulls of the whole board per refresh — each one
+   * parsing and base64-decoding on the thread that has to repaint. It now runs once per
+   * board per connection, and skips the files when the socket already brought them.
+   */
   const loadExistingElements = async (): Promise<void> => {
+    const key = sceneKey()
+    if (loadedSceneKeyRef.current === key) return
+    loadedSceneKeyRef.current = key
     try {
       const response = await fetch(apiUrl('/api/elements'))
       const result: ApiResponse = await response.json()
@@ -2162,22 +2351,90 @@ function App(): JSX.Element {
           // The store holds no terminal block — it is derived and never synced — and this
           // just replaced the scene with what the store holds.
           ensureTerminalBlock()
+          finishBoardSwitch()
         }
       }
 
-      const filesResponse = await fetch('/api/files')
-      if (filesResponse.ok) {
-        const filesResult = await filesResponse.json() as ApiResponse
-        if (filesResult.files) {
-          excalidrawAPI?.addFiles(Object.values(filesResult.files))
+      // Scoped to the board, and skipped outright when the socket's initial message
+      // already carried it: the unscoped version returned every dataURL the process
+      // holds, for every board, which on a board full of screenshots is megabytes.
+      if (filesFromSocketRef.current !== key) {
+        const filesResponse = await fetch(apiUrl('/api/files'))
+        if (filesResponse.ok) {
+          const filesResult = await filesResponse.json() as ApiResponse
+          if (filesResult.files) {
+            excalidrawAPI?.addFiles(Object.values(filesResult.files))
+          }
         }
       }
     } catch (error) {
       console.error('Error loading existing elements:', error)
+      // A failed pull is worth retrying on the next trigger; a successful one is not.
+      if (loadedSceneKeyRef.current === key) loadedSceneKeyRef.current = null
     }
   }
 
+  const stopHeartbeat = (): void => {
+    if (!heartbeatTimerRef.current) return
+    clearInterval(heartbeatTimerRef.current)
+    heartbeatTimerRef.current = null
+  }
+
+  /**
+   * Ask the socket, periodically, whether anything is still on the other end.
+   *
+   * The answer is due before the next question. One unanswered ping closes the socket —
+   * which is the point: `readyState` says OPEN for a half-open connection until TCP times
+   * it out, and until then the pill reads Connected over a board that has stopped
+   * receiving anything. Closing hands it to the reconnect path, which is fast.
+   */
+  const startHeartbeat = (socket: WebSocket): void => {
+    stopHeartbeat()
+    awaitingPongRef.current = false
+    heartbeatTimerRef.current = setInterval(() => {
+      if (socket.readyState !== WebSocket.OPEN) return
+      if (awaitingPongRef.current) {
+        stopHeartbeat()
+        socket.close(4000, 'heartbeat timeout')
+        return
+      }
+      awaitingPongRef.current = true
+      try {
+        socket.send(JSON.stringify({ type: 'ping' }))
+      } catch (error) {
+        console.warn('Heartbeat could not be sent:', error)
+      }
+    }, HEARTBEAT_INTERVAL_MS)
+  }
+
+  /**
+   * Try again, soon and then progressively less often.
+   *
+   * The first retry is immediate. The overwhelmingly common reason a socket drops here is
+   * a canvas server that just restarted, and it is back in milliseconds — the flat three
+   * seconds this replaces was spent entirely on a board that was already able to connect.
+   * Past that it doubles from 250 ms to a five-second ceiling, so a server that is really
+   * gone is not being hammered.
+   */
+  const scheduleReconnect = (): void => {
+    if (reconnectTimerRef.current) return
+    const attempt = reconnectAttemptsRef.current
+    reconnectAttemptsRef.current = attempt + 1
+    const delay = attempt === 0
+      ? 0
+      : Math.min(RECONNECT_BASE_MS * 2 ** (attempt - 1), RECONNECT_CAP_MS)
+    setConnectionState(attempt >= RECONNECT_PATIENCE ? 'disconnected' : 'connecting')
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null
+      connectWebSocket()
+    }, delay)
+  }
+
   const connectWebSocket = (): void => {
+    // Nothing connects before the board is known: a socket opened now would declare the
+    // default board and have to be replaced, which is the defect this all comes from.
+    if (!boardReadyRef.current) return
+
     // Guard CONNECTING too: the mount effect and the excalidrawAPI effect can
     // both run before the first socket opens, orphaning a live duplicate
     // connection whose handlers then process every broadcast twice.
@@ -2192,37 +2449,49 @@ function App(): JSX.Element {
     // tab never redraws with another board's shapes.
     const wsUrl = `${protocol}//${window.location.host}?workspace=${encodeURIComponent(activeWorkspaceRef.current)}`
 
-    websocketRef.current = new WebSocket(wsUrl)
+    connectionGenerationRef.current += 1
+    const socket = new WebSocket(wsUrl)
+    websocketRef.current = socket
 
-    websocketRef.current.onopen = () => {
-      setIsConnected(true)
+    socket.onopen = () => {
+      reconnectAttemptsRef.current = 0
+      setConnectionState('connected')
+      startHeartbeat(socket)
 
-      if (excalidrawAPI) {
-        setTimeout(loadExistingElements, 100)
+      // The ref, not the closure: this handler was created before Excalidraw mounted on
+      // the very load it matters for, and the closure would still say it had not.
+      if (excalidrawAPIRef.current) {
+        setTimeout(() => { void loadExistingElements() }, 100)
       }
     }
 
-    websocketRef.current.onmessage = (event: MessageEvent) => {
+    socket.onmessage = (event: MessageEvent) => {
       try {
         const data: WebSocketMessage = JSON.parse(event.data)
+        if ((data as { type?: string }).type === 'pong') {
+          awaitingPongRef.current = false
+          return
+        }
         handleWebSocketMessage(data)
       } catch (error) {
         console.error('Error parsing WebSocket message:', error, event.data)
       }
     }
 
-    websocketRef.current.onclose = (event: CloseEvent) => {
-      setIsConnected(false)
-
-      // Reconnect after 3 seconds if not a clean close
+    socket.onclose = (event: CloseEvent) => {
+      stopHeartbeat()
+      if (websocketRef.current === socket) websocketRef.current = null
       if (event.code !== 1000) {
-        setTimeout(connectWebSocket, 3000)
+        scheduleReconnect()
+      } else {
+        setConnectionState('disconnected')
       }
     }
 
-    websocketRef.current.onerror = (error: Event) => {
+    socket.onerror = (error: Event) => {
+      // Not a state change: an error is always followed by a close, and that is where the
+      // decision between "retrying" and "offline" belongs.
       console.error('WebSocket error:', error)
-      setIsConnected(false)
     }
   }
 
@@ -2261,7 +2530,12 @@ function App(): JSX.Element {
       }
 
       switch (data.type) {
-        case 'initial_elements':
+        case 'initial_elements': {
+          // A board switch leaves the previous board on screen until this arrives, so this
+          // is the moment it is replaced — including with nothing, when the board being
+          // switched to is empty. Outside a switch an empty payload is left alone, because
+          // there it would mean wiping the canvas on a reconnect that raced the store.
+          const landingOnANewBoard = pendingSceneWorkspaceRef.current !== null
           if (data.elements && data.elements.length > 0) {
             const cleanedElements = data.elements.map(cleanElementForExcalidraw)
             const convertedElements = convertElementsPreservingImageProps(cleanedElements)
@@ -2269,15 +2543,24 @@ function App(): JSX.Element {
               elements: convertedElements,
               captureUpdate: CaptureUpdateAction.NEVER
             })
+          } else if (landingOnANewBoard) {
+            applySceneUpdateWithoutAutoSync(excalidrawAPI, {
+              elements: [],
+              captureUpdate: CaptureUpdateAction.NEVER
+            })
           }
-          // Load files for image elements
+          // Load files for image elements. The socket brought them, so the loader need not
+          // ask for them again over HTTP.
           if ((data as any).files) {
             excalidrawAPI.addFiles(Object.values((data as any).files))
+            filesFromSocketRef.current = sceneKey()
           }
+          if (landingOnANewBoard) finishBoardSwitch()
           // The scene was just replaced wholesale, and the terminal's block is derived, so
           // the store this arrived from has never heard of it. Put it back.
           ensureTerminalBlock()
           break
+        }
 
         case 'files_added':
           if (Array.isArray((data as any).files)) {
@@ -2816,9 +3099,17 @@ function App(): JSX.Element {
       <div className="header">
         <h1>Excalidraw Canvas</h1>
         <div className="controls">
+          {/*
+            Three states, not two. A socket that has never been up is *connecting*, and
+            reporting that as Disconnected is what made a refresh look like an outage.
+          */}
           <div className="status">
-            <div className={`status-dot ${isConnected ? 'status-connected' : 'status-disconnected'}`}></div>
-            <span>{isConnected ? 'Connected' : 'Disconnected'}</span>
+            <div className={`status-dot status-${connectionState}`}></div>
+            <span>
+              {connectionState === 'connected' ? 'Connected'
+                : connectionState === 'connecting' ? 'Connecting…'
+                  : 'Disconnected'}
+            </span>
           </div>
 
           {/* Sync Controls */}
