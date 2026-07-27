@@ -8,24 +8,39 @@ If the timeout simply killed the process and reported failure, the block would s
 work that fully succeeded, and the next click would open a second issue for the same
 observation.
 
-## What it does instead
+## The first answer, and why it was not enough
 
 On timeout, the run salvages the URL from whatever the agent printed before the kill:
 
 ```ts
-const salvaged = extractIssueUrl(stdout);
+const salvaged = extractGithubUrl(stdout, options.expects);
 resolve({
   ok: Boolean(salvaged),
-  issueUrl: salvaged,
+  url: salvaged,
   ...
 });
 ```
 
-A slow success is reported as a success. Only a timeout with no URL anywhere in stdout is a
-failure.
-
-`extractIssueUrl` takes the **last** match in the output, not the first, because the agent may
+`extractGithubUrl` takes the **last** match in the output, not the first, because the agent may
 well have listed existing issues on its way to creating the new one.
 
-The ceiling is twenty minutes, overridable with `EXCALIDRAW_ISSUE_AGENT_TIMEOUT` in seconds. It
-exists only so a wedged agent cannot hold the block in `running` forever with no way back.
+That reads as a guarantee that a slow success is never reported as a failure, and it was
+written down as one. It is not. The configured command is `claude -p` with no
+`--output-format stream-json`, and a `-p` run writes nothing until it exits — so at the kill
+`stdout` is empty and there is nothing to salvage. The trap fired again a year later, at
+1200s, on a run that had created its issue: `Agent timed out after 1200s without returning an
+issue URL`.
+
+The salvage is still there, because it does work for a command that streams. It is not what
+protects the run.
+
+## What actually does
+
+The ceiling is gone. Neither agent has one by default — `EXCALIDRAW_ISSUE_AGENT_TIMEOUT` and
+`EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` (seconds) put one back for anyone who wants it, and a
+board that pins one in its launcher keeps it until that file is edited.
+
+The ceiling's other job was that a wedged agent could not hold the block in `running` forever
+with no way back. That is now the reset: a running block offers **Reset — the run was lost**,
+and `DELETE /api/issue-block/:id` clears the state without touching an issue the run may have
+created. `docs/issue-block.md` has both halves.

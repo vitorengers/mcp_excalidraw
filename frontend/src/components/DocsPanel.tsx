@@ -139,6 +139,8 @@ export interface DocsPanelBodyProps {
   onImplementIssue?: (issue: IssueTarget) => Promise<string | null>
   /** Clears a `running` state whose agent is gone. Does not stop a live run. */
   onResetImplement?: (issue: IssueTarget) => Promise<string | null>
+  /** The same, for the run that researches the issue. Neither run has a time limit. */
+  onResetIssue?: (issue: IssueTarget) => Promise<string | null>
   /**
    * Adds an observation to the issue as a GitHub comment — an answer to a question the
    * issue agent left open, or whatever the observation missed. Keyed by issue like the
@@ -163,13 +165,21 @@ interface ImplementView {
  */
 export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   docKey, title, workspace, collapsible, onToggleCollapse, issue, onCreateIssue,
-  onImplementIssue, onResetImplement, onAddComment, onAttachImages, onDetachImage
+  onImplementIssue, onResetImplement, onResetIssue, onAddComment, onAttachImages, onDetachImage
 }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
   const [issueDetail, setIssueDetail] = useState<IssueDetailState>({ status: 'idle' })
   const [implement, setImplement] = useState<ImplementView>({ state: null, url: null, error: null })
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
   const [imageError, setImageError] = useState<string | null>(null)
+  /**
+   * Why a reset was refused, if it was.
+   *
+   * Its own state rather than `issueError`: that one is shown for a `failed` block, and a
+   * refused reset means the run is still going — writing the refusal there would have to
+   * claim the run failed to be seen at all.
+   */
+  const [resetError, setResetError] = useState<string | null>(null)
   // The observation being written, and whether the box for it is open at all.
   const [composing, setComposing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -261,6 +271,10 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
 
   const issueState = issue?.state ?? null
   const issueUrl = issue?.issueUrl ?? null
+
+  // A refusal belongs to the block it was refused for, and to the state it was refused in.
+  // The panel outlives both, so it would otherwise carry one to the next block selected.
+  useEffect(() => { setResetError(null) }, [issue?.id, issueState])
 
   // Read by issue URL, not by element id: a mirrored card is drawn from GitHub and never
   // reaches the server, so it has no id to ask about — but it has the issue, which is the
@@ -520,9 +534,28 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
           )}
 
           {issue.state === 'running' && (
-            <p className="element-docs__hint">
-              Researching the repository and drafting the issue. This takes minutes.
-            </p>
+            <>
+              <p className="element-docs__hint">
+                Researching the repository and drafting the issue. This takes minutes, and
+                there is no time limit on the run.
+              </p>
+              {/* Without a ceiling, nothing else ever clears this state — and the create
+                  control is hidden while it holds, so a lost run would kill the block for
+                  good. The server refuses while a run is genuinely in flight, so this is a
+                  way back from an abandoned one rather than a way to interrupt a live one. */}
+              {onResetIssue && (
+                <button
+                  type="button"
+                  className="element-docs__collapse"
+                  onClick={async () => {
+                    setResetError(await onResetIssue(issue))
+                  }}
+                >
+                  Reset — the run was lost
+                </button>
+              )}
+              {resetError && <p className="element-docs__error">{resetError}</p>}
+            </>
           )}
 
           {issue.state === 'failed' && (

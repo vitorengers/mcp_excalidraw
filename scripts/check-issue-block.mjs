@@ -7,6 +7,10 @@
  * path: it must stay off unless explicitly enabled, and one observation must never
  * become two issues.
  *
+ * The reset cases are the other half of removing the run's time limit. Nothing kills a
+ * wedged agent now, so nothing else clears `running` either — and a block left in that
+ * state has no way back, because the panel hides the create control there.
+ *
  * Run against a server started with EXCALIDRAW_ISSUE_AGENT pointing at a stub that
  * prints an issue URL — the point is the endpoint's behaviour, not a real agent run.
  *
@@ -111,6 +115,55 @@ async function main() {
   });
   const emptyRun = await call(`/api/issue-block/${empty.body.element.id}`, { method: 'POST' });
   check('400 with no observation', emptyRun.status === 400, `got ${emptyRun.status}`);
+
+  // A run has no ceiling any more, so nothing kills a wedged agent and nothing else ever
+  // clears `running`. Without a way back the block is dead: the panel hides the create
+  // control in that state and the element keeps it across a restart, when the server no
+  // longer has any run to point at.
+  console.log('\n7. a block stuck in running can be reset');
+  const stuck = await call('/api/elements', {
+    method: 'POST',
+    body: JSON.stringify({
+      type: 'rectangle', x: 0, y: 600, width: 200, height: 100,
+      text: 'The panel forgets the selected block after a reconnect',
+      // Exactly what a restart leaves behind: `running` on the element, no run in flight.
+      customData: { kind: 'issue', issueState: 'running', issueError: 'stale' },
+    }),
+  });
+  const stuckId = stuck.body.element.id;
+  const reset = await call(`/api/issue-block/${stuckId}`, { method: 'DELETE' });
+  check('200 for a state no run is behind', reset.status === 200, `got ${reset.status}`);
+  const afterReset = (await call(`/api/elements/${stuckId}`)).body.element;
+  check('the stuck state is gone', !afterReset?.customData?.issueState,
+        `state=${afterReset?.customData?.issueState}`);
+  check('and so is the error it was showing', !afterReset?.customData?.issueError,
+        `error=${afterReset?.customData?.issueError}`);
+  check('the block is still an issue block', afterReset?.customData?.kind === 'issue');
+
+  console.log('\n8. and can then be run again');
+  const retry = await call(`/api/issue-block/${stuckId}`, { method: 'POST' });
+  check('202 after the reset', retry.status === 202, `got ${retry.status} ${JSON.stringify(retry.body)}`);
+
+  console.log('\n9. a reset is refused while a run is genuinely in flight');
+  // Immediately after the 202 above: the state on the element cannot tell a live run from
+  // an abandoned one, but the server can, and resetting a live one would only hide it.
+  const refused = await call(`/api/issue-block/${stuckId}`, { method: 'DELETE' });
+  check('409 while in flight', refused.status === 409, `got ${refused.status}`);
+  check('the refusal says why', /running|in flight/i.test(refused.body.error ?? ''), refused.body.error);
+
+  console.log('\n10. a reset does not let one observation become two issues');
+  const clearCreated = await call(`/api/issue-block/${id}`, { method: 'DELETE' });
+  check('200 on a block that already has an issue', clearCreated.status === 200,
+        `got ${clearCreated.status}`);
+  const keptUrl = (await call(`/api/elements/${id}`)).body.element;
+  check('the issue it produced is still on the block', Boolean(keptUrl?.customData?.issueUrl),
+        `url=${keptUrl?.customData?.issueUrl}`);
+  const second = await call(`/api/issue-block/${id}`, { method: 'POST' });
+  check('409 for a second run on it', second.status === 409, `got ${second.status}`);
+
+  console.log('\n11. a reset for a block that does not exist');
+  const missing = await call('/api/issue-block/no-such-element', { method: 'DELETE' });
+  check('404 rather than a silent success', missing.status === 404, `got ${missing.status}`);
 
   await call('/api/elements/clear', { method: 'DELETE' });
 

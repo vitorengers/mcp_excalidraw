@@ -1197,6 +1197,57 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Clear a stuck `running` state so the block can be tried again.
+ *
+ * A run has no ceiling any more, so nothing kills a wedged agent and nothing else ever
+ * clears that state — and a block left in it is dead: the panel hides the create control
+ * there. This is the way back, and the implement path's opposite number (`DELETE
+ * .../implement`), for the same reason and with the same honesty about what it does.
+ *
+ * It clears state; it does not stop an agent. Nothing here can reach into a process the
+ * server no longer owns. What it can do is refuse while a run is in flight *in this
+ * process*, which is the case that matters: `issueRunsInFlight` is in memory, so after a
+ * restart it is empty while the element still carries `running` from browser sync — only
+ * the server can tell a live run from an abandoned one.
+ *
+ * The issue itself is untouched, which is what stops a reset becoming a second issue for
+ * one observation: `POST` guards on `customData.issueUrl`, and that stays.
+ */
+app.delete('/api/issue-block/:id', (req: Request, res: Response) => {
+  const elementId = req.params.id ?? '';
+  const workspaceId = workspaceIdFrom(req);
+  const store = elementsFor(workspaceId);
+  const element = store.get(elementId);
+  if (!element) {
+    return res.status(404).json({ success: false, error: `Element ${elementId} not found` });
+  }
+
+  if (issueRunsInFlight.has(elementId)) {
+    return res.status(409).json({
+      success: false,
+      error: 'A run is in flight for this block right now. Resetting would only hide it.'
+    });
+  }
+
+  const { issueState, issueError, ...rest } = (element.customData ?? {}) as Record<string, unknown>;
+  const updated: ServerElement = {
+    ...element,
+    // A block that already produced an issue is `created`, whatever the stuck state said.
+    // Dropping the state outright would send that card back to offering a run the POST
+    // route would then refuse.
+    customData: rest.issueUrl ? { ...rest, issueState: 'created' } : rest,
+    updatedAt: new Date().toISOString(),
+    version: (element.version || 0) + 1
+  };
+  store.set(elementId, updated);
+  broadcast({ type: 'element_updated', element: updated } as ElementUpdatedMessage, workspaceId);
+
+  logger.info(`Issue block ${elementId} reset from "${issueState ?? 'no state'}"`
+    + `${issueError ? ', and its error cleared' : ''}`);
+  res.json({ success: true, elementId });
+});
+
 // ─── Implementing an issue ────────────────────────────────────
 //
 // The issue block's opposite number, and its opposite in permissions. The issue agent is
