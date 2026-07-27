@@ -1,9 +1,14 @@
 # Project board mirror
 
-A region on the left of the canvas showing the workspace's GitHub project: one section per
-column, newest issue on top, cards you can drag between columns with the move travelling back to
-GitHub. Dormant unless a project names a `githubProject`, so a board that has none never grows
-one.
+A region to the left of the board's own content, showing the workspace's GitHub project: one
+section per column, newest issue on top, cards you can drag between columns with the move
+travelling back to GitHub. Dormant unless a project names a `githubProject`, so a board that has
+none never grows one.
+
+Not the leftmost region since #96: the terminal sits one gap further left again, anchored to
+this one (`docs/terminal.md`). It has to be, because the mirror repaints every twenty seconds
+and the terminal is placed once — so the shape that never moves aside belongs where nothing is
+coming.
 
 Nothing here names a column. That is the whole point — a fourth option added on GitHub is a
 fourth section on the next poll, with nothing edited in this repository.
@@ -82,9 +87,10 @@ That is #99 — a region that drifted up and to the left over days, with no acti
 because half of it had none.
 
 **Which edge survives a width change is the trade this settles, and it is the left one.** A
-mirror whose width is set by GitHub cannot keep both. The left edge is where the `+` sits, and it
-is the edge another block will be anchored to once the terminal moves there, so a jump in it is a
-jump into something that will not move aside. A column appearing therefore grows the region to
+mirror whose width is set by GitHub cannot keep both. The left edge is where the `+` sits, and —
+since #96 — it is the edge the terminal block is anchored to, a block placed once and never moved
+aside, so a jump in it is a jump into something that will not give way. A column appearing
+therefore grows the region to
 the *right*, into the gap and, past that, toward the board's own content. That is a collision a
 reader can see and connect to the column that caused it, which is what the drift never was.
 
@@ -94,7 +100,8 @@ back.
 
 What may be measured against is one predicate, `mirrorAnchors`, stated the way the autosync and
 the export state theirs: not the mirror's own shapes, or it would re-anchor to itself; not the
-terminal block, which is placed *from* these bounds on the other side; not the draft blocks,
+terminal blocks, which are placed *from* this region's own left edge, so measuring against one
+would walk the mirror onto it and it leftward again on every pass; not the draft blocks,
 which live inside the region; and **not a label bound to any of those**. Excalidraw binds text to
 whatever is selected and that text carries no `kind` of its own, so a title bound to the terminal
 — the one block the reader is expected to drag — looked authored, and dragging it up and to the

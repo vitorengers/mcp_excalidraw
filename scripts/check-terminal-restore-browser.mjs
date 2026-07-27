@@ -309,7 +309,7 @@ const occurrences = (haystack, needle) => String(haystack ?? '').split(needle).l
 try {
   await waitFor(async () => (await fetch(`${BASE}/health`)).ok, 'the canvas server');
 
-  // Something authored, so "the right side" has a right side to be on.
+  // Something authored, so the block has content to be placed away from.
   await api('/api/elements', {
     method: 'POST',
     body: JSON.stringify({ type: 'rectangle', x: 0, y: 0, width: 200, height: 140,
@@ -338,6 +338,20 @@ try {
 
   await waitFor(async () => (await evaluate(PROBE)).block, 'the terminal block to be placed');
   await waitFor(async () => (await evaluate(PROBE)).card, 'the overlay to render');
+
+  // A viewport that shows the block, and room to its left.
+  //
+  // Since #96 the block sits a mirror's width to the *left* of the board's own content, so
+  // the view a board opens at does not contain it and every coordinate below would be
+  // dispatched at empty canvas. Placed by hand rather than with Alt+T: the eraser case drags
+  // right across the block and a control shape beyond it, and fitting the block alone leaves
+  // no room on either side for that.
+  {
+    const opening = await evaluate(PROBE);
+    const zoom = 0.7;
+    await evaluate(`window.__terminalCheckApi.updateScene({ appState: { scrollX: ${360 / zoom - opening.block.x}, scrollY: ${(150 - opening.view.offsetTop) / zoom - opening.block.y}, zoom: { value: ${zoom} } } })`);
+    await sleep(400);
+  }
 
   console.log('0. a shell with something in its transcript');
   let scene = await evaluate(PROBE);
@@ -505,11 +519,20 @@ try {
         Math.abs(drawn.card.left - toViewport(drawn, drawn.block.x, drawn.block.y).x) < 2
         && Math.abs(drawn.card.top - toViewport(drawn, drawn.block.x, drawn.block.y).y) < 2,
         `card at ${drawn.card.left},${drawn.card.top}`);
-  check('and it is in the viewport, because the key scrolls to it as well',
-        toViewport(drawn, drawn.block.x + drawn.block.w / 2, drawn.block.y + drawn.block.h / 2).x > 0
-        && toViewport(drawn, drawn.block.x + drawn.block.w / 2, drawn.block.y + drawn.block.h / 2).x < drawn.view.width,
-        JSON.stringify(toViewport(drawn, drawn.block.x + drawn.block.w / 2, drawn.block.y + drawn.block.h / 2)));
-  check('and nothing reloaded to get there', drawn.sentinel === 'kept-after-reload');
+  // Waited for rather than read the moment the block appears. The key scrolls with
+  // `animate: true`, and since #96 the block is far enough from where a board opens that
+  // half way through the animation it is still off screen — it used to land a few hundred
+  // units from the origin, close enough that the assertion held before the scroll had
+  // finished. A block that never arrives still fails this, on the timeout.
+  const arrived = await waitFor(async () => {
+    const probe = await evaluate(PROBE);
+    if (!probe.block) return null;
+    const centre = toViewport(probe, probe.block.x + probe.block.w / 2, probe.block.y + probe.block.h / 2);
+    return centre.x > 0 && centre.x < probe.view.width ? probe : null;
+  }, 'Alt+T to scroll the block into view');
+  check('and it is in the viewport, because the key scrolls to it as well', Boolean(arrived),
+        JSON.stringify(arrived && toViewport(arrived, arrived.block.x, arrived.block.y)));
+  check('and nothing reloaded to get there', arrived.sentinel === 'kept-after-reload');
   await shot('07-opened-from-nothing');
 } catch (error) {
   failures++;

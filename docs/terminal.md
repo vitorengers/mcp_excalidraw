@@ -1,8 +1,8 @@
 # The terminal
 
-Shells running in the project, drawn as blocks on the **right** of the board — opposite the
-GitHub project mirror on the left. Type into one and its output arrives as it is produced. A
-block carries a **strip of tabs**, one per shell, and a tab can be given a block of its own.
+Shells running in the project, drawn as blocks on the **far left** of the board, one gap beyond
+the GitHub project mirror. Type into one and its output arrives as it is produced. A block
+carries a **strip of tabs**, one per shell, and a tab can be given a block of its own.
 
 This spawns a process that runs **whatever arrives over an API with no authentication**. The
 issue block, which `docs/issue-block.md` calls the most dangerous thing this server does, at
@@ -242,11 +242,15 @@ neither has ever been an element.
 
 ## Where it sits, and how it is drawn
 
-"The right side" is a rule, not a pixel column: `maxX + 120`, level with the top of whatever the
-board has authored. That is the mirror's own arithmetic with the sign flipped — the mirror is
-`minX - gap - width` (`src/core/project-board-layout.ts`) — so each region is placed from the
-board's own bounds, on its own side. Each is left out of the other's measurement, or they would
-walk away from the content in opposite directions.
+Left to right the canvas reads **terminal | mirror | content**. "The far left" is a rule, not a
+pixel column: the block is `left - 120 - width` of the region it has to clear, level with the
+top of it — the mirror's own arithmetic, applied a second time. With a `githubProject` the
+region to clear is the mirror; with none the mirror stays dormant, its slot is free, and the
+block takes it, one gap left of the content. So every region follows a board that grew instead
+of sitting at a coordinate somebody once picked, and the mirror and the terminal are each left
+out of the other's measurement, or each pass would walk them further apart. Since #99 that
+exclusion covers **a label bound to either**, which is the rule the autosync and the export
+already stated.
 
 Placed **once**, and since #99 the mirror is too. That used to be the difference between them:
 this block is expected to be moved and resized, and a redraw that re-anchored it every twenty
@@ -258,6 +262,31 @@ resolve an origin the first time there is something to measure against and keep 
 What still differs is what happens next. This block is the reader's to drag, and where it was
 dragged is remembered and preferred over the rule above; the mirror has no such gesture, being
 repainted from GitHub, so its origin only ever comes from the measurement.
+
+**Which side follows from that.** Placed once means the block never moves aside, so it cannot
+sit on the edge the board grows into — and the documentation, the only thing here that grows,
+grows down and right. It was on the right until #96, and anything authored past the right edge
+as it stood when the session opened ran straight into a block that would not budge. Behind the
+mirror is the edge nothing runs into, and #99 is what makes that true of the mirror as well:
+the region is pinned by its **left** edge now, so a column added on GitHub grows it rightward,
+into the gap it keeps from the board, instead of stepping 324 leftward onto this block. #96
+chose this side while the mirror still moved on every poll; the two decisions have to hold
+together, and pinning that edge is what makes them.
+
+The invariant this depends on is the other half of the same reading: **the documentation grows
+down and right.** Content extended leftward does not move the mirror on the next poll any more —
+neither region re-anchors while the session is open — but both re-measure on a reload, and the
+mirror re-measured against content that now reaches further left comes back further left, with
+the terminal placed from it. So content that has to extend leftward should still be moved right
+instead; what changed is when the collision shows up, not that it does.
+
+**One exception to "placed once."** A session opens on a `POST` that spawns a shell; the mirror
+arrives on a poll that spawns a `gh`. On a board that has a project the block is therefore
+placed before there is a mirror to anchor it to, lands in the mirror's own slot, and would sit
+under it for the rest of the session. It is marked `customData.awaitingMirror` when that
+happens, and the first board that lands moves it aside and takes the mark off — once, and only
+while the block is still exactly where it was put, so a reader who has already dragged it keeps
+their own placement.
 
 The block itself is a plain rectangle, and everything that reads as a terminal is a DOM overlay
 positioned over its bounds (`frontend/src/components/TerminalPanel.tsx`). Inside that overlay is
@@ -359,9 +388,9 @@ The block is not `locked`, and `locked` is the only thing Excalidraw's eraser re
 corner resize that *are* the interface here, so the block stays erasable and **the erase is
 undone instead**: the board notices, in `syncTerminalBlocks`, that it has lost a block whose
 shells are still running, and puts one back where the reader had it — the size and the position
-it was erased at, not re-anchored to the right of the board. A block with two tabs comes back as
-one block with two tabs, because what is remembered is per session and the restore groups the
-orphans by the geometry they share.
+it was erased at, not re-anchored past the mirror. A block with two tabs comes back as one block
+with two tabs, because what is remembered is per session and the restore groups the orphans by
+the geometry they share.
 
 That is the only answer that keeps the shells reachable. Nothing in the erase path kills one:
 `DELETE /api/terminal` is never sent by the frontend for an erase, so a block that stayed gone
