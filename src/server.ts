@@ -171,13 +171,14 @@ wss.on('connection', (ws: WebSocket, request) => {
   clients.add(ws);
   logger.info(`New WebSocket connection established (workspace: ${workspaceId})`);
 
-  // Send current elements to new client
-  const filesObj: Record<string, ExcalidrawFile> = {};
-  files.forEach((f, id) => { filesObj[id] = f; });
+  // Send current elements to new client, with the files this board's own elements point
+  // at — every board's files went out here, on every connect, which is the same megabytes
+  // as the unscoped `GET /api/files` and paid for by every reader of every board.
+  const filesObj = filesForWorkspace(workspaceId);
   const initialMessage: InitialElementsMessage & { files?: Record<string, ExcalidrawFile> } = {
     type: 'initial_elements',
     elements: Array.from(elementsFor(workspaceId).values()),
-    ...(files.size > 0 ? { files: filesObj } : {})
+    ...(Object.keys(filesObj).length > 0 ? { files: filesObj } : {})
   };
   ws.send(JSON.stringify(initialMessage));
 
@@ -203,6 +204,19 @@ wss.on('connection', (ws: WebSocket, request) => {
       sequence: terminal.sequence
     }));
   }
+
+  // A browser cannot send a protocol ping, so the liveness check clients use is an
+  // application message and answering it is the whole contract. Without an answer a
+  // half-open socket reads OPEN until TCP gives up, which is minutes of a canvas that
+  // looks connected and receives nothing.
+  ws.on('message', (raw) => {
+    try {
+      const message = JSON.parse(raw.toString());
+      if (message?.type === 'ping') ws.send(JSON.stringify({ type: 'pong' }));
+    } catch {
+      // Clients talk to this server over HTTP; anything else arriving here is not ours.
+    }
+  });
 
   ws.on('close', () => {
     clients.delete(ws);
@@ -2369,11 +2383,35 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
 });
 
 // ─── Files API (for image elements) ───────────────────────────
-// GET all files
-app.get('/api/files', (_req: Request, res: Response) => {
-  const filesObj: Record<string, ExcalidrawFile> = {};
-  files.forEach((f, id) => { filesObj[id] = f; });
-  res.json({ files: filesObj });
+
+/**
+ * The files one board's elements actually point at.
+ *
+ * The store itself is not per-board — a file is content-addressed by id and two boards may
+ * legitimately reference the same one — so the scoping is by reference rather than by
+ * ownership: the ids that the workspace's own image elements and issue blocks name. What
+ * this replaces is `GET /api/files` handing back every dataURL the process holds for every
+ * board, which on a board full of screenshots is megabytes fetched to draw a canvas that
+ * needed none of them.
+ */
+function filesForWorkspace(workspaceId: string): Record<string, ExcalidrawFile> {
+  const wanted = new Set<string>();
+  for (const element of elementsFor(workspaceId).values()) {
+    const fileId = (element as { fileId?: unknown }).fileId;
+    if (typeof fileId === 'string' && fileId) wanted.add(fileId);
+    for (const id of issueImageIds(element.customData)) wanted.add(id);
+  }
+  const scoped: Record<string, ExcalidrawFile> = {};
+  for (const id of wanted) {
+    const file = files.get(id);
+    if (file) scoped[id] = file;
+  }
+  return scoped;
+}
+
+// GET the files this board's elements reference
+app.get('/api/files', (req: Request, res: Response) => {
+  res.json({ files: filesForWorkspace(workspaceIdFrom(req)) });
 });
 
 /**
@@ -2463,13 +2501,12 @@ app.post('/api/export/image', (req: Request, res: Response) => {
 
     // Re-broadcast current elements so all connected clients (including stale ones)
     // sync to the canonical server state before exporting
-    const filesObj: Record<string, ExcalidrawFile> = {};
-    files.forEach((f, id) => { filesObj[id] = f; });
     const exportWorkspaceId = workspaceIdFrom(req);
+    const filesObj = filesForWorkspace(exportWorkspaceId);
     broadcast({
       type: 'initial_elements',
       elements: Array.from(elementsFor(exportWorkspaceId).values()),
-      ...(files.size > 0 ? { files: filesObj } : {})
+      ...(Object.keys(filesObj).length > 0 ? { files: filesObj } : {})
     } as InitialElementsMessage & { files?: Record<string, ExcalidrawFile> }, exportWorkspaceId);
 
     // Give browsers time to process the reload before requesting export

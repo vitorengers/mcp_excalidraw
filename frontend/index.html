@@ -88,7 +88,18 @@
         .status-disconnected {
             background-color: #dc3545;
         }
-        
+
+        /* Amber, and moving: still trying is not the same news as offline. */
+        .status-connecting {
+            background-color: #f0a020;
+            animation: status-pulse 1.2s ease-in-out infinite;
+        }
+
+        @keyframes status-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.35; }
+        }
+
         .canvas-container {
             flex: 1;
             min-height: 0;
