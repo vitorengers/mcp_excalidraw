@@ -150,13 +150,69 @@ the server no longer owns. What it does do is refuse — 409 — while a run is 
 this process*, which is the case that matters: the element cannot tell a live run from an
 abandoned one, and the server can.
 
+### One checkout per run
+
+Every implementation gets a **git worktree of its own** — `<project>-worktrees/issue-<n>`, on a
+branch of the same name cut from the default branch — and the agent is started there rather than
+in the project directory.
+
+Before this, every run was spawned into the same working tree. The server serialised by issue
+URL, so one issue could not become two pull requests; but the thing the agents contend for is not
+the issue, it is the checkout. Two *different* issues passed every guard and landed in one
+directory: both running `git checkout -b`, the second cutting its branch from the first one's work
+in progress or failing against a dirty tree; commits landing on whichever branch happened to be
+current; both builds writing the same `dist/`, so each verified against the other's artifacts. The
+runs are unattended by design, so nobody was watching it happen.
+
+Worktrees are what Claude Code itself uses for parallel agents: one repository and one object
+store, several checkouts, each on its own branch. Three decisions came with them.
+
+**They live beside the project, not inside it.** A checkout nested in the repository is a second
+copy of every file the type check, the build, the board export and the checks all walk, and being
+outside is one `.gitignore` rule nobody can forget.
+
+**`node_modules` is linked in**, as a junction on Windows and a symlink under WSL. It is not
+tracked, so a fresh checkout has none, and an agent told to run the build would find no compiler
+there; an install per run would cost minutes and gigabytes to arrive at the same tree.
+
+**A worktree with uncommitted work is never removed.** A run that ends clean takes its worktree
+with it, and its branch too when git agrees the branch is merged — `git branch -d` refuses an
+unmerged one, which is exactly the branch a pull request was opened from. A run that ends with
+changes still uncommitted keeps everything: those changes are the only copy of themselves, and an
+agent that died partway through a change leaves precisely that. The path is logged and reported on
+the record, so `GET /api/implement` says where the work is.
+
+A workspace that is not a git repository gets no worktree and runs in the project directory, the
+way everything did before. Isolation is what a repository buys; nothing else changes.
+
+### How many at once
+
+`EXCALIDRAW_IMPLEMENT_CONCURRENCY` caps the implementations one workspace may have in flight,
+and **defaults to 4**. Over the cap, `POST` answers 409 and names the runs holding the slots.
+
+It used to be unlimited, and unlimited by accident — nothing counted runs, because the only guard
+was per issue. Now that each run has a checkout of its own, several at once are safe rather than
+merely tolerated, so the default is greater than one; it is small because every run is a whole
+coding agent building and testing on one machine. `0` removes the cap, `1` serialises.
+
+`GET /api/implement` with no `url` lists every run for the workspace — the question parallel runs
+create is "what is running right now", and until this existed the state was reachable only one
+issue URL at a time, by a caller who already knew which URL to ask about. Finished runs are listed
+too, because one of the things worth knowing is which run left a worktree behind.
+
+State still lives in memory, so a restart loses it while the worktrees survive on disk. Nothing
+reconciles the two: a worktree left by a run the server has forgotten stays where it is, which is
+the same trade the **Reset — the run was lost** affordance already makes.
+
 ### What the agent is told
 
 The workflow is **not** in the prompt. Each project records how work is done in it — branch
 naming, whether a change ships with a check, whether the agent opens a pull request or
 merges it itself — and the agent runs inside that project, so it is told to read its own
 project memory and treat that as the authority. Writing this repository's conventions into
-the prompt would make the feature wrong for every other board.
+the prompt would make the feature wrong for every other board. This repository's own answer
+now lives in a tracked `CLAUDE.md` instead, where a fresh clone can find it, rather than in
+one machine's local agent memory.
 
 What the prompt does carry is what an unattended run needs: investigate before changing
 anything and stop if the issue is already fixed; implement the smallest change that meets
@@ -164,11 +220,19 @@ the definition of done and no more; run the project's own checks and read the ou
 because compiling is not working; and — since nobody can answer a question mid-run — decide
 the issue's open questions, state the call in the pull request, and keep going.
 
+One thing is appended to it: where the run is happening. That is not workflow — it is a fact
+about the process the agent was started in, and one it cannot discover without going looking.
+Without it an agent reads its memory, finds "branch off the default branch", and cuts a second
+branch inside a checkout that already is one; still isolated, but the branch the pull request
+was expected on goes unused. A workspace with no worktree gets no such paragraph, and sends
+the prompt it sent before this existed, byte for byte.
+
 ## Configuration
 
 ```
 EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob"'
 EXCALIDRAW_ISSUE_AGENT_TIMEOUT=1200
+EXCALIDRAW_IMPLEMENT_CONCURRENCY=4
 ```
 
 **Pin the model and the effort.** Without `--model` and `--effort` the agent inherits whatever
