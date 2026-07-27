@@ -30,6 +30,32 @@ export interface ImplementRecord {
    * work — and then this is the only thing that says where it is.
    */
   worktree: string | null;
+  /**
+   * When the run started, ISO.
+   *
+   * One number rather than a duration, and written once rather than ticked. A duration
+   * kept here would have to be refreshed to stay true, and refreshing it means a write per
+   * second per running block — every one of them bumping an element's `version` and
+   * churning every export. An instant is true for as long as the run lasts, and whoever is
+   * looking at it can subtract.
+   */
+  startedAt: string | null;
+  /** When it settled, ISO. Null while it is still going, which is what makes it live. */
+  endedAt: string | null;
+  /**
+   * What the run has spent, when the agent is willing to say.
+   *
+   * Null is the normal case and not a failure: it means the configured command does not
+   * ask its agent for a machine-readable stream, so nothing observable about tokens ever
+   * reaches this process. See `agent-usage.ts`.
+   */
+  usage: ImplementUsage | null;
+}
+
+/** Cumulative token counts for a run, as the agent reported them. */
+export interface ImplementUsage {
+  inputTokens: number;
+  outputTokens: number;
 }
 
 /** A record with the issue it belongs to, which the map holds as a key rather than a field. */

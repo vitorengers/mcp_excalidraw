@@ -47,6 +47,7 @@ import { issueBlockAppearance } from './core/issue-appearance.js';
 import { runImplementAgent } from './core/implement-agent.js';
 import {
   ImplementRecord,
+  ImplementUsage,
   clearImplement,
   isImplementing,
   listImplement,
@@ -1312,6 +1313,13 @@ const IMPLEMENT_CONCURRENCY = (() => {
  * this issue gets the copy, so an authored block and a mirrored card cannot disagree.
  *
  * `null` clears rather than writes, which is what the reset does.
+ *
+ * The two instants travel with the state and the token counts deliberately do not. Every
+ * write here bumps a `version` on every element carrying the issue and broadcasts it,
+ * which is the bookkeeping that makes exports churn — so what goes on an element has to be
+ * something that changes when the state does and not otherwise. `startedAt` and `endedAt`
+ * are written once each; a browser holding either of them can run a clock off it without
+ * asking anyone. Usage changes throughout a run, so it stays on the record alone.
  */
 function recordImplement(
   workspaceId: string,
@@ -1326,7 +1334,9 @@ function recordImplement(
     const custom = (element.customData ?? {}) as Record<string, unknown>;
     if (custom.issueUrl !== issueUrl) continue;
 
-    const { implementState, implementUrl, implementError, ...rest } = custom;
+    const {
+      implementState, implementUrl, implementError, implementStartedAt, implementEndedAt, ...rest
+    } = custom;
     const updated: ServerElement = {
       ...element,
       customData: record
@@ -1334,7 +1344,9 @@ function recordImplement(
             ...rest,
             implementState: record.state,
             implementUrl: record.url,
-            implementError: record.error
+            implementError: record.error,
+            implementStartedAt: record.startedAt,
+            implementEndedAt: record.endedAt
           }
         : rest,
       updatedAt: new Date().toISOString(),
@@ -1343,6 +1355,44 @@ function recordImplement(
     store.set(id, updated);
     broadcast({ type: 'element_updated', element: updated } as ElementUpdatedMessage, workspaceId);
   }
+}
+
+/**
+ * What a run has accumulated so far, to carry into the record that replaces this one.
+ *
+ * `recordImplement` takes a whole record, and a run writes three or four of them: running,
+ * running-with-a-worktree, then done or failed. Rebuilding each from literals is how the
+ * start time would quietly be lost halfway through — so it is read back rather than
+ * remembered.
+ */
+function carriedImplement(
+  workspaceId: string,
+  issueUrl: string
+): Pick<ImplementRecord, 'startedAt' | 'usage'> {
+  const existing = readImplement(workspaceId, issueUrl);
+  return { startedAt: existing?.startedAt ?? null, usage: existing?.usage ?? null };
+}
+
+/**
+ * Token counts onto the record, and nowhere else.
+ *
+ * Deliberately not `recordImplement`: these arrive throughout a run, and writing each one
+ * onto every element carrying the issue would bump a version and broadcast an update every
+ * time — the churn the clock is careful to avoid, arriving through the other door. The
+ * panel polls the record every four seconds and picks them up there, and a block with
+ * nothing selected has no use for them.
+ *
+ * Ignored once the run has settled: a report can still be in flight when the process
+ * closes, and it must not resurrect a finished record.
+ */
+function recordImplementUsage(
+  workspaceId: string,
+  issueUrl: string,
+  usage: ImplementUsage
+): void {
+  const existing = readImplement(workspaceId, issueUrl);
+  if (!existing || existing.state !== 'running') return;
+  writeImplement(workspaceId, issueUrl, { ...existing, usage });
 }
 
 /**
@@ -1402,7 +1452,17 @@ async function beginImplement(res: Response, workspaceId: string, issueUrl: stri
     return;
   }
 
-  recordImplement(workspaceId, issueUrl, { state: 'running', url: null, error: null, worktree: null });
+  // The one write of the start time. Everything after it carries this instant forward, and
+  // everything showing a duration subtracts from it rather than being told a duration.
+  recordImplement(workspaceId, issueUrl, {
+    state: 'running',
+    url: null,
+    error: null,
+    worktree: null,
+    startedAt: new Date().toISOString(),
+    endedAt: null,
+    usage: null
+  });
   res.status(202).json({ success: true, state: 'running', issueUrl });
 
   // The board says Todo until something says otherwise, and starting the run is the
@@ -1421,24 +1481,30 @@ async function beginImplement(res: Response, workspaceId: string, issueUrl: stri
     worktree = await ensureWorktree(workspace, issueUrl);
     if (worktree) {
       recordImplement(workspaceId, issueUrl, {
-        state: 'running', url: null, error: null, worktree: worktree.path
+        state: 'running', url: null, error: null, worktree: worktree.path, endedAt: null,
+        ...carriedImplement(workspaceId, issueUrl)
       });
     }
 
     const result = await runImplementAgent(workspace, issueUrl, {
       agentCommand: IMPLEMENT_AGENT_COMMAND as string,
-      worktree
+      worktree,
+      // Reached only when the configured command already streams. Otherwise the agent
+      // prints prose at exit, there is nothing to read, and this is never called.
+      onUsage: (usage) => recordImplementUsage(workspaceId, issueUrl, usage)
     });
     const kept = await releaseWorktreeFor(workspace, worktree, issueUrl);
 
     if (result.ok && result.url) {
       recordImplement(workspaceId, issueUrl, {
-        state: 'done', url: result.url, error: null, worktree: kept
+        state: 'done', url: result.url, error: null, worktree: kept,
+        ...carriedImplement(workspaceId, issueUrl), endedAt: new Date().toISOString()
       });
       logger.info(`${issueUrl} implemented at ${result.url}`);
     } else {
       recordImplement(workspaceId, issueUrl, {
-        state: 'failed', url: null, error: result.error ?? null, worktree: kept
+        state: 'failed', url: null, error: result.error ?? null, worktree: kept,
+        ...carriedImplement(workspaceId, issueUrl), endedAt: new Date().toISOString()
       });
       logger.warn(`${issueUrl} implementation failed: ${result.error}`);
     }
@@ -1447,7 +1513,9 @@ async function beginImplement(res: Response, workspaceId: string, issueUrl: stri
       state: 'failed',
       url: null,
       error: (error as Error).message,
-      worktree: await releaseWorktreeFor(workspace, worktree, issueUrl)
+      worktree: await releaseWorktreeFor(workspace, worktree, issueUrl),
+      ...carriedImplement(workspaceId, issueUrl),
+      endedAt: new Date().toISOString()
     });
   }
 }

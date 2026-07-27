@@ -438,6 +438,76 @@ on the element cannot tell a live run from an abandoned one, and the server can.
 runs are tracked in memory, so a restart is precisely when a `running` element has no run
 behind it and the reset is the only way out.
 
+### How long it has been running
+
+Removing the ceiling left the panel saying one thing and holding it — *"An agent is
+implementing this issue in the project. There is no time limit on the run."* — for however
+long the run took, which on a real one is an hour or more of a panel that never changes.
+Nothing was wrong; there was simply no way to tell that from wedged. A clock is the number
+that sentence was missing.
+
+`ImplementRecord` carries `startedAt` and `endedAt`, ISO, written once each: at the start,
+and when the run settles as `done` or `failed` alike. `GET /api/implement?url=...` returns
+them with the rest of the record, and `implementStartedAt` / `implementEndedAt` go onto every
+element carrying the issue, so a block reads correctly with nothing selected and no network.
+
+**Two instants, not a duration, and that is the design rather than a detail.** A duration
+kept on the server would have to be rewritten to stay true, and every write to an element
+bumps its `version` and broadcasts it — the bookkeeping behind `docs/trap-export-noise.md`.
+A clock ticking once a second would therefore churn every running block, and every export
+with it. So the server writes an instant that stays true for the whole run, and the browser
+does the subtraction: `RunClock` in `DocsPanel.tsx` re-renders on its own timer and touches
+nothing. A finished run has `endedAt`, so there is nothing left to tick and the total freezes.
+
+`scripts/check-implement-progress.mjs` asserts that directly — it watches an element's
+`version` across several seconds of real time and requires it to stand still while the elapsed
+time derived from `startedAt` advances. `scripts/check-implement-progress-browser.mjs` does
+the half only a browser can answer: that the number on screen moves with no reload and no
+click.
+
+### What the run is spending, when the agent says
+
+Token counts are **opt-in**, and the reason is not effort. `EXCALIDRAW_IMPLEMENT_AGENT` is a
+full command line set by whoever starts the board; nothing requires it to be Claude Code, and
+a plain `claude -p` prints prose at exit and no figures at all. Usage can only come from the
+agent reporting it in a machine-readable stream, which the operator's command line has to ask
+for.
+
+So the server looks for `--output-format stream-json` in the configured command
+(`streamsUsage`, `src/core/agent-usage.ts`). Without it nothing is parsed, nothing is
+recorded, no figures appear, and the spawn path is byte for byte what it was — the same
+"nothing at all" half that `worktreeSection` and `imageReferenceSection` are careful about.
+The prompt is not touched either: whether an agent reports usage is a property of the command
+line, so there is nothing worth telling the agent. **The server never appends the flag
+itself** — silently rewriting somebody's command line is a decision, not a lookup.
+
+With it, stdout is read line by line as it arrives and the totals go onto the record, not onto
+the elements: they change throughout a run, so writing them to shapes would churn the board
+through the other door. The panel picks them up on the poll it already makes every four
+seconds, and gets one last read when a run settles under the reader's eyes — the ending
+arrives over the socket as an element update, which carries the state but not the figures.
+
+Three things about the parsing were confirmed against the CLI rather than inferred, and each
+is a way the naive version is wrong:
+
+- **The same message arrives more than once**, streaming and then finished, carrying one id
+  and a usage block that has grown. Totals are kept per message id and the last one wins;
+  adding up every event roughly doubles them.
+- **The streamed figures are not final.** Output lags in particular — a message can stream at
+  four output tokens and settle at thirty-nine. The `result` event carries the run's own
+  accounting, so when it arrives it replaces the running sum rather than adding to it.
+- **Input counts the cache.** `input_tokens` alone is a handful of tokens per message once
+  prompt caching is on, with tens of thousands in `cache_read_input_tokens` beside it, so a
+  panel showing the literal field would read as "this agent has consumed nothing" for an hour.
+  What is shown is what the model was given: fresh input, cache writes and cache reads
+  together.
+
+`extractGithubUrl` runs over raw stdout, which is now NDJSON with the URL inside a JSON
+string. That still works and is asserted rather than assumed.
+
+Not covered: the research agent. It shares `runAgent` and would get both halves cheaply, but
+its block has no surface to show them on.
+
 ## Configuration
 
 ```
@@ -459,6 +529,13 @@ when an issue comes out worse than usual. The `[1m]` suffix selects the 1M-conte
 approval is blocked, so it finishes with exit code 0 and no issue at all. The list is narrow on
 purpose — `gh`, `git`, and reading. No `Write`, no `Edit`, no open `Bash`: the agent opens
 issues, it does not touch the repository.
+
+**Add `--output-format stream-json --verbose` to the implement command to get token counts.**
+Nothing else turns them on, and nothing else is needed. It changes what the agent prints, not
+what it does: the pull request URL is still found in the output, and the salvage a firing
+ceiling depends on starts working, since stdout then arrives as the run goes rather than only
+at exit. Leave it off and the run is timed but not counted, which is the default and is not a
+degraded state.
 
 A WSL-backed project runs through `wsl.exe --cd <innerPath>`, because the agent has to see the
 repository the way `git` and `gh` inside that distro do.

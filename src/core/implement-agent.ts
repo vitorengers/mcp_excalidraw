@@ -11,6 +11,7 @@
  * The rest of the guards carry over — loopback only, one run per element — plus one more:
  * only a block that already has an issue has anything to implement.
  */
+import { AgentUsage } from './agent-usage.js';
 import { ImplementWorktree } from './implement-worktree.js';
 import { AgentRun, runAgent } from './issue-agent.js';
 import { Workspace } from './workspaces.js';
@@ -128,7 +129,20 @@ a worktree with nothing outstanding is removed when the run ends.`;
 export async function runImplementAgent(
   workspace: Workspace,
   issueUrl: string,
-  options: { agentCommand: string; timeoutMs?: number | null; worktree?: ImplementWorktree | null }
+  options: {
+    agentCommand: string;
+    timeoutMs?: number | null;
+    worktree?: ImplementWorktree | null;
+    /**
+     * Where the run's token totals go while it runs, for a command that streams them.
+     *
+     * Passed through rather than handled here: what the totals mean is the agent's
+     * business, and where they are shown is the server's. Note what it does **not**
+     * change — the prompt. Whether the agent reports usage is a property of the command
+     * line the operator wrote, so nothing about it is worth telling the agent.
+     */
+    onUsage?: (usage: AgentUsage) => void;
+  }
 ): Promise<AgentRun> {
   const worktree = options.worktree ?? null;
   const prompt = `${IMPLEMENT_AGENT_PROMPT}\n\n---\n\nThe issue to implement:\n\n${issueUrl}`
@@ -139,5 +153,6 @@ export async function runImplementAgent(
     expects: 'pull',
     what: 'implement agent',
     directory: worktree,
+    ...(options.onUsage ? { onUsage: options.onUsage } : {}),
   });
 }

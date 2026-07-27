@@ -757,7 +757,14 @@ function App(): JSX.Element {
       }
       setIssue((current) =>
         current?.id === target.id
-          ? { ...current, implementState: null, implementUrl: null, implementError: null }
+          ? {
+              ...current,
+              implementState: null,
+              implementUrl: null,
+              implementError: null,
+              implementStartedAt: null,
+              implementEndedAt: null
+            }
           : current)
       return null
     } catch (error) {
@@ -1900,7 +1907,9 @@ function App(): JSX.Element {
         images: Array.isArray(custom.issueImages) ? (custom.issueImages as string[]) : [],
         implementState: (custom.implementState as IssueTarget['implementState']) ?? null,
         implementUrl: (custom.implementUrl as string) ?? null,
-        implementError: (custom.implementError as string) ?? null
+        implementError: (custom.implementError as string) ?? null,
+        implementStartedAt: (custom.implementStartedAt as string) ?? null,
+        implementEndedAt: (custom.implementEndedAt as string) ?? null
       })
     }
 

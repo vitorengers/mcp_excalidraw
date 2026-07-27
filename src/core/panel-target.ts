@@ -46,6 +46,16 @@ export interface IssueTargetData {
   implementState: 'running' | 'done' | 'failed' | null;
   implementUrl: string | null;
   implementError: string | null;
+  /**
+   * When the run started and when it stopped, ISO, so the panel can show how long it has
+   * been going with nothing selected and no network.
+   *
+   * Instants, not a duration: the clock runs in the browser off `implementStartedAt`, so
+   * the server writes these once each rather than once a second. `implementEndedAt` is
+   * null while the run is live, which is what makes the clock live rather than a total.
+   */
+  implementStartedAt: string | null;
+  implementEndedAt: string | null;
 }
 
 export interface CollapsibleTargetData {
@@ -134,6 +144,8 @@ function mirrorCardIssue(
     implementState: null,
     implementUrl: null,
     implementError: null,
+    implementStartedAt: null,
+    implementEndedAt: null,
   };
 }
 
@@ -203,6 +215,8 @@ export function resolvePanelTarget(
           implementState: asString(issueCustom.implementState) as IssueTargetData['implementState'],
           implementUrl: asString(issueCustom.implementUrl),
           implementError: asString(issueCustom.implementError),
+          implementStartedAt: asString(issueCustom.implementStartedAt),
+          implementEndedAt: asString(issueCustom.implementEndedAt),
         };
 
   // An image gets a collapse control whether or not it carries documentation: an image is
