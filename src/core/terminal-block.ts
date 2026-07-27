@@ -78,16 +78,54 @@ export const TERMINAL_GAP = 120;
 /** How big the block is when it is first drawn. It is resizable from there. */
 export const TERMINAL_SIZE = { width: 760, height: 480 };
 
+export const TERMINAL_FONT_SIZE = 13;
+
+/**
+ * The monospace stack the emulator draws in.
+ *
+ * Here rather than in `TerminalPanel.tsx` because the cell height below is *this font's*
+ * line box and nothing else's: a measurement taken against one stack and an emulator opened
+ * with another would be two different fonts agreeing on a number. `TerminalPanel.css` repeats
+ * it for the frame's own text, which a stylesheet cannot import; the two that must not drift
+ * are the emulator and the measurement, and they both read this.
+ */
+export const TERMINAL_FONT_FAMILY =
+  "'Cascadia Code', 'Cascadia Mono', Menlo, Consolas, 'Courier New', monospace";
+
+/**
+ * The line height the emulator is given, and the only part of a row this code chooses.
+ *
+ * xterm multiplies it by the font's **measured** line box, not by the font size — see
+ * `terminalCell`. Passed to `new Terminal({ lineHeight })` from here so the multiplier the
+ * grid is derived from is the multiplier the emulator was actually given.
+ */
+export const TERMINAL_LINE_HEIGHT = 1.35;
+
+/**
+ * The font's own line box, per font pixel, for a cell nobody has measured.
+ *
+ * A fallback rather than a fact: it is what the grid falls back to off the browser — in
+ * `check-terminal-font.mjs`, and in a browser too old to answer `fontBoundingBoxAscent`.
+ * Rounded **up** from what this machine's stack reports (1.12–1.17em across the range), so
+ * an unmeasured row is never shorter than a real one: too tall costs the reader a row at the
+ * bottom of the block, too short costs them rows they cannot reach at all.
+ */
+export const TERMINAL_LINE_BOX = 1.2;
+
 /**
  * One character cell, in scene units at 100% zoom.
  *
- * Measured from the monospace stack the overlay renders with at
- * `TERMINAL_FONT_SIZE`: a little under 0.6em wide, and a line box of 1.35em. Close enough
- * that a block sized to 80 columns holds 80 columns; there is no PTY behind this, so the
- * grid is what the block reports rather than something a program is told to obey.
+ * The **width** is measured and linear: this machine's stack reports 0.5859px of advance per
+ * font pixel at every size in the range, and 7.6 at 13 is a shade under it, so a block sized
+ * to 80 columns holds 80 columns with a pixel or two to spare.
+ *
+ * The **height** is the fallback described above, and unlike the width it is not what a row
+ * really is — see `terminalCell` for the one that is.
  */
-export const TERMINAL_FONT_SIZE = 13;
-export const TERMINAL_CELL = { width: 7.6, height: 17.5 };
+export const TERMINAL_CELL = {
+  width: 7.6,
+  height: TERMINAL_FONT_SIZE * TERMINAL_LINE_BOX * TERMINAL_LINE_HEIGHT,
+};
 
 /**
  * Room the frame takes: the header strip, the tab strip, the input row and the padding.
@@ -146,9 +184,43 @@ const scaleOf = (fontSize: number): number => {
   return Number.isFinite(size) && size > 0 ? size / TERMINAL_FONT_SIZE : 1;
 };
 
-export function terminalCell(fontSize: number = TERMINAL_FONT_SIZE): Size {
+/**
+ * A row is the font's own line box, not the font size.
+ *
+ * This is the correction #104 is for. `TERMINAL_LINE_HEIGHT` is what the emulator is given,
+ * and it reads as "a row is 1.35 × the font" — but xterm never applies it to the font size.
+ * It measures the font first, as `fontBoundingBoxAscent + fontBoundingBoxDescent` for that
+ * size, and multiplies *that*: `floor(charHeight × lineHeight)`, in
+ * `DomRenderer._updateDimensions`. For the stack above the line box is a little over `1em`,
+ * so a real row came out nearer `1.55 ×` the font than the `1.35` the cell assumed, and the
+ * block handed the shell two or three rows past the bottom of a frame that clips rather than
+ * scrolls.
+ *
+ * So the line box is **passed in**, measured off the font the browser resolved, and the
+ * arithmetic here is xterm's own. It is not a second constant, because it cannot be one: the
+ * metrics come back as whole pixels, so the ratio is a staircase — 1.40 at 10px, 1.60 at
+ * 20px, 1.54 at 24px on the machine this was written on — and every member of the stack has
+ * a line box of its own. A machine that resolves Consolas where this one resolves Cascadia
+ * Code gets its own answer rather than this one's.
+ *
+ * `undefined` is the offline caller and the browser that cannot answer, and falls back to
+ * `TERMINAL_LINE_BOX`.
+ */
+export function terminalCell(
+  fontSize: number = TERMINAL_FONT_SIZE,
+  lineBox?: number | null
+): Size {
   const scale = scaleOf(fontSize);
-  return { width: TERMINAL_CELL.width * scale, height: TERMINAL_CELL.height * scale };
+  const measured = Number(lineBox);
+  return {
+    width: TERMINAL_CELL.width * scale,
+    height: Number.isFinite(measured) && measured > 0
+      // xterm rounds the line box up to whole device pixels before it multiplies, and floors
+      // the product. Both are reproduced rather than approximated: a cell half a pixel out
+      // is a row over the edge on a tall enough block.
+      ? Math.max(1, Math.floor(Math.ceil(measured) * TERMINAL_LINE_HEIGHT))
+      : TERMINAL_CELL.height * scale,
+  };
 }
 
 export function terminalChrome(fontSize: number = TERMINAL_FONT_SIZE): Size {
@@ -210,12 +282,17 @@ export function terminalOrigin(
  * `TerminalPanel.css` clips rather than scrolls. A larger font in the same block is
  * therefore fewer columns and fewer rows, reported through the same route a corner drag
  * uses. It is defaulted, so a caller that has no opinion still gets the block's own.
+ *
+ * `lineBox` is the third input and the one that is not arithmetic: the font's own line box
+ * at that size, as the browser measured it. See `terminalCell` for why a row cannot be
+ * derived without it.
  */
 export function terminalGrid(
   size: Size,
-  fontSize: number = TERMINAL_FONT_SIZE
+  fontSize: number = TERMINAL_FONT_SIZE,
+  lineBox?: number | null
 ): { cols: number; rows: number } {
-  const cell = terminalCell(fontSize);
+  const cell = terminalCell(fontSize, lineBox);
   const chrome = terminalChrome(fontSize);
   const usableWidth = Math.max(0, (size?.width ?? 0) - chrome.width);
   const usableHeight = Math.max(0, (size?.height ?? 0) - chrome.height);

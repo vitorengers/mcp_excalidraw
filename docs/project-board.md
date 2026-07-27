@@ -395,6 +395,12 @@ A block hears the result over the WebSocket, as an element update. A card cannot
 element — so while a run is in flight the panel asks `GET /api/implement`, which reads the record
 and spawns no `gh`.
 
+"On the server" is right about *where* and says nothing about *how long*: on the server means in a
+`Map`, and the map does not outlive the process. A run killed with its server used to come back as
+nothing at all. It now comes back as `interrupted`, read off the worktree it left behind rather
+than restored from anywhere — see **A run that lost its server** in
+[issue-block.md](issue-block.md).
+
 ## A run moves its card, twice
 
 Two transitions, both written by this server, both `moveIssueToColumn`:
@@ -417,6 +423,13 @@ process. An agent that dies early would leave the card where the failure is invi
 state would be written by the one participant that cannot report its own crash. It would also mean
 putting a project URL, a field name and a column name into a prompt whose whole design is to carry
 none of them.
+
+That argument holds and its assumption does not cover everything: it protects against the *agent*
+dying, not against the server dying. When the server is what dies, the participant holding the pen
+is the one that cannot report the crash, and the card is left in **In Progress** with nothing
+behind it. Detecting an interrupted run does **not** move it back. A stranded card is wrong, but a
+card that walks backwards on its own while somebody is looking at the board is worse, and the
+panel is where the run is reported.
 
 Which columns those are, is resolved rather than guessed:
 

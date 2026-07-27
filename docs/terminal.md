@@ -329,12 +329,41 @@ Two decisions the observation left open:
 Buttons rather than a shortcut, for a reason beyond discoverability: while the terminal has the
 keyboard every keystroke is the shell's, so `Ctrl+-` would reach the shell and not the block.
 
-The one thing measured rather than assumed: xterm's cell **width** is linear in the font —
-0.586px per font pixel across the whole range, against the 0.585 the block is drawn with — so
-the columns fit at every step. Its cell **height** is not the font times the line height; xterm
-measures the font's own line box first, which is a little over `1em`, so a row comes out nearer
-`1.55 ×` the font than the `1.35` `TERMINAL_CELL` assumes. That gap is there at 13px with no
-button pressed, which is why it is not this feature's to fix — see *What it does not do yet*.
+## Where a cell comes from
+
+A column and a row are answered differently, and #104 is why.
+
+The **width** is a constant, because it really is one: this stack advances 0.586px per font
+pixel at every size in the range, against the 0.585 `TERMINAL_CELL.width` is drawn with, so the
+columns fit at every step with a pixel or two to spare.
+
+The **height** is measured, in the browser, every time the grid is worked out. It could not be
+a constant, and the one it had was wrong. `TERMINAL_LINE_HEIGHT` is `1.35` and reads as *"a row
+is 1.35 × the font"* — but that is the `lineHeight` xterm is **given**, and xterm never applies
+it to the font size. It measures the font's own line box first, as
+`fontBoundingBoxAscent + fontBoundingBoxDescent`, and multiplies that:
+`floor(charHeight × lineHeight)`, in `DomRenderer._updateDimensions`. For this stack the line
+box is a little over `1em`, so a real row was nearer `1.55 ×` the font — the block divided by a
+cell about 15% too short and handed the shell two or three rows past the bottom of a frame that
+clips rather than scrolls. The default block claimed 22 rows and could draw 20.
+
+A second measured constant would have been no more honest than the first. The metrics come back
+as **whole pixels**, so the ratio is a staircase and not a line — 1.50 at 8px, 1.40 at 10px,
+1.60 at 20px, 1.54 at 24px on the machine this was written on — and every member of
+`TERMINAL_FONT_FAMILY` has a line box of its own, so a machine that resolves Consolas where this
+one resolves Cascadia Code has a different answer at every size.
+
+So `frontend/src/terminal-metrics.ts` asks the browser, by the same route xterm's own
+`TextMetricsMeasureStrategy` takes — `measureText('W')` on a 2d context — and passes the line
+box into `terminalCell()`, which does xterm's arithmetic on it. `src/core/terminal-block.ts`
+stays arithmetic-only and DOM-free, so the offline checks still import it; a caller with nothing
+to pass, or a browser too old to report `fontBoundingBoxAscent`, gets `TERMINAL_LINE_BOX` —
+`1.2`, rounded **up** from the 1.12–1.17 this machine reports, because too tall costs the reader
+a row at the bottom and too short costs them rows they cannot reach at all.
+
+The font family and the line height live in `terminal-block.ts` for the same reason the
+measurement does: the emulator is opened with both of them, so a grid derived from one font and
+drawn in another would be two fonts agreeing on a number.
 
 **Resizing is Excalidraw's own.** The block is a real scene element, so dragging a corner
 resizes it and selecting it opens the usual style panel. The reader's new size reaches the
@@ -464,6 +493,12 @@ taken.
   real pointer, the grid the *shell* was told changing with them, a line exactly as wide as the
   header's claim drawn with its last column inside the block, the shape still selectable and
   still resizable by its corner afterwards, and the size still there after a reload.
+- `scripts/check-terminal-rows-browser.mjs` — the vertical half of that, and #104's. At zoom 1,
+  where a scene unit is a pixel, at the default size and at both ends of the range: the screen
+  xterm drew inside the frame that holds it, the rows the *shell* was told no more than the
+  frame can draw and no more than two fewer, and a marked last line printed into the bottom row
+  and seen inside the block. Every number is read off the render, because a check that divided
+  by the same wrong cell the code did would have agreed with it.
 - `scripts/check-terminal-focus-browser.mjs` — who owns the pointer where, in Chrome. A click
   in the middle of the screen focusing the shell and a command typed straight after it running;
   a drag on the header moving the block and a drag on the screen selecting text and *not*
@@ -472,7 +507,7 @@ taken.
   the header still a target at a zoom that shrinks everything else; and the corner still
   resizing the block, with the new size reaching the server.
 
-All ten were written first and seen to fail against the code as it stood.
+All eleven were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.
@@ -484,13 +519,6 @@ browser does.
 - **Nothing streams the agents into it.** That is the destination the observation behind #51
   named, and it is a second producer on this surface rather than part of building it: tap
   `issue-agent.ts` where the chunks arrive and broadcast them. It deserves its own issue.
-- **The block claims about two rows more than it draws, at every font size.** `TERMINAL_CELL`
-  takes a row to be `1.35 ×` the font, which is the line height xterm is given; xterm applies
-  that to the font's *measured* line box, which is a little over `1em`, so a real row is nearer
-  `1.55 ×`. The columns are unaffected — the width is linear and a shade conservative — and the
-  bottom rows are the ones clipped. It predates the size buttons, which found it; correcting the
-  constant changes what every shell is told on every board, and deserves its own issue and its
-  own before-and-after check.
 - **A program that turns mouse reporting on takes the pointer with it.** Once the screen has
   the pointer, `vim` or `claude` asking for mouse tracking receives clicks and the wheel as
   escape sequences, which is what those programs expect and also means the reader cannot

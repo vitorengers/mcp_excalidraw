@@ -12,10 +12,24 @@
  * be able to disagree about it, and one issue must not become two pull requests because it
  * was asked for twice through two shapes.
  *
- * In memory, like the element store. A run lost to a restart is what the reset is for.
+ * In memory, like the element store — and that is why `interrupted` exists. A restart empties
+ * this map, so a run killed with its server used to come back as nothing at all: the board
+ * showed a card in **In Progress** and the server answered `0 runs recorded`, while the work
+ * sat on disk held by nobody. The map is not the thing that survives; the worktree is. What
+ * comes back at startup is read off git and written here, so the run that was lost is at least
+ * a run the process knows about.
  */
 
-export type ImplementState = 'running' | 'done' | 'failed';
+/**
+ * `interrupted` is the state no run ever writes for itself.
+ *
+ * The other three are transitions this process made: it started a run, and the run settled one
+ * way or the other. `interrupted` is an inference made at startup about a run this process
+ * never saw — a checkout named after an issue with commits the base does not have, or a dirty
+ * tree, and no agent anywhere working in it. A run cannot survive the process that spawned it,
+ * so anything found in that shape is over, whatever it looked like when it stopped.
+ */
+export type ImplementState = 'running' | 'done' | 'failed' | 'interrupted';
 
 export interface ImplementRecord {
   state: ImplementState;

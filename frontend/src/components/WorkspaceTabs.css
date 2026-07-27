@@ -1,8 +1,32 @@
+/*
+ * Every size on the strip is one number times a base.
+ *
+ * The strip is the board's top-level navigation and it was set smaller than everything it
+ * navigates between: a 13px label under a 24px `<h1>`, beside a documentation panel running
+ * at 0.875–1.125rem. The type scale was borrowed from Excalidraw's own island chrome and
+ * never revisited (#110).
+ *
+ * The bases below are what it was — 13px on the name, 6px/12px around it, 9px on the badge,
+ * 12px on the gear, 18px on the `+` — kept literal so the strip's proportions stay readable,
+ * with `--workspace-tab-scale` as the single multiplier. Retuning is then one number rather
+ * than a hunt through a dozen declarations, which is the difference between this landing
+ * once and landing three times.
+ *
+ * The property is deliberately declared on `.workspace-tabs` rather than on `:root`: it
+ * describes this strip, and a board-wide token would invite the rest of the chrome to
+ * inherit a size nobody asked it to take.
+ *
+ * The 1px borders are the exception, on purpose. A border is a hairline that separates, not
+ * a size that is read, and a 2.5px outline round the active tab draws more attention to the
+ * frame than to the name inside it.
+ */
 .workspace-tabs {
+  --workspace-tab-scale: 2.5;
+
   display: flex;
-  gap: 4px;
+  gap: calc(4px * var(--workspace-tab-scale));
   align-items: center;
-  padding: 6px 8px 0;
+  padding: calc(6px * var(--workspace-tab-scale)) calc(8px * var(--workspace-tab-scale)) 0;
   overflow-x: auto;
   background: var(--island-bg-color, #fff);
   border-bottom: 1px solid var(--color-gray-30, #ced4da);
@@ -14,7 +38,7 @@
   align-items: center;
   border: 1px solid transparent;
   border-bottom: none;
-  border-radius: 6px 6px 0 0;
+  border-radius: calc(6px * var(--workspace-tab-scale)) calc(6px * var(--workspace-tab-scale)) 0 0;
   background: transparent;
   white-space: nowrap;
 }
@@ -22,13 +46,13 @@
 .workspace-tab__select {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: calc(6px * var(--workspace-tab-scale));
   border: none;
   background: transparent;
   color: var(--text-primary-color, #1e1e1e);
   font: inherit;
-  font-size: 13px;
-  padding: 6px 12px;
+  font-size: calc(13px * var(--workspace-tab-scale));
+  padding: calc(6px * var(--workspace-tab-scale)) calc(12px * var(--workspace-tab-scale));
   cursor: pointer;
   white-space: nowrap;
 }
@@ -52,11 +76,11 @@
 }
 
 .workspace-tab__badge {
-  font-size: 9px;
+  font-size: calc(9px * var(--workspace-tab-scale));
   font-weight: 700;
   letter-spacing: 0.04em;
-  padding: 1px 4px;
-  border-radius: 3px;
+  padding: calc(1px * var(--workspace-tab-scale)) calc(4px * var(--workspace-tab-scale));
+  border-radius: calc(3px * var(--workspace-tab-scale));
   background: var(--color-gray-30, #ced4da);
   color: var(--color-gray-80, #343a40);
 }
@@ -73,20 +97,21 @@
   color: var(--text-primary-color, #1e1e1e);
   font: inherit;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: calc(4px * var(--workspace-tab-scale));
   opacity: 0.65;
 }
 
 .workspace-tab__config {
-  font-size: 12px;
-  padding: 4px 8px 4px 0;
+  font-size: calc(12px * var(--workspace-tab-scale));
+  padding: calc(4px * var(--workspace-tab-scale)) calc(8px * var(--workspace-tab-scale)) calc(4px * var(--workspace-tab-scale)) 0;
 }
 
 .workspace-tabs__add {
-  font-size: 18px;
+  font-size: calc(18px * var(--workspace-tab-scale));
   line-height: 1;
-  padding: 3px 9px 5px;
-  margin-left: 2px;
+  /* Asymmetric because the `+` glyph does not sit centred in its own line box. */
+  padding: calc(3px * var(--workspace-tab-scale)) calc(9px * var(--workspace-tab-scale)) calc(5px * var(--workspace-tab-scale));
+  margin-left: calc(2px * var(--workspace-tab-scale));
 }
 
 .workspace-tab__config:hover,

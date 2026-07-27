@@ -67,10 +67,12 @@ import {
   writeImplement
 } from './core/implement-state.js';
 import {
+  HeldWorktree,
   ImplementWorktree,
   ensureWorktree,
   releaseWorktree
 } from './core/implement-worktree.js';
+import { describeInterrupted, interruptedRuns } from './core/implement-recovery.js';
 import { layoutLabel, DEFAULT_BOUND_TEXT_FONT_SIZE } from './core/text-layout.js';
 import {
   elementsFor,
@@ -1559,8 +1561,18 @@ function recordImplementUsage(
  * card that has no element at all — so the guards are stated once and cannot drift apart.
  * Answers immediately and reports over the socket: implementing has no time limit, so a
  * held-open request would only look like a hang.
+ *
+ * `resume` is the same run with one thing added to the prompt, and one guard added in front of
+ * it. Not a route of its own: everything below — the per-issue guard, the cap, the worktree,
+ * the release — is identical, and a second copy of it would be a second place for the guard
+ * that stops one issue becoming two pull requests to be got wrong.
  */
-async function beginImplement(res: Response, workspaceId: string, issueUrl: string): Promise<void> {
+async function beginImplement(
+  res: Response,
+  workspaceId: string,
+  issueUrl: string,
+  options: { resume?: boolean } = {}
+): Promise<void> {
   if (!isIssueUrl(issueUrl)) {
     res.status(400).json({ success: false, error: `Not a GitHub issue URL: ${issueUrl}` });
     return;
@@ -1569,6 +1581,19 @@ async function beginImplement(res: Response, workspaceId: string, issueUrl: stri
   const existing = readImplement(workspaceId, issueUrl);
   if (existing?.state === 'running') {
     res.status(409).json({ success: false, error: 'An implementation is already in flight for this issue.' });
+    return;
+  }
+  // Resuming is a claim about the past — that there is an attempt to continue — so it is
+  // refused when the server does not agree there was one. A resume that quietly became a
+  // fresh run would be the exact failure this feature exists to stop, arriving through the
+  // button that was meant to prevent it.
+  if (options.resume && existing?.state !== 'interrupted') {
+    res.status(409).json({
+      success: false,
+      error: existing
+        ? `There is no interrupted run to resume for this issue; it is ${existing.state}.`
+        : 'There is no interrupted run to resume for this issue.'
+    });
     return;
   }
   if (existing?.state === 'done' && existing.url) {
@@ -1664,9 +1689,18 @@ async function beginImplement(res: Response, workspaceId: string, issueUrl: stri
       });
     }
 
+    // Read here rather than remembered from the record: the record says a run was interrupted,
+    // the worktree says what is actually in it, and the second is what the agent is about to
+    // be looking at. Nothing has touched the checkout between the guard above and this line,
+    // and `ensureWorktree` reuses it rather than rebuilding it.
+    const resuming = options.resume
+      ? (await interruptedRuns(workspace)).find((run) => run.issueUrl === issueUrl)?.worktree ?? null
+      : null;
+
     const result = await runImplementAgent(workspace, issueUrl, {
       agentCommand: IMPLEMENT_AGENT_COMMAND as string,
       worktree,
+      resuming,
       // Reached only when the configured command already streams. Otherwise the agent
       // prints prose at exit, there is nothing to read, and this is never called.
       onUsage: (usage) => recordImplementUsage(workspaceId, issueUrl, usage)
@@ -1724,6 +1758,61 @@ async function releaseWorktreeFor(
   }
 }
 
+/**
+ * Give back, at startup, the runs the previous process took with it.
+ *
+ * A run cannot survive the process that spawned it — the agent is a child, and the tree goes
+ * together — so anything found here is over, whatever it looked like when it stopped. That is
+ * what makes this safe to do once, on the way up, with nothing running to race against.
+ *
+ * Derived, not restored: `implement-recovery.ts` reads git, and git is the only participant
+ * that was still there. Only runs the map does not already know about are written, which at
+ * startup is all of them and would matter if this were ever called again.
+ *
+ * Not awaited by the caller, and not fatal. It spawns a handful of git processes per project,
+ * and a board must not wait on them to start answering — the cost of that is that the record
+ * appears a moment after the port opens, which is a moment nobody is looking at a panel in.
+ */
+async function recoverInterruptedRuns(): Promise<void> {
+  let workspaces: Workspace[];
+  try {
+    workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  } catch (error) {
+    logger.warn(`Could not look for interrupted implementations: ${(error as Error).message}`);
+    return;
+  }
+
+  for (const workspace of workspaces) {
+    if (workspace.error) continue;
+    try {
+      for (const run of await interruptedRuns(workspace)) {
+        if (readImplement(workspace.id, run.issueUrl)) continue;
+        const held: HeldWorktree = run.worktree;
+        recordImplement(workspace.id, run.issueUrl, {
+          state: 'interrupted',
+          url: null,
+          error: describeInterrupted(held),
+          worktree: held.path,
+          // Both null on purpose. The worktree knows what was done and not when it was
+          // started or when it stopped, and an instant invented here would run a clock in
+          // the panel counting time nobody spent.
+          startedAt: null,
+          endedAt: null,
+          usage: null
+        });
+        logger.warn(
+          `${run.issueUrl} was being implemented when a previous server stopped; `
+          + `its checkout is still at ${held.path} (${held.commits} commit(s), ${held.changes} uncommitted path(s))`
+        );
+      }
+    } catch (error) {
+      logger.warn(
+        `Could not look for interrupted implementations in "${workspace.id}": ${(error as Error).message}`
+      );
+    }
+  }
+}
+
 /** The agent writes to the repository, so every entrance carries the same two guards. */
 function implementingRefused(res: Response): boolean {
   if (!IMPLEMENT_AGENT_COMMAND) {
@@ -1761,7 +1850,7 @@ app.post('/api/issue-block/:id/implement', async (req: Request, res: Response) =
     return res.status(400).json({ success: false, error: 'This block has no issue to implement.' });
   }
 
-  await beginImplement(res, workspaceId, issueUrl);
+  await beginImplement(res, workspaceId, issueUrl, { resume: req.body?.resume === true });
 });
 
 /**
@@ -1769,6 +1858,10 @@ app.post('/api/issue-block/:id/implement', async (req: Request, res: Response) =
  *
  * A mirrored card is drawn from GitHub and never synced, so there is no element id to name
  * it by — but there is an issue, and the issue is what is being implemented.
+ *
+ * `resume: true` continues an interrupted attempt instead of starting one. A flag on the
+ * existing route rather than a route of its own, because it is one run either way: what
+ * changes is a paragraph of the prompt, and every guard around it is the same.
  */
 app.post('/api/implement', async (req: Request, res: Response) => {
   if (implementingRefused(res)) return;
@@ -1778,7 +1871,7 @@ app.post('/api/implement', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: 'No issue URL was given.' });
   }
 
-  await beginImplement(res, workspaceIdFrom(req), issueUrl);
+  await beginImplement(res, workspaceIdFrom(req), issueUrl, { resume: req.body?.resume === true });
 });
 
 /**
@@ -3067,6 +3160,11 @@ async function startServer(): Promise<void> {
     // server that never came up; lets `excalidraw-canvas stop` find us.
     writePidFile(PORT, process.pid);
     ownsPidFile = true;
+
+    // Whatever the last process was in the middle of when it stopped. Started here rather
+    // than before `listen` so a slow git cannot delay the board coming up, and deliberately
+    // not awaited: nothing else depends on it having finished.
+    void recoverInterruptedRuns();
   });
 
   const shutdown = (signal: NodeJS.Signals): void => {

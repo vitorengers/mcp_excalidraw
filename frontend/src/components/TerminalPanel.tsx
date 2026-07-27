@@ -1,7 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { TERMINAL_FONT_RANGE } from '../../../src/core/terminal-block'
+import {
+  TERMINAL_FONT_FAMILY,
+  TERMINAL_FONT_RANGE,
+  TERMINAL_LINE_HEIGHT
+} from '../../../src/core/terminal-block'
 import type { Rect } from '../../../src/core/anchored-placement'
 import './TerminalPanel.css'
 
@@ -44,12 +48,6 @@ export interface TerminalPanelProps {
   /** A new one, from the buttons on the header. Clamped by whoever holds the state. */
   onFontSize: (next: number) => void
 }
-
-/**
- * A monospace stack that exists on the machines this runs on, kept in one place because
- * `terminal-block.ts` measures a cell against it and the two must not drift.
- */
-const FONT_FAMILY = "'Cascadia Code', 'Cascadia Mono', Menlo, Consolas, 'Courier New', monospace"
 
 /**
  * A wheel the emulator did not want, given to the board instead of dropped.
@@ -141,10 +139,12 @@ const TerminalScreen: React.FC<{
     if (!host) return
 
     const terminal = new Terminal({
-      fontFamily: FONT_FAMILY,
+      // Both from `terminal-block.ts`, and not because they are constants. The grid is
+      // derived from this font's measured line box times this multiplier, so an emulator
+      // opened with either of its own would be drawing a row the block never divided by.
+      fontFamily: TERMINAL_FONT_FAMILY,
       fontSize,
-      // The same 1.35 the block's cell metric is derived from, so `cols`×`rows` fills it.
-      lineHeight: 1.35,
+      lineHeight: TERMINAL_LINE_HEIGHT,
       cols,
       rows,
       cursorBlink: true,
