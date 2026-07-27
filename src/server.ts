@@ -1328,10 +1328,12 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
       markState('created', { issueUrl: result.issueUrl, issueError: null, observation });
       logger.info(`Issue block ${elementId} created ${result.issueUrl}`);
 
-      // The issue exists now, so it no longer belongs in the column the observation was
-      // written in — the first one, which is where the `+` drops a block and where GitHub's
-      // *Item added to project* workflow leaves the issue the agent just created. Without
-      // this the two populations share a column and only a person can tell them apart.
+      // The issue exists now, so it no longer belongs where the observation was written —
+      // the notes column, which the canvas draws for itself and which no project item can
+      // be in. The issue the agent created is on the project, in whichever column its
+      // *Item added to project* workflow put it; that decision is made outside this
+      // repository and cannot be read back, so this move is what makes the landing column
+      // something we know rather than something we hope for.
       //
       // Deliberately not awaited and never fatal, exactly as for the In Progress move: the
       // issue is already created by the time this runs, and a `gh` working through its

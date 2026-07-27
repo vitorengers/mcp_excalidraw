@@ -6,17 +6,30 @@
  * for its card, a draft block holding the top of a column — and arithmetic can be checked
  * without driving a browser. The component that also did the arithmetic could not be.
  *
- * Everything here is in **scene coordinates**. The caller decides where the region sits;
- * `boardWidth` is exported so it can place the mirror by its right edge, which is what
- * anchoring it to the left of the board's own content needs.
+ * Everything here is in **scene coordinates**. Where the region sits is `resolveMirrorOrigin`'s
+ * answer, measured once against the board's own content and then kept; `mirrorWidth` is what
+ * the caller hands it, being the whole width the mirror is about to draw.
+ *
+ * Not every column here is GitHub's. The first one is the canvas's own — where the `+`
+ * drops an observation, and the only column on the mirror no option is behind. It is added
+ * by `layoutMirror`; `layoutBoard` below it draws whatever it is given.
  *
  * Every shape produced carries `customData.kind = "project-board"`. That mark is what
  * keeps the mirror out of the export and out of the autosync: these elements are derived
  * from GitHub and rebuilt from it, never restored from a file.
  */
 import { layoutLabel } from './text-layout.js';
-import { BoardSection, ProjectBoard, NO_STATUS_OPTION_ID } from './project-board-types.js';
+import {
+  BoardSection,
+  ProjectBoard,
+  NO_STATUS_OPTION_ID,
+  NOTES_OPTION_ID,
+  NOTES_NAME,
+} from './project-board-types.js';
 import { TERMINAL_KIND } from './terminal-block.js';
+
+// Re-exported so the canvas can name the notes column without importing two modules.
+export { NOTES_OPTION_ID, NOTES_NAME } from './project-board-types.js';
 
 /** The mark that says an element belongs to the mirror rather than to the board. */
 export const MIRROR_KIND = 'project-board';
@@ -115,7 +128,14 @@ export interface MirrorColumn {
  */
 export interface DraftBlock {
   id: string;
-  /** The column the block belongs to. A column the board no longer has is ignored. */
+  /**
+   * The column the block belongs to.
+   *
+   * A column this layout does not have is ignored — `layoutBoard` has nowhere to put it and
+   * will not invent one. `layoutMirror` is where that stops being true: it draws a column
+   * that is the canvas's own, so a homeless block has a home, and it rehomes before laying
+   * anything out.
+   */
   sectionOptionId: string;
   /** The block's current height. It grows as its title is typed, which is the point. */
   height: number;
@@ -355,8 +375,9 @@ function label(
  *
  * It carried two numbers, `drafts / cards`, because two populations shared one column and
  * the header had to say which was which. They no longer share one: hand-written blocks land
- * in the first column and a researched issue is moved out of it, so the split is done by the
- * columns and repeating it here says nothing.
+ * in the notes column, which no card can be in at all, so the split is done by the columns
+ * and repeating it here says nothing. The notes column is therefore always a draft count —
+ * by this same sum, with two of its three terms zero, rather than by a rule of its own.
  *
  * **Not a revert to `cards.length + hidden`.** That number counted the mirrored items alone,
  * which is why a column holding three drafts and no cards read `Todo (0)` — the defect #79
@@ -380,6 +401,9 @@ function cardText(title: string, number: number | null, error: string | undefine
  * Columns follow the order the project declares its options in, so where a section sits
  * is GitHub's decision rather than this file's — including a "No Status" section, which
  * `toBoard` only appends when something actually lands in it.
+ *
+ * It draws the sections it is handed and asks nothing about where they came from. The
+ * canvas calls `layoutMirror`, which hands it one the project never declared.
  */
 export function layoutBoard(
   board: ProjectBoard,
@@ -446,10 +470,11 @@ export function layoutBoard(
     });
     elements.push(header, label(header, headerText(section, columnDrafts.length), HEADER_FONT_SIZE, stroke));
 
-    // `+` on the first column only. Which column that is comes from the project, not from
-    // a name written here: GitHub's *Item added to project* workflow puts a new issue in
-    // the first option, so that is the only column this can honestly create into.
-    if (index === 0 && section.optionId !== NO_STATUS_OPTION_ID) {
+    // `+` on the notes column, which is the canvas's own and the only column a block the
+    // reader is still writing belongs in. It used to be drawn on `index === 0` — on
+    // whichever option the project declared first — which is what made an empty `Status`
+    // option on GitHub load-bearing for a population GitHub never sees.
+    if (section.optionId === NOTES_OPTION_ID) {
       const add = rectangle({
         id: 'pb-add',
         x: x + COLUMN_WIDTH - ADD_SIZE - 8,
@@ -467,8 +492,10 @@ export function layoutBoard(
     }
 
     // The drafts hold the top of the column and the cards start under them. A draft whose
-    // column the board no longer has is left out here and gets no placement: rehoming it
-    // into a column it was never in would be a worse answer than leaving it where it is.
+    // column this layout does not have is left out here and gets no placement: picking one
+    // of the project's own columns for it would be a worse answer than leaving it where it
+    // is. `layoutMirror` sends it to the notes column before it gets this far, which is a
+    // different decision — that column is not one of the project's.
     let y = cardsTop;
     for (const draft of columnDrafts) {
       placements.push({ id: draft.id, x, y, width: COLUMN_WIDTH, height: draft.height });
@@ -541,6 +568,64 @@ export function layoutBoard(
     drafts: placements,
     bounds: { x: origin.x, y: origin.y, width, height: bottom + PADDING - origin.y },
   };
+}
+
+/**
+ * The section observations are written in — the canvas's own, with no option behind it.
+ *
+ * Empty of cards and always will be: nothing mirrored can land in a column GitHub has no
+ * name for, which is exactly what makes it safe to draw one. Its header therefore counts
+ * the drafts and nothing else, which `headerText` already does for any column.
+ */
+export function notesSection(): BoardSection {
+  return { optionId: NOTES_OPTION_ID, name: NOTES_NAME, cards: [], hidden: 0 };
+}
+
+/**
+ * The columns the canvas draws: the notes column, then the project's own, in its order.
+ *
+ * First, and not because anything sorts it there — it is put in front, because that is
+ * where the observations were already written and the `+` goes with them. The project's
+ * columns keep the positions they had when an option stood in for this one, so the hues
+ * they are drawn in do not shift either.
+ */
+export function mirrorSections(board: ProjectBoard): BoardSection[] {
+  return [notesSection(), ...board.sections];
+}
+
+/** How wide the mirror is, the notes column included. The caller anchors by this. */
+export function mirrorWidth(board: ProjectBoard): number {
+  return boardWidth(board.sections.length + 1);
+}
+
+/**
+ * Lay out the mirror as the canvas draws it: the project's columns, and the one that is not.
+ *
+ * `layoutBoard` renders whatever sections it is handed and knows nothing about where they
+ * came from. This is the layer that decides — it is the only place that says the notes
+ * column exists, so it is also where a block whose column has gone can be given one.
+ *
+ * **Rehoming is the reversal.** A draft naming a column the board no longer has used to be
+ * left where it sat, placed by nothing and counted by nothing: an authored element quietly
+ * unplaced, overlapped by the next redraw. That was the right answer while every column was
+ * GitHub's — none of them was where the block *belonged*, only where it might be guessed
+ * to. The notes column is where it belongs, by construction: every draft was written as an
+ * observation, and observations go here. The blocks stamped with the deleted option's id
+ * are precisely that population.
+ */
+export function layoutMirror(
+  board: ProjectBoard,
+  origin: { x: number; y: number },
+  options: LayoutOptions = {}
+): MirrorLayout {
+  const sections = mirrorSections(board);
+  const drawn = new Set(sections.map((section) => section.optionId));
+  const drafts = (options.drafts ?? []).map((draft) => (
+    drawn.has(draft.sectionOptionId)
+      ? draft
+      : { ...draft, sectionOptionId: NOTES_OPTION_ID }
+  ));
+  return layoutBoard({ ...board, sections }, origin, { ...options, drafts });
 }
 
 /** Which column a point falls in, or null when it falls between or beyond them. */

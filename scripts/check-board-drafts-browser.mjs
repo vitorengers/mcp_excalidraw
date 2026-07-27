@@ -16,13 +16,17 @@
  * triggers, so a drop that moved the cards but left the header stale would look identical here
  * until somebody read the text.
  *
- * The fixture is a **four-column** project with the observations' column first, which is the
- * shape #86 asks for. Two things only a browser settles come out of that: the columns are drawn
- * in the order the project declares its options, and the `+` lands on the first of them rather
- * than on a column named in this repository. The last case then does what a finished research
+ * The fixture is a **three-column** project, and the browser draws four. The fourth is the
+ * column observations are written in, which is the canvas's own: #97 took it off GitHub, where
+ * it had been an option holding no item and existing only to lend its id to blocks that live
+ * here. So the things only a browser settles are that a column with no option behind it is
+ * drawn at all, that it is first and carries the `+`, that the project's own columns are drawn
+ * after it in the order the project declares them, and that a block dropped into it is stamped
+ * with an id the project cannot rename away. The last case then does what a finished research
  * run does to a block — writes the issue URL onto it while that issue's card sits in a
  * *different* column — because the reconciliation matches on the URL and a check that put the
- * card in the same column could not tell the two rules apart.
+ * card in the same column could not tell the two rules apart. It is no longer possible to put
+ * the card in the same column, which is the point: no project item can be in this one.
  *
  * It also asserts what orders that stack. `customData.draftCreatedAt` is the key; the stamp
  * in the element id is only a fallback for blocks made before the field existed. Both are
@@ -44,7 +48,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -84,6 +88,12 @@ if (!existsSync(frontend)) {
   process.exit(1);
 }
 
+if (!existsSync(join(repoRoot, 'dist', 'core', 'project-board-types.js'))) {
+  console.error('  FAIL  the compiled server exists — dist/core/project-board-types.js not found');
+  console.error('        (run ./node_modules/.bin/tsc first)');
+  process.exit(1);
+}
+
 let failures = 0;
 const check = (name, condition, detail = '') => {
   if (condition) console.log(`  ok    ${name}`);
@@ -105,15 +115,20 @@ const fixturePath = join(workDir, 'fixture.json');
 const registryPath = join(workDir, 'workspaces.json');
 
 /**
- * Four columns, in the order the project declares them.
+ * Three columns, in the order the project declares them — and no option for the notes one.
  *
- * `My Notes` is first because that is where the observations are written and where the `+`
- * therefore has to be — which column that is comes from the project's own ordering, never
- * from a name in this repository, and a fixture with four options is what shows it.
- * A researched issue is moved out of it into `Todo`, so `Todo` here already holds one card
- * that has been through that.
+ * That absence is the fixture's whole point: the column observations are written in has to
+ * be drawn from nothing the project says. Its id and its name are read from the compiled
+ * module that reserves them rather than written out here, so a check that agreed with the
+ * code only by being typed the same way could not pass.
+ *
+ * A researched issue is moved out of the notes column into `Todo`, so `Todo` here already
+ * holds one card that has been through that.
  */
-const MY_NOTES = { id: 'aa11bb22', name: 'My Notes' };
+const notesModule = await import(pathToFileURL(
+  join(repoRoot, 'dist', 'core', 'project-board-types.js')
+).href);
+const NOTES = { id: notesModule.NOTES_OPTION_ID, name: notesModule.NOTES_NAME };
 const TODO = { id: 'f75ad846', name: 'Todo' };
 const DOING = { id: '47fc9ee4', name: 'In Progress' };
 const DONE = { id: '98236657', name: 'Done' };
@@ -138,11 +153,11 @@ writeFileSync(fixturePath, JSON.stringify({
     id: 'PVT_kwHOBVSHIs4BefUS',
     title: 'mcp_excalidraw',
     url: 'https://github.com/users/vitorengers/projects/5',
-    field: { id: 'PVTSSF_status', name: 'Status', options: [MY_NOTES, TODO, DOING, DONE] },
+    field: { id: 'PVTSSF_status', name: 'Status', options: [TODO, DOING, DONE] },
     items: { pageInfo: { hasNextPage: false }, nodes: [
-      item('PVTI_a', 3, 'Oldest note', '2026-07-01T10:00:00Z', MY_NOTES),
-      item('PVTI_b', 21, 'Newest note', '2026-07-20T10:00:00Z', MY_NOTES),
-      item('PVTI_c', 12, 'Middle note', '2026-07-10T10:00:00Z', MY_NOTES),
+      item('PVTI_a', 3, 'Oldest one', '2026-07-01T10:00:00Z', DOING),
+      item('PVTI_b', 21, 'Newest one', '2026-07-20T10:00:00Z', DOING),
+      item('PVTI_c', 12, 'Middle one', '2026-07-10T10:00:00Z', DOING),
       item('PVTI_d', 9, 'Researched already', '2026-07-05T10:00:00Z', TODO),
     ] },
   } } },
@@ -365,8 +380,17 @@ const toViewport = (scene, x, y) => ({
   x: (x + scene.view.scrollX) * scene.view.zoom + scene.view.offsetLeft,
   y: (y + scene.view.scrollY) * scene.view.zoom + scene.view.offsetTop,
 });
-/** The mirrored cards in the column the drafts are dropped into — the first one. */
-const notesCards = (scene) => scene.cards.filter((element) => element.col === MY_NOTES.id);
+/**
+ * The mirrored cards in the column the drafts are dropped into.
+ *
+ * Always none of them, and that is asserted rather than assumed: the column is the canvas's
+ * own and no project item can carry its id. It used to be the busiest column on the fixture,
+ * which is what made a `+` on "whichever option is first" look reasonable.
+ */
+const notesCards = (scene) => scene.cards.filter((element) => element.col === NOTES.id);
+
+/** Every card the project put on the board — all of them in a column of the project's. */
+const projectCards = (scene) => scene.cards.filter((element) => element.col !== NOTES.id);
 
 try {
   await waitFor(async () => (await fetch(`${BASE}/health`)).ok, 'the canvas server');
@@ -395,19 +419,24 @@ try {
   let scene = await evaluate(PROBE);
   await shot('01-mirror');
 
-  console.log('1. four columns in the order the project declares them, with the + on the first');
-  check('every option became a column, left to right in the project\'s own order',
-        JSON.stringify(scene.columns) === JSON.stringify([MY_NOTES.id, TODO.id, DOING.id, DONE.id]),
+  console.log('1. the canvas\'s own column first, then the three the project declares, with the + on it');
+  check('a column is drawn for the notes, though the project declares no option for it',
+        scene.columns.includes(NOTES.id), JSON.stringify(scene.columns));
+  check('first, and the project\'s own columns after it in the project\'s own order',
+        JSON.stringify(scene.columns) === JSON.stringify([NOTES.id, TODO.id, DOING.id, DONE.id]),
         JSON.stringify(scene.columns));
-  check('and the + is on the first of them, which is where an observation is written',
-        scene.add?.col === MY_NOTES.id, JSON.stringify(scene.add));
+  check('and the + is on it, not on the first option the project happens to declare',
+        scene.add?.col === NOTES.id, JSON.stringify(scene.add));
+  check('nothing mirrored is in it, because nothing on the project can be',
+        notesCards(scene).length === 0 && projectCards(scene).length === 4,
+        JSON.stringify(scene.cards.map((card) => card.col)));
 
   console.log('\n2. the + drops its block above the blocks already in the column');
-  // What the header said before anything was dropped: the three mirrored cards, and
-  // nothing else, because there is nothing else in the column yet.
-  const headerBefore = scene.headers[MY_NOTES.id];
-  check('the header starts on the mirrored cards alone',
-        headerBefore === 'My Notes (3)', JSON.stringify(scene.headers));
+  // What the header said before anything was dropped: nothing, because the column holds
+  // nothing until the reader writes something into it.
+  const headerBefore = scene.headers[NOTES.id];
+  check('the header starts empty, the column having no card it could ever hold',
+        headerBefore === `${NOTES.name} (0)`, JSON.stringify(scene.headers));
 
   const plus = toViewport(scene, scene.add.x + scene.add.w / 2, scene.add.y + scene.add.h / 2);
   await click(plus.x, plus.y);
@@ -415,16 +444,19 @@ try {
   scene = await evaluate(PROBE);
   await shot('02-one-draft');
   check('one click, one block', scene.drafts.length === 1, JSON.stringify(scene.drafts));
-  check('above every card in that column',
-        scene.drafts.length === 1 && notesCards(scene).every((card) => card.y >= scene.drafts[0].y + scene.drafts[0].h),
+  check('in the notes column, carrying the reserved id rather than an option id',
+        scene.drafts[0]?.col === NOTES.id, JSON.stringify(scene.drafts[0]));
+  check('at the top of it, with no mirrored card anywhere below it to make room',
+        scene.drafts.length === 1 && notesCards(scene).length === 0,
         `${JSON.stringify(scene.drafts[0])} vs ${JSON.stringify(notesCards(scene))}`);
-  // #79: the block just dropped was invisible to the only number above it. #86 gives it a
-  // column of its own and the number goes back to being one — of everything the column
-  // holds, drafts included, which is the half a plain revert would have lost. The count is
+  // #79: the block just dropped was invisible to the only number above it. #86 gave it a
+  // column of its own and the number went back to being one — of everything the column
+  // holds, drafts included, which is the half a plain revert would have lost. #97 took the
+  // column off GitHub, so drafts are now the only thing that number can ever count. It is
   // read off the scene rather than off the layout, because the layout is where it was
   // already right — the question here is whether the click redraws the header at all.
-  check('and the header now counts it: one number, four things',
-        scene.headers[MY_NOTES.id] === 'My Notes (4)', JSON.stringify(scene.headers));
+  check('and the header now counts it',
+        scene.headers[NOTES.id] === `${NOTES.name} (1)`, JSON.stringify(scene.headers));
   check('while a column with no drafts in it is untouched',
         scene.headers[TODO.id] === 'Todo (1)', JSON.stringify(scene.headers));
   check('and an empty one still reads zero',
@@ -442,11 +474,11 @@ try {
   check('and the newer one is on top, not under the one already there',
         scene.drafts.length === 2 && scene.drafts[0].at > scene.drafts[1].at,
         scene.drafts.map((draft) => `${draft.id}@${draft.y}`).join(' | '));
-  check('the cards start below both of them',
-        notesCards(scene).every((card) => scene.drafts.every((draft) => card.y >= draft.y + draft.h)),
-        JSON.stringify(scene));
+  check('and neither of them overlaps the other',
+        scene.drafts.length === 2 && scene.drafts[1].y >= scene.drafts[0].y + scene.drafts[0].h,
+        JSON.stringify(scene.drafts));
   check('and the header moved with the second one, on the click rather than on the poll',
-        scene.headers[MY_NOTES.id] === 'My Notes (5)', JSON.stringify(scene.headers));
+        scene.headers[NOTES.id] === `${NOTES.name} (2)`, JSON.stringify(scene.headers));
 
   console.log('\n3. typing into a block pushes what is below it down, with no wait for the poll');
   // Nothing selected before the click. A block left selected puts Excalidraw's properties
@@ -460,7 +492,11 @@ try {
   scene = await evaluate(PROBE);
   const top = scene.drafts[0];
   const below = scene.drafts[1];
-  const cardsBefore = notesCards(scene).map((card) => card.y);
+  // What has to move: the block under the one being typed into. What must not: every card
+  // on the board, all of which are in the project's own columns now that this one holds
+  // none. Before #97 the first of those was the same column and both claims were one.
+  const belowBefore = below.y;
+  const cardsBefore = projectCards(scene).map((card) => card.y);
   const centre = toViewport(scene, top.x + top.w / 2, top.y + top.h / 2);
   await click(centre.x, centre.y, 2);
   await sleep(500);
@@ -478,21 +514,26 @@ try {
   }
   await shot('04-typing');
   const grown = scene.drafts.find((draft) => draft.id === top.id);
-  const cardsAfter = notesCards(scene).map((card) => card.y);
+  const belowAfter = scene.drafts.find((draft) => draft.id === below.id)?.y ?? null;
+  const cardsAfter = projectCards(scene).map((card) => card.y);
   check('the block grew as it was typed into', Boolean(grown) && grown.h > top.h, `${top.h} → ${grown?.h}`);
   check('the editor stayed open throughout', scene.editorOpen, `editingId=${scene.editingId}`);
-  check('the cards below had already moved down in the probe that saw it grow',
-        grewAfterMs !== null && cardsAfter.length === cardsBefore.length
-        && cardsAfter.every((y, index) => y > cardsBefore[index]),
-        `${cardsBefore.join(',')} → ${cardsAfter.join(',')}`);
+  check('the block below it had already moved down in the probe that saw it grow',
+        grewAfterMs !== null && belowAfter !== null && belowAfter > belowBefore,
+        `${belowBefore} → ${belowAfter}`);
   check('by exactly what the block grew by',
-        Boolean(grown) && cardsAfter.every((y, index) => Math.abs((y - cardsBefore[index]) - (grown.h - top.h)) < 1),
-        `grew ${grown && grown.h - top.h}, cards moved ${cardsAfter.map((y, i) => y - cardsBefore[i]).join(',')}`);
+        Boolean(grown) && belowAfter !== null
+        && Math.abs((belowAfter - belowBefore) - (grown.h - top.h)) < 1,
+        `grew ${grown && grown.h - top.h}, the block below moved ${belowAfter - belowBefore}`);
+  check('and no card in any of the project\'s columns moved at all',
+        cardsAfter.length === cardsBefore.length
+        && cardsAfter.every((y, index) => Math.abs(y - cardsBefore[index]) < 1),
+        `${cardsBefore.join(',')} → ${cardsAfter.join(',')}`);
   check('and the block under the caret did not move',
         Boolean(grown) && Math.abs(grown.y - top.y) < 1 && Math.abs(grown.x - top.x) < 1,
         `${JSON.stringify(top)} → ${JSON.stringify(grown)}`);
   check('nor did the block below it get overlapped',
-        (scene.drafts.find((draft) => draft.id === below.id)?.y ?? 0) >= grown.y + grown.h,
+        (belowAfter ?? 0) >= grown.y + grown.h,
         `${JSON.stringify(grown)} over ${JSON.stringify(scene.drafts.find((draft) => draft.id === below.id))}`);
 
   console.log('\n4. leaving the editor changes nothing that was already right');
@@ -505,13 +546,13 @@ try {
   scene = await evaluate(PROBE);
   await shot('05-column');
   check('the cards are where the last relayout put them',
-        notesCards(scene).every((card, index) => Math.abs(card.y - cardsAfter[index]) < 1),
-        `${cardsAfter.join(',')} → ${notesCards(scene).map((card) => card.y).join(',')}`);
+        projectCards(scene).every((card, index) => Math.abs(card.y - cardsAfter[index]) < 1),
+        `${cardsAfter.join(',')} → ${projectCards(scene).map((card) => card.y).join(',')}`);
   check('the blocks still stack newest-first',
         scene.drafts.length === 2 && scene.drafts[0].id === top.id,
         scene.drafts.map((draft) => `${draft.id}@${draft.y}`).join(' | '));
-  check('and the header still counts five — typing into a block does not make a sixth',
-        scene.headers[MY_NOTES.id] === 'My Notes (5)', JSON.stringify(scene.headers));
+  check('and the header still counts two — typing into a block does not make a third',
+        scene.headers[NOTES.id] === `${NOTES.name} (2)`, JSON.stringify(scene.headers));
   const column = [...scene.drafts, ...notesCards(scene)].sort((a, b) => a.y - b.y);
   check('and nothing in the column overlaps anything else',
         column.every((box, index) => index === 0 || box.y >= column[index - 1].y + column[index - 1].h),
@@ -539,10 +580,11 @@ try {
   console.log('\n6. a researched block goes when its issue turns up as a card — in any column');
   // What a finished run leaves behind: the block carries the URL of the issue it produced,
   // and the server has since moved that issue out of the column the block was written in.
-  // The card is under Todo and the block is under My Notes, so a reconciliation that
-  // matched on the column would keep the block forever and the reader would end up with
-  // both. Written through the API rather than into the scene, so the update reaches the
-  // browser the way a real run's does — over the socket.
+  // The card is under Todo and the block is in the notes column, which is not a column the
+  // card could be in at all, so a reconciliation that matched on the column would keep the
+  // block forever and the reader would end up with both. Written through the API rather
+  // than into the scene, so the update reaches the browser the way a real run's does —
+  // over the socket.
   const researched = scene.drafts[0];
   const RESEARCHED_URL = 'https://github.com/vitorengers/mcp_excalidraw/issues/9';
   check('the card for that issue really is in another column',
@@ -576,7 +618,7 @@ try {
         reconciled?.drafts.length === 1 && reconciled.drafts[0].id === upper.id,
         JSON.stringify(reconciled?.drafts));
   check('and the header counts one fewer',
-        reconciled?.headers[MY_NOTES.id] === 'My Notes (4)', JSON.stringify(reconciled?.headers));
+        reconciled?.headers[NOTES.id] === `${NOTES.name} (1)`, JSON.stringify(reconciled?.headers));
   check('while the column the issue was moved into is unchanged',
         reconciled?.headers[TODO.id] === 'Todo (1)', JSON.stringify(reconciled?.headers));
 } catch (error) {

@@ -21,12 +21,13 @@ import type { BoardSectionElement } from '../../src/core/board-sections'
 import { referenceImageName } from '../../src/core/pasted-images'
 import { layoutLabel } from '../../src/core/text-layout'
 import {
-  layoutBoard,
-  boardWidth,
+  layoutMirror,
+  mirrorWidth,
   columnAt,
   mirrorAnchors,
   resolveMirrorOrigin,
-  MIRROR_KIND
+  MIRROR_KIND,
+  NOTES_OPTION_ID
 } from '../../src/core/project-board-layout'
 import type { CardImplementState, DraftBlock, MirrorColumn } from '../../src/core/project-board-layout'
 import type { ProjectBoard } from '../../src/core/project-board-types'
@@ -1397,7 +1398,10 @@ function App(): JSX.Element {
     // is now said once, so a check can ask it without a browser.
     const anchors = mirrorAnchors(own)
 
-    const width = boardWidth(board.sections.length)
+    // The notes column is drawn too, and it is as wide as the rest, so the width the first
+    // measurement places the region by has to include it — `mirrorWidth`, not `boardWidth`,
+    // which counts only the options the project declares.
+    const width = mirrorWidth(board)
     const bounds = anchors.length > 0
       ? (() => {
         const [minX, minY] = getCommonBounds(anchors as readonly NonDeletedExcalidrawElement[])
@@ -1411,8 +1415,10 @@ function App(): JSX.Element {
 
     // The blocks the `+` dropped hold the top of their column, newest first, and the
     // mirrored cards start below them. Both halves of that arithmetic come from
-    // `layoutBoard`, so the room reserved and the slot a block is put in cannot disagree.
-    const layout = layoutBoard(board, origin, {
+    // `layoutMirror`, so the room reserved and the slot a block is put in cannot disagree
+    // — and it is what draws the notes column those blocks live in, which the project
+    // itself declares nothing for.
+    const layout = layoutMirror(board, origin, {
       errors: projectBoardRef.current.errors,
       implementing: projectBoardRef.current.implementing,
       drafts: drafts.map(draftBlockOf)
@@ -1675,13 +1681,19 @@ function App(): JSX.Element {
       if (column && column.optionId === custom.sectionOptionId) continue
 
       strayed = true
-      if (column && custom.draggable === true && typeof custom.itemId === 'string') {
+      // The notes column is the canvas's own and has no option to write, so a card dropped
+      // into it is put back and nothing is sent. Sending it would reach the server, be
+      // refused there for naming a column the project does not have, and write that refusal
+      // onto the card — an error message for a drop this side already knows is impossible.
+      // A silent snap-back is what a card that cannot be moved already does.
+      if (column && column.optionId !== NOTES_OPTION_ID
+          && custom.draggable === true && typeof custom.itemId === 'string') {
         void moveMirrorCard(custom.itemId, column.optionId)
         return
       }
     }
 
-    // Dropped in a gap, or onto a column it cannot be moved to. Put it back.
+    // Dropped in a gap, onto the notes column, or onto one it cannot be moved to. Put it back.
     if (strayed) {
       projectBoardRef.current = { ...projectBoardRef.current, signature: '' }
       renderMirror(board)
@@ -1734,10 +1746,10 @@ function App(): JSX.Element {
   /**
    * Drop an issue block at the top of a column.
    *
-   * Only the first column, because that is the only one this can honestly create into:
-   * the project's *Item added to project* workflow is what gives a new issue a status,
-   * and it puts it in the first option. An item that arrives with none shows up in the
-   * No Status section rather than vanishing.
+   * The notes column, which is the only column this can honestly create into: a block is
+   * an observation until a run turns it into an issue, and that column is the one the
+   * canvas draws for itself rather than mirroring from an option. The id it stamps onto
+   * the block is therefore the reserved one, which no project can rename away.
    */
   const addIssueBlockToColumn = (sectionOptionId: string): void => {
     const api = excalidrawAPIRef.current

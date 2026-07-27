@@ -79,19 +79,19 @@ export interface WorkspaceConfig {
   /**
    * Column an issue is moved to when its implementation starts.
    *
-   * Unset, the option named `In Progress` is used — the same reliance on GitHub's own
-   * defaults the `+` already makes on the first column. A board that renamed it says so
-   * here; a board that has no such column gets no move rather than a guess.
+   * Unset, the option named `In Progress` is used — what GitHub calls that column on a
+   * project it created. A board that renamed it says so here; a board that has no such
+   * column gets no move rather than a guess.
    */
   projectInProgressColumn?: string;
   /**
    * Column an issue is moved to when the run that researched it finishes.
    *
-   * Unset, the option named `Todo` is used. The first column is where a hand-written block
-   * is drafted, and it is where GitHub's *Item added to project* workflow leaves the issue
-   * the agent creates — so without this move the two populations share one column and only a
-   * person can tell them apart. A board that has no such column gets no move rather than a
-   * guess.
+   * Unset, the option named `Todo` is used. A hand-written block is drafted in the canvas's
+   * own notes column, which is not on the project at all; the issue the agent creates lands
+   * wherever the project's *Item added to project* workflow puts it, which this code cannot
+   * read. This move is what makes that column known instead of assumed. A board that has no
+   * such column gets no move rather than a guess.
    */
   projectTodoColumn?: string;
   /** Per-project model, effort and ceiling for each agent. See WorkspaceAgentConfig. */
