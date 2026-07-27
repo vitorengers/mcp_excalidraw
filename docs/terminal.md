@@ -182,9 +182,44 @@ screen. So the parsing happens in the block, and what it draws is a screen rathe
 
 Where it differs from the documentation card is the zoom. That card stays the same size on
 screen at any zoom, because it is a reading column pinned beside a shape. This one **is** the
-shape: the grid is fixed by the block's *scene* size — the same `cols`×`rows` the shell was told
-— and only the font scales with the board, so a terminal zoomed out is the same screen drawn
-smaller rather than a different number of columns.
+shape: the zoom scales the font and leaves the grid alone, so a terminal zoomed out is the same
+screen drawn smaller rather than a different number of columns.
+
+## The font size is an input to the grid
+
+The reader sets it, with `−` and `+` on the block's own header, between 8 and 24. What the zoom
+multiplies is that size, so the two questions stay separate: the zoom is how close the board is,
+and this is how big the text is on it.
+
+It could not be a display tweak. xterm sizes its canvas as `cols` × `rows` × the font, and the
+grid is derived from a cell that was measured at 13px — so a `+` that only assigned
+`terminal.options.fontSize` would leave the emulator drawing past the frame, and everything past
+the frame is clipped rather than scrolled (below). Bigger text, silently fewer visible columns,
+and no scrollbar to reach them.
+
+So `terminalGrid()` takes the font size as its second argument, and one size feeds three things:
+the cell, the frame — the header, the prompt strip and the padding are all `em`, so the chrome
+grows with the text it holds — and therefore the grid. **A larger font in the same block is
+fewer columns and fewer rows**, reported down the same debounced route a corner drag uses. The
+`cols`×`rows` in the header is the confirmation, because it is what came back from the shell.
+
+Two decisions the observation left open:
+
+- **It survives a reload**, in `localStorage` next to the theme, and it is **global rather than
+  per board**: it is a preference about the reader's eyes, and the same eyes read every project.
+- **It never reaches `customData`.** The block is derived and stripped at both doors, so a size
+  stored on the shape would be dropped on the way to the store and read as the block forgetting
+  it.
+
+Buttons rather than a shortcut, for a reason beyond discoverability: while the terminal has the
+keyboard every keystroke is the shell's, so `Ctrl+-` would reach the shell and not the block.
+
+The one thing measured rather than assumed: xterm's cell **width** is linear in the font —
+0.586px per font pixel across the whole range, against the 0.585 the block is drawn with — so
+the columns fit at every step. Its cell **height** is not the font times the line height; xterm
+measures the font's own line box first, which is a little over `1em`, so a row comes out nearer
+`1.55 ×` the font than the `1.35` `TERMINAL_CELL` assumes. That gap is there at 13px with no
+button pressed, which is why it is not this feature's to fix — see *What it does not do yet*.
 
 **Resizing is Excalidraw's own.** The block is a real scene element, so dragging its corner
 resizes it, dragging its middle moves it, and selecting it opens the usual style panel. That
@@ -194,10 +229,10 @@ clicks would take the shape's handles away with it. The reader's new size reache
 debounced so a drag is one request rather than one per frame.
 
 That is the collision an emulator brings, and this is how it is resolved: **the pointer stays
-with the canvas, and only the keyboard is handed over.** xterm would like the pointer, for
-selection and for scrolling, and taking it would cost the block its handles. So the strip along
-the bottom is the one part of the overlay that takes a click, and what the click does is focus
-the terminal. From then on every keystroke goes to the shell — Ctrl+C, arrows, Escape included —
+with the canvas, and it is handed back only where the overlay says what it is for.** xterm would
+like the pointer, for selection and for scrolling, and taking it would cost the block its
+handles. So two small places take a click and nothing else does: the two font buttons on the
+header, and the strip along the bottom — whose click focuses the terminal. From then on every keystroke goes to the shell — Ctrl+C, arrows, Escape included —
 and none of them reach Excalidraw, which binds every bare letter to a tool. Clicking anywhere on
 the canvas blurs it and gives the keyboard back. The strip says which of the two states it is
 in.
@@ -229,8 +264,15 @@ of the session.
 - `scripts/check-terminal-ansi-browser.mjs` — also in Chrome: an SGR escape drawn as a colour
   rather than as four characters, a real Ctrl+C interrupting a running command, and the block's
   corner still resizing it afterwards.
+- `scripts/check-terminal-font.mjs` — the arithmetic behind the size buttons: the cell, the
+  frame and therefore the grid all move with the font, the grid never grows on the way up the
+  range, and no size in it asks for a screen the block cannot hold.
+- `scripts/check-terminal-font-browser.mjs` — the buttons themselves, in Chrome. Clicked with a
+  real pointer, the grid the *shell* was told changing with them, a line exactly as wide as the
+  header's claim drawn with its last column inside the block, the shape still selectable and
+  still resizable by its corner afterwards, and the size still there after a reload.
 
-All four were written first and seen to fail against the code as it stood.
+All six were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.
@@ -242,6 +284,13 @@ browser does.
 - **Nothing streams the agents into it.** That is the destination the observation behind #51
   named, and it is a second producer on this surface rather than part of building it: tap
   `issue-agent.ts` where the chunks arrive and broadcast them. It deserves its own issue.
+- **The block claims about two rows more than it draws, at every font size.** `TERMINAL_CELL`
+  takes a row to be `1.35 ×` the font, which is the line height xterm is given; xterm applies
+  that to the font's *measured* line box, which is a little over `1em`, so a real row is nearer
+  `1.55 ×`. The columns are unaffected — the width is linear and a shade conservative — and the
+  bottom rows are the ones clipped. It predates the size buttons, which found it; correcting the
+  constant changes what every shell is told on every board, and deserves its own issue and its
+  own before-and-after check.
 - **The transcript cannot be scrolled or selected with the mouse.** The body has to stay
   transparent to the pointer for the block underneath to remain a block, so the wheel and a drag
   both belong to the canvas. A taller block shows more; a full-screen program is unaffected,

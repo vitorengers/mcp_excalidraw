@@ -30,8 +30,10 @@ import type { CardImplementState, DraftBlock, MirrorColumn } from '../../src/cor
 import type { ProjectBoard } from '../../src/core/project-board-types'
 import { TerminalPanel } from './components/TerminalPanel'
 import {
+  TERMINAL_FONT_SIZE,
   TERMINAL_KIND,
   TERMINAL_SIZE,
+  clampTerminalFont,
   terminalBlockElement,
   terminalGrid,
   terminalOrigin
@@ -152,6 +154,17 @@ const TERMINAL_HOTKEY_CODE = 'KeyT';
 
 /** How long to wait before telling the server the block was resized. */
 const TERMINAL_RESIZE_DEBOUNCE_MS = 400;
+
+/**
+ * Where the reader's terminal font size is kept.
+ *
+ * In `localStorage` alongside the theme, and global rather than per board: it is a viewing
+ * preference about the reader's eyes, not a fact about a project, and the same eyes read
+ * every board. Deliberately **not** `customData` — the block is derived and stripped at
+ * both doors, so a size stored there would be dropped on the way to the store and read as
+ * the block forgetting it.
+ */
+const TERMINAL_FONT_STORAGE_KEY = 'excalidraw-terminal-font-size';
 
 type CustomData = Record<string, unknown> | null | undefined;
 
@@ -1687,6 +1700,29 @@ function App(): JSX.Element {
   const terminalResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   /**
+   * How big the terminal's text is, before the board's zoom multiplies it.
+   *
+   * The reader's, set by the `+` and `-` on the block's header and remembered across
+   * reloads the way the theme is. It is an input to the grid rather than a display tweak:
+   * bigger text in the same block is fewer columns and fewer rows, because xterm sizes its
+   * canvas from `cols` × `rows` × the font and anything past the frame is clipped rather
+   * than scrolled. See `terminalGrid` in `src/core/terminal-block.ts`.
+   */
+  const [terminalFont, setTerminalFont] = useState<number>(() => {
+    if (typeof window === 'undefined') return TERMINAL_FONT_SIZE
+    try {
+      return clampTerminalFont(window.localStorage?.getItem(TERMINAL_FONT_STORAGE_KEY))
+    } catch (error) {
+      console.warn('Failed to read the terminal font size from localStorage:', error)
+      return TERMINAL_FONT_SIZE
+    }
+  })
+  /** The same value for the report path, which runs from timers and closes over its scope. */
+  const terminalFontRef = useRef<number>(terminalFont)
+  /** The block's scene size, so a font change can re-derive the grid without a gesture. */
+  const terminalBlockSizeRef = useRef<{ width: number; height: number } | null>(null)
+
+  /**
    * Put the block on the board, if a session is open and it is not there already.
    *
    * Placed once and then left alone, unlike the mirror, which repaints on a timer: the
@@ -1893,15 +1929,28 @@ function App(): JSX.Element {
       return next
     })
 
-    // Reported on the end of the gesture rather than during it: a resize crosses every size
-    // between where it started and where it lands, and reporting each one would be a
-    // request per frame.
-    //
-    // A report that does not land is undone rather than forgotten. The signature stands for
-    // "the server knows this size", so leaving it set after a failed request would mean the
-    // block never mentions that size again — and with a PTY behind the session that is not
-    // a stale label any more, it is a shell repainting to a width the block no longer has.
-    const grid = terminalGrid({ width: element.width, height: element.height })
+    terminalBlockSizeRef.current = { width: element.width, height: element.height }
+    reportTerminalGrid({ width: element.width, height: element.height })
+  }
+
+  /**
+   * Tell the shell what grid the block now stands for.
+   *
+   * Two things move it: the corner being dragged, and the `+` and `-` on the header. They
+   * are the same event as far as the shell is concerned — the screen it repaints into got
+   * bigger or smaller — so they share one route, one debounce and one retry.
+   *
+   * Reported on the end of the gesture rather than during it: a resize crosses every size
+   * between where it started and where it lands, and reporting each one would be a request
+   * per frame. A run of clicks on `+` coalesces the same way.
+   *
+   * A report that does not land is undone rather than forgotten. The signature stands for
+   * "the server knows this size", so leaving it set after a failed request would mean the
+   * block never mentions that size again — and with a PTY behind the session that is not a
+   * stale label any more, it is a shell repainting to a width the block no longer has.
+   */
+  const reportTerminalGrid = (size: { width: number; height: number }): void => {
+    const grid = terminalGrid(size, terminalFontRef.current)
     const signature = `${grid.cols}x${grid.rows}`
     if (signature === terminalGridRef.current) return
     terminalGridRef.current = signature
@@ -1927,6 +1976,34 @@ function App(): JSX.Element {
     terminalResizeTimerRef.current = setTimeout(() => report(1), TERMINAL_RESIZE_DEBOUNCE_MS)
   }
 
+  /**
+   * The reader moved the text, from the buttons on the block's header.
+   *
+   * Clamped here, once, rather than in the arithmetic: `terminalGrid` answers about the
+   * font it is given, and holding a size down inside it would report a grid nobody chose.
+   */
+  const changeTerminalFont = (next: number): void => {
+    const size = clampTerminalFont(next)
+    setTerminalFont((current) => (current === size ? current : size))
+  }
+
+  // Remembered, and the grid re-derived from the block it is already on. A font change is a
+  // resize the reader did not drag: the block kept its size and the screen inside it did
+  // not, so the shell has to be told the same way a corner drag tells it.
+  useEffect(() => {
+    terminalFontRef.current = terminalFont
+    try {
+      window.localStorage?.setItem(TERMINAL_FONT_STORAGE_KEY, String(terminalFont))
+    } catch (error) {
+      console.warn('Failed to save the terminal font size to localStorage:', error)
+    }
+    const size = terminalBlockSizeRef.current
+    if (size) reportTerminalGrid(size)
+    // Only the font: this is what the reader changed, and the block's own size arrives
+    // through `syncTerminalBlock` with its own report.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terminalFont])
+
   // One session per board, opened when the board is shown. Nothing is closed on the way
   // out: a terminal you switched away from keeps its shell and its transcript, and the
   // server closes every session when it goes down.
@@ -1934,6 +2011,7 @@ function App(): JSX.Element {
     if (!excalidrawAPI) return
     terminalOpenRef.current = false
     terminalGridRef.current = ''
+    terminalBlockSizeRef.current = null
     setTerminal({ status: null, output: '', ended: null })
     setTerminalRect(null)
     void openTerminal()
@@ -3225,6 +3303,8 @@ function App(): JSX.Element {
             status={terminal.status}
             ended={terminal.ended}
             onInput={sendTerminalInput}
+            fontSize={terminalFont}
+            onFontSize={changeTerminalFont}
           />
         </div>
       </div>
