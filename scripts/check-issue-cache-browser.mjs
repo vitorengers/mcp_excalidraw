@@ -605,9 +605,11 @@ try {
 
   console.log('\n6. none of it was written onto the board');
   const finalScene = await evaluate(PROBE);
+  // `issueState` is deliberately not on this list: on an authored block it is the block's
+  // own stage, which belongs on the element. What must never land there is the issue itself.
   const leaked = finalScene.carried.filter((element) =>
     /Body version/.test(element.json)
-    || element.keys.some((key) => /^(body|comments|issueBody|issueState)$/.test(key)));
+    || element.keys.some((key) => /^(body|comments|issueBody|githubState|stateReason)$/.test(key)));
   check('no element carries an issue body, its comments or its GitHub state',
         leaked.length === 0, JSON.stringify(leaked).slice(0, 400));
   check('the cards still carry only what the mirror draws them from',

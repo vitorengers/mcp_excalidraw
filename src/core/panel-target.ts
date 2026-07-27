@@ -46,6 +46,16 @@ export interface IssueTargetData {
   implementState: 'running' | 'done' | 'failed' | null;
   implementUrl: string | null;
   implementError: string | null;
+  /**
+   * When the run started and when it stopped, ISO, so the panel can show how long it has
+   * been going with nothing selected and no network.
+   *
+   * Instants, not a duration: the clock runs in the browser off `implementStartedAt`, so
+   * the server writes these once each rather than once a second. `implementEndedAt` is
+   * null while the run is live, which is what makes the clock live rather than a total.
+   */
+  implementStartedAt: string | null;
+  implementEndedAt: string | null;
 }
 
 export interface CollapsibleTargetData {
@@ -149,11 +159,14 @@ function mirrorCardIssue(
     // A card exists because the issue does, so there is no run left to attach anything to.
     images: [],
     implementState: asRunState(card.customData?.implementState),
-    // Neither is drawn on a card: the outline says whether there is a run, and the URL and
-    // the failure are what the panel reads from the server. Inventing them here would put
-    // two answers to one question on the board.
+    // None of the rest is drawn on a card: the outline is the only thing the mirror has to
+    // say about a run, and the pull request, the failure and the two instants are what the
+    // panel reads from the server. Inventing them here would put two answers to one
+    // question on the board.
     implementUrl: null,
     implementError: null,
+    implementStartedAt: null,
+    implementEndedAt: null,
   };
 }
 
@@ -223,6 +236,8 @@ export function resolvePanelTarget(
           implementState: asRunState(issueCustom.implementState),
           implementUrl: asString(issueCustom.implementUrl),
           implementError: asString(issueCustom.implementError),
+          implementStartedAt: asString(issueCustom.implementStartedAt),
+          implementEndedAt: asString(issueCustom.implementEndedAt),
         };
 
   // An image gets a collapse control whether or not it carries documentation: an image is

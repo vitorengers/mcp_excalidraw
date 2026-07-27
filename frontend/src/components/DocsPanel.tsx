@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { closureView, offersImplement } from '../../../src/core/issue-appearance'
@@ -29,6 +29,12 @@ export interface IssueTarget {
   implementState?: 'running' | 'done' | 'failed' | null
   implementUrl?: string | null
   implementError?: string | null
+  /**
+   * When the run started and stopped, ISO. Kept on the element for the same reason the
+   * title is: a block has to read correctly with nothing selected and no network.
+   */
+  implementStartedAt?: string | null
+  implementEndedAt?: string | null
 }
 
 /** A comment as the server hands it over. */
@@ -166,6 +172,92 @@ interface ImplementView {
   state: 'running' | 'done' | 'failed' | null
   url: string | null
   error: string | null
+  /** The two ends of the run, ISO. `endedAt` null while it is still going. */
+  startedAt: string | null
+  endedAt: string | null
+  /** Token totals, when the configured agent command reports them. Usually null. */
+  usage: { inputTokens: number; outputTokens: number } | null
+}
+
+/** Nothing known about a run, which is also what a reset leaves behind. */
+const NO_IMPLEMENT: ImplementView = {
+  state: null, url: null, error: null, startedAt: null, endedAt: null, usage: null
+}
+
+/** An implementation record as the server hands it over, in the shape the panel wants. */
+const implementView = (record: Record<string, unknown> | null | undefined): ImplementView => ({
+  state: (record?.state as ImplementView['state']) ?? null,
+  url: (record?.url as string) ?? null,
+  error: (record?.error as string) ?? null,
+  startedAt: (record?.startedAt as string) ?? null,
+  endedAt: (record?.endedAt as string) ?? null,
+  usage: (record?.usage as ImplementView['usage']) ?? null
+})
+
+/** `4:07`, or `1:12:30` once there is an hour to show. */
+function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const seconds = String(total % 60).padStart(2, '0')
+  const minutes = total >= 3600 ? String(Math.floor(total / 60) % 60).padStart(2, '0') : String(Math.floor(total / 60))
+  const hours = Math.floor(total / 3600)
+  return hours ? `${hours}:${minutes}:${seconds}` : `${minutes}:${seconds}`
+}
+
+/** `28.4k`, because a running total is read at a glance rather than added up. */
+function formatTokens(count: number): string {
+  if (count < 1000) return String(count)
+  if (count < 1_000_000) return `${(count / 1000).toFixed(count < 10_000 ? 1 : 0)}k`
+  return `${(count / 1_000_000).toFixed(1)}M`
+}
+
+/**
+ * How long the run has been going, ticking in the browser.
+ *
+ * The server writes one instant when the run starts and one when it ends; everything
+ * moving here is arithmetic against `Date.now()`. That is the whole design: a duration
+ * kept on the server would have to be rewritten to stay true, and rewriting it means an
+ * element update — a version bump and a broadcast — every second, for every block with a
+ * run in flight. The clock is the cheapest thing on the board, and the board never knows
+ * it is running.
+ *
+ * A finished run is a frozen total: `endedAt` is set, so there is nothing to tick.
+ */
+const RunClock: React.FC<{ startedAt: string; endedAt: string | null }> = ({ startedAt, endedAt }) => {
+  const started = Date.parse(startedAt)
+  const ended = endedAt ? Date.parse(endedAt) : NaN
+  const live = !Number.isFinite(ended)
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!live) return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [live, startedAt])
+
+  if (!Number.isFinite(started)) return null
+  return <>{formatDuration((live ? now : ended) - started)}</>
+}
+
+/**
+ * The run's progress: how long it has taken, and what it has spent when it says.
+ *
+ * The tokens are absent far more often than not — they arrive only when the board's
+ * configured agent command already asks for a machine-readable stream — so the layout has
+ * to read properly with the clock alone.
+ */
+const RunProgress: React.FC<{ implement: ImplementView }> = ({ implement }) => {
+  if (!implement.startedAt) return null
+  return (
+    <p className="element-docs__progress">
+      <RunClock startedAt={implement.startedAt} endedAt={implement.endedAt} />
+      {implement.usage && (
+        <span className="element-docs__tokens">
+          {' · '}{formatTokens(implement.usage.inputTokens)} in
+          {' · '}{formatTokens(implement.usage.outputTokens)} out
+        </span>
+      )}
+    </p>
+  )
 }
 
 /**
@@ -183,22 +275,28 @@ function knownAlready(
   issue: IssueTarget | null | undefined,
   workspace: string
 ): { detail: IssueDetailState; implement: ImplementView } {
-  const fromShape: ImplementView | null = issue?.implementState
-    ? {
-        state: issue.implementState,
-        url: issue.implementUrl ?? null,
-        error: issue.implementError ?? null
-      }
-    : null
-
   const issueUrl = issue?.state === 'created' ? (issue.issueUrl ?? null) : null
   const remembered = issueUrl ? recallIssue(workspace, issueUrl) : null
+
+  // The shape carries everything about the run except the token totals, which are
+  // deliberately kept off elements because they change throughout one — so the remembered
+  // copy is what those come from, even when the shape is the newer source for the rest.
+  const fromShape: ImplementView | null = issue?.implementState
+    ? {
+        ...(remembered?.implement ?? NO_IMPLEMENT),
+        state: issue.implementState,
+        url: issue.implementUrl ?? null,
+        error: issue.implementError ?? null,
+        startedAt: issue.implementStartedAt ?? null,
+        endedAt: issue.implementEndedAt ?? null
+      }
+    : null
 
   return {
     detail: !issueUrl
       ? { status: 'idle' }
       : remembered ? loadedIssue(remembered.issue) : { status: 'loading' },
-    implement: fromShape ?? remembered?.implement ?? { state: null, url: null, error: null }
+    implement: fromShape ?? remembered?.implement ?? NO_IMPLEMENT
   }
 }
 
@@ -227,6 +325,14 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
    * claim the run failed to be seen at all.
    */
   const [resetError, setResetError] = useState<string | null>(null)
+  /**
+   * Whether the run was still going the last time this looked.
+   *
+   * Only a run that settles *while it is being watched* needs the extra read below. A
+   * block selected long after its run finished already got the whole record from
+   * `/api/issue`, and asking again would be a request per selection for nothing.
+   */
+  const wasRunning = useRef(false)
   // The observation being written, and whether the box for it is open at all.
   const [composing, setComposing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -313,12 +419,21 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   // simply never fires for one.
   useEffect(() => {
     if (!issue?.implementState) return
-    setImplement({
-      state: issue.implementState,
+    // The token totals are deliberately not on the element — they change throughout a run,
+    // and writing them onto shapes would churn the board — so this keeps whatever the poll
+    // below has already learned rather than clearing it.
+    setImplement((current) => ({
+      ...current,
+      state: issue.implementState ?? null,
       url: issue.implementUrl ?? null,
-      error: issue.implementError ?? null
-    })
-  }, [issue?.implementState, issue?.implementUrl, issue?.implementError])
+      error: issue.implementError ?? null,
+      startedAt: issue.implementStartedAt ?? null,
+      endedAt: issue.implementEndedAt ?? null
+    }))
+  }, [
+    issue?.implementState, issue?.implementUrl, issue?.implementError,
+    issue?.implementStartedAt, issue?.implementEndedAt
+  ])
 
   useEffect(() => {
     if (!docKey) {
@@ -418,14 +533,10 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
           }
           return
         }
-        const implementView: ImplementView = {
-          state: body.implement?.state ?? null,
-          url: body.implement?.url ?? null,
-          error: body.implement?.error ?? null
-        }
-        rememberIssue(workspace, issueUrl, { issue: body.issue ?? {}, implement: implementView })
+        const view = implementView(body.implement)
+        rememberIssue(workspace, issueUrl, { issue: body.issue ?? {}, implement: view })
         setIssueDetail(loadedIssue(body.issue ?? {}))
-        setImplement(implementView)
+        setImplement(view)
       })
       .catch((error: Error) => {
         if (!cancelled && !remembered) setIssueDetail({ status: 'error', message: error.message })
@@ -438,23 +549,32 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   // cannot — there is no element — so while a run is in flight it asks. This reads only
   // the record, so it costs no `gh` process.
   useEffect(() => {
-    if (!issueUrl || implement.state !== 'running') return
+    if (!issueUrl || !implement.state) return
 
     let cancelled = false
-    const timer = setInterval(() => {
+    const read = (): void => {
       fetch(`/api/implement?url=${encodeURIComponent(issueUrl)}&workspace=${encodeURIComponent(workspace)}`)
         .then((response) => response.json())
         .then((body) => {
           if (cancelled || !body?.success) return
-          setImplement({
-            state: body.implement?.state ?? null,
-            url: body.implement?.url ?? null,
-            error: body.implement?.error ?? null
-          })
+          setImplement(implementView(body.implement))
         })
         .catch(() => undefined)
-    }, 4000)
+    }
 
+    // One last read when a run settles under the reader's eyes. The ending arrives over
+    // the socket as an element update, which carries the state and the two instants but
+    // not the token totals — those live on the record alone, precisely so that a figure
+    // changing throughout a run never rewrites a shape. Without this the panel would keep
+    // whichever total it happened to poll last while the run was still going.
+    if (implement.state !== 'running') {
+      if (wasRunning.current) read()
+      wasRunning.current = false
+      return () => { cancelled = true }
+    }
+
+    wasRunning.current = true
+    const timer = setInterval(read, 4000)
     return () => { cancelled = true; clearInterval(timer) }
   }, [issueUrl, implement.state, workspace])
 
@@ -499,6 +619,10 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                   </a>
                 )}
 
+                {/* The clock belongs to a finished run as much as to a live one: "it took
+                    forty minutes" is the answer to the same question, asked afterwards. */}
+                {implement.state !== null && <RunProgress implement={implement} />}
+
                 {implement.state === 'running' && (
                   <>
                     <p className="element-docs__hint">
@@ -516,12 +640,11 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                           const error = await onResetImplement(issue)
                           if (error) setImplement((current) => ({ ...current, error }))
                           else {
-                            const cleared: ImplementView = { state: null, url: null, error: null }
-                            setImplement(cleared)
+                            setImplement(NO_IMPLEMENT)
                             // Written through for the reason the start is: the point of a
                             // reset is that the block can be tried again, and a remembered
                             // `running` would take that back on the next selection.
-                            if (issueUrl) rememberImplement(workspace, issueUrl, cleared)
+                            if (issueUrl) rememberImplement(workspace, issueUrl, NO_IMPLEMENT)
                           }
                         }}
                       >
@@ -578,15 +701,20 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                       onClick={async () => {
                         // Optimistic, because the run itself answers immediately and the
                         // result arrives later — over the socket for a block, by asking for
-                        // a card. Written through to what is remembered as well, or the
-                        // next selection would paint the record from before the click and
-                        // offer to start the run a second time.
-                        const started: ImplementView = { state: 'running', url: null, error: null }
+                        // a card. The clock starts from here for the same reason, and is
+                        // replaced by the server's own instant the moment one arrives.
+                        //
+                        // Written through to what is remembered as well, or the next
+                        // selection would paint the record from before the click and offer
+                        // to start the run a second time.
+                        const started: ImplementView = {
+                          ...NO_IMPLEMENT, state: 'running', startedAt: new Date().toISOString()
+                        }
                         setImplement(started)
                         if (issueUrl) rememberImplement(workspace, issueUrl, started)
                         const error = await onImplementIssue(issue)
                         if (error) {
-                          const failed: ImplementView = { state: 'failed', url: null, error }
+                          const failed: ImplementView = { ...NO_IMPLEMENT, state: 'failed', error }
                           setImplement(failed)
                           if (issueUrl) rememberImplement(workspace, issueUrl, failed)
                         }

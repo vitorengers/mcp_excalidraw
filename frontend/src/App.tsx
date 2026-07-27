@@ -199,27 +199,21 @@ const editingDraftId = (api: ExcalidrawImperativeAPI): string => {
 };
 
 /**
- * A draft block reduced to what the placement needs.
+ * The timestamp a draft's id was built from, for blocks that carry no field.
  *
- * `draftCreatedAt` is what orders the stack. A block dropped before that field was written
- * carries none; the layout keeps those in the order they arrive, so an old scene still
- * lays out the same way twice running.
- */
-/**
- * The timestamp a draft's id was built from, for when the field is gone.
+ * `draftCreatedAt` does reach the scene, and this is only a fallback. It was once believed
+ * to be dropped somewhere between `instantiateIssueBlock` and the scene, and the ordering
+ * was patched around that belief; the field was in fact never dropped. It survives
+ * `convertToExcalidrawElements`, the round trip through `POST /api/elements`, and a reload —
+ * `scripts/check-board-drafts-browser.mjs` reads it back out of the scene and asserts it.
+ * What the run behind that belief was looking at was a scene whose blocks predated the
+ * field: exactly `kind`, `projectBoardDraft` and `sectionOptionId` is what the `+` wrote
+ * before the field existed, which is what a stale bundle would still have been writing.
  *
- * `draftCreatedAt` is written onto every block the `+` drops, and it survives the server
- * intact — a round trip through `POST /api/elements` returns it unchanged. It does not
- * survive the browser: by the time the block is in the scene its `customData` holds `kind`,
- * `projectBoardDraft` and `sectionOptionId` — written in the same object literal — and not
- * this one.
- *
- * Reading the stamp back off the id was rejected when this was written, on the grounds that
- * a timestamp seeded into an id is a weak key. That reasoning still holds, which is why this
- * is a fallback and the field is still written and still preferred. But a weak key that
- * survives beats a strong one that does not: with neither, `(b.createdAt ?? 0) - (a.createdAt
- * ?? 0)` is zero for every pair, the sort is stable, and the newest block lands at the bottom
- * of the column instead of the top.
+ * So this stays for the blocks that really do carry no field — the ones already sitting in
+ * scenes saved before it was added. Reading a stamp back off an id is a weak key, an id
+ * being the one field anything on the canvas is free to rewrite, which is why the field is
+ * preferred and this is reached for only when there is nothing else.
  */
 const createdAtFromId = (id: string): number | null => {
   const stamp = /^pbdraft-(\d+)/.exec(id)?.[1];
@@ -228,6 +222,13 @@ const createdAtFromId = (id: string): number | null => {
   return Number.isFinite(value) ? value : null;
 };
 
+/**
+ * A draft block reduced to what the placement needs.
+ *
+ * `draftCreatedAt` is what orders the stack. A block dropped before that field was written
+ * carries none; the stamp in its id stands in, and a block with neither is kept in the
+ * order it arrives, so an old scene still lays out the same way twice running.
+ */
 const draftBlockOf = (element: { id: string; height: number; customData?: CustomData }): DraftBlock => {
   const custom = customDataOf(element);
   const createdAt = typeof custom.draftCreatedAt === 'number'
@@ -756,7 +757,14 @@ function App(): JSX.Element {
       }
       setIssue((current) =>
         current?.id === target.id
-          ? { ...current, implementState: null, implementUrl: null, implementError: null }
+          ? {
+              ...current,
+              implementState: null,
+              implementUrl: null,
+              implementError: null,
+              implementStartedAt: null,
+              implementEndedAt: null
+            }
           : current)
       return null
     } catch (error) {
@@ -1899,7 +1907,9 @@ function App(): JSX.Element {
         images: Array.isArray(custom.issueImages) ? (custom.issueImages as string[]) : [],
         implementState: (custom.implementState as IssueTarget['implementState']) ?? null,
         implementUrl: (custom.implementUrl as string) ?? null,
-        implementError: (custom.implementError as string) ?? null
+        implementError: (custom.implementError as string) ?? null,
+        implementStartedAt: (custom.implementStartedAt as string) ?? null,
+        implementEndedAt: (custom.implementEndedAt as string) ?? null
       })
     }
 

@@ -14,6 +14,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
+import { AgentUsage, streamsUsage, UsageMeter } from './agent-usage.js';
 import { Workspace } from './workspaces.js';
 
 /** Default instruction. Investigation first, evidence over guesswork, URL last. */
@@ -226,6 +227,15 @@ export interface RunAgentOptions {
   what: string;
   /** Where to start the agent, when that is not the project directory itself. */
   directory?: AgentDirectory | null;
+  /**
+   * The run's token totals so far, whenever they change.
+   *
+   * Called only when the configured command already asks its agent for a machine-readable
+   * stream. A command that does not — today's default — never reaches this, and the spawn
+   * path below is byte for byte what it was: the same "nothing at all" half that
+   * `worktreeSection` and `imageReferenceSection` are careful about.
+   */
+  onUsage?: (usage: AgentUsage) => void;
 }
 
 /**
@@ -263,6 +273,12 @@ export async function runAgent(
     let stderr = '';
     let settled = false;
 
+    // Reads the totals out of the stream the agent is already writing. Null unless the
+    // caller asked *and* the command streams, which is what keeps this off by default.
+    const meter = options.onUsage && streamsUsage(options.agentCommand)
+      ? new UsageMeter(options.onUsage)
+      : null;
+
     // `undefined` means "use the default"; `null` and 0 mean "no ceiling at all".
     const timeoutMs = options.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : options.timeoutMs;
     const timeout = timeoutMs ? setTimeout(() => {
@@ -279,6 +295,7 @@ export async function runAgent(
       // there is nothing here to find. It rescues a run only when the command streams —
       // `--output-format stream-json` — which is why this is no longer the answer to a
       // ceiling that fires. Not firing at all is.
+      meter?.flush();
       const salvaged = extractGithubUrl(stdout, options.expects);
       resolve({
         ok: Boolean(salvaged),
@@ -290,13 +307,18 @@ export async function runAgent(
 
     const clearIfSet = () => { if (timeout) clearTimeout(timeout); };
 
-    child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.stdout?.on('data', (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      meter?.take(text);
+    });
     child.stderr?.on('data', (chunk) => { stderr += chunk.toString(); });
 
     child.on('error', (error) => {
       if (settled) return;
       settled = true;
       clearIfSet();
+      meter?.flush();
       resolve({ ok: false, url: null, output: stdout, error: error.message });
     });
 
@@ -304,6 +326,7 @@ export async function runAgent(
       if (settled) return;
       settled = true;
       clearIfSet();
+      meter?.flush();
       const url = extractGithubUrl(stdout, options.expects);
       resolve({
         ok: code === 0 && Boolean(url),
