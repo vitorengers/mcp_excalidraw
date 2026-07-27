@@ -270,8 +270,9 @@ function label(
  *
  * It carried two numbers, `drafts / cards`, because two populations shared one column and
  * the header had to say which was which. They no longer share one: hand-written blocks land
- * in the first column and a researched issue is moved out of it, so the split is done by the
- * columns and repeating it here says nothing.
+ * in the notes column, which no card can be in at all, so the split is done by the columns
+ * and repeating it here says nothing. The notes column is therefore always a draft count —
+ * by this same sum, with two of its three terms zero, rather than by a rule of its own.
  *
  * **Not a revert to `cards.length + hidden`.** That number counted the mirrored items alone,
  * which is why a column holding three drafts and no cards read `Todo (0)` — the defect #79
