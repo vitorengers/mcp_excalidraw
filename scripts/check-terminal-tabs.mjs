@@ -292,6 +292,10 @@ try {
   const remaining = await listed();
   check('and only the other one is listed', remaining.length === 1 && remaining[0].id === bravo,
         JSON.stringify(remaining.map((one) => one.id)));
+  // Waited for rather than read: the broadcast rides the child's `close`, which the runtime
+  // delivers a tick or two after the pid stops answering.
+  await waitFor(() => viewer.messages.some((one) => one.type === 'terminal_exit' && one.sessionId === alpha),
+                'the exit to be announced');
   check('the exit message says which session ended',
         viewer.messages.some((one) => one.type === 'terminal_exit' && one.sessionId === alpha),
         JSON.stringify(viewer.messages.filter((one) => one.type === 'terminal_exit')));

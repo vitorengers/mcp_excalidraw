@@ -1884,9 +1884,9 @@ function App(): JSX.Element {
 
     let changed = added.length > 0 || dropped.size > 0
     const next = scene
-      .filter((element) => !dropped.has(element.id))
+      .filter((element) => !dropped.has(element.id) && !element.isDeleted)
       .map((element) => {
-        if (element.isDeleted || !isTerminalElement(element)) return element
+        if (!isTerminalElement(element)) return element
         const entry = layout.get(element.id)
         if (!entry) return element
         const current = terminalBlockData(element.customData)
@@ -1910,10 +1910,22 @@ function App(): JSX.Element {
       })
 
     if (!changed) return
+    // The tombstones go back in **around** the conversion rather than through it.
+    // `convertToExcalidrawElements` rebuilds each element from a skeleton and has no
+    // `isDeleted` to rebuild from, so anything deleted that is handed to it comes back
+    // alive — which is how a block restored one tick after an eraser drag used to resurrect
+    // everything else the drag had taken (#98). Dropping them instead is not the answer
+    // either: the sync sends deleted elements on purpose, because the store never treats
+    // absence as a deletion, so a tombstone lost here is a shape that stays alive on the
+    // server. So they are set aside, and appended untouched.
+    const tombstones = scene.filter((element) => element.isDeleted && !dropped.has(element.id))
     applySceneUpdateWithoutAutoSync(api, {
-      elements: convertElementsPreservingImageProps(
-        [...next, ...added] as unknown as Partial<ExcalidrawElement>[]
-      ) as ExcalidrawElement[],
+      elements: [
+        ...convertElementsPreservingImageProps(
+          [...next, ...added] as unknown as Partial<ExcalidrawElement>[]
+        ),
+        ...tombstones
+      ] as ExcalidrawElement[],
       captureUpdate: CaptureUpdateAction.NEVER
     })
   }
@@ -2163,10 +2175,15 @@ function App(): JSX.Element {
         [session.id]: { status: terminalStatusOf(session), output: '', ended: null }
       }))
 
+      // The block that asked, or any block already holding tabs. Either way the new session
+      // becomes the tab on top: opening a shell is a request to look at it, and a board
+      // whose last shell had exited would otherwise answer Alt+T by leaving the dead tab
+      // drawn and the new one behind it.
       const api = excalidrawAPIRef.current
-      const host = api && blockId
-        ? terminalBlocksOf(api).find((block) => block.id === blockId)
-        : null
+      const blocks = api ? terminalBlocksOf(api) : []
+      const host = blockId
+        ? blocks.find((block) => block.id === blockId)
+        : blocks.find((block) => terminalBlockData(block.customData).sessions.length > 0)
       if (api && host) {
         const layout = terminalLayoutOf(terminalBlocksOf(api))
         // Taken off every block before it is put on this one. The socket's announcement of
@@ -2240,7 +2257,7 @@ function App(): JSX.Element {
 
     entry.sessions = entry.sessions.filter((id) => id !== sessionId)
     if (entry.active === sessionId) entry.active = entry.sessions[0] ?? ''
-    commitTerminalLayout(layout, [newTerminalBlock(api, [sessionId], source)])
+    commitTerminalLayout(layout, [newTerminalBlock(api, [sessionId], { beside: source })])
   }
 
   /**
