@@ -40,6 +40,16 @@ export interface WorkspaceConfig {
    * here; a board that has no such column gets no move rather than a guess.
    */
   projectInProgressColumn?: string;
+  /**
+   * Column an issue is moved to when the run that researched it finishes.
+   *
+   * Unset, the option named `Todo` is used. The first column is where a hand-written block
+   * is drafted, and it is where GitHub's *Item added to project* workflow leaves the issue
+   * the agent creates — so without this move the two populations share one column and only a
+   * person can tell them apart. A board that has no such column gets no move rather than a
+   * guess.
+   */
+  projectTodoColumn?: string;
 }
 
 export interface Workspace {
@@ -58,6 +68,8 @@ export interface Workspace {
   projectCardLimit: number | null;
   /** Null means "the column named In Progress, if the project has one". */
   projectInProgressColumn: string | null;
+  /** Null means "the column named Todo, if the project has one". */
+  projectTodoColumn: string | null;
   /** Populated when this workspace could not be fully loaded. */
   error: string | null;
 }
@@ -110,6 +122,7 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
     projectField: null,
     projectCardLimit: null,
     projectInProgressColumn: null,
+    projectTodoColumn: null,
     error: null,
   };
 
@@ -154,6 +167,7 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
       ? Number(config.projectCardLimit)
       : null,
     projectInProgressColumn: config.projectInProgressColumn?.trim() || null,
+    projectTodoColumn: config.projectTodoColumn?.trim() || null,
     error: escaped.length
       ? `Config field(s) outside the workspace, ignored: ${escaped.join(', ')}`
       : null,

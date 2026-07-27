@@ -143,9 +143,15 @@ ambiguous — it reads like a drag that did not take — so the message is what 
 ## The `+`
 
 The first column carries a `+` that drops an issue block at the top of it. Which column that is
-comes from the project rather than from a name written here: GitHub's *Item added to project*
-workflow is what gives a new issue a status, and it puts it in the first option, so that is the
-only column this can honestly create into.
+comes from the project's own ordering rather than from a name written here — by convention it is
+`My Notes`, and a board that calls it something else gets no edit in this repository.
+
+It used to be argued the other way round: the `+` was on the first column because GitHub's *Item
+added to project* workflow puts a new issue in the first option, so that was the only column this
+could honestly create into. That is still true of the workflow — it assigns the first option, which
+is what adding #86 to project 5 demonstrated — but it is no longer the reason. The first column is
+where an observation is *written*, and the issue that comes out of it is moved to `Todo` by this
+server the moment it exists. The landing column is no longer decided outside this repository.
 
 The block comes from the library (`docs/blocks.excalidrawlib`, through `GET /api/library`) rather
 than being built here, because what makes a block functional is `customData.kind` and a second
@@ -193,32 +199,35 @@ confirm is that the arithmetic is wired to a keystroke at all, which
 `scripts/check-board-drafts-browser.mjs` drives a real Chrome to do.
 
 When the run finishes and the refreshed board holds a card with the same `issueUrl`, the draft is
-deleted — matched on the URL because that is the only thing the block and the card provably share.
-A run that failed leaves its block alone: there is nothing to replace it with, and the observation
-is still worth keeping.
+deleted — matched on the URL because that is the only thing the block and the card provably share,
+and **never on the column**, which by then is a different one: the block is in `My Notes` and its
+card has already been moved to `Todo`. A run that failed leaves its block alone: there is nothing
+to replace it with, and the observation is still worth keeping.
 
 ## What a section header counts
 
-Two populations sit under one header, and the number above them used to see one:
+One number, and it counts **everything the column holds**: the blocks the `+` dropped, the
+mirrored cards, and the cards the cap left out.
 
 ```
-Icebox (2 / 3)          two blocks dropped by the +, three issues that already exist
-Underway (1)            one issue, and nothing hand-written under it
-Shipped (12, 9 hidden)  twelve issues, nine of them left out by projectCardLimit
-Icebox (2 / 12, 9 hidden)
+My Notes (5)            two blocks dropped by the +, three issues that already exist
+Todo (1)                one issue, and nothing hand-written under it
+Done (12, 9 hidden)     twelve issues, nine of them left out by projectCardLimit
+My Notes (14, 9 hidden)
 ```
 
-**Drafts first, mirrored items last.** That is the order the request used — what was written by
-hand, then what already exists — and it leaves the last number meaning exactly what the single
-number has always meant. So a column with no drafts still draws one number rather than a `/ 0`:
-the `+` is on the first column only, so every other column would otherwise carry a zero for a
-population it can never hold. A column holding drafts and no cards reads `(3 / 0)`, which is the
-honest form of the same rule, and is the case that started this: three observations waiting to be
-researched under a header that said `Todo (0)`.
+It carried two numbers for a while, `drafts / cards`, because two populations shared one column
+and the header had to say which was which. They no longer share one: observations are written in
+the first column and a researched issue is moved out of it, so the split is done by the columns
+and repeating it in the header says nothing.
 
-There is no total. Two numbers were asked for, and a third in a 300px header that also carries
-`, N hidden` buys nothing. The cap applies to the mirrored items alone, so `, N hidden` qualifies
-that side and no other.
+**This is not a revert.** The single number this header had *before* that was `cards + hidden` —
+the mirrored items alone — which is why a column holding three drafts and no cards read
+`Todo (0)`, the defect #79 recorded. Restoring it would move that defect one column left, onto
+the column the drafts now have to themselves. The drafts stay in the sum; only the slash goes.
+
+The cap decides what is *drawn*, never what is *held*, so the hidden cards are in the total and
+`, N hidden` still qualifies the card side — the only side a cap applies to.
 
 The draft count comes from the same `options.drafts` that decides where the blocks go, so the
 header and the column cannot disagree, and it moves on the click that drops a block rather than on
@@ -226,7 +235,7 @@ the next poll. Nothing new is read from GitHub and nothing new is stored. **Whic
 a column is decided by `sectionOptionId`, never by a name** — a draft naming a column the board no
 longer has is counted by no header, for the same reason it is placed nowhere.
 
-Splitting the *mirrored* side by who created the issue is a different feature and is not this one:
+Splitting the mirrored cards by who created the issue is a different feature and is not this one:
 the provenance does not exist anywhere durable. The agent runs `gh` under the maintainer's own
 login, there is no label convention, and the local trace is deleted on purpose when the card
 appears. It would have to be introduced — a label written by the server where the created URL
@@ -236,6 +245,34 @@ first exists — before anything could count it.
 `Icebox` / `Underway` / `Shipped`, and renames them again, so nothing may key on `Todo`.
 `scripts/check-board-drafts-browser.mjs` reads the header back out of a real scene after a click,
 because a drop that moved the cards and left the header stale compiles just as well.
+
+## The columns a board is expected to have
+
+Four, in this order: **My Notes**, **Todo**, **In Progress**, **Done**. That is a convention, not
+a rule this code enforces — nothing here creates, renames or reorders a column, and a project with
+three columns or seven still mirrors correctly. What the convention buys is that each column
+answers one question, and the two moves this server writes have somewhere honest to land:
+
+| Column | What is in it | What puts it there |
+| --- | --- | --- |
+| My Notes | observations written by hand, not yet issues | the `+`, and nothing else |
+| Todo | issues that exist and are waiting | the server, when a research run finishes |
+| In Progress | issues an agent is working on | the server, when an implementation starts |
+| Done | closed issues | GitHub's own project workflows |
+
+**Adding the columns is a maintainer's job, done on GitHub.** Not automated, and deliberately:
+`updateProjectV2Field` takes the whole `singleSelectOptions` list and its input carries no option
+ids, so writing a fifth option means rewriting all of them — and every item's `Status` is stored
+against an option id. A convenience that quietly cleared the board is not worth having.
+
+Order matters, and it is the load-bearing half. GitHub appends a new option **last**, and the `+`
+is on the **first** column, so a `My Notes` left where GitHub put it would be a column nothing
+writes into and would leave the `+` on `Todo`. *Item added to project* also assigns the first
+option, so with `My Notes` first that is where a newly created issue lands too — which is exactly
+what the move below is for.
+
+A board that names its columns differently says so in `board.config.json` rather than being
+renamed to suit this page; see `projectTodoColumn` and `projectInProgressColumn` below.
 
 ## A card is an issue block
 
@@ -266,45 +303,59 @@ A block hears the result over the WebSocket, as an element update. A card cannot
 element — so while a run is in flight the panel asks `GET /api/implement`, which reads the record
 and spawns no `gh`.
 
-## A run moves its card
+## A run moves its card, twice
 
-Starting an implementation moves that issue's card to **In Progress**, and the mirror shows it on
-the next poll. Closing and creation are already automated by GitHub's own project workflows — In
-Progress was the one transition nobody wrote, which is why it was the one that drifted.
+Two transitions, both written by this server, both `moveIssueToColumn`:
 
-**The server writes it, not the agent.** The observation this came from named the agent, because
-the agent is what the click starts, but nothing requires the write to come from that process. An
-agent that dies early would leave the card in Todo with a run in flight, and the state would be
-written by the one participant that cannot report its own crash. It would also mean putting a
-project URL, a field name and a column name into a prompt whose whole design is to carry none of
-them.
+- **Research finished** → the issue that came out of it moves to **Todo**. It was created in
+  `My Notes`, because that is where the observation was written and where *Item added to project*
+  leaves it; a researched issue that stayed there would be indistinguishable from one nobody has
+  looked at yet.
+- **Implementation started** → that issue's card moves to **In Progress**. Closing and creation
+  are already automated by GitHub's own project workflows; this was the one transition nobody
+  wrote, which is why it was the one that drifted.
 
-Which column that is, is resolved rather than guessed:
+Both show up in the mirror on the next poll.
+
+**The server writes them, not the agent.** The observations these came from named the agent,
+because the agent is what the click starts, but nothing requires the write to come from that
+process. An agent that dies early would leave the card where the failure is invisible, and the
+state would be written by the one participant that cannot report its own crash. It would also mean
+putting a project URL, a field name and a column name into a prompt whose whole design is to carry
+none of them.
+
+Which columns those are, is resolved rather than guessed:
 
 ```json
-{ "githubProject": "…", "projectInProgressColumn": "Doing" }
+{ "githubProject": "…", "projectTodoColumn": "Ready", "projectInProgressColumn": "Doing" }
 ```
 
-Unset, the option named `In Progress` is used, matched case-insensitively — the same reliance on
-GitHub's defaults the `+` makes on the first column. **If neither resolves, nothing is moved** and
-the reason is logged. A board that renamed the column gets no move until it says so, which is the
-deliberate half of that trade: retargeting to some other column would put somebody's card
-somewhere they never asked for.
+Unset, the options named `Todo` and `In Progress` are used, matched case-insensitively — the same
+reliance on GitHub's defaults the `+` makes on the first column. **If neither resolves, nothing is
+moved** and the reason is logged, naming the setting that would fix it. A board that renamed a
+column gets no move until it says so, which is the deliberate half of that trade: retargeting to
+some other column would put somebody's card somewhere they never asked for.
 
-Nothing about this may cost the implementation. The write is not awaited — the project and the
-agent are independent, and a `gh` working through its retries must not hold a run up — and every
-outcome that is not a move is a log line: no project configured (no `gh` is spawned at all), no
-such column, an issue that is not on the project, a card already in that column, or `gh` itself
-failing. The run still starts, and the route still answers 202.
+Nothing about either move may cost the run. The write is not awaited — the project and the agent
+are independent, and a `gh` working through its retries must not hold a run up — and every outcome
+that is not a move is a log line: no project configured (no `gh` is spawned at all), no such
+column, an issue that is not on the project, a card already in that column, or `gh` itself failing.
+The implementation still starts and the block still reads `created`; both routes answered 202 long
+before any of this ran.
+
+A research run that created **no** issue moves nothing, and the board is not even read: there is
+nothing to move, and the block keeps its observation so it can be tried again.
 
 The board is read uncapped for this, unlike a drag: `projectCardLimit` exists so a section does not
 draw hundreds of cards, and a card hidden behind it would otherwise read as an issue that is not on
 the project.
 
-A run that *fails* leaves the card in In Progress. Moving it back would erase the record that
-anything was attempted, and the pull request state on the card already says how the run ended.
+An implementation that *fails* leaves the card in In Progress. Moving it back would erase the
+record that anything was attempted, and the pull request state on the card already says how the
+run ended.
 
-`scripts/check-implement-in-progress.mjs` covers this with a stubbed `gh` and a stubbed agent.
+`scripts/check-issue-todo-column.mjs` and `scripts/check-implement-in-progress.mjs` cover the two
+moves, each with a stubbed `gh` and a stubbed agent.
 
 ## The hotkey
 

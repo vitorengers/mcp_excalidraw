@@ -2,24 +2,24 @@
 /**
  * Checks what a section header counts.
  *
- * A header carried exactly one number and it counted mirrored GitHub items only, so the
- * blocks the `+` dropped were invisible to it: a first column holding three drafts and no
- * cards read `Todo (0)`. #79 asked for two numbers — the drafts written by hand, and the
- * issues that already exist — and the drafts are already an input to `layoutBoard`, which
- * is why this is arithmetic in the layout layer rather than anything new read from GitHub.
+ * One number, and it counts **everything the column holds**: the blocks the `+` dropped,
+ * the mirrored cards, and the cards the cap left out. Not the same thing as the single
+ * number this header carried before #79 — that one counted the mirrored items alone, which
+ * is why a first column holding three drafts and no cards read `Todo (0)`.
  *
- * The four questions the issue left open are answered here, and this file is where the
- * answers are pinned down:
+ * #79 answered that with two numbers, `drafts / cards`, because two populations shared one
+ * column and the header had to say which was which. #86 splits them into columns of their
+ * own — hand-written observations land in the first column and a researched issue is moved
+ * out of it — so the reason for the split is gone, and the request is one number again.
  *
- * - **Drafts first**, cards second: `Icebox (2 / 3)`. That is the order the observation
- *   itself used — "issues written by me" and then "issues the agent created".
- * - **A column with no drafts keeps one number**, `Underway (1)`, rather than drawing a
- *   `/ 0` that is zero by construction: the `+` is on the first column only, so every other
- *   column would carry a permanent zero. The invariant is that the *last* number is always
- *   the mirrored items, which is what the single number has always meant.
- * - **No total.** Two numbers were asked for; a third in a 300px header that also carries
- *   `, N hidden` buys nothing.
- * - The hidden suffix still qualifies the card side: `Shipped (2 / 12, 9 hidden)`.
+ * **This is not a revert.** Reverting restores `cards.length + hidden`, and a column full of
+ * drafts with no cards behind them would read `(0)` all over again — the defect #79
+ * recorded, moved one column left. The drafts stay in the sum; only the slash goes.
+ *
+ * - **Drafts count.** A column holding three drafts and no cards reads `(3)`.
+ * - **Hidden cards count.** The cap decides what is *drawn*, never what is *held*, so
+ *   `, N hidden` still qualifies the card side and the total still includes them.
+ * - **No slash, anywhere.** A column with both populations draws their sum and nothing else.
  *
  * The fixture's sections are named `Icebox` / `Underway` / `Shipped`, the way
  * `check-block-appearance.mjs` names its own, so nothing keying on `Todo` could pass — and
@@ -107,58 +107,54 @@ function headerLabel(laid, optionId) {
 /** The whole label with the line breaks `layoutLabel` may have put in taken back out. */
 const flat = (text) => (text ?? '').replace(/\s*\n\s*/g, ' ');
 
-// ─── 1. Both populations, both numbers ────────────────────────
+// ─── 1. One number, covering both populations ─────────────────
 
-console.log('1. a column holding drafts and cards draws both counts');
+console.log('1. a column holding drafts and cards draws one number for all of them');
 
 const both = layoutBoard(board(NAMES, [[card(1), card(2), card(3)], [card(9)], []]), ORIGIN, {
   drafts: [draft('pbdraft-a', FIRST, 2000), draft('pbdraft-b', FIRST, 1000)],
 });
 
-check('2 drafts and 3 cards read as both numbers, drafts first',
-      flat(headerLabel(both, FIRST)) === 'Icebox (2 / 3)',
+check('2 drafts and 3 cards read as 5',
+      flat(headerLabel(both, FIRST)) === 'Icebox (5)',
       JSON.stringify(headerLabel(both, FIRST)));
-check('the draft side is the drafts, not the cards',
-      /\(2 \/ /.test(flat(headerLabel(both, FIRST))),
+check('and the two populations are not split by a slash any more',
+      !flat(headerLabel(both, FIRST)).includes('/'),
       JSON.stringify(headerLabel(both, FIRST)));
-check('and no total is drawn alongside them',
-      !/\d+\s*:/.test(flat(headerLabel(both, FIRST))),
-      JSON.stringify(headerLabel(both, FIRST)));
-
-// ─── 2. The degenerate form ───────────────────────────────────
-
-console.log('\n2. a column with no drafts keeps the one number it always had');
-
 check('a column with cards and no drafts is unchanged',
       flat(headerLabel(both, SECOND)) === 'Underway (1)',
       JSON.stringify(headerLabel(both, SECOND)));
-check('an empty column too',
+check('an empty column still reads zero, because it holds nothing',
       flat(headerLabel(both, THIRD)) === 'Shipped (0)',
       JSON.stringify(headerLabel(both, THIRD)));
-check('a board laid out with no drafts at all draws no second number anywhere', (() => {
-  const bare = layoutBoard(board(NAMES, [[card(1), card(2), card(3)], [card(9)], []]), ORIGIN);
-  return [FIRST, SECOND, THIRD].every((optionId) => !flat(headerLabel(bare, optionId)).includes('/'));
-})());
+check('no header anywhere on the board carries a slash',
+      both.elements.filter((element) => element.customData?.role === 'label')
+        .every((element) => !(element.text ?? '').includes('/')),
+      both.elements.filter((element) => element.customData?.role === 'label')
+        .map((element) => element.text).join(' | '));
 
-// ─── 3. Drafts only ───────────────────────────────────────────
+// ─── 2. Drafts with nothing behind them ───────────────────────
 
-console.log('\n3. drafts with no cards behind them are not invisible — the defect #79 reported');
+console.log('\n2. drafts with no cards behind them are still not invisible — the defect #79 recorded');
 
 const draftsOnly = layoutBoard(board(NAMES, [[], [card(9)], []]), ORIGIN, {
   drafts: [draft('pbdraft-a', FIRST, 3000), draft('pbdraft-b', FIRST, 2000), draft('pbdraft-c', FIRST, 1000)],
 });
-check('three drafts and no cards read as 3 / 0, not as 0',
-      flat(headerLabel(draftsOnly, FIRST)) === 'Icebox (3 / 0)',
+check('three drafts and no cards read as 3',
+      flat(headerLabel(draftsOnly, FIRST)) === 'Icebox (3)',
+      JSON.stringify(headerLabel(draftsOnly, FIRST)));
+check('and emphatically not as 0, which is what a plain revert would draw',
+      !/\(0[,)]/.test(flat(headerLabel(draftsOnly, FIRST))),
       JSON.stringify(headerLabel(draftsOnly, FIRST)));
 
-// ─── 4. A capped section still adds up ────────────────────────
+// ─── 3. A capped section still adds up ────────────────────────
 
-console.log('\n4. a capped section counts what it left out, and still says so');
+console.log('\n3. a capped section counts what it left out, and still says so');
 
 const capped = layoutBoard(board(NAMES, [[card(1)], [card(9)], [card(20), card(21), card(22)]], [0, 0, 9]), ORIGIN, {
   drafts: [draft('pbdraft-a', FIRST, 1000)],
 });
-check('the hidden cards still count towards the card side',
+check('the hidden cards count towards the total, and the suffix stays',
       flat(headerLabel(capped, THIRD)) === 'Shipped (12, 9 hidden)',
       JSON.stringify(headerLabel(capped, THIRD)));
 
@@ -167,50 +163,52 @@ const cappedWithDrafts = layoutBoard(
   ORIGIN,
   { drafts: [draft('pbdraft-a', FIRST, 2000), draft('pbdraft-b', FIRST, 1000)] }
 );
-check('and a capped column that also holds drafts carries all three facts',
-      flat(headerLabel(cappedWithDrafts, FIRST)) === 'Icebox (2 / 12, 9 hidden)',
+check('a capped column that also holds drafts adds all three up: 2 + 3 + 9',
+      flat(headerLabel(cappedWithDrafts, FIRST)) === 'Icebox (14, 9 hidden)',
       JSON.stringify(headerLabel(cappedWithDrafts, FIRST)));
 check('the drafts do not go into the hidden count',
-      !/11 hidden|2 hidden/.test(flat(headerLabel(cappedWithDrafts, FIRST))),
+      /, 9 hidden\)/.test(flat(headerLabel(cappedWithDrafts, FIRST))),
       JSON.stringify(headerLabel(cappedWithDrafts, FIRST)));
 
-// ─── 5. Nothing keys on a column name ─────────────────────────
+// ─── 4. Nothing keys on a column name ─────────────────────────
 
-console.log('\n5. the counts follow the data, never a column name');
+console.log('\n4. the counts follow the data, never a column name');
 
 const renamed = layoutBoard(board(['Backlog', 'Cooking', 'Landed'], [[card(1), card(2), card(3)], [card(9)], []]), ORIGIN, {
   drafts: [draft('pbdraft-a', FIRST, 2000), draft('pbdraft-b', FIRST, 1000)],
 });
 check('renaming every column changes only the name',
-      flat(headerLabel(renamed, FIRST)) === 'Backlog (2 / 3)'
+      flat(headerLabel(renamed, FIRST)) === 'Backlog (5)'
       && flat(headerLabel(renamed, SECOND)) === 'Cooking (1)',
       `${JSON.stringify(headerLabel(renamed, FIRST))} | ${JSON.stringify(headerLabel(renamed, SECOND))}`);
-check('no header mentions Todo, In Progress or Done',
+check('no header mentions Todo, In Progress, Done or My Notes',
       renamed.elements.filter((element) => element.customData?.role === 'label')
-        .every((element) => !/Todo|In Progress|Done/.test(element.text ?? '')));
+        .every((element) => !/Todo|In Progress|Done|My Notes/.test(element.text ?? '')));
 
-console.log('\n5b. a draft in a column that is not the first one is counted there too');
+console.log('\n4b. a draft in a column that is not the first one is counted there too');
 const second = layoutBoard(board(NAMES, [[card(1)], [card(9)], []]), ORIGIN, {
   drafts: [draft('pbdraft-elsewhere', SECOND, 1000)],
 });
-check('the second column counts its own draft',
-      flat(headerLabel(second, SECOND)) === 'Underway (1 / 1)',
+check('the second column counts its own draft alongside its card',
+      flat(headerLabel(second, SECOND)) === 'Underway (2)',
       JSON.stringify(headerLabel(second, SECOND)));
-check('and the first column, which has none, keeps one number',
+check('and the first column, which has none, counts only its card',
       flat(headerLabel(second, FIRST)) === 'Icebox (1)',
       JSON.stringify(headerLabel(second, FIRST)));
 
-console.log('\n5c. a draft naming a column the board no longer has counts nowhere');
+console.log('\n4c. a draft naming a column the board no longer has counts nowhere');
 const orphan = layoutBoard(board(NAMES, [[card(1)], [card(9)], []]), ORIGIN, {
   drafts: [draft('pbdraft-orphan', 'a-column-that-was-renamed', 1000)],
 });
-check('no header grew a draft count for it',
-      [FIRST, SECOND, THIRD].every((optionId) => !flat(headerLabel(orphan, optionId)).includes('/')),
+check('no header grew for it',
+      flat(headerLabel(orphan, FIRST)) === 'Icebox (1)'
+      && flat(headerLabel(orphan, SECOND)) === 'Underway (1)'
+      && flat(headerLabel(orphan, THIRD)) === 'Shipped (0)',
       [FIRST, SECOND, THIRD].map((optionId) => headerLabel(orphan, optionId)).join(' | '));
 
-// ─── 6. Nothing else about the header moved ───────────────────
+// ─── 5. Nothing else about the header moved ───────────────────
 
-console.log('\n6. the header is still a mirror element and nothing new reaches the board file');
+console.log('\n5. the header is still a mirror element and nothing new reaches the board file');
 
 check('every element the layout produced is still marked as mirror',
       both.elements.length > 0

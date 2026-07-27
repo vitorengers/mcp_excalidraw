@@ -37,7 +37,9 @@ import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } 
 import {
   readProjectBoard,
   moveCard,
-  moveIssueToInProgress,
+  moveIssueToColumn,
+  inProgressColumn,
+  todoColumn,
   NoProjectConfigured,
   NotOnThisBoard
 } from './core/project-board.js';
@@ -1210,6 +1212,23 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     if (result.ok && result.issueUrl) {
       markState('created', { issueUrl: result.issueUrl, issueError: null, observation });
       logger.info(`Issue block ${elementId} created ${result.issueUrl}`);
+
+      // The issue exists now, so it no longer belongs in the column the observation was
+      // written in — the first one, which is where the `+` drops a block and where GitHub's
+      // *Item added to project* workflow leaves the issue the agent just created. Without
+      // this the two populations share a column and only a person can tell them apart.
+      //
+      // Deliberately not awaited and never fatal, exactly as for the In Progress move: the
+      // issue is already created by the time this runs, and a `gh` working through its
+      // retries must not hold the block in `running`. A failed board write costs a log line.
+      // A run that created *no* issue reaches the branch below instead and moves nothing —
+      // there is nothing to move, and the draft is deliberately kept.
+      void moveIssueToColumn(workspace, result.issueUrl, todoColumn(workspace))
+        .then((column) => { if (column) logger.info(`${result.issueUrl} was researched, so its card moved to "${column}"`); })
+        .catch((error) => logger.warn(
+          `Could not move ${result.issueUrl} on the project board: ${(error as Error).message}`
+        ));
+
       try {
         await adoptIssueTitle(result.issueUrl);
       } catch (error) {
@@ -1491,7 +1510,7 @@ async function beginImplement(res: Response, workspaceId: string, issueUrl: stri
   // `gh` working through its retries must not hold an implementation up. Deliberately not
   // fatal either — a board write that fails costs a log line and nothing else, because the
   // point of the run is the pull request, not the column.
-  void moveIssueToInProgress(workspace, issueUrl)
+  void moveIssueToColumn(workspace, issueUrl, inProgressColumn(workspace))
     .then((column) => { if (column) logger.info(`${issueUrl} is being implemented, so its card moved to "${column}"`); })
     .catch((error) => logger.warn(
       `Could not move ${issueUrl} on the project board: ${(error as Error).message}`

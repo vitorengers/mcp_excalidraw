@@ -397,6 +397,18 @@ It is best-effort by design: no project, no such column, an issue that is not on
 `gh` that fails are all logged and nothing more. The run still starts. `docs/project-board.md` has
 the column-resolution rule and `projectInProgressColumn`.
 
+### And when the research run finishes
+
+The same write, one step earlier. A block is drafted in the first column — `My Notes` by
+convention — and the issue the agent creates is left there too, because GitHub's *Item added to
+project* workflow assigns the first option. Once the issue exists it is no longer an observation
+waiting to be looked at, so the server moves it to **Todo**.
+
+Best-effort in exactly the same way, and for a stronger reason: the issue is already created by
+the time this runs, so nothing here may turn a successful run into a failed block. A run that
+created no issue moves nothing at all. `projectTodoColumn` names the column on a board that calls
+it something else.
+
 ### One checkout per run
 
 Every implementation gets a **git worktree of its own** — `<project>-worktrees/issue-<n>`, on a
