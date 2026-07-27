@@ -233,6 +233,26 @@ try {
     'the server-side directory listing');
   check('and it lists directories the server can see, because the browser cannot', browsable);
 
+  const where = () => evaluate(`document.querySelector('.workspace-dialog__where')?.textContent ?? null`);
+  const startedAt = await where();
+  check('it says where it is looking', typeof startedAt === 'string', String(startedAt));
+  // Walking the listing is the gesture the picker exists for, and it is the half a typed
+  // path never exercises.
+  check('a listed directory can be opened',
+        await evaluate(`(() => {
+          const entry = [...document.querySelectorAll('.workspace-dialog__entry')]
+            .find((button) => !button.classList.contains('workspace-dialog__entry--up'));
+          if (!entry) return false;
+          entry.click();
+          return true;
+        })()`));
+  const walkedIn = await waitFor(async () => {
+    const now = await where();
+    return now && now !== startedAt ? now : null;
+  }, 'the listing to move into the directory that was clicked');
+  check('and the listing follows it in', walkedIn !== startedAt, `${startedAt} → ${walkedIn}`);
+  check('with a way back up', await evaluate(`Boolean(document.querySelector('.workspace-dialog__entry--up'))`));
+
   console.log('\n3. completing it adds a tab and switches to it, with no reload');
   await type('.workspace-dialog__path', slash(firstDir));
   await shot('03-path-typed');
