@@ -34,6 +34,14 @@ export interface IssueTargetData {
   issueError: string | null;
   issueTitle: string | null;
   observation: string | null;
+  /**
+   * Files attached as reference material for the run, by id in the server's file store.
+   *
+   * An explicit list rather than Excalidraw group membership: a group is a user-facing
+   * concept, so grouping a block with its neighbours for layout would silently change
+   * what the agent sees, and ungrouping would silently take it away.
+   */
+  images: string[];
   /** Set once an agent has been asked to implement the issue. */
   implementState: 'running' | 'done' | 'failed' | null;
   implementUrl: string | null;
@@ -62,6 +70,12 @@ function docKeyOf(element: PanelElement | undefined): string | null {
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null;
+}
+
+/** A list of ids, or an empty one — never undefined, so the panel can just map over it. */
+function asIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
 }
 
 /**
@@ -115,6 +129,8 @@ function mirrorCardIssue(
     issueError: null,
     issueTitle: asString(card.text) ?? asString(label?.text),
     observation: null,
+    // A card exists because the issue does, so there is no run left to attach anything to.
+    images: [],
     implementState: null,
     implementUrl: null,
     implementError: null,
@@ -183,6 +199,7 @@ export function resolvePanelTarget(
           issueError: asString(issueCustom.issueError),
           issueTitle: asString(issueCustom.issueTitle),
           observation: asString(issueCustom.observation),
+          images: asIdList(issueCustom.issueImages),
           implementState: asString(issueCustom.implementState) as IssueTargetData['implementState'],
           implementUrl: asString(issueCustom.implementUrl),
           implementError: asString(issueCustom.implementError),

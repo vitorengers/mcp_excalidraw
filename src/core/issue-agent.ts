@@ -286,12 +286,40 @@ export async function runAgent(
   });
 }
 
+/**
+ * The section that names the reference images, or nothing at all.
+ *
+ * Nothing at all is the important half: a block with no images attached must send the
+ * prompt it sent before this existed, byte for byte, because a feature nobody used must
+ * not change what every block already does.
+ *
+ * The instruction says what the images are *for*, because the obvious reading is wrong.
+ * They cannot become part of the issue — `gh issue create` uploads nothing, and the
+ * upload endpoint GitHub's own web client uses is not public API — so an agent that tries
+ * to attach them wastes the run. They are material for the investigation, and anything
+ * from them the issue depends on has to be written out in words.
+ */
+export function imageReferenceSection(paths: readonly string[]): string {
+  if (!paths.length) return '';
+
+  const list = paths.map((imagePath) => `- ${imagePath}`).join('\n');
+  return `\n\n---\n\nReference images (${paths.length}), attached to this observation and already on disk:
+
+${list}
+
+Read each one before you write the issue. They are reference material for the
+investigation, not content for the issue: they cannot be uploaded to GitHub, so describe
+in words whatever the issue depends on. They are deleted when this run ends, so nothing
+you write may point at these paths.`;
+}
+
 export async function runIssueAgent(
   workspace: Workspace,
   observation: string,
-  options: { agentCommand: string; timeoutMs?: number }
+  options: { agentCommand: string; timeoutMs?: number; imagePaths?: readonly string[] }
 ): Promise<IssueAgentResult> {
-  const prompt = `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observation}`;
+  const prompt = `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observation}`
+    + imageReferenceSection(options.imagePaths ?? []);
   const run = await runAgent(workspace, prompt, {
     agentCommand: options.agentCommand,
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),

@@ -33,6 +33,7 @@ import { isMainModule } from './core/entry.js';
 import { writePidFile, removePidFile } from './core/pidfile.js';
 import { loadWorkspaces, Workspace } from './core/workspaces.js';
 import { runIssueAgent } from './core/issue-agent.js';
+import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
 import {
   readProjectBoard,
   moveCard,
@@ -1147,8 +1148,27 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     broadcast({ type: 'element_updated', element: updatedLabel } as ElementUpdatedMessage, workspaceId);
   };
 
+  let images: MaterializedImages = NO_IMAGES;
   try {
-    const result = await runIssueAgent(workspace, observation, { agentCommand: ISSUE_AGENT_COMMAND });
+    // The images are written before the spawn and removed in the `finally` below, on the
+    // failure path as much as on the success one — they exist only while the run does.
+    // A failure to write them is not a failure of the run: the observation is still worth
+    // investigating, and an image is not worth the investigation.
+    try {
+      images = await materializeIssueImages(
+        workspace,
+        issueImageIds(element.customData),
+        (fileId) => files.get(fileId),
+        elementId
+      );
+    } catch (error) {
+      logger.warn(`Issue block ${elementId}: could not prepare reference images — ${(error as Error).message}`);
+    }
+
+    const result = await runIssueAgent(workspace, observation, {
+      agentCommand: ISSUE_AGENT_COMMAND,
+      imagePaths: images.paths
+    });
     if (result.ok && result.issueUrl) {
       markState('created', { issueUrl: result.issueUrl, issueError: null, observation });
       logger.info(`Issue block ${elementId} created ${result.issueUrl}`);
@@ -1164,6 +1184,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   } catch (error) {
     markState('failed', { issueError: (error as Error).message });
   } finally {
+    await images.cleanup();
     issueRunsInFlight.delete(elementId);
   }
 });
@@ -1700,6 +1721,21 @@ app.get('/api/files', (_req: Request, res: Response) => {
   const filesObj: Record<string, ExcalidrawFile> = {};
   files.forEach((f, id) => { filesObj[id] = f; });
   res.json({ files: filesObj });
+});
+
+/**
+ * One file by id.
+ *
+ * `GET /api/files` returns every dataURL the process holds, which is the wrong request
+ * for a panel that wants to show the two images a block has attached — on a board full
+ * of screenshots that is megabytes to render a thumbnail.
+ */
+app.get('/api/files/:id', (req: Request, res: Response) => {
+  const file = files.get(req.params.id as string);
+  if (!file) {
+    return res.status(404).json({ success: false, error: `File with ID ${req.params.id} not found` });
+  }
+  res.json({ success: true, file });
 });
 
 // POST add/update files (batch)

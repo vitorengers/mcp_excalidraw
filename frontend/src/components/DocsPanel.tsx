@@ -19,6 +19,8 @@ export interface IssueTarget {
   issueTitle?: string | null
   /** The text that produced the issue, preserved when the label was retitled. */
   observation?: string | null
+  /** Files attached as reference material for the run, by id in the server's file store. */
+  images?: string[]
   /** Set once an agent has been asked to implement the issue. */
   implementState?: 'running' | 'done' | 'failed' | null
   implementUrl?: string | null
@@ -51,6 +53,12 @@ export interface DocsPanelBodyProps {
   issue?: IssueTarget | null
   onCreateIssue?: (id: string) => void
   /**
+   * Attach reference images to a block before it is researched, and take one back off.
+   * Both answer with an error to show, or null.
+   */
+  onAttachImages?: (issue: IssueTarget, chosen: File[]) => Promise<string | null>
+  onDetachImage?: (issue: IssueTarget, fileId: string) => Promise<string | null>
+  /**
    * Both take the issue rather than an element id: a mirrored card has no element on the
    * server to name, so the issue URL is the only handle the two shapes share. Both answer
    * with an error to show, or null — a card has no element for a failure to arrive on.
@@ -76,11 +84,48 @@ interface ImplementView {
  */
 export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   docKey, title, workspace, collapsible, onToggleCollapse, issue, onCreateIssue,
-  onImplementIssue, onResetImplement
+  onImplementIssue, onResetImplement, onAttachImages, onDetachImage
 }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
   const [issueDetail, setIssueDetail] = useState<IssueDetailState>({ status: 'idle' })
   const [implement, setImplement] = useState<ImplementView>({ state: null, url: null, error: null })
+  const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
+  const [imageError, setImageError] = useState<string | null>(null)
+
+  const attached = issue?.images ?? []
+  // A list is a new array on every render; its contents are what the effect depends on.
+  const attachedKey = attached.join(',')
+
+  // The bytes live in the server's file store, not on the element — an element carrying
+  // dataURLs would ride in every autosync payload and every export. One request per
+  // attached image rather than the whole store, which on a board of screenshots is
+  // megabytes to draw two thumbnails.
+  useEffect(() => {
+    if (!attached.length) {
+      setThumbnails({})
+      return
+    }
+
+    let cancelled = false
+    Promise.all(attached.map(async (id) => {
+      try {
+        const response = await fetch(`/api/files/${encodeURIComponent(id)}`)
+        if (!response.ok) return [id, null] as const
+        const body = await response.json().catch(() => ({}))
+        const dataURL = body?.file?.dataURL
+        return [id, typeof dataURL === 'string' ? dataURL : null] as const
+      } catch {
+        return [id, null] as const
+      }
+    })).then((entries) => {
+      if (cancelled) return
+      setThumbnails(Object.fromEntries(
+        entries.filter((entry): entry is readonly [string, string] => Boolean(entry[1]))
+      ))
+    })
+
+    return () => { cancelled = true }
+  }, [attachedKey])
 
   // An authored block carries a copy of the state, which arrives over the socket and is
   // what makes a block read correctly before any fetch lands. A card carries none, so this
@@ -311,6 +356,68 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
 
           {issue.state === 'failed' && (
             <p className="element-docs__error">{issue.issueError ?? 'The run failed.'}</p>
+          )}
+
+          {/* Only before the run: the images are material for the investigation, so
+              attaching one to a block whose issue already exists would change nothing.
+              A mirrored card never reaches here — it is `created` by construction. */}
+          {issue.state !== 'created' && issue.state !== 'running' && onAttachImages && (
+            <div className="element-docs__images">
+              {attached.length > 0 && (
+                <ul className="element-docs__image-list">
+                  {attached.map((fileId) => (
+                    <li key={fileId} className="element-docs__image">
+                      {thumbnails[fileId]
+                        ? <img src={thumbnails[fileId]} alt="Attached reference" />
+                        : <span className="element-docs__image-missing">missing</span>}
+                      {onDetachImage && (
+                        <button
+                          type="button"
+                          className="element-docs__image-remove"
+                          title="Remove this image"
+                          aria-label="Remove this image"
+                          onClick={async () => {
+                            setImageError(null)
+                            const error = await onDetachImage(issue, fileId)
+                            if (error) setImageError(error)
+                          }}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {/* A label wrapping a hidden input: a file picker is a native control that
+                  cannot be opened from script, so the button has to be the input. */}
+              <label className="element-docs__collapse element-docs__attach">
+                {attached.length
+                  ? `Attach another reference image (${attached.length} attached)`
+                  : 'Attach reference images'}
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={async (event) => {
+                    const chosen = Array.from(event.target.files ?? [])
+                    // Cleared so the same file picked twice in a row still fires onChange.
+                    event.target.value = ''
+                    if (!chosen.length) return
+                    setImageError(null)
+                    const error = await onAttachImages(issue, chosen)
+                    if (error) setImageError(error)
+                  }}
+                />
+              </label>
+
+              {imageError && <p className="element-docs__error">{imageError}</p>}
+              <p className="element-docs__hint">
+                The agent reads these while it investigates. They cannot be uploaded to the
+                issue itself, so whatever the issue depends on is written out in words.
+              </p>
+            </div>
           )}
 
           {issue.state !== 'created' && issue.state !== 'running' && onCreateIssue && (

@@ -611,6 +611,97 @@ function App(): JSX.Element {
     }
   }
 
+  /**
+   * Ceiling on one reference image.
+   *
+   * The observation says N images and puts no number on it, and neither does this — but a
+   * dataURL is base64 in a map that lives in the server process, so one image the size of
+   * a video is a different kind of mistake from ten screenshots. Ten megabytes is well
+   * past any screenshot and well short of hurting.
+   */
+  const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
+
+  const readAsDataURL = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(new Error(`Could not read ${file.name}`))
+      reader.readAsDataURL(file)
+    })
+
+  /** Write a block's attached list, and mirror it into the panel. */
+  const writeIssueImages = async (elementId: string, images: string[]): Promise<void> => {
+    const element = excalidrawAPI?.getSceneElements().find((candidate) => candidate.id === elementId)
+    const response = await fetch(apiUrl(`/api/elements/${elementId}`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customData: { ...(customDataOf(element as { customData?: CustomData }) ?? {}), issueImages: images }
+      })
+    })
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}))
+      throw new Error(body?.error ?? `HTTP ${response.status}`)
+    }
+    setIssue((current) => (current?.id === elementId ? { ...current, images } : current))
+  }
+
+  /**
+   * Attach reference images to a block, so the agent can look at them while it investigates.
+   *
+   * The bytes go to the server's file store and only the ids land on the element: an
+   * element carrying dataURLs would ride in every autosync payload and in every export of
+   * the board. Nothing is uploaded to GitHub — `gh issue create` has no way to attach a
+   * file — so these are material for the run and nothing else.
+   */
+  const attachIssueImages = async (target: IssueTarget, chosen: File[]): Promise<string | null> => {
+    const images = chosen.filter((file) => file.type.startsWith('image/'))
+    if (!images.length) return 'Those files are not images.'
+
+    const tooBig = images.find((file) => file.size > MAX_REFERENCE_IMAGE_BYTES)
+    if (tooBig) {
+      return `${tooBig.name} is larger than ${MAX_REFERENCE_IMAGE_BYTES / (1024 * 1024)} MB.`
+    }
+
+    try {
+      const uploads = await Promise.all(images.map(async (file) => ({
+        id: `issue-image-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+        dataURL: await readAsDataURL(file),
+        mimeType: file.type,
+        created: Date.now()
+      })))
+
+      // The file store is not per-board, so this request carries no workspace — the same
+      // id means the same image everywhere, which is why the ids are generated here.
+      const stored = await fetch('/api/files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: uploads })
+      })
+      if (!stored.ok) return `Could not store the images: HTTP ${stored.status}`
+
+      await writeIssueImages(target.id, [...(target.images ?? []), ...uploads.map((file) => file.id)])
+      return null
+    } catch (error) {
+      return (error as Error).message
+    }
+  }
+
+  /**
+   * Take one image back off a block.
+   *
+   * The reference goes; the stored file stays. Deleting it would be a guess about who else
+   * holds that id, and the store is in memory anyway — it does not outlive the server.
+   */
+  const detachIssueImage = async (target: IssueTarget, fileId: string): Promise<string | null> => {
+    try {
+      await writeIssueImages(target.id, (target.images ?? []).filter((id) => id !== fileId))
+      return null
+    } catch (error) {
+      return (error as Error).message
+    }
+  }
+
   /** Thumbnail height for a collapsed image, in scene units. */
   const COLLAPSED_IMAGE_HEIGHT = 48
 
@@ -1307,6 +1398,7 @@ function App(): JSX.Element {
         issueError: (custom.issueError as string) ?? null,
         issueTitle: (custom.issueTitle as string) ?? null,
         observation: (custom.observation as string) ?? null,
+        images: Array.isArray(custom.issueImages) ? (custom.issueImages as string[]) : [],
         implementState: (custom.implementState as IssueTarget['implementState']) ?? null,
         implementUrl: (custom.implementUrl as string) ?? null,
         implementError: (custom.implementError as string) ?? null
@@ -1987,6 +2079,8 @@ function App(): JSX.Element {
             onToggleCollapse={toggleImageCollapse}
             issue={issue}
             onCreateIssue={createIssueFromBlock}
+            onAttachImages={attachIssueImages}
+            onDetachImage={detachIssueImage}
             onImplementIssue={implementIssueFromBlock}
             onResetImplement={resetImplementOnBlock}
           />
