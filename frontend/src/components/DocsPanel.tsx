@@ -856,6 +856,18 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
             <p className="element-docs__error">{issue.issueError ?? 'The run failed.'}</p>
           )}
 
+          {/* Said out loud for the reason Ctrl+V is: Enter finishing an edit is this
+              board's convention rather than Excalidraw's, so nothing else on screen
+              would mention it. Only before the run — a created block's text is the
+              issue title, and nobody is writing an observation into it. */}
+          {issue.state !== 'created' && issue.state !== 'running' && (
+            <p className="element-docs__hint">
+              While writing in the block, Enter finishes the edit and Shift+Enter breaks the
+              line. Finishing writes the observation down; the button below is what starts
+              the run.
+            </p>
+          )}
+
           {/* Only before the run: the images are material for the investigation, so
               attaching one to a block whose issue already exists would change nothing.
               A mirrored card never reaches here — it is `created` by construction. */}

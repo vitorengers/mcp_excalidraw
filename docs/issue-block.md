@@ -24,6 +24,53 @@ A second click while a run is in flight gets 409. So does a block that already h
 There is no time limit on the run, and a block stuck in `running` can be reset —
 [No time limit, and the way back](#no-time-limit-and-the-way-back) covers both agents.
 
+## Writing the observation
+
+Writing into a block is typing into Excalidraw's own bound-label editor, and that editor
+commits on exactly two keys: **Escape**, and **Ctrl/Cmd+Enter**. Plain Enter matched neither,
+fell through to the textarea and inserted a newline — so the one key a reader reaches for to
+say *done* was the one key that did not finish. There is no prop, option or callback that
+changes it; the handler is `editable.onkeydown`, assigned as an element property inside
+`textWysiwyg`.
+
+So the board takes the key before that handler runs, with a capture-phase `keydown` listener
+on `document` — the same manoeuvre the paste path makes, for the same reason: an
+element-property handler runs at the target phase, so capturing at `document` is what gets
+there first, and stopping the event is what keeps the newline from being typed.
+
+- **Enter** finishes the edit. The text is committed to the label and the block stays
+  selected, so the card is still on screen.
+- **Shift+Enter** breaks the line. That is where the newline went, and the interception is
+  written so as not to swallow it.
+- **Escape** and **Ctrl/Cmd+Enter** are untouched. They already finished, and removing a
+  keystroke people have in their fingers buys nothing.
+- **Every other label on the board** is untouched too. Enter still inserts a newline there;
+  the listener fires only when the open editor belongs to a shape carrying
+  `customData.kind === "issue"`.
+- **A composition in progress** is let through, or Enter-to-confirm an IME candidate would
+  close the editor mid-word.
+
+**A selected issue block therefore changes what Enter does on the canvas, the way it already
+changes what Ctrl+V does**, and the card says so for the same reason — a keystroke nothing on
+screen mentions is a keystroke nobody tries.
+
+Two decisions inside it are worth naming.
+
+**Enter finishes the edit; it does not start the run.** Starting the agent is an unattended
+process with repository access, and inferring that from a key that means "done writing" would
+be a guess with consequences. The button on the card stays the only way in.
+
+**The finish is a synthetic Escape at the textarea, not a `blur()`.** `onSubmit` re-selects
+the container *only when the submit came from the keyboard*, so blurring commits the text and
+leaves nothing selected — which closes the card the reader wants next. The synthetic event
+does not bubble: the editor's own handler is all it needs to reach, and an Escape loose on the
+page is a different keystroke with its own meanings.
+
+`scripts/check-issue-block-enter-browser.mjs` drives a real Chrome, because which of two
+handlers wins is not a question a type check can be asked. It presses Enter with its text
+(`\r`) attached rather than as a bare key: a newline in a textarea is the *default action* of
+the keypress, so a key event with no text would pass every case while inserting nothing.
+
 ## Reference images
 
 A block can carry images as well as text. Select it and either press **Ctrl+V** with a
