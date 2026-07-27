@@ -16,18 +16,27 @@
   color: #cdd6f4;
   font-family: 'Cascadia Code', 'Cascadia Mono', Menlo, Consolas, 'Courier New', monospace;
   line-height: 1.35;
-  /* Transparent to the pointer, so Excalidraw keeps the block: clicking selects it,
-     dragging moves it, and the corner handles still resize it. Only the prompt row takes
-     the pointer back, and it says so itself. */
+  /* Transparent to the pointer by default, so what the overlay does not claim reaches
+     Excalidraw and the block stays a block. The screen claims it — that is #112 — and the
+     header deliberately does not, because with the screen opaque the header is the band
+     that selects and drags the shape. */
   pointer-events: none;
 }
 
+/* The band the block is grabbed by, and since #112 the only one: the screen below takes the
+   pointer, so a click in the middle of the card belongs to the shell rather than the shape.
+   Everything here is sized in `em` and follows the board's zoom, which at the zoom floor
+   leaves about five screen pixels — not a target. Hence the minimum in *pixels*: it is a
+   no-op above about 70% zoom and the difference between a draggable block and a stuck one
+   below it. The grid the shell is told is derived from the block's scene size, not from this
+   box, so a header that stops shrinking on screen does not change what any shell is sent. */
 .terminal-card__header {
   flex: 0 0 auto;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 0.75em;
+  min-height: 12px;
   padding-bottom: 0.25em;
   border-bottom: 1px solid rgb(205 214 244 / 18%);
   color: #a6adc8;
@@ -47,9 +56,9 @@
   opacity: 0.7;
 }
 
-/* The reader's text size, and the second thing on this overlay that is not transparent to
-   the pointer. Only the two buttons take it — the number between them is a readout, and a
-   readout that swallowed clicks would be a strip of the block that no longer selects it. */
+/* The reader's text size. Only the two buttons take the pointer — the number between them is
+   a readout, and a readout that swallowed clicks would be a strip of the header that no
+   longer selects the block, which since #112 is the only strip that does. */
 .terminal-card__font {
   flex: 0 0 auto;
   display: flex;
@@ -102,10 +111,10 @@
 /* The tabs, one per shell in this block.
 
    The row itself stays transparent to the pointer and only the chips take it. That is not
-   tidiness: the row spans the card, the card is the block, and a full-width strip that took
-   the pointer would sit over the block's own top edge and swallow the resize handles there.
-   The chips are inset from the left edge for the same reason — Excalidraw's handles reach a
-   few pixels either side of the shape's outline. */
+   tidiness: the row spans the card, the card is the block, and since #112 the top of the card
+   is the whole of what selects and drags the shape — a full-width strip that took the pointer
+   would be most of that band gone. The chips are inset from the left edge for the same
+   reason, and because Excalidraw's handles reach a few pixels either side of the outline. */
 .terminal-card__tabs {
   flex: 0 0 auto;
   display: flex;
@@ -176,15 +185,19 @@
   cursor: not-allowed;
 }
 
-/* The emulator's host. It keeps `pointer-events: none` from the card, which is the whole
-   bargain: xterm would happily take clicks for selection, and taking them would take
-   Excalidraw's resize handles for the block underneath. */
+/* The emulator's host, and since #112 the one large part of the overlay that takes the
+   pointer. It used to inherit the card's `none` so that Excalidraw kept the block's resize
+   handles — but those handles sit two to ten screen pixels *outside* the block's bounds, and
+   the overlay covers exactly the bounds, so nothing here was ever costing a handle. What it
+   costs is selecting and dragging the block from its middle, which the header now does. */
 .terminal-card__body {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
   margin: 0.3em 0 0;
   overflow: hidden;
+  pointer-events: auto;
+  cursor: text;
 }
 
 /* Every session in the block has one of these, stacked, and all but the active one is
@@ -197,12 +210,15 @@
 }
 
 /* xterm sizes itself in pixels from the grid it was given; the block is the frame around
-   that, and anything the frame cannot hold is clipped rather than scrolled — the viewport
-   cannot be reached with a pointer that belongs to the canvas. */
+   that, and anything the frame cannot hold is clipped rather than laid out below it. */
 .terminal-card__screen .xterm {
   height: 100%;
 }
 
+/* No scrollbar, and still scrollable: xterm moves this box's `scrollTop` itself when the
+   wheel is turned over it, and an `overflow: hidden` box scrolls perfectly well that way.
+   A real scrollbar would be a strip of the block's width the grid was never told about, so
+   the last column would go under it. */
 .terminal-card__screen .xterm-viewport {
   overflow: hidden !important;
 }
@@ -217,8 +233,9 @@
   border-top: 1px solid rgb(205 214 244 / 18%);
   overflow: hidden;
   white-space: nowrap;
-  /* The one part of the overlay that is not transparent to the pointer. It does not take
-     text — the emulator does — it takes the click that hands the keyboard over. */
+  /* A status line since #112, saying which of the two keyboard states the block is in. It
+     still takes a click and still hands the keyboard over — the screen above it is the way
+     in now, but a strip that reads like one and does nothing would be worse than either. */
   pointer-events: auto;
   cursor: text;
 }

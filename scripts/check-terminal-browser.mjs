@@ -10,12 +10,16 @@
  * So the questions here are the ones only a browser can answer. Is the block on the far left
  * of the board, clear of the mirror it is anchored to — including when the session opened
  * before the first poll drew that mirror, which is the ordering a reload actually produces?
- * Does Alt+T bring it into view, and Alt+B still reach the mirror? Does a click reach the *shape* through the
- * overlay, which is what leaves Excalidraw's own resize handles usable — and does dragging
- * one really tell the server a new size? Does a command typed into the block run, without
- * `p`, `w` and `d` being taken as Excalidraw's freedraw, then its diamond tool? And is the
- * block still absent from the store after all of that, which is the half of "derived" that
- * a check on the export cannot see?
+ * Does Alt+T bring it into view, and Alt+B still reach the mirror? Does a click on the
+ * **header** reach the shape through the overlay — which since #112 is the band that selects
+ * and drags the block, the screen below it having taken the pointer for the shell — and does
+ * dragging a handle really tell the server a new size? Does a command typed into the block
+ * run, without `p`, `w` and `d` being taken as Excalidraw's freedraw, then its diamond tool?
+ * And is the block still absent from the store after all of that, which is the half of
+ * "derived" that a check on the export cannot see?
+ *
+ * Who owns the pointer where is `check-terminal-focus-browser.mjs`; this one only insists
+ * that the shape underneath is still a shape.
  *
  * Chrome is driven over the DevTools protocol through `ws`, which the server already
  * depends on. Self-contained otherwise: it builds a throwaway workspace, starts its own
@@ -327,10 +331,18 @@ const PROBE = `(() => {
     const body = card.querySelector('.terminal-card__body');
     const prompt = card.querySelector('.terminal-card__prompt');
     const promptBox = prompt ? prompt.getBoundingClientRect() : null;
+    const header = card.querySelector('.terminal-card__header');
+    const headerBox = header ? header.getBoundingClientRect() : null;
     out.card = {
       left: box.left, top: box.top, width: box.width, height: box.height,
       fontSize: Number.parseFloat(getComputedStyle(card).fontSize),
       pointerEvents: getComputedStyle(body).pointerEvents,
+      headerPointerEvents: header ? getComputedStyle(header).pointerEvents : null,
+      // Low in the header and in from the left: the middle of the row is where the font
+      // buttons and the mode chip are, and those do take the pointer.
+      header: headerBox
+        ? { x: headerBox.left + 6, y: headerBox.top + headerBox.height - 2 }
+        : null,
       where: (card.querySelector('.terminal-card__where') || {}).textContent || '',
       grid: (card.querySelector('.terminal-card__grid') || {}).textContent || '',
       mode: (card.querySelector('.terminal-card__mode') || {}).textContent || '',
@@ -441,8 +453,10 @@ try {
   check('it names the directory the shell is in',
         containsPath(scene.card.where, projectDir), scene.card.where);
   check('and the grid the block stands for', /\d+×\d+/.test(scene.card.grid), scene.card.grid);
-  check('the transcript is transparent to the pointer, so the shape underneath is still the shape',
-        scene.card.pointerEvents === 'none', scene.card.pointerEvents);
+  check('the screen takes the pointer, so a click in it belongs to the shell',
+        scene.card.pointerEvents === 'auto', scene.card.pointerEvents);
+  check('and the header does not, so the shape underneath is still the shape',
+        scene.card.headerPointerEvents === 'none', String(scene.card.headerPointerEvents));
 
   // The whole arrangement in one frame — terminal, then mirror, then the board's own
   // content — because the subject of this case is a layout, and a coordinate is a poor way
@@ -497,8 +511,8 @@ try {
   console.log('\n3. a command typed into the block runs, and its output comes back');
   check('the block says which mode the session got', /^(pty|pipe)$/.test(scene.card.mode.trim()),
         scene.card.mode);
-  // The strip at the bottom is the only part of the overlay that takes the pointer, and
-  // clicking it is the whole of "giving the terminal the keyboard".
+  // The strip at the bottom is the status line, and clicking it still hands the keyboard
+  // over — the screen above it is the way in a reader takes, which is #112's own check.
   await click(scene.card.prompt.x, scene.card.prompt.y);
   check('clicking the prompt strip puts the keyboard in the terminal',
         /xterm/.test((await evaluate(PROBE)).focused), (await evaluate(PROBE)).focused);
@@ -542,12 +556,12 @@ try {
   await sleep(400);
   scene = await evaluate(PROBE);
 
-  // A click at the block's centre has to select the *shape*: the overlay is on top of it,
-  // and if it took the click there would be no selection and no resize handles at all.
-  const centre = toViewport(scene, scene.block.x + scene.block.w / 2, scene.block.y + scene.block.h / 2);
-  await click(centre.x, centre.y);
+  // A click on the header has to select the *shape*. Since #112 that band is the whole of
+  // what reaches it — the screen below takes the pointer for the shell — so if the header
+  // ever stopped letting a click through there would be no selection and no handles at all.
+  await click(scene.card.header.x, scene.card.header.y);
   scene = await evaluate(PROBE);
-  check('clicking the block selects it through the overlay',
+  check('clicking the header selects the block through the overlay',
         scene.selected.includes(scene.block.id), JSON.stringify(scene.selected));
 
   const corner = toViewport(scene, scene.block.x + scene.block.w, scene.block.y + scene.block.h);

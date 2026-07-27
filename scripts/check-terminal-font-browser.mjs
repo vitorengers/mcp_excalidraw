@@ -4,13 +4,14 @@
  *
  * `check-terminal-font.mjs` covers the arithmetic: one font size feeds the cell, the frame
  * and the grid, so a larger font in the same block is fewer columns. None of that says the
- * buttons exist, that a pointer can reach them through an overlay that is deliberately
+ * buttons exist, that a pointer can reach them on an overlay whose header is deliberately
  * transparent, or that the emulator really draws the grid the header claims — and this
  * repository has paid three times for the difference between compiling and working.
  *
  * So the questions here are the ones only a browser can answer. Are the two buttons on the
- * header, and did they take the pointer back without taking the block's own handles with
- * them? Does clicking `+` change what the *shell* was told, and not just what is drawn?
+ * header, and did they take the pointer back without taking the rest of that row with them —
+ * which since #112 is the whole of what selects and drags the block? Does clicking `+`
+ * change what the *shell* was told, and not just what is drawn?
  * At the largest size, is the rightmost column the header claims actually inside the
  * block — the failure the whole design is arranged around, since anything past the frame
  * is clipped rather than scrolled. Is the block still selectable and still resizable by its
@@ -309,6 +310,13 @@ const PROBE = `(() => {
     },
     body: centreOf(body),
     screen: centreOf(screen),
+    // Low in the header and in from the left: the middle of the row is the buttons above.
+    header: header
+      ? (() => {
+        const headerBox = header.getBoundingClientRect();
+        return { x: headerBox.left + 6, y: headerBox.top + headerBox.height - 2 };
+      })()
+      : null,
     prompt: centreOf(card.querySelector('.terminal-card__prompt')),
     rows: (card.querySelector('.xterm-rows') || {}).textContent || '',
   };
@@ -525,10 +533,11 @@ try {
     scene = await evaluate(PROBE);
   }
 
-  const centre = toViewport(scene, scene.block.x + scene.block.w / 2, scene.block.y + scene.block.h / 2);
-  await click(centre.x, centre.y);
+  // The header rather than the middle: since #112 the screen takes the pointer for the
+  // shell, and the header is the band that still reaches the shape.
+  await click(scene.card.header.x, scene.card.header.y);
   scene = await evaluate(PROBE);
-  check('clicking it through the overlay still selects it',
+  check('clicking the header through the overlay still selects it',
         scene.selected.includes(scene.block.id), JSON.stringify(scene.selected));
 
   // Two pixels inside the corner, not exactly on it. The handle is centred on the vertex, so

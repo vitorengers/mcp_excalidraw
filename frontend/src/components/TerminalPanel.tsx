@@ -51,6 +51,47 @@ export interface TerminalPanelProps {
  */
 const FONT_FAMILY = "'Cascadia Code', 'Cascadia Mono', Menlo, Consolas, 'Courier New', monospace"
 
+/**
+ * A wheel the emulator did not want, given to the board instead of dropped.
+ *
+ * The block is a shape on a board, and over any other shape that wheel pans or zooms. Now
+ * that the overlay takes the pointer it also takes the wheel, so without this a terminal
+ * would be a hole in the board's own navigation — the failure #112 names as worse than
+ * either answer to the question of who owns the wheel.
+ *
+ * Two ways the emulator says it has spoken for one. It calls `preventDefault` on the wheel
+ * it scrolled the scrollback with, and leaves the one it could not use alone — the screen is
+ * already at the bottom, or there is no scrollback at all. And a program that has turned
+ * mouse reporting on is being sent the wheel as an escape sequence, which xterm marks with a
+ * class on its own root rather than with the event.
+ *
+ * What is left has to be re-dispatched rather than left to bubble: this overlay is a
+ * *sibling* of the canvas, not a child, so Excalidraw's listener is nowhere on this event's
+ * path. And it goes to the **canvas** rather than to the container that listens, because
+ * that listener drops any wheel whose target is not a canvas, a textarea or an iframe — a
+ * board that scrolled while the pointer was over a menu is the bug it is guarding against.
+ */
+function forwardWheelToCanvas(event: React.WheelEvent): void {
+  if (event.nativeEvent.defaultPrevented) return
+  if ((event.target as Element | null)?.closest?.('.xterm.enable-mouse-events')) return
+  const canvas = document.querySelector('.excalidraw__canvas.interactive')
+    ?? document.querySelector('.excalidraw__canvas')
+  if (!canvas) return
+  canvas.dispatchEvent(new WheelEvent('wheel', {
+    deltaX: event.deltaX,
+    deltaY: event.deltaY,
+    deltaMode: event.deltaMode,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
+    altKey: event.altKey,
+    bubbles: true,
+    cancelable: true
+  }))
+}
+
 /** The block's own palette, so the emulator and the shape underneath read as one object. */
 const THEME = {
   background: '#1e1e2e',
@@ -111,6 +152,37 @@ const TerminalScreen: React.FC<{
     })
     terminal.open(host)
     terminal.onData((data) => onDataRef.current(data))
+
+    // The two keystrokes a browser and a shell both claim, settled the way this machine's own
+    // terminal settles them. Everything else is the shell's, which is the whole point of the
+    // block taking the keyboard.
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown') return true
+      // AltGr arrives as Ctrl+Alt on several layouts, and it is somebody typing a `@`.
+      if (event.altKey || !(event.ctrlKey || event.metaKey)) return true
+      const key = event.key.toLowerCase()
+
+      // Ctrl+C is a copy while something is selected and an interrupt the rest of the time.
+      // The selection is dropped straight after, so the second press is an interrupt again —
+      // without that, a reader who had selected something would have no way to stop a shell
+      // that was running away.
+      if (key === 'c' && terminal.hasSelection()) {
+        const selected = terminal.getSelection()
+        event.preventDefault()
+        terminal.clearSelection()
+        void navigator.clipboard?.writeText(selected).catch(() => { /* no clipboard here */ })
+        return false
+      }
+
+      // Ctrl+V is the browser's, not the shell's: xterm already listens for the `paste` event
+      // the default action fires, and handing this to the shell instead would send it the
+      // `\x16` that Ctrl+V means on a terminal. Returning false is what leaves the default
+      // alone — xterm's own key handling would have cancelled the event.
+      if (key === 'v') return false
+
+      return true
+    })
+
     terminalRef.current = terminal
     writtenRef.current = ''
     registerFocusRef.current(() => terminal.focus())
@@ -213,30 +285,35 @@ const TerminalScreen: React.FC<{
  * new font and reports it down the route a corner drag already uses; what comes back is
  * what the header shows.
  *
- * The body is transparent to the pointer on purpose, and that survived the emulator, the
- * font buttons and the tabs. This is where a terminal in a canvas has to choose: Excalidraw
- * owns clicking, dragging and resizing the block underneath, and an overlay that took pointer
- * events — which is what xterm would like — would take the shape's own handles with it. So
- * the pointer stays with the canvas, and the three places that take it back say what they are
- * for: the strip at the bottom hands the *keyboard* over, the two buttons on the header set
- * the size, and the tab chips switch, add, close, detach and merge. Once the strip has been
- * clicked every keystroke goes to the shell, Ctrl+C included; clicking anywhere on the canvas
- * blurs it and gives the keyboard back. The cost is the one the transcript already had: no
- * selecting or scrolling with the mouse.
+ * **The screen takes the pointer and the header does not**, which is #112 and the reverse of
+ * what this file said for its first three revisions. The old arrangement made the whole
+ * overlay transparent and carved one strip out of the bottom that said `click here to type`,
+ * on the reasoning that an overlay taking pointer events would take the shape's resize
+ * handles with it. That reasoning was measured and found wrong: Excalidraw's handles sit two
+ * to ten screen pixels *outside* an element's bounds and the overlay covers exactly the
+ * bounds, so the screen can take every click it likes and the block keeps every handle.
  *
- * The chips are the newest of the three, and they are deliberately the *chips* rather than
- * the row they sit in: a full-width strip along the top of the card would sit over the
- * block's own top edge and take the resize handles with it, which is the failure this file
- * has recorded since it was written — and the reason the font buttons are as small as a
- * target can be. They are inset from the card's edges for the same reason, and the browser
- * check drags a corner afterwards to say so.
+ * What a pointer-taking screen really costs is selecting and dragging the block from its
+ * middle, and that is what the header buys back. Clicking the header selects the shape,
+ * dragging it moves the shape, and the handles that appear are the shape's own — so the
+ * header is load bearing for resizing too, since a handle only exists while something is
+ * selected. Below it the pointer is the shell's: a click focuses the emulator, a drag selects
+ * text, the wheel scrolls the scrollback, and Alt+click moves the shell's own cursor along
+ * the line it is editing. A wheel the scrollback has no use for is handed back to the canvas
+ * rather than swallowed — see `forwardWheelToCanvas`.
+ *
+ * The tab chips stay the *chips* rather than the row they sit in, and the font buttons stay
+ * as small as a target can be, for the reason that survived: the top of the card is now the
+ * whole of what selects and drags the block, so every pixel of it that takes the pointer is
+ * a pixel that no longer grabs the shape. The browser checks drag a corner afterwards to say
+ * the shape is still a shape.
  */
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   rect, zoom, suppressed, tabs, activeId, canAdd, canMerge,
   onSelect, onAdd, onClose, onDetach, onMerge, onInput,
   fontSize: readerFontSize, onFontSize
 }) => {
-  /** Focus handles, one per live screen, so the prompt strip can reach the active one. */
+  /** Focus handles, one per live screen, so a click anywhere can reach the active one. */
   const focusRef = useRef<Map<string, () => void>>(new Map())
   const [attached, setAttached] = useState(false)
   /**
@@ -400,7 +477,19 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         )}
       </div>
 
-      <div className="terminal-card__body">
+      {/* The screen, and the part of the overlay the pointer belongs to. The focus is taken
+          on pointer *down* rather than on click, matching what the strip below has always
+          done: a click is a second event, and the drag that selects text never produces one.
+          Nothing is prevented here — xterm's own selection and cursor handling has already
+          run by the time this fires, and preventing the default would undo it. */}
+      <div
+        className="terminal-card__body"
+        onPointerDown={(event) => {
+          event.stopPropagation()
+          if (active) focusRef.current.get(active.id)?.()
+        }}
+        onWheel={forwardWheelToCanvas}
+      >
         {tabs.map((tab) => (
           <TerminalScreen
             key={tab.id}
@@ -420,9 +509,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         ))}
       </div>
 
-      {/* The other part that takes the pointer. Clicking it hands the keyboard to the shell;
-          clicking the canvas takes it back, which is also what leaves the block draggable
-          and resizable underneath. */}
+      {/* The status line: which of the two keyboard states the block is in. It was the way
+          in before #112 and still takes a click, because a strip that reads like a prompt and
+          refuses one would be worse than either — but the screen above it is what a reader
+          clicks now, and clicking the canvas is still what gives the keyboard back. */}
       <div
         className="terminal-card__prompt"
         onPointerDown={(event) => {
@@ -430,7 +520,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           event.preventDefault()
           if (active) focusRef.current.get(active.id)?.()
         }}
-        onWheel={(event) => event.stopPropagation()}
+        onWheel={forwardWheelToCanvas}
       >
         <span className="terminal-card__caret">❯</span>
         <span className="terminal-card__hint">
@@ -442,7 +532,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             ? `the shell has gone — ${active.ended} — press + for another, or Alt+T`
             : attached
               ? 'typing goes to the shell — click the canvas to give the keyboard back'
-              : 'click here to type'}
+              : 'click the screen to type — the header drags the block'}
         </span>
       </div>
     </div>
