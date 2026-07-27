@@ -42,6 +42,7 @@ import {
   NotOnThisBoard
 } from './core/project-board.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
+import { issueBlockAppearance } from './core/issue-appearance.js';
 import { runImplementAgent } from './core/implement-agent.js';
 import {
   ImplementRecord,
@@ -1074,11 +1075,21 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   }
 
   issueRunsInFlight.add(elementId);
+  /**
+   * Write the state onto the block, and the look that goes with it.
+   *
+   * Here rather than in the browser because this is where the state is authored: the
+   * appearance then persists, exports and reaches every connected tab through the update
+   * that already carries the state. A browser deriving it on render would have to derive it
+   * again on every path that draws a block, and a block saved to `docs/board.excalidraw`
+   * would go back to looking like a draft.
+   */
   const markState = (state: string, extra: Record<string, unknown> = {}) => {
     const current = store.get(elementId);
     if (!current) return;
     const updated: ServerElement = {
       ...current,
+      ...issueBlockAppearance(state),
       customData: { ...(current.customData ?? {}), issueState: state, ...extra },
       updatedAt: new Date().toISOString(),
       version: (current.version || 0) + 1
@@ -1231,8 +1242,12 @@ app.delete('/api/issue-block/:id', (req: Request, res: Response) => {
   }
 
   const { issueState, issueError, ...rest } = (element.customData ?? {}) as Record<string, unknown>;
+  const resetTo = rest.issueUrl ? 'created' : 'draft';
   const updated: ServerElement = {
     ...element,
+    // The look goes back with the state. This route is the other writer of `issueState`,
+    // so a block reset here would otherwise keep whatever the stuck run had painted on it.
+    ...issueBlockAppearance(resetTo),
     // A block that already produced an issue is `created`, whatever the stuck state said.
     // Dropping the state outright would send that card back to offering a run the POST
     // route would then refuse.

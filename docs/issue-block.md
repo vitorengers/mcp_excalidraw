@@ -74,6 +74,35 @@ Three things are deliberate:
 Attaching is offered only before the run. Once a block has an issue there is nothing left for
 an image to inform, and attaching one does not make the block runnable again.
 
+## What a block looks like
+
+A block used to look the same at every stage. `draft`, `running`, `created` and `failed` were
+four states with one appearance, because appearance was authored once in
+`docs/blocks.excalidrawlib` and only ever copied afterwards — no code owned the question.
+`src/core/issue-appearance.ts` owns it now, as one pure function from state to colours.
+
+| Stage | Outline | Stroke | Fill |
+| --- | --- | --- | --- |
+| `draft`, `running`, `failed` | dashed | `#f08c00` | `#fff9db` |
+| `created` | solid | `#e67700` | `#fff3bf` |
+
+**Dashed means there is no issue behind it yet; solid means there is.** The second stage is the
+first one step down the same ramp rather than a new colour, so a board reads as one thing at a
+glance and the change still survives being squinted at.
+
+`running` and `failed` deliberately keep the first-stage look. Both are blocks with no issue
+behind them, which is exactly what the dashed outline already says, and the panel reports which
+of the two a block is in. `check-block-appearance.mjs` holds the draft values against the ones
+the library ships: a mapping that disagreed with the library would repaint every block the first
+time anything touched it.
+
+The appearance is written by the server, in the same `markState` that writes
+`customData.issueState`, rather than derived in the browser. That is where the state is
+authored, so the look persists, exports with the board, and reaches every connected tab on the
+update that already carries the state — a browser deriving it on render would have to derive it
+again on every path that draws a block, and a block saved to `docs/board.excalidraw` would go
+back to looking like a draft.
+
 ## After the issue exists
 
 The block is retitled to the issue it produced: `customData.issueTitle` is stored and the bound
@@ -91,6 +120,13 @@ a card has to read correctly with nothing selected and with no network.
 That route shells out to `gh issue view --json` and carries the same loopback guard as the run
 route — reading is not writing, but it still spawns a process holding your `gh` credentials.
 `EXCALIDRAW_GH_COMMAND` overrides the binary so `scripts/check-issue-detail.mjs` can stub it.
+
+The query asks for `stateReason` and `closedByPullRequestsReferences` as well as the body and the
+comments, so that a closed issue can say **what** closed it. "Closed" and "closed by a pull
+request" are different facts, and the second one is a field rather than an inference. A `gh` too
+old to know those two answers `Unknown JSON field`; the reader notices that once and drops back to
+the older list, because turning every issue read into a hard error would be a poor price for a
+link.
 
 ## Adding observations
 
@@ -171,6 +207,25 @@ choice, made by whoever runs the board, to let the agent do the work.
 The other guards carry over — loopback only, one run at a time per element — and one is
 added: a block with no issue has nothing to implement, and a block that already produced a
 pull request will not produce a second one.
+
+### A closed issue is not offered
+
+The button used to be decided by the run record alone — `implement.state` neither `done` nor
+`running` — so a closed, shipped issue still offered to be implemented, even though the panel
+had already read the state it needed to know better and was showing it beside the link. It now
+takes both facts: the record says whether an agent is already on it, the issue says whether
+there is anything left to do (`offersImplement`, `src/core/issue-appearance.ts`).
+
+A closed issue is named rather than merely emptied of controls:
+
+- closed by a pull request — the pull request is linked, because "was this actually shipped" is
+  the question a Done card raises and GitHub answers it;
+- closed with none — *Closed. No pull request is recorded as closing it.* That is the ordinary
+  shape of an issue closed by hand, not a missing link;
+- closed as not planned — *Closed as not planned.* A decision, not an omission.
+
+An issue that has not been read yet keeps the button it had. An unread issue is not an open
+one, but a control that appeared a second after every selection would read as a glitch.
 
 ### The card moves when the run starts
 

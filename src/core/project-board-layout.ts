@@ -37,6 +37,23 @@ export const ADD_SIZE = 28;
 /** Enough hues to tell columns apart; it wraps rather than running out. */
 const COLUMN_STROKES = ['#1971c2', '#e8590c', '#2f9e44', '#6741d9', '#c2255c'];
 
+/**
+ * The card fill for each of those hues, in the same order and wrapping the same way.
+ *
+ * A card carried its column's identity all along — `sectionOptionId` is written onto every
+ * one — and drew none of it, so a card in the first column looked exactly like a card in the
+ * last. The fill comes from where a section sits, never from what it is called: a project
+ * that renames a column, or adds a fourth, gets no edit in this repository.
+ */
+const COLUMN_FILLS = ['#e7f5ff', '#fff4e6', '#ebfbee', '#f3f0ff', '#fff0f6'];
+
+/** The untriaged section, which has no position of its own to take a hue from. */
+const NO_STATUS_STROKE = '#adb5bd';
+const NO_STATUS_FILL = '#f1f3f5';
+
+/** A card whose issue is being implemented, or has been. Anything else is unmarked. */
+export type CardImplementState = 'running' | 'done' | 'failed';
+
 export interface MirrorElement {
   id: string;
   type: 'rectangle' | 'text';
@@ -48,6 +65,7 @@ export interface MirrorElement {
   backgroundColor: string;
   fillStyle: string;
   strokeWidth: number;
+  strokeStyle: string;
   roughness: number;
   locked: boolean;
   roundness: { type: number } | null;
@@ -127,6 +145,16 @@ export interface LayoutOptions {
    * over a block the reader is still typing into.
    */
   drafts?: DraftBlock[];
+  /**
+   * What is known about implementing each issue, by issue URL.
+   *
+   * By URL and not by item id because that is where this state actually lives — on the
+   * server, against the issue (`implement-state.ts`), which is what lets two shapes for one
+   * issue agree. A column says where somebody put a card; only this says whether an agent
+   * is on it. The observation that asked for this asked for exactly that distinction: a
+   * card can be In Progress because a person dragged it there, and that is the normal case.
+   */
+  implementing?: Record<string, CardImplementState>;
 }
 
 /**
@@ -162,6 +190,7 @@ function rectangle(partial: Partial<MirrorElement> & { id: string; x: number; y:
     backgroundColor: '#ffffff',
     fillStyle: 'solid',
     strokeWidth: 1,
+    strokeStyle: 'solid',
     roughness: 0,
     locked: false,
     roundness: { type: 3 },
@@ -197,6 +226,7 @@ function label(
     backgroundColor: 'transparent',
     fillStyle: 'solid',
     strokeWidth: 1,
+    strokeStyle: 'solid',
     roughness: 0,
     locked: container.locked,
     roundness: null,
@@ -236,6 +266,7 @@ export function layoutBoard(
 ): MirrorLayout {
   const errors = options.errors ?? {};
   const drafts = draftsByColumn(options.drafts ?? []);
+  const implementing = options.implementing ?? {};
   const elements: MirrorElement[] = [];
   const columns: MirrorColumn[] = [];
   const placements: DraftPlacement[] = [];
@@ -269,8 +300,11 @@ export function layoutBoard(
   board.sections.forEach((section, index) => {
     const x = origin.x + PADDING + index * (COLUMN_WIDTH + COLUMN_GAP);
     const stroke = section.optionId === NO_STATUS_OPTION_ID
-      ? '#adb5bd'
+      ? NO_STATUS_STROKE
       : (COLUMN_STROKES[index % COLUMN_STROKES.length] as string);
+    const fill = section.optionId === NO_STATUS_OPTION_ID
+      ? NO_STATUS_FILL
+      : (COLUMN_FILLS[index % COLUMN_FILLS.length] as string);
 
     const header = rectangle({
       id: `pb-h-${section.optionId || 'none'}`,
@@ -329,6 +363,13 @@ export function layoutBoard(
       const laid = layoutLabel(text, COLUMN_WIDTH, CARD_FONT_SIZE);
       const height = Math.max(CARD_MIN_HEIGHT, laid.containerHeight + 8);
 
+      // Whether an agent is on this issue, which the column cannot say: a card is in a
+      // column because somebody put it there. `failed` is left unmarked on purpose — the
+      // run is over and nothing is being implemented, which is what an unmarked card
+      // already means; the panel is where the failure is reported.
+      const run = card.url ? implementing[card.url] : undefined;
+      const outlined = run === 'running' || run === 'done';
+
       const shape = rectangle({
         id: `pb-c-${card.itemId}`,
         x,
@@ -336,7 +377,15 @@ export function layoutBoard(
         width: COLUMN_WIDTH,
         height,
         strokeColor: error ? '#e03131' : (card.draggable ? '#495057' : '#ced4da'),
-        backgroundColor: card.draggable ? '#ffffff' : '#f8f9fa',
+        // The column tints the card; a card that cannot be moved keeps the grey that says
+        // so, because "not this board's to rearrange" outranks which column it sits in.
+        backgroundColor: card.draggable ? fill : '#f8f9fa',
+        // Weight and outline rather than another colour: hue is already spoken for by the
+        // column and by a failed move, and a third meaning for it would collide with both.
+        // Dashed while the work is in flight, solid once it has landed — the same reading
+        // an issue block's own outline has.
+        strokeWidth: outlined ? 2 : 1,
+        strokeStyle: run === 'running' ? 'dashed' : 'solid',
         // A card that cannot be moved is locked, so the canvas refuses the drag rather
         // than accepting one this server would have to undo.
         locked: !card.draggable,
@@ -348,6 +397,7 @@ export function layoutBoard(
           itemId: card.itemId,
           issueUrl: card.url,
           draggable: card.draggable,
+          ...(run ? { implementState: run } : {}),
           ...(error ? { moveError: error } : {}),
         },
       });

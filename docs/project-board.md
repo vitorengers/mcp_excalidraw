@@ -89,6 +89,47 @@ back. Cards are not: dragging one *is* the interface. A card that cannot be move
 or an issue from another repository — is locked instead, so the canvas refuses the drag rather than
 accepting one the server would have to undo.
 
+## What a card's colours mean
+
+A card carried its column's identity all along — every one is written with `sectionOptionId` —
+and drew none of it, so a card in the first column looked exactly like a card in the last. It is
+now filled from a list of tints running alongside the column strokes, indexed the same way and
+wrapping the same way.
+
+**The fill comes from where a section sits, never from what it is called.** A project that
+renames a column, or adds a fourth, still gets no edit in this repository — the same rule the
+rest of this file keeps. `check-block-appearance.mjs` pins it down on a fixture whose sections
+are named `Icebox` / `Underway` / `Shipped`, so a hardcoded `Todo` could not pass, and it renames
+them to prove nothing keys on a string.
+
+A card that cannot be moved keeps its grey fill instead. "Not this board's to rearrange" outranks
+which column it happens to be sitting in.
+
+The outline is a second, independent fact: **whether an agent is on it.**
+
+| Outline | Means |
+| --- | --- |
+| thin, solid | nothing is being implemented |
+| thick, dashed | a run is in flight |
+| thick, solid | a run produced a pull request |
+
+Weight and outline rather than another colour, because hue is already spoken for by the column
+and by a failed move, and a third meaning for it would collide with both. Dashed while the work
+is in flight and solid once it has landed is the same reading an issue block's own outline has.
+
+**In Progress and "an agent is implementing" are different facts, and this is the distinction
+that keeps them apart.** A card is in a column because somebody dragged it there or changed it on
+GitHub; whether a run exists is the implement record, keyed by issue URL, which is the only place
+that can honestly answer it. A card dragged to In Progress with no agent behind it draws no
+outline, which is the normal case rather than an edge one.
+
+A `failed` record draws nothing. The run is over and nothing is being implemented, which is what
+an unmarked card already says; the failure itself is reported in the panel.
+
+The records reach the canvas from `GET /api/implement` with no `url`, read on the same
+twenty-second poll as the board. It costs no `gh` — the route reads the in-memory map and
+nothing else — and it cannot come from the cards, which are redrawn from GitHub every time.
+
 ## Dragging a card
 
 The move is written on the **end** of a drag, not during it: a card crosses columns on its way
@@ -139,6 +180,10 @@ Selecting a card opens the same panel an authored block opens: the issue title, 
 body, and **Implement / Fix**. That is what makes deleting the draft honest — the card can do
 everything the block it replaced could, so researching an issue from the board no longer ends by
 taking the description and the implement button away.
+
+A closed issue is the exception, and it is the issue's rule rather than the card's: the button
+goes and what closed it is named in its place, on a card and on a block alike.
+`docs/issue-block.md` has it.
 
 It works for any card, including issues that were never drafted here. An issue opened on GitHub
 appears in the mirror and can be implemented from the canvas without a block ever existing for it.
@@ -213,8 +258,8 @@ card's title.
 
 - **Only the first page of items**, 100 of them, is mirrored. Beyond that the server logs a
   warning rather than paginating.
-- **A card shows its number and title, nothing else.** Labels, assignee and state colour each cost
-  a wider query.
+- **A card shows its number, its title, its column and whether an agent is on it.** Labels,
+  assignee and the issue's own open/closed state each cost a wider query.
 - **Cards from other repositories, and pull requests, are read-only.** They render; they do not
   move.
 - **Order will not match GitHub's.** Items come back in `POSITION` order — whatever arrangement
