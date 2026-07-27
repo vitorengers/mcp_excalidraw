@@ -259,9 +259,27 @@ store, several checkouts, each on its own branch. Three decisions came with them
 copy of every file the type check, the build, the board export and the checks all walk, and being
 outside is one `.gitignore` rule nobody can forget.
 
-**`node_modules` is linked in**, as a junction on Windows and a symlink under WSL. It is not
-tracked, so a fresh checkout has none, and an agent told to run the build would find no compiler
-there; an install per run would cost minutes and gigabytes to arrive at the same tree.
+**`node_modules` is hard-linked in.** It is not tracked, so a fresh checkout has none, and an
+agent told to run the build would find no compiler there; an install per run would cost minutes
+and gigabytes to arrive at the same tree.
+
+It was a junction first, and that made `node_modules` a single mutable directory behind four
+supposedly isolated checkouts. Anything an agent ran that cleared its own dependencies — an
+`npm ci`, an `rm -rf` in the wrong place — reached through and emptied the project's. It happened
+twice in one afternoon. The symptom arrives much later and looks unrelated: the next build fails
+with `Cannot find package 'winston'`, in a checkout nobody touched, and the running server
+survives only because it already has its modules in memory.
+
+Hard links give each checkout its own directory entries over the same bytes: ~20k links, a few
+seconds, once per worktree. Deleting them deletes links, and an agent that really does install
+gets its own files. The trade is that a file *edited in place* is edited for everyone — far rarer
+than deletion, and far less destructive. Under WSL the same thing is one `cp -al` rather than
+twenty thousand calls across the boundary, and if hard links fail outright the junction is still
+better than a checkout with no compiler in it.
+
+`scripts/check-worktree-dependencies.mjs` holds the line by doing the destructive thing: it clears
+the *contents* of a worktree's `node_modules` — the way a tool that descends does — and then looks
+at the project's.
 
 **A worktree with uncommitted work is never removed.** A run that ends clean takes its worktree
 with it, and its branch too when git agrees the branch is merged — `git branch -d` refuses an

@@ -150,6 +150,11 @@ const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_GH_COMMAND: `node "${stubPath.replace(/\\/g, '/')}"`,
     STUB_GH_FIXTURE: fixturePath,
+    // The `+` drops a block *from the library* — `addIssueBlockToColumn` looks for a
+    // template carrying `customData.kind === "issue"` and, finding none, warns to the
+    // console and returns. Without this the server serves an empty library, every click is
+    // a silent no-op, and the check fails on its own harness rather than on the feature.
+    EXCALIDRAW_LIBRARY: join(repoRoot, 'docs', 'blocks.excalidrawlib'),
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
