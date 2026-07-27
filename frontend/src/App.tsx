@@ -16,6 +16,7 @@ import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
 import type { Rect } from '../../src/core/anchored-placement'
 import { resolvePanelTarget } from '../../src/core/panel-target'
 import type { PanelElement } from '../../src/core/panel-target'
+import { referenceImageName } from '../../src/core/pasted-images'
 import { layoutLabel } from '../../src/core/text-layout'
 import {
   layoutBoard,
@@ -812,7 +813,10 @@ function App(): JSX.Element {
 
     const tooBig = images.find((file) => file.size > MAX_REFERENCE_IMAGE_BYTES)
     if (tooBig) {
-      return `${tooBig.name} is larger than ${MAX_REFERENCE_IMAGE_BYTES / (1024 * 1024)} MB.`
+      // Named through `referenceImageName`: a file off the clipboard is `image.png` at
+      // best and unnamed at worst, so the name alone read as " is larger than 10 MB."
+      const megabytes = MAX_REFERENCE_IMAGE_BYTES / (1024 * 1024)
+      return `${referenceImageName(tooBig)} is larger than ${megabytes} MB.`
     }
 
     try {

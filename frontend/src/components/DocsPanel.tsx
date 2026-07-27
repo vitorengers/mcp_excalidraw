@@ -3,6 +3,7 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { closureView, offersImplement } from '../../../src/core/issue-appearance'
 import type { ClosingPullRequest } from '../../../src/core/issue-appearance'
+import { clipboardImages, isWritableTarget, panelTakesPaste } from '../../../src/core/pasted-images'
 import './DocsPanel.css'
 
 type DocState =
@@ -230,6 +231,46 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
 
     return () => { cancelled = true }
   }, [attachedKey])
+
+  /**
+   * Attach whatever screenshot is on the clipboard, on Ctrl+V.
+   *
+   * The clipboard is how a screenshot arrives at all: `Win+Shift+S` produces a bitmap with
+   * no path on disk, which is precisely what a file picker cannot reach.
+   *
+   * On `document`, in the capture phase, rather than an `onPaste` on the card. Excalidraw
+   * registers its own `paste` on `document` and turns the image into a scene element, and
+   * the ordinary gesture — click the block, the card opens, Ctrl+V — leaves focus inside
+   * the Excalidraw container with the cursor over the canvas, which is exactly the case it
+   * claims. A handler scoped to the card would therefore never fire in the one case the
+   * feature is for. Capturing at `document` runs before the bubble-phase listener there,
+   * and stopping propagation is what keeps the same screenshot off the board.
+   *
+   * **So a selected draft block changes what Ctrl+V does on the canvas**, which is the
+   * decision this makes: the alternative, requiring a click into the card first, is
+   * discoverable only if the card says so, and the block is selected because the reader
+   * just chose it. Nothing else is touched — the effect exists only while the card does,
+   * so with nothing selected, or with a block whose issue exists, Ctrl+V is what it was.
+   */
+  useEffect(() => {
+    if (!issue || !onAttachImages || !panelTakesPaste(issue)) return
+
+    const onPaste = (event: ClipboardEvent): void => {
+      // Whatever is being typed into keeps its own paste, block or no block.
+      if (isWritableTarget(event.target as HTMLElement | null)) return
+      const images = clipboardImages<File>(event.clipboardData)
+      if (!images.length) return
+
+      // Taken: not pasted onto the board, and not pasted anywhere else either.
+      event.preventDefault()
+      event.stopPropagation()
+      setImageError(null)
+      void onAttachImages(issue, images).then((error) => { if (error) setImageError(error) })
+    }
+
+    document.addEventListener('paste', onPaste, true)
+    return () => { document.removeEventListener('paste', onPaste, true) }
+  }, [issue, onAttachImages])
 
   // An authored block carries a copy of the state, which arrives over the socket and is
   // what makes a block read correctly before any fetch lands. A card carries none, so this
@@ -654,6 +695,12 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
               </label>
 
               {imageError && <p className="element-docs__error">{imageError}</p>}
+              {/* The paste is worth saying out loud: it is the way a screenshot arrives,
+                  and a keystroke nothing on screen mentions is a keystroke nobody tries. */}
+              <p className="element-docs__hint">
+                A screenshot on the clipboard can be pasted straight in with Ctrl+V (⌘V on a
+                Mac); the button is for images already saved as files.
+              </p>
               <p className="element-docs__hint">
                 The agent reads these while it investigates. They cannot be uploaded to the
                 issue itself, so whatever the issue depends on is written out in words.
