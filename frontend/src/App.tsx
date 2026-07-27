@@ -23,7 +23,7 @@ import {
   columnAt,
   MIRROR_KIND
 } from '../../src/core/project-board-layout'
-import type { DraftBlock, MirrorColumn } from '../../src/core/project-board-layout'
+import type { CardImplementState, DraftBlock, MirrorColumn } from '../../src/core/project-board-layout'
 import type { ProjectBoard } from '../../src/core/project-board-types'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
@@ -993,8 +993,10 @@ function App(): JSX.Element {
     board: ProjectBoard | null
     columns: MirrorColumn[]
     errors: Record<string, string>
+    /** What is known about implementing each issue, by URL, as of the last refresh. */
+    implementing: Record<string, CardImplementState>
     signature: string
-  }>({ board: null, columns: [], errors: {}, signature: '' })
+  }>({ board: null, columns: [], errors: {}, implementing: {}, signature: '' })
 
   /** Whether a drag was in flight on the previous change, so its end can be noticed. */
   const mirrorDraggingRef = useRef<boolean>(false)
@@ -1003,7 +1005,7 @@ function App(): JSX.Element {
   const draftGeometryRef = useRef<string>('')
 
   const clearMirror = (): void => {
-    projectBoardRef.current = { board: null, columns: [], errors: {}, signature: '' }
+    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, signature: '' }
     draftGeometryRef.current = ''
     const api = excalidrawAPIRef.current
     if (!api) return
@@ -1050,6 +1052,7 @@ function App(): JSX.Element {
     // `layoutBoard`, so the room reserved and the slot a block is put in cannot disagree.
     const layout = layoutBoard(board, origin, {
       errors: projectBoardRef.current.errors,
+      implementing: projectBoardRef.current.implementing,
       drafts: drafts.map(draftBlockOf)
     })
     const placed = new Map(layout.drafts.map((placement) => [placement.id, placement]))
@@ -1090,9 +1093,9 @@ function App(): JSX.Element {
     }
 
     projectBoardRef.current = {
+      ...projectBoardRef.current,
       board,
       columns: layout.columns,
-      errors: projectBoardRef.current.errors,
       signature
     }
 
@@ -1146,6 +1149,32 @@ function App(): JSX.Element {
     })
   }
 
+  /**
+   * Which issues have a run against them, by URL.
+   *
+   * Read alongside the board rather than from the cards, because a card cannot carry it:
+   * the mirror redraws from GitHub on every poll, and the run record lives on the server
+   * against the issue. It costs no `gh` — `GET /api/implement` reads the map and nothing
+   * else — which is why it can ride the same twenty-second poll the board does.
+   */
+  const readImplementRecords = async (): Promise<Record<string, CardImplementState>> => {
+    try {
+      const response = await fetch(apiUrl('/api/implement'))
+      if (!response.ok) return {}
+      const body = await response.json().catch(() => ({}))
+      const runs = Array.isArray(body?.runs) ? body.runs : []
+      return Object.fromEntries(
+        runs
+          .filter((run: { issueUrl?: string; state?: string }) => Boolean(run?.issueUrl && run.state))
+          .map((run: { issueUrl: string; state: CardImplementState }) => [run.issueUrl, run.state])
+      )
+    } catch {
+      // A board that draws no run marks is worse than one that draws them; a board that
+      // stops redrawing because this request failed is worse than both.
+      return {}
+    }
+  }
+
   /** Re-read the project and redraw. A board with no project configured stays blank. */
   const refreshProjectBoard = async (): Promise<void> => {
     const api = excalidrawAPIRef.current
@@ -1173,6 +1202,9 @@ function App(): JSX.Element {
       if (!body?.success || !body.board) return
       await reconcileDrafts(body.board as ProjectBoard)
       if (activeWorkspaceRef.current !== workspace) return
+      const implementing = await readImplementRecords()
+      if (activeWorkspaceRef.current !== workspace) return
+      projectBoardRef.current = { ...projectBoardRef.current, implementing }
       renderMirror(body.board as ProjectBoard)
     } catch (error) {
       console.warn('Could not read the project board:', error)
@@ -1481,7 +1513,7 @@ function App(): JSX.Element {
     lastSelectedIdRef.current = null
     // The mirror belongs to one project. Keeping the last board would let a stale set of
     // columns decide where a card dragged on the new board was dropped.
-    projectBoardRef.current = { board: null, columns: [], errors: {}, signature: '' }
+    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, signature: '' }
 
     if (excalidrawAPI) {
       applySceneUpdateWithoutAutoSync(excalidrawAPI, {

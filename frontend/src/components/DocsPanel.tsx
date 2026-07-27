@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { closureView, offersImplement } from '../../../src/core/issue-appearance'
+import type { ClosingPullRequest } from '../../../src/core/issue-appearance'
 import './DocsPanel.css'
 
 type DocState =
@@ -42,6 +44,9 @@ export interface IssueData {
   state: string
   number: number
   comments?: IssueCommentData[]
+  /** Why it is closed, when it is, and what closed it. Absent while it is open. */
+  stateReason?: string | null
+  closedBy?: ClosingPullRequest[]
 }
 
 /** A comment ready to render: its markdown already through `marked` and `DOMPurify`. */
@@ -63,6 +68,9 @@ type IssueDetailState =
       state: string
       number: number
       comments: RenderedComment[]
+      /** Why it is closed, when it is: `COMPLETED`, `NOT_PLANNED`, or nothing. */
+      stateReason: string | null
+      closedBy: ClosingPullRequest[]
     }
   | { status: 'error'; message: string }
 
@@ -87,7 +95,9 @@ const loadedIssue = (issue: Partial<IssueData>): IssueDetailState => ({
     createdAt: comment.createdAt ?? '',
     url: comment.url ?? '',
     html: render(comment.body ?? '')
-  }))
+  })),
+  stateReason: issue.stateReason ?? null,
+  closedBy: Array.isArray(issue.closedBy) ? issue.closedBy : []
 })
 
 /** A comment's date, in the reader's own format, or nothing if GitHub sent none. */
@@ -342,6 +352,16 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
     return () => { cancelled = true; clearInterval(timer) }
   }, [issueUrl, implement.state, workspace])
 
+  // What GitHub says about the issue, once it has said anything. Null while it is being
+  // read, which is not the same as open — the controls below treat it as "unknown" rather
+  // than guessing, so nothing appears and then vanishes a second later.
+  const githubState = issueDetail.status === 'loaded' ? issueDetail.state : null
+  const closure = closureView({
+    githubState,
+    stateReason: issueDetail.status === 'loaded' ? issueDetail.stateReason : null,
+    closedBy: issueDetail.status === 'loaded' ? issueDetail.closedBy : []
+  })
+
   return (
     <div className="element-docs">
       {issue && (
@@ -402,11 +422,28 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                   <p className="element-docs__error">{implement.error ?? 'The run failed.'}</p>
                 )}
 
+                {/* A closed issue is done with, and what closed it is worth naming: the
+                    pull request is the answer to "was this actually shipped", and it is
+                    one gh field away rather than an inference. */}
+                {closure?.pullRequests.map((pullRequest) => (
+                  <a
+                    key={pullRequest.url}
+                    className="element-docs__issue-link"
+                    href={pullRequest.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Closed by {pullRequest.url.replace(/^https:\/\/github\.com\//, '')}
+                  </a>
+                ))}
+                {closure?.note && <p className="element-docs__hint">{closure.note}</p>}
+
                 {/* Two actions on one row rather than two rows of one. Adding an
                     observation is offered for as long as the issue exists — including
                     while an implementation runs, because that is exactly when something
-                    forgotten turns up — so when Implement / Fix is gone it simply takes
-                    the row to itself. */}
+                    forgotten turns up — so when Implement / Fix is gone, whether because a
+                    run holds it or because the issue is closed, it simply takes the row to
+                    itself. */}
                 <div className="element-docs__actions">
                   {onAddComment && (
                     <button
@@ -421,7 +458,7 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                     </button>
                   )}
 
-                  {implement.state !== 'done' && implement.state !== 'running' && onImplementIssue && (
+                  {offersImplement({ githubState, implementState: implement.state }) && onImplementIssue && (
                     <button
                       type="button"
                       className="element-docs__collapse element-docs__action"

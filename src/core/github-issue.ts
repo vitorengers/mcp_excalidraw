@@ -51,7 +51,26 @@ export interface IssueDetail {
    * it can be seen afterwards.
    */
   comments: IssueComment[];
+  /** `COMPLETED`, `NOT_PLANNED`, or null — why it is closed, when it is. */
+  stateReason: string | null;
+  /**
+   * The pull requests GitHub says closed it, usually one and occasionally none.
+   *
+   * Asked for rather than inferred. "Closed" and "closed by a pull request" are different
+   * facts, and `gh` has answered the second since 2.62 — so the panel says which it is
+   * instead of drawing a gap where a link should have been.
+   */
+  closedBy: ClosingPullRequest[];
 }
+
+export interface ClosingPullRequest {
+  number: number;
+  url: string;
+}
+
+/** What the panel needs, and what a `gh` old enough to refuse the last two can still give. */
+const FIELDS = 'number,title,body,state,comments,stateReason,closedByPullRequestsReferences';
+const FIELDS_WITHOUT_CLOSURE = 'number,title,body,state,comments';
 
 export function isIssueUrl(url: string): boolean {
   return ISSUE_URL.test(url);
@@ -79,12 +98,23 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 export async function fetchIssue(workspace: Workspace, issueUrl: string): Promise<IssueDetail> {
   let lastError: Error = new Error('gh was never run');
+  // Dropped to the older field list once a `gh` says it does not know the newer one.
+  // Without this, adding a field to the query would turn every issue read on an older CLI
+  // into a hard error in the panel — a regression paid by everyone, for a link.
+  let fields = FIELDS;
 
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     try {
-      return await runGh(workspace, issueUrl);
+      return await runGh(workspace, issueUrl, fields);
     } catch (error) {
       if (error instanceof MalformedResponse) throw error;
+      if (fields === FIELDS && /unknown json field/i.test((error as Error).message)) {
+        logger.warn(`gh does not know what closed an issue; reading ${issueUrl} without it`);
+        fields = FIELDS_WITHOUT_CLOSURE;
+        // Not an attempt: the query was wrong for this `gh`, and the next one is different.
+        attempt--;
+        continue;
+      }
       // Report the last failure, not the first: it describes what kept happening.
       lastError = error as Error;
       if (attempt < ATTEMPTS - 1) {
@@ -156,17 +186,33 @@ export async function commentOnIssue(
 }
 
 /**
+ * The closing pull requests out of whatever `gh` put in that field.
+ *
+ * Defensive rather than trusting, because this field is the one that can be absent: a `gh`
+ * too old to know it answers without it, and the panel showing no link is a far better
+ * outcome than an issue that will not open at all.
+ */
+function closingPullRequests(value: unknown): ClosingPullRequest[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is Record<string, unknown> =>
+      Boolean(entry) && typeof (entry as Record<string, unknown>).url === 'string'
+      && ((entry as Record<string, unknown>).url as string).length > 0)
+    .map((entry) => ({ number: Number(entry.number ?? 0), url: String(entry.url) }));
+}
+
+/**
  * One `gh` run. Rejects with a message fit to show in the panel — the caller has no
  * better context to add, and a raw `gh` stderr is more useful than "request failed".
  */
-async function runGh(workspace: Workspace, issueUrl: string): Promise<IssueDetail> {
+async function runGh(workspace: Workspace, issueUrl: string, fields: string): Promise<IssueDetail> {
   if (!isIssueUrl(issueUrl)) {
     throw new MalformedResponse(`Not a GitHub issue URL: ${issueUrl}`);
   }
 
   const { command, args, cwd } = buildAgentCommand(
     workspace,
-    `${GH_COMMAND} issue view ${issueUrl} --json number,title,body,state,comments`
+    `${GH_COMMAND} issue view ${issueUrl} --json ${fields}`
   );
 
   logger.info(`Reading ${issueUrl} for workspace "${workspace.id}"`);
@@ -218,6 +264,10 @@ async function runGh(workspace: Workspace, issueUrl: string): Promise<IssueDetai
           state: String(parsed.state ?? ''),
           url: issueUrl,
           comments: readComments(parsed.comments),
+          stateReason: typeof parsed.stateReason === 'string' && parsed.stateReason
+            ? parsed.stateReason
+            : null,
+          closedBy: closingPullRequests(parsed.closedByPullRequestsReferences),
         });
       } catch (error) {
         reject(new MalformedResponse(`Could not parse the gh response: ${(error as Error).message}`));
