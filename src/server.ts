@@ -42,6 +42,8 @@ import {
   NotOnThisBoard
 } from './core/project-board.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
+import type { IssueDetail } from './core/github-issue.js';
+import { IssueMemo, memoWindow } from './core/issue-memo.js';
 import { TerminalSession, shellCommandFrom } from './core/terminal-session.js';
 import { issueBlockAppearance } from './core/issue-appearance.js';
 import { runImplementAgent } from './core/implement-agent.js';
@@ -1279,6 +1281,19 @@ app.delete('/api/issue-block/:id', (req: Request, res: Response) => {
   res.json({ success: true, elementId });
 });
 
+/**
+ * Issues read recently enough to hand back without spawning another `gh`.
+ *
+ * Selecting a block used to cost a whole `gh issue view`, every time, for text that had not
+ * changed — and the panel drew its controls from "not read yet" for the whole of that
+ * second. The panel remembers what it read too; this is the half that means a burst of
+ * clicks, or two tabs open on one board, still only asks GitHub once.
+ *
+ * Only the issue is memoised. The implement record is read fresh on every request, because
+ * it costs nothing to read and is the fact most likely to have changed since.
+ */
+const issueMemo = new IssueMemo<IssueDetail>(memoWindow(process.env.EXCALIDRAW_ISSUE_MEMO_MS));
+
 // ─── Implementing an issue ────────────────────────────────────
 //
 // The issue block's opposite number, and its opposite in permissions. The issue agent is
@@ -1320,6 +1335,12 @@ function recordImplement(
 ): void {
   if (record) writeImplement(workspaceId, issueUrl, record);
   else clearImplement(workspaceId, issueUrl);
+
+  // A run is the one thing the board does that changes the issue on GitHub: it ends in a
+  // pull request, and a pull request is what closes it. So whatever was remembered about
+  // the issue is dropped here rather than waited out — the panel's next selection is where
+  // "closed by #N" has to appear, and it must not be answered from before the run.
+  issueMemo.forget(workspaceId, issueUrl);
 
   const store = elementsFor(workspaceId);
   for (const [id, element] of store) {
@@ -1646,7 +1667,7 @@ app.get('/api/issue', async (req: Request, res: Response) => {
   }
 
   try {
-    const issue = await fetchIssue(workspace, issueUrl);
+    const issue = await issueMemo.read(workspaceId, issueUrl, () => fetchIssue(workspace, issueUrl));
     res.json({ success: true, issue, implement: readImplement(workspaceId, issueUrl) });
   } catch (error) {
     // 502: the failure is GitHub's or gh's, not the caller's request.
@@ -1711,8 +1732,12 @@ app.post('/api/issue/comment', async (req: Request, res: Response) => {
   // Read back so the panel can show the comment without a reload. Deliberately after the
   // post has been reported as succeeding: a read that fails is not a comment that failed,
   // and telling the reader otherwise would invite a second one.
+  //
+  // The memo is dropped first, because the comment just made whatever it holds wrong — and
+  // the read that replaces it becomes what the next selection is served.
+  issueMemo.forget(workspaceId, issueUrl);
   try {
-    const issue = await fetchIssue(workspace, issueUrl);
+    const issue = await issueMemo.read(workspaceId, issueUrl, () => fetchIssue(workspace, issueUrl));
     res.json({ success: true, issue });
   } catch (error) {
     logger.warn(`Commented on ${issueUrl} but could not read it back: ${(error as Error).message}`);
@@ -1761,7 +1786,9 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
   }
 
   try {
-    const issue = await fetchIssue(workspace, issueUrl);
+    // The same memo the URL-addressed route uses: one issue, one read, whichever shape asked
+    // for it — an authored block and a mirrored card must not each spawn a `gh` of their own.
+    const issue = await issueMemo.read(workspaceId, issueUrl, () => fetchIssue(workspace, issueUrl));
     res.json({ success: true, issue });
   } catch (error) {
     // 502: the failure is GitHub's or gh's, not the caller's request.

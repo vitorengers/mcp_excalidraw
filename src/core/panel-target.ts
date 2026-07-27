@@ -72,6 +72,17 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null;
 }
 
+/**
+ * A run state, or null for anything that is not one.
+ *
+ * Narrowed rather than cast, because this is now read off a shape as well as off the
+ * server's own record: a `customData.implementState` the mirror never writes must read as
+ * "nothing known", not as a fourth state the panel has no branch for.
+ */
+function asRunState(value: unknown): IssueTargetData['implementState'] {
+  return value === 'running' || value === 'done' || value === 'failed' ? value : null;
+}
+
 /** A list of ids, or an empty one — never undefined, so the panel can just map over it. */
 function asIdList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -109,10 +120,16 @@ function issueShapeOf(
  * What a mirrored card can say about its issue on its own.
  *
  * Almost nothing, deliberately. A card exists because the issue does, so its state is
- * `created` by construction; everything else — the body, and whether an implementation is
- * running — is read from the server against the issue URL. Nothing is taken from the card
- * itself because the mirror redraws it from GitHub on every read, so a card is the wrong
- * place to remember anything.
+ * `created` by construction, and the body is read from the server against the issue URL
+ * rather than taken from the card — the mirror redraws a card from GitHub on every read, so
+ * it is the wrong place to remember anything.
+ *
+ * The one exception is the run, and it is not a memory: the mirror *writes* the run onto
+ * the card as it draws it, from the record the server keeps against the issue URL, because
+ * that is what a dashed or solid outline on the board is drawn from. This used to hardcode
+ * `null` anyway, so a card sitting in **In Progress** offered **Implement / Fix** until a
+ * `gh issue view` came back a second later — the shape under the pointer already knew
+ * better. Reading it here costs nothing and is right on the first frame.
  */
 function mirrorCardIssue(
   card: PanelElement,
@@ -131,7 +148,10 @@ function mirrorCardIssue(
     observation: null,
     // A card exists because the issue does, so there is no run left to attach anything to.
     images: [],
-    implementState: null,
+    implementState: asRunState(card.customData?.implementState),
+    // Neither is drawn on a card: the outline says whether there is a run, and the URL and
+    // the failure are what the panel reads from the server. Inventing them here would put
+    // two answers to one question on the board.
     implementUrl: null,
     implementError: null,
   };
@@ -200,7 +220,7 @@ export function resolvePanelTarget(
           issueTitle: asString(issueCustom.issueTitle),
           observation: asString(issueCustom.observation),
           images: asIdList(issueCustom.issueImages),
-          implementState: asString(issueCustom.implementState) as IssueTargetData['implementState'],
+          implementState: asRunState(issueCustom.implementState),
           implementUrl: asString(issueCustom.implementUrl),
           implementError: asString(issueCustom.implementError),
         };

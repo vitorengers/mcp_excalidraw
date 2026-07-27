@@ -167,6 +167,52 @@ old to know those two answers `Unknown JSON field`; the reader notices that once
 the older list, because turning every issue read into a hard error would be a poor price for a
 link.
 
+### Read once, remembered, revalidated
+
+Fetching at selection is right; fetching at *every* selection was not. The panel is unmounted
+whenever nothing is selected, so its knowledge of an issue died with it and the next click on the
+same block spent another `gh issue view` — a little over a second here, nearer two when the first
+attempt drops at connect — re-reading text that had not changed. Worse than the wait was what the
+wait was drawn from: `offersImplement` treats an unread `githubState` as *unknown* and keeps the
+button, on purpose, so a closed and shipped issue offered **Implement / Fix** for that whole
+second, every time.
+
+So a read issue is now remembered in two places, and on neither of them is it stored:
+
+- **In the browser**, `frontend/src/issue-cache.ts` — a module-level map keyed by workspace and
+  issue URL, outside the panel's lifecycle because the panel is the thing that keeps dying. A
+  remembered issue paints at once, with its title, body, comments and the right buttons, and the
+  read still goes out behind it. A revalidation that fails keeps the remembered copy rather than
+  replacing it with an error: `gh` drops a socket here often enough that the alternative would be
+  worse. One that succeeds replaces the panel's contents silently — it only ever moves towards
+  what GitHub says.
+- **In the server**, `src/core/issue-memo.ts` — the same key, in front of `fetchIssue`, for
+  `EXCALIDRAW_ISSUE_MEMO_MS` (30 s by default; `0` turns it off and leaves the server as it was).
+  Reads that arrive while one is in flight join it rather than starting their own, so a burst of
+  clicks, or two tabs on one board, is one process. A failed read is never remembered.
+
+It is dropped, rather than waited out, where the server already knows the issue changed: posting
+an observation (`POST /api/issue/comment` re-reads afterwards, and that read becomes what the next
+selection is served) and `recordImplement`, because a run ends in a pull request and a pull
+request is what closes an issue. The panel writes the same three actions through to its own cache.
+
+**Both are session memory**, lost on a reload and on a restart, like the implement record and the
+file store. Anything that survived those would be the stored copy this section rejects: what the
+cache buys is the frame, not the freshness.
+
+The first frame is the point, so the panel decides what to show **during render** rather than in
+an effect — an effect runs after the browser has painted, and one frame of the previous
+selection's issue with the previous selection's buttons is this defect in miniature.
+`scripts/check-issue-cache-browser.mjs` asserts against a stub `gh` that sleeps two seconds, so
+nothing it sees can have been fed by the read; `scripts/check-issue-cache.mjs` counts the stub's
+invocations.
+
+The mirror is the other half. A card is redrawn from GitHub on every poll and is the wrong place
+to remember anything — but the mirror already *writes* the run onto it, because that is what the
+card's outline is drawn from, and `resolvePanelTarget` used to hardcode `implementState: null`
+anyway. A card sitting in **In Progress** therefore offered to be implemented until a `gh` came
+back, with the answer sitting on the shape under the pointer. It is read off the card now.
+
 ## Adding observations
 
 A created block's panel has two actions on one row: **Add observations** and
@@ -443,6 +489,7 @@ behind it and the reset is the only way out.
 ```
 EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob"'
 EXCALIDRAW_IMPLEMENT_CONCURRENCY=4
+EXCALIDRAW_ISSUE_MEMO_MS=30000
 ```
 
 `EXCALIDRAW_ISSUE_AGENT_TIMEOUT=1200` used to be here, and pinning it in the environment is

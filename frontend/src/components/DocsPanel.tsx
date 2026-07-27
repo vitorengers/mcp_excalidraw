@@ -4,6 +4,7 @@ import DOMPurify from 'dompurify'
 import { closureView, offersImplement } from '../../../src/core/issue-appearance'
 import type { ClosingPullRequest } from '../../../src/core/issue-appearance'
 import { clipboardImages, isWritableTarget, panelTakesPaste } from '../../../src/core/pasted-images'
+import { recallIssue, rememberImplement, rememberIssue } from '../issue-cache'
 import './DocsPanel.css'
 
 type DocState =
@@ -168,6 +169,40 @@ interface ImplementView {
 }
 
 /**
+ * Everything already known about a selection, before anything has been asked for.
+ *
+ * Two sources, and neither is a network call. The shape carries the run — an authored block
+ * gets it over the socket, a mirrored card is drawn with it — and the session cache carries
+ * the issue if it has been read before. Between them, a block selected a second time has
+ * its whole card decided here.
+ *
+ * The shape wins on the run state where both have one: the cache was written when the issue
+ * was last read, and a run may have started since.
+ */
+function knownAlready(
+  issue: IssueTarget | null | undefined,
+  workspace: string
+): { detail: IssueDetailState; implement: ImplementView } {
+  const fromShape: ImplementView | null = issue?.implementState
+    ? {
+        state: issue.implementState,
+        url: issue.implementUrl ?? null,
+        error: issue.implementError ?? null
+      }
+    : null
+
+  const issueUrl = issue?.state === 'created' ? (issue.issueUrl ?? null) : null
+  const remembered = issueUrl ? recallIssue(workspace, issueUrl) : null
+
+  return {
+    detail: !issueUrl
+      ? { status: 'idle' }
+      : remembered ? loadedIssue(remembered.issue) : { status: 'loading' },
+    implement: fromShape ?? remembered?.implement ?? { state: null, url: null, error: null }
+  }
+}
+
+/**
  * Everything the documentation panel shows, with no opinion about where it sits.
  *
  * Split out from the panel itself so the fetching, sanitising and the
@@ -179,8 +214,9 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   onImplementIssue, onResetImplement, onResetIssue, onAddComment, onAttachImages, onDetachImage
 }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
-  const [issueDetail, setIssueDetail] = useState<IssueDetailState>({ status: 'idle' })
-  const [implement, setImplement] = useState<ImplementView>({ state: null, url: null, error: null })
+  const [atSelection] = useState(() => knownAlready(issue, workspace))
+  const [issueDetail, setIssueDetail] = useState<IssueDetailState>(atSelection.detail)
+  const [implement, setImplement] = useState<ImplementView>(atSelection.implement)
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
   const [imageError, setImageError] = useState<string | null>(null)
   /**
@@ -323,6 +359,32 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   const issueState = issue?.state ?? null
   const issueUrl = issue?.issueUrl ?? null
 
+  /**
+   * Catch up with a selection that changed under a panel that stayed mounted.
+   *
+   * During render, not in an effect. An effect runs *after* the browser has painted, so
+   * state written there is one frame late — and one frame late is this whole defect in
+   * miniature: the panel would paint the previous selection's issue, or none, and draw its
+   * buttons from that. React re-renders before committing when a component sets its own
+   * state during its own render, so nothing half-updated reaches the screen.
+   *
+   * The panel is usually unmounted between selections, and the initial state above covers
+   * that; this is the other path — clicking straight from one block to the next.
+   */
+  const selection = `${workspace}\n${issue?.id ?? ''}\n${issueUrl ?? ''}\n${issueState ?? ''}`
+  const [shownFor, setShownFor] = useState(selection)
+  if (shownFor !== selection) {
+    setShownFor(selection)
+    const known = knownAlready(issue, workspace)
+    setIssueDetail(known.detail)
+    setImplement(known.implement)
+    // A half-written observation belongs to the issue it was being written about, so
+    // selecting another shape puts the box away rather than carrying the text across.
+    setComposing(false)
+    setDraft('')
+    setCommentError(null)
+  }
+
   // A refusal belongs to the block it was refused for, and to the state it was refused in.
   // The panel outlives both, so it would otherwise carry one to the next block selected.
   useEffect(() => { setResetError(null) }, [issue?.id, issueState])
@@ -331,39 +393,42 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   // reaches the server, so it has no id to ask about — but it has the issue, which is the
   // thing being read. Read on selection rather than stored, so an edit made on GitHub
   // shows up here without the board being touched.
+  //
+  // Stale while revalidate: what the panel already knew is on screen before this runs — the
+  // two blocks above put it there — and this is only the read that keeps it honest. The
+  // panel is unmounted whenever nothing is selected, so before the cache outside it, every
+  // click on the same block paid for a `gh issue view` again and spent that whole second
+  // showing controls computed from "not read yet".
   useEffect(() => {
-    // A half-written observation belongs to the issue it was being written about, so
-    // selecting another shape puts the box away rather than carrying the text across.
-    setComposing(false)
-    setDraft('')
-    setCommentError(null)
+    if (!issueUrl || issueState !== 'created') return
 
-    if (!issueUrl || issueState !== 'created') {
-      setIssueDetail({ status: 'idle' })
-      setImplement({ state: null, url: null, error: null })
-      return
-    }
-
+    const remembered = recallIssue(workspace, issueUrl)
     let cancelled = false
-    setIssueDetail({ status: 'loading' })
 
     fetch(`/api/issue?url=${encodeURIComponent(issueUrl)}&workspace=${encodeURIComponent(workspace)}`)
       .then(async (response) => {
         const body = await response.json().catch(() => ({}))
         if (cancelled) return
         if (!response.ok) {
-          setIssueDetail({ status: 'error', message: body?.error ?? `HTTP ${response.status}` })
+          // A failed revalidation is not a reason to throw away a copy that is almost
+          // certainly still right. `gh` drops a socket here often enough that replacing the
+          // issue with an error every time it did would be the worse trade.
+          if (!remembered) {
+            setIssueDetail({ status: 'error', message: body?.error ?? `HTTP ${response.status}` })
+          }
           return
         }
-        setIssueDetail(loadedIssue(body.issue ?? {}))
-        setImplement({
+        const implementView: ImplementView = {
           state: body.implement?.state ?? null,
           url: body.implement?.url ?? null,
           error: body.implement?.error ?? null
-        })
+        }
+        rememberIssue(workspace, issueUrl, { issue: body.issue ?? {}, implement: implementView })
+        setIssueDetail(loadedIssue(body.issue ?? {}))
+        setImplement(implementView)
       })
       .catch((error: Error) => {
-        if (!cancelled) setIssueDetail({ status: 'error', message: error.message })
+        if (!cancelled && !remembered) setIssueDetail({ status: 'error', message: error.message })
       })
 
     return () => { cancelled = true }
@@ -450,7 +515,14 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                         onClick={async () => {
                           const error = await onResetImplement(issue)
                           if (error) setImplement((current) => ({ ...current, error }))
-                          else setImplement({ state: null, url: null, error: null })
+                          else {
+                            const cleared: ImplementView = { state: null, url: null, error: null }
+                            setImplement(cleared)
+                            // Written through for the reason the start is: the point of a
+                            // reset is that the block can be tried again, and a remembered
+                            // `running` would take that back on the next selection.
+                            if (issueUrl) rememberImplement(workspace, issueUrl, cleared)
+                          }
                         }}
                       >
                         Reset — the run was lost
@@ -506,10 +578,18 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                       onClick={async () => {
                         // Optimistic, because the run itself answers immediately and the
                         // result arrives later — over the socket for a block, by asking for
-                        // a card.
-                        setImplement({ state: 'running', url: null, error: null })
+                        // a card. Written through to what is remembered as well, or the
+                        // next selection would paint the record from before the click and
+                        // offer to start the run a second time.
+                        const started: ImplementView = { state: 'running', url: null, error: null }
+                        setImplement(started)
+                        if (issueUrl) rememberImplement(workspace, issueUrl, started)
                         const error = await onImplementIssue(issue)
-                        if (error) setImplement({ state: 'failed', url: null, error })
+                        if (error) {
+                          const failed: ImplementView = { state: 'failed', url: null, error }
+                          setImplement(failed)
+                          if (issueUrl) rememberImplement(workspace, issueUrl, failed)
+                        }
                       }}
                     >
                       Implement / Fix
@@ -543,7 +623,15 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                           }
                           setDraft('')
                           setComposing(false)
-                          if (result.issue) setIssueDetail(loadedIssue(result.issue))
+                          // The server read the issue back after posting, so this is the
+                          // newest copy anyone has — remembered as well as rendered, or the
+                          // next selection would show the issue without its own comment.
+                          if (result.issue) {
+                            setIssueDetail(loadedIssue(result.issue))
+                            if (issueUrl) {
+                              rememberIssue(workspace, issueUrl, { issue: result.issue, implement })
+                            }
+                          }
                         }}
                       >
                         {posting ? 'Posting…' : 'Post to the issue'}
