@@ -298,7 +298,7 @@ const occurrences = (haystack, needle) => String(haystack ?? '').split(needle).l
 try {
   await waitFor(async () => (await fetch(`${BASE}/health`)).ok, 'the canvas server');
 
-  // Something authored, so "the right side" has a right side to be on.
+  // Something authored, so the block has content to be placed away from.
   await api('/api/elements', {
     method: 'POST',
     body: JSON.stringify({ type: 'rectangle', x: 0, y: 0, width: 200, height: 140,
@@ -327,6 +327,20 @@ try {
 
   await waitFor(async () => (await evaluate(PROBE)).block, 'the terminal block to be placed');
   await waitFor(async () => (await evaluate(PROBE)).card, 'the overlay to render');
+
+  // A viewport that shows the block, and room to its left.
+  //
+  // Since #96 the block sits a mirror's width to the *left* of the board's own content, so
+  // the view a board opens at does not contain it and every coordinate below would be
+  // dispatched at empty canvas. Placed by hand rather than with Alt+T: the eraser case drags
+  // right across the block and a control shape beyond it, and fitting the block alone leaves
+  // no room on either side for that.
+  {
+    const opening = await evaluate(PROBE);
+    const zoom = 0.7;
+    await evaluate(`window.__terminalCheckApi.updateScene({ appState: { scrollX: ${360 / zoom - opening.block.x}, scrollY: ${(150 - opening.view.offsetTop) / zoom - opening.block.y}, zoom: { value: ${zoom} } } })`);
+    await sleep(400);
+  }
 
   console.log('0. a shell with something in its transcript');
   let scene = await evaluate(PROBE);

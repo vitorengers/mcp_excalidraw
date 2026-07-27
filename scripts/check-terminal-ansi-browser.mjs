@@ -421,6 +421,21 @@ try {
         !String(scene.card.screen).includes('SURVIVED'), String(scene.card.screen).slice(-300));
 
   console.log('\n5. and the block is still a block: its corner still resizes it');
+
+  // A viewport of this case's own, rather than whatever the board was left at.
+  //
+  // The corner handle sits *on* the block's bottom-right vertex, so the press has to be that
+  // point converted back — and `(clientX / zoom) - scrollX` does not always give the vertex
+  // back exactly. A tenth of a picometre past it reads as the shape rather than the handle,
+  // and the block moves instead of growing: the case then fails on floating point rather than
+  // on anything the code did. Round numbers, chosen here, convert back exactly.
+  {
+    const zoom = 0.8;
+    await evaluate(`window.__ansiCheckApi.updateScene({ appState: { scrollX: ${300 / zoom - scene.block.x}, scrollY: ${(150 - scene.view.offsetTop) / zoom - scene.block.y}, zoom: { value: ${zoom} } } })`);
+    await sleep(400);
+    scene = await evaluate(PROBE);
+  }
+
   const centre = toViewport(scene, scene.block.x + scene.block.w / 2, scene.block.y + scene.block.h / 2);
   await click(centre.x, centre.y);
   scene = await evaluate(PROBE);
