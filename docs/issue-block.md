@@ -472,6 +472,15 @@ was per issue. Now that each run has a checkout of its own, several at once are 
 merely tolerated, so the default is greater than one; it is small because every run is a whole
 coding agent building and testing on one machine. `0` removes the cap, `1` serialises.
 
+**The slot is claimed before the registry is read**, in the same uninterrupted step as the count.
+While the claim sat below that read, two clicks arriving together both counted before either
+claimed and the cap was exceeded by however many fitted in the window — which is not only a budget
+overrun, because the extra run is what puts two `git worktree add` in the same instant. The cost of
+claiming first is that a run refused afterwards — an unregistered workspace, a workspace that
+failed to load — has to give the slot back, or the cap would leak the other way and shrink until
+the server restarts. `scripts/check-implement-cap.mjs` fires more requests than the cap in one
+`Promise.all` and checks both directions.
+
 `GET /api/implement` with no `url` lists every run for the workspace — the question parallel runs
 create is "what is running right now", and until this existed the state was reachable only one
 issue URL at a time, by a caller who already knew which URL to ask about. Finished runs are listed
