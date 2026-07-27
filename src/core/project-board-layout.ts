@@ -610,8 +610,21 @@ export function mirrorWidth(board: ProjectBoard): number {
  * unplaced, overlapped by the next redraw. That was the right answer while every column was
  * GitHub's — none of them was where the block *belonged*, only where it might be guessed
  * to. The notes column is where it belongs, by construction: every draft was written as an
- * observation, and observations go here. The blocks stamped with the deleted option's id
- * are precisely that population.
+ * observation, and observations go here.
+ *
+ * **So every draft goes there, and the stamp it carries decides nothing.** Rehoming keyed
+ * on "the board no longer has this column" for one release, which caught the blocks the
+ * deleted option left behind and missed the other half of the same population: a block
+ * stamped with an option that is still perfectly real. That happened whenever the project's
+ * *ordering* changed while the notes column was still an option — the `+` moved to whatever
+ * was now first and the blocks already written did not, so they were drawn among the issues
+ * in a column whose whole contract is that its cards are issues that exist. Project 5 had
+ * three of them, in `Todo`, and no gesture could move them: `settleMirrorDrag` rewrites a
+ * column for mirrored cards and nothing else.
+ *
+ * A draft is an observation; observations are in the notes column. That rule holds whatever
+ * a stamp says, so `sectionOptionId` on a draft is now vestigial — written by the `+`, read
+ * by nothing that matters, and kept only because `layoutBoard` below places by it.
  */
 export function layoutMirror(
   board: ProjectBoard,
@@ -619,9 +632,8 @@ export function layoutMirror(
   options: LayoutOptions = {}
 ): MirrorLayout {
   const sections = mirrorSections(board);
-  const drawn = new Set(sections.map((section) => section.optionId));
   const drafts = (options.drafts ?? []).map((draft) => (
-    drawn.has(draft.sectionOptionId)
+    draft.sectionOptionId === NOTES_OPTION_ID
       ? draft
       : { ...draft, sectionOptionId: NOTES_OPTION_ID }
   ));

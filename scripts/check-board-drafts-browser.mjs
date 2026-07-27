@@ -28,6 +28,15 @@
  * card in the same column could not tell the two rules apart. It is no longer possible to put
  * the card in the same column, which is the point: no project item can be in this one.
  *
+ * The last case is about a stamp the layout has to overrule. A draft carries whichever column
+ * the `+` was on when it was clicked, written once and never again, so while that column was
+ * an ordinary option any change to the project's *ordering* stranded every block already
+ * written — drawn among the issues in a column whose cards are issues that exist, with no
+ * gesture that could move it. The stamp is set through the API, because the stamp is what a
+ * reload reads, and then the drawn column is read off the block's `x` rather than off its
+ * `customData`: those two are the same field until the layout disagrees with it, which is the
+ * whole of what this asserts.
+ *
  * It also asserts what orders that stack. `customData.draftCreatedAt` is the key; the stamp
  * in the element id is only a fallback for blocks made before the field existed. Both are
  * written from one `Date.now()`, so they agree by construction and a passing order proves
@@ -341,6 +350,11 @@ const PROBE = `(() => {
   }
   // Left to right, which is the order the project declares its options in.
   out.columns = sections.slice().sort((a, b) => a.x - b.x).map((section) => section.col);
+  // Where each column starts, so a block's *drawn* column can be told from the one its
+  // customData names. Those are the same field until the layout disagrees with it, which
+  // is precisely the case worth asserting. (No backticks in here: this is inside one.)
+  out.columnX = {};
+  for (const section of sections) out.columnX[section.col] = section.x;
   const state = api.getAppState();
   out.view = { scrollX: state.scrollX, scrollY: state.scrollY, zoom: state.zoom.value,
                offsetLeft: state.offsetLeft, offsetTop: state.offsetTop };
@@ -365,6 +379,23 @@ const SETSTAMP = (id, at) => `(() => {
         height: element.height + 1,
         version: (element.version || 1) + 1,
         customData: { ...(element.customData || {}), draftCreatedAt: ${at} } }
+    : element);
+  api.updateScene({ elements, captureUpdate: 'NEVER' });
+  return true;
+})()`;
+
+/**
+ * Grow one draft by a pixel, so the relayout has something in its signature to notice.
+ *
+ * The same manoeuvre `SETSTAMP` makes and for the same reason, without the timestamp: a
+ * `customData` edit alone moves nothing `relayoutForDrafts` watches, so the column would not
+ * be laid out again until the twenty-second poll — and where a draft is *drawn* is only
+ * decided by a layout that actually runs.
+ */
+const NUDGE = (id) => `(() => {
+  const api = window.__boardCheckApi;
+  const elements = api.getSceneElements().map((element) => element.id === ${JSON.stringify(id)}
+    ? { ...element, height: element.height + 1, version: (element.version || 1) + 1 }
     : element);
   api.updateScene({ elements, captureUpdate: 'NEVER' });
   return true;
@@ -621,6 +652,70 @@ try {
         reconciled?.headers[NOTES.id] === `${NOTES.name} (1)`, JSON.stringify(reconciled?.headers));
   check('while the column the issue was moved into is unchanged',
         reconciled?.headers[TODO.id] === 'Todo (1)', JSON.stringify(reconciled?.headers));
+
+  console.log('\n7. a block stamped with a project column is still drawn in the notes column');
+  // The defect reproduced as it actually arose, on the board rather than in the arithmetic.
+  // A draft carries whichever column the `+` was on when it was clicked, written once and
+  // never again — so while the notes column was an ordinary option, any change to the
+  // project's *ordering* stranded every block already written. Three of them sat among the
+  // issues in `Todo` on project 5, and no gesture could move them: `settleMirrorDrag`
+  // rewrites a column for mirrored cards and nothing else, so dragging one moved it until
+  // the next relayout and no further.
+  //
+  // Written through the API rather than into the scene, because the stamp is what survives
+  // a reload — and a correction made only in the browser would be undone by one.
+  const stray = reconciled.drafts[0];
+  const strayHeld = await (await fetch(`${BASE}/api/elements/${stray.id}?workspace=mirror-check`)).json();
+  await fetch(`${BASE}/api/elements/${stray.id}?workspace=mirror-check`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      customData: { ...(strayHeld.element?.customData ?? {}), sectionOptionId: TODO.id },
+    }),
+  });
+
+  // `col` on a probed draft is the element's own `customData`, so waiting on it is what says
+  // the update reached the scene at all — before asking where the block was then drawn.
+  // Where it is *drawn* has to be read off `x`, because the two agree until this defect.
+  let stamped = null;
+  for (let attempt = 0; attempt < 40 && stamped === null; attempt++) {
+    await sleep(1000);
+    const now = await evaluate(PROBE);
+    if (now.drafts.find((draft) => draft.id === stray.id)?.col === TODO.id) stamped = now;
+  }
+  await shot('08-stamped-elsewhere');
+  check('the block really does carry another column now, so there is something to get wrong',
+        stamped !== null, JSON.stringify((await evaluate(PROBE)).drafts));
+
+  // Nudged, for the reason section 5 nudges: a `customData` edit moves nothing in the
+  // signature `renderMirror` skips on, so without this the block keeps whatever position the
+  // last layout gave it and the assertion below reads a stale coordinate rather than a
+  // decision. The update this one arrived on also carries the server's copy of `x`, which is
+  // older still — the mirror moves drafts under `applySceneUpdateWithoutAutoSync`, so where
+  // it puts them is never synced back.
+  await evaluate(NUDGE(stray.id));
+  await sleep(1600);
+  const settled = await evaluate(PROBE);
+  await shot('09-still-in-notes');
+
+  const drawn = settled.drafts.find((draft) => draft.id === stray.id);
+  check('it is drawn in the notes column all the same',
+        Boolean(drawn) && drawn.x === settled.columnX[NOTES.id],
+        `draft x=${drawn?.x}, notes column at ${settled.columnX?.[NOTES.id]}, `
+        + `Todo at ${settled.columnX?.[TODO.id]}`);
+  check('and not in the one its stamp names',
+        Boolean(drawn) && drawn.x !== settled.columnX[TODO.id],
+        `draft x=${drawn?.x}, Todo at ${settled.columnX?.[TODO.id]}`);
+  check('the stamp itself is untouched, so this is the layout overruling it, not rewriting it',
+        drawn?.col === TODO.id, JSON.stringify(drawn));
+  check('the notes header counts it and Todo\'s does not',
+        settled.headers[NOTES.id] === `${NOTES.name} (1)` && settled.headers[TODO.id] === 'Todo (1)',
+        JSON.stringify(settled.headers));
+  check('so no card in Todo gave up room for it',
+        settled.cards.filter((card) => card.col === TODO.id)
+          .every((card, index) => card.y === reconciled.cards.filter((c) => c.col === TODO.id)[index]?.y),
+        `${settled.cards.filter((c) => c.col === TODO.id).map((c) => c.y).join(',')} vs `
+        + `${reconciled?.cards.filter((c) => c.col === TODO.id).map((c) => c.y).join(',')}`);
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);
