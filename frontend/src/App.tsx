@@ -16,6 +16,8 @@ import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
 import type { Rect } from '../../src/core/anchored-placement'
 import { resolvePanelTarget } from '../../src/core/panel-target'
 import type { PanelElement } from '../../src/core/panel-target'
+import { describeIgnoredClaims, resolveBoardSectionHotkeys } from '../../src/core/board-sections'
+import type { BoardSectionElement } from '../../src/core/board-sections'
 import { referenceImageName } from '../../src/core/pasted-images'
 import { layoutLabel } from '../../src/core/text-layout'
 import {
@@ -933,6 +935,26 @@ function App(): JSX.Element {
   const syncInFlightRef = useRef<boolean>(false)
   const suppressAutoSyncCountRef = useRef<number>(0)
   const userInteractedRef = useRef<boolean>(false)
+
+  /** The last set of rejected hotkey claims that was printed, so it is printed once. */
+  const sectionClaimsRef = useRef<string>('')
+
+  /**
+   * Say once when a section asked for a key it cannot have.
+   *
+   * A reserved or duplicated claim is ignored rather than honoured, and an ignored claim
+   * with nothing said is a key that silently does nothing — the drawing looks right and
+   * the board looks broken. Printed from `onChange`, which is also where the board is
+   * edited, and guarded by the last thing printed because `onChange` fires on every
+   * pointer move.
+   */
+  const reportSectionClaims = (elements: readonly unknown[]): void => {
+    const { ignored } = resolveBoardSectionHotkeys(elements as unknown as BoardSectionElement[])
+    const signature = describeIgnoredClaims(ignored)
+    if (signature === sectionClaimsRef.current) return
+    sectionClaimsRef.current = signature
+    if (signature) console.warn(`Board section hotkey ignored: ${signature}`)
+  }
 
   /**
    * Track which selected shape the docs panel should describe.
@@ -1864,6 +1886,49 @@ function App(): JSX.Element {
 
       event.preventDefault()
       api.scrollToContent(mirror as unknown as ExcalidrawElement[], {
+        fitToViewport: true,
+        animate: true
+      })
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  // The board's own keys — one per section it has drawn a mark around.
+  //
+  // Alt+B and Alt+T above are constants because a mirror and a terminal are features of
+  // every board. Sections are not: they are how one project chose to cut its own
+  // documentation, so the key is read off the shape (`src/core/board-sections.ts`) and a
+  // board that draws no sections binds nothing at all. Same guards as Alt+B, and the same
+  // reason for `window`: a key pressed outside the canvas is one Excalidraw never sees.
+  //
+  // Resolved on the keypress rather than kept in state: a section is a shape like any
+  // other, so it can be drawn, retitled or deleted while the page is open, and one pass
+  // over the scene per Alt+key costs nothing next to being wrong about what is on it.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!event.altKey || event.ctrlKey || event.metaKey) return
+
+      const active = document.activeElement as HTMLElement | null
+      if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) {
+        return
+      }
+
+      const api = excalidrawAPIRef.current
+      if (!api) return
+      if ((api.getAppState() as unknown as Record<string, unknown>).editingTextElement) return
+
+      const elements = api.getSceneElements()
+      const { bindings } = resolveBoardSectionHotkeys(elements as unknown as BoardSectionElement[])
+      const bound = bindings.find((binding) => binding.code === event.code)
+      if (!bound) return
+
+      const section = elements.find((element) => element.id === bound.elementId)
+      if (!section) return
+
+      event.preventDefault()
+      api.scrollToContent([section] as unknown as ExcalidrawElement[], {
         fitToViewport: true,
         animate: true
       })
@@ -2812,6 +2877,7 @@ function App(): JSX.Element {
                 }
               }
               syncSelectedDoc(appState)
+              reportSectionClaims(_elements)
               // Order matters: syncSelectedDoc settles which shape is anchored, and this
               // then works out where that shape is.
               syncDocsAnchor(_elements, appState as unknown as Record<string, any>)
