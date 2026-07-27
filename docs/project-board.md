@@ -142,6 +142,46 @@ A block hears the result over the WebSocket, as an element update. A card cannot
 element — so while a run is in flight the panel asks `GET /api/implement`, which reads the record
 and spawns no `gh`.
 
+## A run moves its card
+
+Starting an implementation moves that issue's card to **In Progress**, and the mirror shows it on
+the next poll. Closing and creation are already automated by GitHub's own project workflows — In
+Progress was the one transition nobody wrote, which is why it was the one that drifted.
+
+**The server writes it, not the agent.** The observation this came from named the agent, because
+the agent is what the click starts, but nothing requires the write to come from that process. An
+agent that dies early would leave the card in Todo with a run in flight, and the state would be
+written by the one participant that cannot report its own crash. It would also mean putting a
+project URL, a field name and a column name into a prompt whose whole design is to carry none of
+them.
+
+Which column that is, is resolved rather than guessed:
+
+```json
+{ "githubProject": "…", "projectInProgressColumn": "Doing" }
+```
+
+Unset, the option named `In Progress` is used, matched case-insensitively — the same reliance on
+GitHub's defaults the `+` makes on the first column. **If neither resolves, nothing is moved** and
+the reason is logged. A board that renamed the column gets no move until it says so, which is the
+deliberate half of that trade: retargeting to some other column would put somebody's card
+somewhere they never asked for.
+
+Nothing about this may cost the implementation. The write is not awaited — the project and the
+agent are independent, and a `gh` working through its retries must not hold a run up — and every
+outcome that is not a move is a log line: no project configured (no `gh` is spawned at all), no
+such column, an issue that is not on the project, a card already in that column, or `gh` itself
+failing. The run still starts, and the route still answers 202.
+
+The board is read uncapped for this, unlike a drag: `projectCardLimit` exists so a section does not
+draw hundreds of cards, and a card hidden behind it would otherwise read as an issue that is not on
+the project.
+
+A run that *fails* leaves the card in In Progress. Moving it back would erase the record that
+anything was attempted, and the pull request state on the card already says how the run ended.
+
+`scripts/check-implement-in-progress.mjs` covers this with a stubbed `gh` and a stubbed agent.
+
 ## The hotkey
 
 **Alt+B** scrolls the viewport onto the mirror. `Alt` because Excalidraw owns the bare letters —

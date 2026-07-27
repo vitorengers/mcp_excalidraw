@@ -32,6 +32,14 @@ export interface WorkspaceConfig {
   projectField?: string;
   /** Cards a section shows before it starts hiding them. */
   projectCardLimit?: number;
+  /**
+   * Column an issue is moved to when its implementation starts.
+   *
+   * Unset, the option named `In Progress` is used — the same reliance on GitHub's own
+   * defaults the `+` already makes on the first column. A board that renamed it says so
+   * here; a board that has no such column gets no move rather than a guess.
+   */
+  projectInProgressColumn?: string;
 }
 
 export interface Workspace {
@@ -48,6 +56,8 @@ export interface Workspace {
   /** Null means "whatever the project board reader defaults to". */
   projectField: string | null;
   projectCardLimit: number | null;
+  /** Null means "the column named In Progress, if the project has one". */
+  projectInProgressColumn: string | null;
   /** Populated when this workspace could not be fully loaded. */
   error: string | null;
 }
@@ -99,6 +109,7 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
     githubProject: null,
     projectField: null,
     projectCardLimit: null,
+    projectInProgressColumn: null,
     error: null,
   };
 
@@ -142,6 +153,7 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
     projectCardLimit: Number.isFinite(config.projectCardLimit)
       ? Number(config.projectCardLimit)
       : null,
+    projectInProgressColumn: config.projectInProgressColumn?.trim() || null,
     error: escaped.length
       ? `Config field(s) outside the workspace, ignored: ${escaped.join(', ')}`
       : null,

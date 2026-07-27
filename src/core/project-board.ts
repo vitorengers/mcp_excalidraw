@@ -231,8 +231,22 @@ function projectFieldFor(workspace: Workspace): string {
   return configured;
 }
 
+export interface ReadBoardOptions {
+  /**
+   * Overrides the workspace's own cap. `0` reads every item.
+   *
+   * The cap exists so a section does not draw four hundred cards; a caller that is looking
+   * one card up rather than drawing anything must not inherit it, or a card hidden behind
+   * the cap reads as a card that is not on the project at all.
+   */
+  cardLimit?: number;
+}
+
 /** Read the workspace's project and lay it out as sections. */
-export async function readProjectBoard(workspace: Workspace): Promise<ProjectBoard> {
+export async function readProjectBoard(
+  workspace: Workspace,
+  options: ReadBoardOptions = {}
+): Promise<ProjectBoard> {
   const ref = parseProjectUrl(workspace.githubProject);
   if (!ref) {
     throw new NoProjectConfigured(
@@ -257,8 +271,9 @@ export async function readProjectBoard(workspace: Workspace): Promise<ProjectBoa
     throw new Error(`Could not read the gh response: ${(error as Error).message}`);
   }
 
+  const cardLimit = options.cardLimit ?? workspace.projectCardLimit;
   const board = toBoard(parsed, {
-    ...(workspace.projectCardLimit !== null ? { cardLimit: workspace.projectCardLimit } : {}),
+    ...(cardLimit !== null && cardLimit !== undefined ? { cardLimit } : {}),
     repo: workspace.repo,
   });
   if (board.morePages) {
@@ -336,3 +351,88 @@ export async function moveCard(
 
 /** A move naming a column or an item this project does not have — the caller's mistake. */
 export class NotOnThisBoard extends Error {}
+
+/**
+ * The column an implementation lands in when a project does not name one.
+ *
+ * This is the one constant in this file that names a column, and it is a fallback rather
+ * than a rule: it is what GitHub calls the column on a project it created, the same default
+ * the `+` already leans on when it drops a draft into the first option. A board that renamed
+ * it sets `projectInProgressColumn`; a board that has no such column gets no move, because a
+ * guess would move somebody's card into a column they never asked for.
+ */
+export const DEFAULT_IN_PROGRESS_COLUMN = 'In Progress';
+
+/** A section by name, case-insensitively. No Status is not a column anything can move to. */
+export function findColumn(board: ProjectBoard, name: string): BoardSection | null {
+  const wanted = name.trim().toLowerCase();
+  return board.sections.find((section) =>
+    section.optionId !== NO_STATUS_OPTION_ID
+    && section.name.trim().toLowerCase() === wanted) ?? null;
+}
+
+/**
+ * Move the card carrying one issue into the in-progress column.
+ *
+ * Called when a run starts, and written by the server rather than by the agent's prompt.
+ * The observation this comes from names the agent because the agent is what the click
+ * starts, but nothing requires the write to come from that process — and an agent is the one
+ * participant that cannot report its own crash, so an agent that died early would leave the
+ * card in Todo with a run in flight. Here the state is written by whoever knows the run
+ * began.
+ *
+ * Everything that is not a move returns `null` rather than throwing: no project, no such
+ * column, an issue that is not on the board, a card already in that column. None of them is
+ * a fault of the implementation, and none of them may cost it. Only `gh` itself failing
+ * throws, and the caller logs it.
+ *
+ * Returns the column landed on, or `null` when nothing was written.
+ */
+export async function moveIssueToInProgress(
+  workspace: Workspace,
+  issueUrl: string
+): Promise<string | null> {
+  // A board with no project stays exactly as dormant as it was: no `gh`, no read, nothing.
+  if (!workspace.githubProject) return null;
+
+  // Read uncapped: the cap is there so a section does not draw hundreds of cards, and a
+  // card hidden behind it would read here as an issue that is not on the project.
+  const board = await readProjectBoard(workspace, { cardLimit: 0 });
+
+  const wanted = workspace.projectInProgressColumn ?? DEFAULT_IN_PROGRESS_COLUMN;
+  const target = findColumn(board, wanted);
+  if (!target) {
+    logger.warn(
+      `Project board: no "${wanted}" column on this project, so ${issueUrl} was left where it is. `
+      + 'Name the column as "projectInProgressColumn" in board.config.json.'
+    );
+    return null;
+  }
+
+  const found = board.sections
+    .flatMap((section) => section.cards.map((card) => ({ section, card })))
+    .find((entry) => entry.card.url === issueUrl);
+  if (!found) {
+    logger.info(`Project board: ${issueUrl} is not on this project, so nothing was moved`);
+    return null;
+  }
+  if (found.section.optionId === target.optionId) {
+    logger.info(`Project board: ${issueUrl} is already in "${target.name}"`);
+    return null;
+  }
+
+  const args = buildMoveArgs({
+    projectId: board.projectId,
+    fieldId: board.fieldId,
+    itemId: found.card.itemId,
+    optionId: target.optionId,
+  });
+  // `moveCard` is the drag's version of this and re-reads the board afterwards to answer the
+  // request with a fresh one. Nothing consumes a board here — the canvas polls — so that
+  // read, and the one `moveCard` does to find the item this function has already found,
+  // would both be spent on nobody.
+  await runGh(workspace, args.join(' '), { what: 'the project board move' });
+  logger.info(`Project board: ${issueUrl} moved to "${target.name}"`);
+
+  return target.name;
+}

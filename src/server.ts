@@ -37,6 +37,7 @@ import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } 
 import {
   readProjectBoard,
   moveCard,
+  moveIssueToInProgress,
   NoProjectConfigured,
   NotOnThisBoard
 } from './core/project-board.js';
@@ -1321,6 +1322,17 @@ async function beginImplement(res: Response, workspaceId: string, issueUrl: stri
 
   recordImplement(workspaceId, issueUrl, { state: 'running', url: null, error: null, worktree: null });
   res.status(202).json({ success: true, state: 'running', issueUrl });
+
+  // The board says Todo until something says otherwise, and starting the run is the
+  // something. Deliberately not awaited: the project and the agent are independent, and a
+  // `gh` working through its retries must not hold an implementation up. Deliberately not
+  // fatal either — a board write that fails costs a log line and nothing else, because the
+  // point of the run is the pull request, not the column.
+  void moveIssueToInProgress(workspace, issueUrl)
+    .then((column) => { if (column) logger.info(`${issueUrl} is being implemented, so its card moved to "${column}"`); })
+    .catch((error) => logger.warn(
+      `Could not move ${issueUrl} on the project board: ${(error as Error).message}`
+    ));
 
   let worktree: ImplementWorktree | null = null;
   try {
