@@ -47,13 +47,34 @@
   opacity: 0.7;
 }
 
+.terminal-card__mode {
+  flex: 0 0 auto;
+  padding: 0 0.4em;
+  border-radius: 0.5em;
+  background: rgb(205 214 244 / 12%);
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+/* The emulator's host. It keeps `pointer-events: none` from the card, which is the whole
+   bargain: xterm would happily take clicks for selection, and taking them would take
+   Excalidraw's resize handles for the block underneath. */
 .terminal-card__body {
   flex: 1 1 auto;
+  min-height: 0;
   margin: 0.3em 0 0;
   overflow: hidden;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font: inherit;
+}
+
+/* xterm sizes itself in pixels from the grid it was given; the block is the frame around
+   that, and anything the frame cannot hold is clipped rather than scrolled — the viewport
+   cannot be reached with a pointer that belongs to the canvas. */
+.terminal-card__body .xterm {
+  height: 100%;
+}
+
+.terminal-card__body .xterm-viewport {
+  overflow: hidden !important;
 }
 
 .terminal-card__prompt {
@@ -64,9 +85,12 @@
   margin-top: 0.25em;
   padding-top: 0.25em;
   border-top: 1px solid rgb(205 214 244 / 18%);
-  /* The one part of the overlay that is not transparent to the pointer: a command has to
-     be clicked into and typed into, and Excalidraw binds every bare letter to a tool. */
+  overflow: hidden;
+  white-space: nowrap;
+  /* The one part of the overlay that is not transparent to the pointer. It does not take
+     text — the emulator does — it takes the click that hands the keyboard over. */
   pointer-events: auto;
+  cursor: text;
 }
 
 .terminal-card__caret {
@@ -74,16 +98,10 @@
   color: #a6e3a1;
 }
 
-.terminal-card__input {
+.terminal-card__hint {
   flex: 1 1 auto;
   min-width: 0;
-  border: none;
-  background: none;
-  color: inherit;
-  font: inherit;
-  outline: none;
-}
-
-.terminal-card__input::placeholder {
+  overflow: hidden;
   color: #6c7086;
+  text-overflow: ellipsis;
 }

@@ -8,13 +8,19 @@
  * deliberate — opt in by environment variable, loopback only, and one session per
  * workspace. The routes in `src/server.ts` apply them.
  *
- * Piped, not a PTY. A real PTY is what a full-screen program needs — Claude Code's own
- * interface included — and every PTY for Node is a native module, which would be the first
- * native dependency in a package published to npm and the first thing that needs a compiler
- * to install. A pipe runs commands and streams their output, which is what this surface was
- * asked for. `docs/terminal.md` records what that costs.
+ * A PTY where there is one, and a pipe where there is not. A pipe runs commands and streams
+ * their output, and that is all it can ever do: a process on three pipes sees `stdin.isTTY`
+ * false, and every full-screen program — `vim`, `top`, Claude Code's own interface — asks
+ * that first and takes its non-interactive path. So the PTY is what the session prefers,
+ * from an `optionalDependency` with prebuilt binaries loaded at runtime; a machine that has
+ * no binary for its platform still gets the pipe rather than a server that will not start.
+ * Which of the two it got is in the summary, because a feature that behaves differently on
+ * two machines with no way to tell them apart is worse than one that only does less.
+ * `docs/terminal.md` records what each mode costs.
  */
 import { spawn, spawnSync, ChildProcess } from 'child_process';
+import { existsSync, statSync } from 'fs';
+import { delimiter, isAbsolute, join } from 'path';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
 import { agentPath, buildAgentCommand } from './issue-agent.js';
@@ -32,18 +38,101 @@ export const SCROLLBACK_LIMIT = 200_000;
 /** What a block reports before anything has resized it. */
 export const DEFAULT_GRID = { cols: 80, rows: 24 };
 
+/** Whether the shell is talking to a terminal or to three pipes. */
+export type TerminalMode = 'pty' | 'pipe';
+
+/** The slice of the PTY binding this uses, named so nothing here depends on its types. */
+export interface PtyProcess {
+  readonly pid: number;
+  onData(listener: (data: string) => void): void;
+  onExit(listener: (event: { exitCode: number; signal?: number | undefined }) => void): void;
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  kill(signal?: string): void;
+}
+
+export interface PtyModule {
+  spawn(
+    file: string,
+    args: string[] | string,
+    options: {
+      name?: string;
+      cols?: number;
+      rows?: number;
+      cwd?: string | undefined;
+      env?: Record<string, string>;
+      useConpty?: boolean;
+    }
+  ): PtyProcess;
+}
+
+/**
+ * The PTY binding, once, or null.
+ *
+ * `@lydell/node-pty` rather than `node-pty` itself: the objection this feature was built
+ * around was that a PTY would be "the first thing here that needs a compiler to install",
+ * and that fork ships the binary per platform as its own `optionalDependencies`
+ * (`win32-x64`, `win32-arm64`, `darwin-x64`, `darwin-arm64`, `linux-x64`, `linux-arm64`),
+ * so `npm install` on any of them fetches a prebuilt `.node` and never runs `node-gyp`.
+ * Anywhere else npm skips the optional dependency, the import below throws, and this
+ * returns null.
+ *
+ * The specifier is held in a variable on purpose: a bare `import('@lydell/node-pty')` is a
+ * static dependency as far as the compiler is concerned, and `tsc` in a clean checkout that
+ * skipped the optional install would fail on a module that is allowed to be missing.
+ *
+ * `EXCALIDRAW_TERMINAL_PTY=0` forces the pipe. That is what a machine with no prebuilt
+ * binary gets for free, and having a way to ask for it deliberately is what lets that path
+ * be checked on a machine where the binary is present.
+ */
+const PTY_SPECIFIER = '@lydell/node-pty';
+let ptyLoad: Promise<PtyModule | null> | null = null;
+
+export function ptyDisabled(setting: string | undefined | null = process.env.EXCALIDRAW_TERMINAL_PTY): boolean {
+  return /^(0|false|off|no|disabled)$/i.test((setting ?? '').trim());
+}
+
+export async function loadPty(): Promise<PtyModule | null> {
+  if (ptyDisabled()) return null;
+  if (!ptyLoad) {
+    ptyLoad = (async () => {
+      try {
+        const loaded = await import(/* @vite-ignore */ PTY_SPECIFIER) as { spawn?: unknown; default?: unknown };
+        const candidate = (typeof loaded.spawn === 'function' ? loaded : loaded.default) as PtyModule | undefined;
+        if (!candidate || typeof candidate.spawn !== 'function') return null;
+        return candidate;
+      } catch (error) {
+        logger.info('No PTY binding is available, so the terminal will use pipes', {
+          reason: (error as Error).message
+        });
+        return null;
+      }
+    })();
+  }
+  return ptyLoad;
+}
+
 /**
  * The shell to start when the setting says "on" but does not say which.
  *
  * PowerShell on Windows rather than `cmd.exe` because `pwd`, `ls` and `cat` all mean
  * something there, and a terminal whose first command fails on the platform's own spelling
- * is a poor first impression. `-Command -` reads commands from stdin and writes each one's
- * output as it is produced; `-NoProfile` keeps a machine's own profile out of a shell this
+ * is a poor first impression. `-NoProfile` keeps a machine's own profile out of a shell this
  * server started.
+ *
+ * The two modes need two spellings of it, and this is not a preference. `-Command -` reads
+ * commands from stdin, and PowerShell refuses it outright when stdin is a terminal —
+ * "'-' was specified as the argument to -Command, but standard input has not been
+ * redirected" — printing its usage and exiting. Handed a real console it wants to be the
+ * console's shell, which is also what makes it echo, edit lines and colour its own prompt.
  */
-export function defaultShellCommand(workspace: Workspace): string {
+export function defaultShellCommand(workspace: Workspace, mode: TerminalMode = 'pipe'): string {
   if (workspace.environment.kind === 'wsl') return 'bash';
-  if (process.platform === 'win32') return 'powershell.exe -NoLogo -NoProfile -Command -';
+  if (process.platform === 'win32') {
+    return mode === 'pty'
+      ? 'powershell.exe -NoLogo -NoProfile'
+      : 'powershell.exe -NoLogo -NoProfile -Command -';
+  }
   return 'bash';
 }
 
@@ -57,11 +146,14 @@ export function defaultShellCommand(workspace: Workspace): string {
  */
 export function shellCommandFrom(
   setting: string | undefined | null,
-  workspace: Workspace
+  workspace: Workspace,
+  mode: TerminalMode = 'pipe'
 ): string | null {
   const value = (setting ?? '').trim();
   if (!value) return null;
-  return /^(1|true|on|yes|enabled|default)$/i.test(value) ? defaultShellCommand(workspace) : value;
+  return /^(1|true|on|yes|enabled|default)$/i.test(value)
+    ? defaultShellCommand(workspace, mode)
+    : value;
 }
 
 /**
@@ -79,11 +171,137 @@ export function buildTerminalCommand(
   return buildAgentCommand(workspace, shellCommand);
 }
 
+/**
+ * The command as an absolute path, or as it was given.
+ *
+ * `child_process.spawn` searches `PATH` for a bare command name; the PTY binding does not,
+ * and on Windows it reports the failure as `File not found:` with nothing after the colon,
+ * which says neither what was missing nor that a lookup was expected. So the lookup happens
+ * here, against the same `PATH` the shell is about to be handed rather than this process's
+ * own — `EXCALIDRAW_TERMINAL=node ...` has to find the same `node` in both modes.
+ *
+ * Falling back to the original spelling is deliberate: a command that cannot be resolved
+ * should fail in the spawn, with the spawn's own message, rather than here.
+ */
+export function resolveExecutable(command: string, path: string): string {
+  const runnable = (candidate: string): boolean => {
+    try { return existsSync(candidate) && statSync(candidate).isFile(); } catch { return false; }
+  };
+  // Already a path of some kind, so there is nothing to look up.
+  if (command.includes('/') || command.includes('\\') || isAbsolute(command)) return command;
+
+  const extensions = process.platform === 'win32'
+    ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    : [];
+  for (const directory of path.split(delimiter).filter(Boolean)) {
+    const base = join(directory, command);
+    if (runnable(base)) return base;
+    for (const extension of extensions) {
+      if (runnable(base + extension)) return base + extension;
+    }
+  }
+  return command;
+}
+
+/**
+ * A watcher that takes the shell down when the server goes, whether the server saw it or not.
+ *
+ * `docs/terminal.md` promises that every session is closed when the server goes down, and a
+ * piped shell kept that promise by itself: its stdin was the server's, and a closed pipe is
+ * an EOF the shell exits on. A shell on a terminal has no such tie. On Windows the console
+ * is serviced by a `conhost` the pseudoconsole owns rather than by the server, so the shell
+ * is reparented onto it and a server killed outright — which is what `kill` is on Windows,
+ * with no handler of ours getting to run — leaves a PowerShell attached to a console nobody
+ * is reading. Measured, that happened on roughly half of the hard kills.
+ *
+ * So the promise gets a keeper: one detached process per PTY session that watches the two
+ * pids and does what the server would have done. It is deliberately the smallest thing that
+ * can be: no imports of ours, no state, and it exits the moment the shell does — which for
+ * an ordinary `close()` is within one tick, because `close()` kills the shell first.
+ */
+const REAPER = `
+const [owner, shell] = process.argv.slice(1).map(Number);
+const gone = (pid) => { try { process.kill(pid, 0); return false; } catch { return true; } };
+const timer = setInterval(() => {
+  if (gone(shell)) { clearInterval(timer); process.exit(0); }
+  if (!gone(owner)) return;
+  clearInterval(timer);
+  if (process.platform === 'win32') {
+    require('child_process').spawnSync('taskkill', ['/PID', String(shell), '/T', '/F'], { windowsHide: true });
+  } else {
+    try { process.kill(-shell, 'SIGKILL'); } catch {}
+    try { process.kill(shell, 'SIGKILL'); } catch {}
+  }
+  process.exit(0);
+}, 400);
+`;
+
+/** How far back a cut may look for the escape it might be standing in the middle of. */
+const MAX_SEQUENCE = 4096;
+
+/**
+ * Where the escape sequence starting at `start` ends, or null if it does not end here.
+ *
+ * Only as much of the grammar as a boundary needs: CSI (`ESC [`) runs to a byte in
+ * `@`–`~`; OSC and the string escapes (`DCS`, `SOS`, `PM`, `APC`) run to `BEL` or to `ST`
+ * (`ESC \`); the charset designators take one more byte; anything else is two bytes long.
+ */
+function sequenceEnd(text: string, start: number): number | null {
+  const limit = Math.min(text.length, start + MAX_SEQUENCE);
+  const next = text[start + 1];
+  if (next === undefined) return null;
+
+  if (next === '[') {
+    for (let index = start + 2; index < limit; index++) {
+      const code = text.charCodeAt(index);
+      if (code >= 0x40 && code <= 0x7e) return index + 1;
+    }
+    return null;
+  }
+
+  if (next === ']' || next === 'P' || next === 'X' || next === '^' || next === '_') {
+    for (let index = start + 2; index < limit; index++) {
+      if (text.charCodeAt(index) === 0x07) return index + 1;
+      if (text.charCodeAt(index) === 0x1b && text[index + 1] === '\\') return index + 2;
+    }
+    return null;
+  }
+
+  return '()*+#%'.includes(next) ? start + 3 : start + 2;
+}
+
+/**
+ * Keep the last `limit` characters, without cutting through an escape sequence.
+ *
+ * On a plain byte stream any offset is a boundary, which is what the old
+ * `buffer.slice(-LIMIT)` assumed. On a stream from a PTY it is not: a cut through
+ * `ESC [ 3 1 m` leaves `1m`, and every viewer that replays the scrollback then prints two
+ * characters nobody wrote — or, for a cut through an OSC, swallows everything up to the
+ * next terminator. The ceiling is still a ceiling; what gives is the exact offset, which
+ * moves forward past the sequence it landed in.
+ */
+export function trimScrollback(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const cut = text.length - limit;
+  const floor = Math.max(0, cut - MAX_SEQUENCE);
+  for (let index = cut - 1; index >= floor; index--) {
+    if (text.charCodeAt(index) !== 0x1b) continue;
+    const end = sequenceEnd(text, index);
+    // Only a sequence that is still open at the cut moves it; one that closed before it is
+    // already whole on the far side, and an unterminated run is not treated as a sequence
+    // at all rather than being allowed to swallow the rest of the transcript.
+    return text.slice(end !== null && end > cut ? end : cut);
+  }
+  return text.slice(cut);
+}
+
 export interface TerminalSessionSummary {
   workspaceId: string;
   /** The directory the shell was started in, as the workspace's own environment names it. */
   cwd: string;
   shell: string;
+  /** Whether the shell got a terminal or three pipes. The block says which. */
+  mode: TerminalMode;
   pid: number | null;
   startedAt: string;
   cols: number;
@@ -109,9 +327,23 @@ export class TerminalSession {
   readonly workspaceId: string;
   readonly cwd: string;
   readonly shell: string;
+  readonly mode: TerminalMode;
   readonly startedAt = new Date().toISOString();
 
-  private readonly child: ChildProcess;
+  /**
+   * Settled once the shell has a process id.
+   *
+   * A pipe has one the moment `spawn` returns. A ConPTY does not: the console host is
+   * connected on a thread of its own and the binding reports `pid` as 0 until it is, which
+   * would put a 0 in the session the route answers with and hand `taskkill` a pid that
+   * means "every process in this console" on the way out. The route awaits this before it
+   * says the session is open, which it already had every right to do — the response is a
+   * 202 about a shell that is running.
+   */
+  readonly started: Promise<void>;
+
+  private readonly child: ChildProcess | null = null;
+  private readonly pty: PtyProcess | null = null;
   private readonly hooks: TerminalSessionHooks;
   private buffer = '';
   private sequenceNumber = 0;
@@ -122,23 +354,48 @@ export class TerminalSession {
   private exitCode: number | null = null;
   private closing = false;
 
-  constructor(workspace: Workspace, shellCommand: string, hooks: TerminalSessionHooks) {
+  constructor(
+    workspace: Workspace,
+    shellCommand: string,
+    hooks: TerminalSessionHooks,
+    pty: PtyModule | null = null
+  ) {
     const { command, args, cwd } = buildTerminalCommand(workspace, shellCommand);
     this.workspaceId = workspace.id;
     this.shell = shellCommand;
+    this.mode = pty ? 'pty' : 'pipe';
     // What the shell itself will report from `pwd`, which for a WSL project is not the
     // path this process used to spawn it.
     this.cwd = workspace.environment.kind === 'wsl' ? workspace.innerPath : (cwd ?? workspace.path);
     this.hooks = hooks;
 
-    logger.info(`Starting terminal for workspace "${workspace.id}"`, { command, cwd: this.cwd });
+    logger.info(`Starting terminal for workspace "${workspace.id}"`, { command, cwd: this.cwd, mode: this.mode });
 
+    // The same PATH the agents get: a server started before the GitHub CLI was installed
+    // would otherwise hand this shell a PATH without it, and `gh` is most of what anyone
+    // types in here.
+    const env = { ...process.env, PATH: agentPath() };
+
+    if (pty) {
+      this.pty = pty.spawn(resolveExecutable(command, env.PATH ?? ''), args, {
+        // What the shell is told it is talking to. Without it a program has no way to know
+        // it may use colour, and `TERM=dumb` is what an unset one is taken to mean.
+        name: 'xterm-256color',
+        cols: this.cols,
+        rows: this.rows,
+        cwd,
+        env: { ...stringEnv(env), TERM: 'xterm-256color' }
+      });
+      this.pty.onData((chunk) => this.emit(chunk));
+      this.pty.onExit(({ exitCode }) => this.settle(exitCode ?? null));
+      this.started = this.waitForPid();
+      return;
+    }
+
+    this.started = Promise.resolve();
     this.child = spawn(command, args, {
       cwd,
-      // The same PATH the agents get: a server started before the GitHub CLI was installed
-      // would otherwise hand this shell a PATH without it, and `gh` is most of what anyone
-      // types in here.
-      env: { ...process.env, PATH: agentPath() },
+      env,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -159,7 +416,7 @@ export class TerminalSession {
   }
 
   get pid(): number | null {
-    return this.child.pid ?? null;
+    return this.pty ? this.pty.pid : (this.child?.pid ?? null);
   }
 
   get alive(): boolean {
@@ -179,6 +436,7 @@ export class TerminalSession {
       workspaceId: this.workspaceId,
       cwd: this.cwd,
       shell: this.shell,
+      mode: this.mode,
       pid: this.pid,
       startedAt: this.startedAt,
       cols: this.cols,
@@ -188,45 +446,62 @@ export class TerminalSession {
   }
 
   /**
-   * Send a line to the shell, and put it in the transcript.
+   * Send what was typed to the shell, whatever it was.
    *
-   * The echo is written here rather than in the browser because the transcript is what a
-   * late socket replays: a shell reading a pipe echoes nothing, so without this the
-   * scrollback would be answers with no questions in it, and a second viewer would see
-   * output nobody appeared to ask for.
+   * Bytes, not a line: with a terminal in front of it the browser sends `\r` for Enter,
+   * `\x03` for Ctrl+C and `ESC [ A` for an arrow, and a route that appended a newline to
+   * every one of those would make three of them mean nothing.
+   *
+   * The echo is the difference between the two modes. A shell reading a pipe echoes
+   * nothing, so the session writes what it was sent into the transcript itself — otherwise
+   * the scrollback would be answers with no questions in it, and a second viewer would see
+   * output nobody appeared to ask for. A shell on a terminal echoes for itself, and a
+   * session that still added its own would show every keystroke twice.
    */
   write(data: string): number {
     if (!this.alive) return this.sequenceNumber;
+    if (this.pty) {
+      this.pty.write(data);
+      return this.sequenceNumber;
+    }
     this.emit(data);
-    this.child.stdin?.write(data);
+    this.child?.stdin?.write(data);
     return this.sequenceNumber;
   }
 
   /**
-   * Record the grid the block now stands for.
+   * Tell the shell how big the block it is drawn in has become.
    *
-   * Recorded, not pushed: there is no PTY here, so there is no `TIOCSWINSZ` to send and
-   * nothing inside the shell is told. It is still worth keeping — it is what a second
-   * viewer sizes its own block from, and it is the one piece of state a PTY would need on
-   * the day one arrives.
+   * Pushed now, not merely recorded: a program that repaints a screen repaints it to the
+   * width it was told, so a size the child never hears about shows up as output wrapped at
+   * eighty columns inside a block twice that wide. With no PTY there is still no
+   * `TIOCSWINSZ` to send, and the number is kept for what it was always good for — the
+   * block a second viewer draws.
    */
   resize(cols: number, rows: number): void {
     this.cols = cols;
     this.rows = rows;
+    if (!this.pty || !this.alive) return;
+    try {
+      this.pty.resize(cols, rows);
+    } catch (error) {
+      logger.debug('Could not resize the terminal', { error: (error as Error).message });
+    }
   }
 
   /**
    * End the session, and take whatever it was running with it.
    *
-   * `stdin.end()` first, which is how a shell reading a pipe exits of its own accord, then
+   * `stdin.end()` first for a piped shell, which is how one exits of its own accord, then
    * the process. On Windows the tree is killed explicitly: `child.kill()` reaches the shell
    * and not the command running inside it, and a session closed while something was running
-   * would otherwise leave that something behind with nothing left to stop it.
+   * would otherwise leave that something behind with nothing left to stop it. A PTY is no
+   * different — the shell is the console's, and what it started is still its own child.
    */
   close(): void {
     if (this.closing) return;
     this.closing = true;
-    try { this.child.stdin?.end(); } catch { /* already gone */ }
+    try { this.child?.stdin?.end(); } catch { /* already gone */ }
     if (!this.alive) return;
 
     const pid = this.pid;
@@ -234,14 +509,39 @@ export class TerminalSession {
       const killed = spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
       if (killed.status === 0) return;
     }
-    try { this.child.kill(); } catch { /* already gone */ }
+    try { this.pty ? this.pty.kill() : this.child?.kill(); } catch { /* already gone */ }
+  }
+
+  /** Poll until the console host has connected, then set the keeper on the pair of them. */
+  private async waitForPid(): Promise<void> {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if (this.hasExited) return;
+      if (this.pty && this.pty.pid > 0) return this.startReaper(this.pty.pid);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    logger.warn(`The terminal for workspace "${this.workspaceId}" never reported a process id`);
+  }
+
+  /** Detached and unreferenced: it has to outlive this process to be of any use. */
+  private startReaper(shellPid: number): void {
+    try {
+      spawn(process.execPath, ['-e', REAPER, String(process.pid), String(shellPid)], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true
+      }).unref();
+    } catch (error) {
+      logger.warn('Could not start the terminal keeper; a hard kill may leave the shell behind', {
+        error: (error as Error).message
+      });
+    }
   }
 
   /** Append to the transcript, trim it to the ceiling, and hand the chunk on. */
   private emit(chunk: string): void {
     if (!chunk) return;
     this.sequenceNumber += 1;
-    this.buffer = (this.buffer + chunk).slice(-SCROLLBACK_LIMIT);
+    this.buffer = trimScrollback(this.buffer + chunk, SCROLLBACK_LIMIT);
     this.hooks.onOutput(chunk, this.sequenceNumber);
   }
 
@@ -252,4 +552,13 @@ export class TerminalSession {
     logger.info(`Terminal for workspace "${this.workspaceId}" exited`, { code });
     this.hooks.onExit(code);
   }
+}
+
+/** `process.env` as the PTY binding wants it: no holes where a variable was unset. */
+function stringEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === 'string') out[key] = value;
+  }
+  return out;
 }
