@@ -521,6 +521,25 @@ change that merged mid-run is not widening the scope, it is finishing.
 through the real composition path. It is a lint over instructions and says so: it cannot show that
 an agent obeys, only fail when the guidance is dropped or reworded away.
 
+### Facts the repository does not settle
+
+The two agents had opposite halves of the same gap. The issue agent was ordered to research and
+denied the tools — that is the `--allowedTools` half, fixed in **Configuration** above. This one
+is the mirror image: the implement agent is denied nothing, and nothing asked it to research.
+Step 2 said "check the issue's claims against the code", which reads as though the code is where
+every claim is settled, and step 4's *compiling is not working* arrives a step too late to help.
+
+A library's API, a tool's flag, an external service's behaviour are none of them in the tree, and
+a remembered one compiles exactly as well as a correct one. So step 2 now names that kind of fact,
+says the web is there, and asks for it to be confirmed against its source rather than invented —
+the same instruction the issue agent has carried since it was written, in the same words as far as
+the two prompts allow.
+
+`scripts/check-agent-research.mjs` holds **both** prompts to it, for the reason the gap existed at
+all: the rationale had only ever been written down on one side. Same shape as the two lints above,
+same disclaimer — captured over stdin through the real composition path, and unable to show that
+any agent looks anything up.
+
 ## No time limit, and the way back
 
 **Neither agent has a ceiling by default.** Implementing never did: a clock that kills a
@@ -631,7 +650,7 @@ its block has no surface to show them on.
 ## Configuration
 
 ```
-EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob"'
+EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob WebFetch WebSearch"'
 EXCALIDRAW_IMPLEMENT_CONCURRENCY=4
 EXCALIDRAW_ISSUE_MEMO_MS=30000
 ```
@@ -650,6 +669,23 @@ when an issue comes out worse than usual. The `[1m]` suffix selects the 1M-conte
 approval is blocked, so it finishes with exit code 0 and no issue at all. The list is narrow on
 purpose — `gh`, `git`, and reading. No `Write`, no `Edit`, no open `Bash`: the agent opens
 issues, it does not touch the repository.
+
+**`WebFetch` and `WebSearch` are part of reading.** The prompt has always ordered the agent to
+research what the repository does not settle — "research it — do not invent it" — and until
+these were added, the list denied it the only tools that do. `-p` turns that omission into a
+silent refusal: the run gets `Claude requested permissions to use WebFetch, but you haven't
+granted it yet`, exits 0, and reads afterwards as an agent that chose not to look anything up.
+Both halves of that were observed rather than reasoned about: under the old list both calls are
+refused, under this one both succeed, and **the exit code is 0 either way**. The narrowness this
+does not weaken is the narrowness about *writes* — a read-only fetch adds nothing to what the
+agent can change.
+
+Unrestricted on purpose, not by omission. `WebFetch(domain:host)` is the documented way to scope
+it — `WebFetch(domain:*.example.com)` for subdomains, a bare `WebFetch` for every domain — and an
+allowlist of documentation hosts is the more conservative setting. It is not the default here
+because it reinstates exactly this defect for anything off the list: an agent that needs a page
+on a host nobody predicted is refused silently and exits 0. Scope it if the trade is worth it —
+a fetch is read-only but can still carry repository content outward in the URL it requests.
 
 **Add `--output-format stream-json --verbose` to the implement command to get token counts.**
 Nothing else turns them on, and nothing else is needed. It changes what the agent prints, not
