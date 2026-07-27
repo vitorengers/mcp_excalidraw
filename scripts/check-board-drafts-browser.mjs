@@ -10,6 +10,13 @@
  * without waiting for the twenty-second poll. It earned its place: it caught a second
  * draft still overlapping the one being typed into, which the pure check could not see.
  *
+ * It also asserts what orders that stack. `customData.draftCreatedAt` is the key; the stamp
+ * in the element id is only a fallback for blocks made before the field existed. Both are
+ * written from one `Date.now()`, so they agree by construction and a passing order proves
+ * nothing about which of them was read — which is how a scene built by a stale bundle, whose
+ * blocks carried no field at all, was once read as the field being dropped. So the field is
+ * asserted present in the scene, and then made to disagree with the id to see which wins.
+ *
  * Chrome is driven over the DevTools protocol through `ws`, which the server already
  * depends on, rather than by adding a browser-automation dependency. Self-contained
  * otherwise: it writes a stub `gh`, starts its own canvas server against a throwaway
@@ -287,6 +294,31 @@ const PROBE = `(() => {
   return out;
 })()`;
 
+/**
+ * Rewrite one draft's timestamp in the scene, and nudge it so the relayout notices.
+ *
+ * The height is what carries the write: `relayoutForDrafts` keeps a signature of the draft
+ * heights, and a `customData` edit on its own moves nothing in it, so the column would not
+ * be laid out again until the twenty-second poll came round.
+ */
+const SETSTAMP = (id, at) => `(() => {
+  const api = window.__boardCheckApi;
+  const elements = api.getSceneElements().map((element) => element.id === ${JSON.stringify(id)}
+    ? { ...element,
+        height: element.height + 1,
+        version: (element.version || 1) + 1,
+        customData: { ...(element.customData || {}), draftCreatedAt: ${at} } }
+    : element);
+  api.updateScene({ elements, captureUpdate: 'NEVER' });
+  return true;
+})()`;
+
+/** The stamp the fallback would read off an id, for asserting it says the opposite. */
+const stampInId = (id) => {
+  const digits = /^pbdraft-(\d+)/.exec(id)?.[1];
+  return digits ? Number(digits) : null;
+};
+
 const toViewport = (scene, x, y) => ({
   x: (x + scene.view.scrollX) * scene.view.zoom + scene.view.offsetLeft,
   y: (y + scene.view.scrollY) * scene.view.zoom + scene.view.offsetTop,
@@ -337,6 +369,9 @@ try {
   scene = await evaluate(PROBE);
   await shot('03-two-drafts');
   check('a second block', scene.drafts.length === 2, JSON.stringify(scene.drafts));
+  check('each block reached the scene carrying the timestamp that orders it',
+        scene.drafts.length === 2 && scene.drafts.every((draft) => typeof draft.at === 'number'),
+        scene.drafts.map((draft) => `${draft.id}: draftCreatedAt=${draft.at}`).join(' | '));
   check('and the newer one is on top, not under the one already there',
         scene.drafts.length === 2 && scene.drafts[0].at > scene.drafts[1].at,
         scene.drafts.map((draft) => `${draft.id}@${draft.y}`).join(' | '));
@@ -401,6 +436,25 @@ try {
   check('and nothing in the column overlaps anything else',
         column.every((box, index) => index === 0 || box.y >= column[index - 1].y + column[index - 1].h),
         column.map((box) => `${box.id}:${box.y}+${box.h}`).join(' | '));
+
+  console.log('\n4. the stack is ordered by the field, not by the stamp in the id');
+  // Nothing above tells the two keys apart: one `Date.now()` produces both, so they agree
+  // and either would put the same block on top. Here the lower block's field is made the
+  // newest of the two while its id keeps the older stamp. If `draftCreatedAt` is what the
+  // layout reads, the blocks swap; if the fallback is quietly doing the work, they do not.
+  const lower = scene.drafts[1];
+  const upper = scene.drafts[0];
+  check('the two ids do carry the opposite order, so the swap is a real disagreement',
+        stampInId(lower.id) !== null && stampInId(upper.id) !== null
+        && stampInId(lower.id) < stampInId(upper.id),
+        `${lower.id} vs ${upper.id}`);
+  await evaluate(SETSTAMP(lower.id, upper.at + 5000));
+  await sleep(1500);
+  scene = await evaluate(PROBE);
+  await shot('06-restamped');
+  check('the block whose field is newest is on top, though its id is the older stamp',
+        scene.drafts.length === 2 && scene.drafts[0].id === lower.id,
+        scene.drafts.map((draft) => `${draft.id}@${draft.y} at=${draft.at}`).join(' | '));
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);
