@@ -399,10 +399,11 @@ the column-resolution rule and `projectInProgressColumn`.
 
 ### And when the research run finishes
 
-The same write, one step earlier. A block is drafted in the first column — `My Notes` by
-convention — and the issue the agent creates is left there too, because GitHub's *Item added to
-project* workflow assigns the first option. Once the issue exists it is no longer an observation
-waiting to be looked at, so the server moves it to **Todo**.
+The same write, one step earlier. A block is drafted in the notes column, which is the canvas's
+own and not on the project at all, and the issue the agent creates arrives wherever the project's
+*Item added to project* workflow puts it — a decision this code cannot read. Once the issue exists
+it is no longer an observation waiting to be looked at, so the server moves it to **Todo** rather
+than leaving it wherever that workflow chose.
 
 Best-effort in exactly the same way, and for a stronger reason: the issue is already created by
 the time this runs, so nothing here may turn a successful run into a failed block. A run that

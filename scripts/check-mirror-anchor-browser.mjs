@@ -37,7 +37,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -77,6 +77,15 @@ if (!existsSync(frontend)) {
   process.exit(1);
 }
 
+const typesPath = join(repoRoot, 'dist', 'core', 'project-board-types.js');
+if (!existsSync(typesPath)) {
+  console.error('  FAIL  the compiled server exists — dist/core/project-board-types.js not found');
+  console.error('        (run ./node_modules/.bin/tsc first)');
+  process.exit(1);
+}
+/** The canvas's own column, read from the module that reserves it rather than spelled out. */
+const NOTES = await import(pathToFileURL(typesPath).href);
+
 let failures = 0;
 const check = (name, condition, detail = '') => {
   if (condition) console.log(`  ok    ${name}`);
@@ -98,7 +107,11 @@ const fixturePath = join(workDir, 'fixture.json');
 const logPath = join(workDir, 'gh-calls.log');
 const registryPath = join(workDir, 'workspaces.json');
 
-const MY_NOTES = { id: 'aa11bb22', name: 'My Notes' };
+// Two options to start with, and the canvas draws a third in front of them: since #97 the
+// column observations are written in is the canvas's own and the project declares nothing for
+// it. A fixture that still declared a `My Notes` option would be asserting the arrangement
+// this repository stopped relying on — and the count this check turns on, three columns
+// becoming four, is the same either way.
 const TODO = { id: 'f75ad846', name: 'Todo' };
 const DOING = { id: '47fc9ee4', name: 'In Progress' };
 /** The column that is not there to begin with. GitHub appends a new option last. */
@@ -126,16 +139,17 @@ const payload = (options) => JSON.stringify({
     url: 'https://github.com/users/vitorengers/projects/5',
     field: { id: 'PVTSSF_status', name: 'Status', options },
     items: { pageInfo: { hasNextPage: false }, nodes: [
-      item('PVTI_a', 3, 'An observation', MY_NOTES),
+      item('PVTI_a', 3, 'Being worked on', DOING),
       item('PVTI_b', 21, 'Waiting to be picked up', TODO),
     ] },
   } } },
 });
 
-const THREE = [MY_NOTES, TODO, DOING];
-const FOUR = [MY_NOTES, TODO, DOING, DONE];
+/** What the project declares. The canvas draws one more, in front, that is not on this list. */
+const TWO = [TODO, DOING];
+const THREE_OPTIONS = [TODO, DOING, DONE];
 
-writeFileSync(fixturePath, payload(THREE), 'utf8');
+writeFileSync(fixturePath, payload(TWO), 'utf8');
 writeFileSync(logPath, '', 'utf8');
 
 /** A `gh` that answers from a file — rewritten mid-run — and logs every call it is given. */
@@ -361,8 +375,8 @@ try {
   await shot('01-three-columns');
 
   console.log('1. the region is placed once, against the board\'s own content');
-  check('three columns, in the order the project declares its options',
-        JSON.stringify(columnIds(scene)) === JSON.stringify([MY_NOTES.id, TODO.id, DOING.id]),
+  check('three columns: the canvas\'s own, then the two the project declares, in its order',
+        JSON.stringify(columnIds(scene)) === JSON.stringify([NOTES.NOTES_OPTION_ID, TODO.id, DOING.id]),
         JSON.stringify(columnIds(scene)));
   check('its right edge is one gap left of the board\'s own left edge',
         scene.title && Math.abs((scene.title.x + scene.title.w) - (CONTENT.x - 120)) < 1,
@@ -371,12 +385,14 @@ try {
         scene.title && Math.abs(scene.title.y - CONTENT.y) < 1, JSON.stringify(scene.title));
 
   const placed = { columns: xs(scene), add: scene.add, title: scene.title };
-  check('the + is on the first column', scene.add && scene.add.x > placed.columns[0], JSON.stringify(scene.add));
+  check('the + is on the first column, which is the notes one',
+        scene.add && scene.add.x > placed.columns[0] && scene.add.x < placed.columns[1],
+        JSON.stringify(scene.add));
 
   // ─── A column appears on GitHub ─────────────────────────────
 
   console.log('\n2. a column added on GitHub leaves the columns already drawn where they are');
-  writeFileSync(fixturePath, payload(FOUR), 'utf8');
+  writeFileSync(fixturePath, payload(THREE_OPTIONS), 'utf8');
   const grown = await waitFor(async () => {
     const now = await evaluate(PROBE);
     return now.columns.length === 4 ? now : null;
@@ -384,7 +400,7 @@ try {
   await shot('02-four-columns');
 
   check('the fourth column arrived on a poll, with nothing touched on the canvas',
-        JSON.stringify(columnIds(grown)) === JSON.stringify([MY_NOTES.id, TODO.id, DOING.id, DONE.id]),
+        JSON.stringify(columnIds(grown)) === JSON.stringify([NOTES.NOTES_OPTION_ID, TODO.id, DOING.id, DONE.id]),
         JSON.stringify(columnIds(grown)));
   check('the three that were already there are at the same x',
         JSON.stringify(xs(grown).slice(0, 3)) === JSON.stringify(placed.columns),
@@ -433,9 +449,12 @@ try {
   check('Alt+B brings the region back into view',
         scene.title && onScreen(scene, scene.title), JSON.stringify(scene.title));
 
-  const moving = scene.cards.find((card) => card.col === MY_NOTES.id);
+  // Out of one of the project's own columns and into another. Not out of the notes column,
+  // which since #97 no mirrored card can be in: a drag from there is not a move this server
+  // has anywhere to write, and a drag *into* it snaps back on purpose.
+  const moving = scene.cards.find((card) => card.col === DOING.id);
   const target = scene.columns.find((column) => column.col === TODO.id);
-  check('there is a card in the first column to drag', Boolean(moving), JSON.stringify(scene.cards));
+  check('there is a card in one of the project\'s columns to drag', Boolean(moving), JSON.stringify(scene.cards));
 
   const before = ghCalls().filter((call) => call.includes('item-edit')).length;
   // Held near the card's top edge rather than its middle, which is where its label is.

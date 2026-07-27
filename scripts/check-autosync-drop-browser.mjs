@@ -105,7 +105,9 @@ const fixturePath = join(workDir, 'fixture.json');
 const registryPath = join(workDir, 'workspaces.json');
 
 const REPO = 'vitorengers/mcp_excalidraw';
-const MY_NOTES = { id: 'aa11bb22', name: 'My Notes' };
+// One option, and no option for the column the `+` drops into: since #97 that column is
+// the canvas's own and the project declares nothing for it. A fixture that still declared
+// a `My Notes` option would be asserting the arrangement this repository stopped relying on.
 const TODO = { id: 'f75ad846', name: 'Todo' };
 
 writeFileSync(fixturePath, JSON.stringify({
@@ -113,7 +115,7 @@ writeFileSync(fixturePath, JSON.stringify({
     id: 'PVT_kwHOBVSHIs4BefUS',
     title: 'mcp_excalidraw',
     url: 'https://github.com/users/vitorengers/projects/5',
-    field: { id: 'PVTSSF_status', name: 'Status', options: [MY_NOTES, TODO] },
+    field: { id: 'PVTSSF_status', name: 'Status', options: [TODO] },
     items: { pageInfo: { hasNextPage: false }, nodes: [{
       id: 'PVTI_a',
       type: 'ISSUE',

@@ -48,3 +48,32 @@ export interface ProjectBoard {
 /** The section for items the project holds but never gave a status. */
 export const NO_STATUS_OPTION_ID = '';
 export const NO_STATUS_NAME = 'No Status';
+
+/**
+ * The section observations are written in, which is the canvas's own.
+ *
+ * It used to be an ordinary `Status` option — whichever one the project declared first —
+ * and that was the whole of its representation: the `+` was drawn on `index === 0` and
+ * stamped that option's id onto every block it dropped. Nothing ever put a *project item*
+ * in it, by design, so GitHub was being asked to keep an empty option alive for the sole
+ * purpose of lending its id to blocks that live here. Delete the option and the `+` moves
+ * onto the next column along, where observations and real issues share a column again, and
+ * every block already stamped with the old id names a column the board no longer has.
+ *
+ * So it has an id of its own. Reserved the way `NO_STATUS_OPTION_ID` is, and deliberately
+ * shaped so it cannot be mistaken for an option: GitHub writes those as hex, and the `:`
+ * here is refused by the `NODE_ID` pattern every write to the project is validated against.
+ * A card dropped into this column therefore cannot be written back even by a caller that
+ * tried — which is the honest answer, because there is no option to write.
+ */
+export const NOTES_OPTION_ID = 'canvas:notes';
+
+/**
+ * What that column is called.
+ *
+ * The one column name in this repository that is a constant, and it has to be: every other
+ * name is GitHub's to choose because every other column is GitHub's. This one is drawn
+ * here, so its name comes from here or from nowhere. `My Notes` is what the board already
+ * called it when it was an option, so nothing on screen changes.
+ */
+export const NOTES_NAME = 'My Notes';
