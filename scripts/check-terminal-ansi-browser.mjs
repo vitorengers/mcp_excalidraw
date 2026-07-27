@@ -441,7 +441,7 @@ try {
         `card ${scene.card.width}×${scene.card.height} for block ${scene.block.w}×${scene.block.h}`);
 
   const grid = await waitFor(async () => {
-    const session = (await (await api('/api/terminal')).json())?.session;
+    const [session] = (await (await api('/api/terminal')).json())?.sessions ?? [];
     return session && session.cols > 20 ? session : null;
   }, 'the session to report a grid');
   check('and the shell was told the size it now has',

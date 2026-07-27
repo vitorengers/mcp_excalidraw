@@ -315,7 +315,8 @@ try {
 
   const closed = await call(BASE, '/api/terminal', { method: 'DELETE' });
   check('the session closes', closed.status === 200, `got ${closed.status}`);
-  await waitFor(async () => !(await call(BASE, '/api/terminal')).body?.session, 'the session to go');
+  await waitFor(async () => ((await call(BASE, '/api/terminal')).body?.sessions ?? []).length === 0,
+                'the session to go');
   viewer.close();
 
   // ─── 5. And with no PTY binding, the pipe still works ───────

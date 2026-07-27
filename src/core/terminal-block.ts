@@ -16,8 +16,49 @@
  */
 export const TERMINAL_KIND = 'terminal';
 
-/** One terminal per board, so the shape can have a name rather than an id nobody chose. */
-export const TERMINAL_ELEMENT_ID = 'terminal-block';
+/**
+ * A block's id, which is no longer a name.
+ *
+ * It used to be the constant `terminal-block`, and it could be: there was one terminal per
+ * board, so the shape could have a name rather than an id nobody chose. A board that can
+ * hold several — and can split one into two by dragging a tab out — cannot, because two
+ * shapes with one id is a scene Excalidraw cannot draw.
+ *
+ * Generated rather than derived from the session it starts with: a session moves between
+ * blocks, and an id that meant "the block for s1" would be a lie the first time s1 was
+ * detached and a *new* block wanted the same name.
+ */
+export function terminalElementId(): string {
+  return `terminal-block-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Which sessions a block is showing, and which of them is on top.
+ *
+ * Kept on the shape rather than in the browser's own state because the shape *is* the
+ * arrangement: which block a tab is in is where it was dragged to, and that is geometry
+ * Excalidraw already owns. It rides in `customData` beside `kind`, so both doors that save a
+ * board strip it along with everything else about the block — a tab list in the committed
+ * board file would name sessions that stopped existing when the server did.
+ */
+export interface TerminalBlockData {
+  kind: string;
+  sessions: string[];
+  /** The tab on top. Always one of `sessions`, or the empty string for a block with none. */
+  active: string;
+}
+
+/** What a block says about itself, with anything malformed read as "nothing". */
+export function terminalBlockData(customData: unknown): TerminalBlockData {
+  const raw = (customData ?? {}) as Record<string, unknown>;
+  const sessions = Array.isArray(raw.sessions)
+    ? raw.sessions.filter((id): id is string => typeof id === 'string')
+    : [];
+  const active = typeof raw.active === 'string' && sessions.includes(raw.active)
+    ? raw.active
+    : (sessions[0] ?? '');
+  return { kind: TERMINAL_KIND, sessions, active };
+}
 
 /**
  * Distance between the board's own right edge and the terminal's left edge.
@@ -42,8 +83,15 @@ export const TERMINAL_SIZE = { width: 760, height: 480 };
 export const TERMINAL_FONT_SIZE = 13;
 export const TERMINAL_CELL = { width: 7.6, height: 17.5 };
 
-/** Room the frame takes: the header strip, the input row and the body's padding. */
-export const TERMINAL_CHROME = { width: 20, height: 62 };
+/**
+ * Room the frame takes: the header strip, the tab strip, the input row and the padding.
+ *
+ * The tab strip is the 22 that was added for #94, and it is added rather than absorbed: the
+ * grid is what the *shell* is told, so a strip that took its rows out of the screen without
+ * this would have every full-screen program repainting two lines past the bottom of the
+ * block.
+ */
+export const TERMINAL_CHROME = { width: 20, height: 84 };
 
 /**
  * How far the reader may move the text, with `+` and `-` on the block's own header.
@@ -170,7 +218,7 @@ export function terminalBlockElement(
   extra: Record<string, unknown> = {}
 ): Record<string, unknown> {
   return {
-    id: TERMINAL_ELEMENT_ID,
+    id: terminalElementId(),
     type: 'rectangle',
     x: origin.x,
     y: origin.y,

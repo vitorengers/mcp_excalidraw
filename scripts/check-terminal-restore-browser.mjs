@@ -142,7 +142,18 @@ const api = (path, options = {}) => request(`${BASE}${path}${path.includes('?') 
   ...options,
 });
 
-const terminalState = async () => (await (await api('/api/terminal')).json());
+/**
+ * The board's one session, in the shape this file was written against.
+ *
+ * `GET /api/terminal` lists sessions since #94, because a board may hold several. Nothing
+ * here opens a second one, so the first is *the* session — and `session: null` still means
+ * "none", which is what most of the cases below turn on.
+ */
+const terminalState = async () => {
+  const body = await (await api('/api/terminal')).json();
+  const [session] = body?.sessions ?? [];
+  return { session: session ?? null, scrollback: session?.scrollback ?? '' };
+};
 
 // ─── Talking to Chrome ────────────────────────────────────────
 

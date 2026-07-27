@@ -188,6 +188,7 @@ export type WebSocketMessageType =
   | 'files_added'
   | 'file_deleted'
   // The terminal, which is the one thing here that carries bytes rather than shapes.
+  | 'terminal_sessions'
   | 'terminal_session'
   | 'terminal_output'
   | 'terminal_resized'
@@ -287,30 +288,58 @@ export interface SetViewportMessage extends WebSocketMessage {
 // The transport had no vocabulary for a byte stream: every message above is element- or
 // canvas-shaped. These carry the session's output, and they are the reason `broadcast`
 // takes a workspace — a shell belongs to one board and its output must not reach another.
+//
+// A workspace is no longer enough to say *which* shell, so every one of them names a
+// session. Without that a board with two tabs would draw both streams into whichever block
+// it happened to be looking at, which is the same class of defect as a board receiving
+// another board's output.
 
-/** Sent to a socket that connects while a session is running, and when one opens. */
+/** One session's state, as a viewer that has not been watching needs it. */
+export interface TerminalSessionReplay {
+  session: Record<string, unknown>;
+  /** The transcript so far, so a reconnecting viewer is not left staring at a blank block. */
+  scrollback: string;
+  sequence: number;
+}
+
+/**
+ * Every live session, sent to a socket the moment it connects.
+ *
+ * The whole set rather than one message per session, and sent even when the set is empty:
+ * this is what a viewer reconciles against, so a session that ended while the tab was
+ * disconnected has to be absent from something rather than merely unmentioned. Sent only
+ * when the feature is switched on — a board that never turned it on is told nothing.
+ */
+export interface TerminalSessionsMessage extends WebSocketMessage {
+  type: 'terminal_sessions';
+  sessions: TerminalSessionReplay[];
+}
+
+/** Sent when a session opens, to every viewer of that board. */
 export interface TerminalSessionMessage extends WebSocketMessage {
   type: 'terminal_session';
   session: Record<string, unknown> | null;
-  /** The transcript so far, so a reconnecting viewer is not left staring at a blank block. */
   scrollback: string;
   sequence: number;
 }
 
 export interface TerminalOutputMessage extends WebSocketMessage {
   type: 'terminal_output';
+  sessionId: string;
   data: string;
   sequence: number;
 }
 
 export interface TerminalResizedMessage extends WebSocketMessage {
   type: 'terminal_resized';
+  sessionId: string;
   cols: number;
   rows: number;
 }
 
 export interface TerminalExitMessage extends WebSocketMessage {
   type: 'terminal_exit';
+  sessionId: string;
   code: number | null;
 }
 

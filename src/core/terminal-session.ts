@@ -5,8 +5,8 @@
  * `docs/issue-block.md` already calls the most dangerous thing this server does: that one
  * spawns a process with a fixed prompt, this one spawns a process that runs whatever
  * arrives over an API with no authentication. So it copies the same guards, and the copy is
- * deliberate — opt in by environment variable, loopback only, and one session per
- * workspace. The routes in `src/server.ts` apply them.
+ * deliberate — opt in by environment variable, loopback only, and a **capped** number of
+ * sessions per workspace. The routes in `src/server.ts` apply them.
  *
  * A PTY where there is one, and a pipe where there is not. A pipe runs commands and streams
  * their output, and that is all it can ever do: a process on three pipes sees `stdin.isTTY`
@@ -34,6 +34,24 @@ import { agentPath, buildAgentCommand } from './issue-agent.js';
  * something noisy in it must not grow without one.
  */
 export const SCROLLBACK_LIMIT = 200_000;
+
+/**
+ * How many shells one board may have running at once.
+ *
+ * The rule used to be one, and that was a guard rather than an oversight: this runs whatever
+ * arrives over an unauthenticated API, so the count is one of the three things standing
+ * between the feature and a machine. Tabs relax it from 1 to N; they do not remove it, and
+ * "unbounded" would remove it — a page that could ask in a loop would be asking for as many
+ * shells as it liked.
+ *
+ * Eight because it is more tabs than anyone opens on one board and still a number the
+ * machine notices: at `SCROLLBACK_LIMIT` per session it is a worst case of 1.6 MB of
+ * transcript held server-side, which is a ceiling worth having rather than one worth fearing.
+ * The ceiling stays **per session** rather than becoming a per-board budget, because a shared
+ * budget would make one noisy session eat another one's history — the transcripts would then
+ * disagree about how far back a board remembers depending on which tab was busy.
+ */
+export const TERMINAL_SESSION_LIMIT = 8;
 
 /** What a block reports before anything has resized it. */
 export const DEFAULT_GRID = { cols: 80, rows: 24 };
@@ -296,6 +314,14 @@ export function trimScrollback(text: string, limit: number): string {
 }
 
 export interface TerminalSessionSummary {
+  /**
+   * Which session this is, on a board that may have several.
+   *
+   * Short and readable — `s1`, `s2` — because it is also what a tab is labelled with, and a
+   * tab strip is no place for a generated id. Unique for the life of the server, which is
+   * the whole life of a session: nothing here survives a restart.
+   */
+  id: string;
   workspaceId: string;
   /** The directory the shell was started in, as the workspace's own environment names it. */
   cwd: string;
@@ -324,6 +350,7 @@ export interface TerminalSessionHooks {
  * run is `running` and nothing more.
  */
 export class TerminalSession {
+  readonly id: string;
   readonly workspaceId: string;
   readonly cwd: string;
   readonly shell: string;
@@ -355,12 +382,14 @@ export class TerminalSession {
   private closing = false;
 
   constructor(
+    id: string,
     workspace: Workspace,
     shellCommand: string,
     hooks: TerminalSessionHooks,
     pty: PtyModule | null = null
   ) {
     const { command, args, cwd } = buildTerminalCommand(workspace, shellCommand);
+    this.id = id;
     this.workspaceId = workspace.id;
     this.shell = shellCommand;
     this.mode = pty ? 'pty' : 'pipe';
@@ -369,7 +398,7 @@ export class TerminalSession {
     this.cwd = workspace.environment.kind === 'wsl' ? workspace.innerPath : (cwd ?? workspace.path);
     this.hooks = hooks;
 
-    logger.info(`Starting terminal for workspace "${workspace.id}"`, { command, cwd: this.cwd, mode: this.mode });
+    logger.info(`Starting terminal "${id}" for workspace "${workspace.id}"`, { command, cwd: this.cwd, mode: this.mode });
 
     // The same PATH the agents get: a server started before the GitHub CLI was installed
     // would otherwise hand this shell a PATH without it, and `gh` is most of what anyone
@@ -433,6 +462,7 @@ export class TerminalSession {
 
   summary(): TerminalSessionSummary {
     return {
+      id: this.id,
       workspaceId: this.workspaceId,
       cwd: this.cwd,
       shell: this.shell,
@@ -519,7 +549,7 @@ export class TerminalSession {
       if (this.pty && this.pty.pid > 0) return this.startReaper(this.pty.pid);
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    logger.warn(`The terminal for workspace "${this.workspaceId}" never reported a process id`);
+    logger.warn(`The terminal "${this.id}" for workspace "${this.workspaceId}" never reported a process id`);
   }
 
   /** Detached and unreferenced: it has to outlive this process to be of any use. */
@@ -549,7 +579,7 @@ export class TerminalSession {
     if (this.hasExited) return;
     this.hasExited = true;
     this.exitCode = code;
-    logger.info(`Terminal for workspace "${this.workspaceId}" exited`, { code });
+    logger.info(`Terminal "${this.id}" for workspace "${this.workspaceId}" exited`, { code });
     this.hooks.onExit(code);
   }
 }
