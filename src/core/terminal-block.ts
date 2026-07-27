@@ -46,6 +46,63 @@ export const TERMINAL_CELL = { width: 7.6, height: 17.5 };
 /** Room the frame takes: the header strip, the input row and the body's padding. */
 export const TERMINAL_CHROME = { width: 20, height: 62 };
 
+/**
+ * How far the reader may move the text, with `+` and `-` on the block's own header.
+ *
+ * The bottom is where a monospace glyph stops being a letter; the top is chosen so the
+ * floors in `terminalGrid()` are never what stops it — at 24 the default block is still
+ * fifty columns wide, so the `+` runs out because the *block* did, which is a thing the
+ * reader can see and drag.
+ */
+export const TERMINAL_FONT_RANGE = { min: 8, max: 24, step: 1 };
+
+/**
+ * A font size that came from somewhere untrusted — `localStorage`, a stale key — made into
+ * one of the sizes the buttons can reach. Anything that is not a number at all is the
+ * default rather than an end of the range: a corrupt key is not a preference.
+ */
+export function clampTerminalFont(value: unknown): number {
+  // A stored preference arrives as a string, and an absent one as `null`. Only the first is
+  // worth parsing: `Number(null)` is 0, which would clamp to the smallest size the buttons
+  // reach and read as "the reader once chose 8" on a board where nobody chose anything.
+  const size = typeof value === 'number'
+    ? value
+    : (typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN);
+  if (!Number.isFinite(size)) return TERMINAL_FONT_SIZE;
+  const { min, max, step } = TERMINAL_FONT_RANGE;
+  const onGrid = min + Math.round((size - min) / step) * step;
+  return Math.min(max, Math.max(min, onGrid));
+}
+
+/**
+ * The cell and the frame at a given font size.
+ *
+ * Both are proportions of the text rather than constants beside it. The cell is the glyph,
+ * so it is the font by definition; the frame is the header, the prompt strip and the
+ * padding, and every one of those is sized in `em` in `TerminalPanel.css`, so it grows with
+ * the text it holds. A frame that stayed 62 while the text doubled would hand the emulator
+ * three rows the block has no room to draw.
+ *
+ * Neither clamps to `TERMINAL_FONT_RANGE`. These answer about the font they were given —
+ * holding 30 down to 24 here would report a grid nobody asked for and be impossible to see
+ * from the caller. Bounding the reader's choice is `clampTerminalFont`, once, where the
+ * choice is made.
+ */
+const scaleOf = (fontSize: number): number => {
+  const size = Number(fontSize);
+  return Number.isFinite(size) && size > 0 ? size / TERMINAL_FONT_SIZE : 1;
+};
+
+export function terminalCell(fontSize: number = TERMINAL_FONT_SIZE): Size {
+  const scale = scaleOf(fontSize);
+  return { width: TERMINAL_CELL.width * scale, height: TERMINAL_CELL.height * scale };
+}
+
+export function terminalChrome(fontSize: number = TERMINAL_FONT_SIZE): Size {
+  const scale = scaleOf(fontSize);
+  return { width: TERMINAL_CHROME.width * scale, height: TERMINAL_CHROME.height * scale };
+}
+
 export interface Point { x: number; y: number }
 export interface Size { width: number; height: number }
 
@@ -93,13 +150,25 @@ export function terminalOrigin(
  * From the block's **scene** size rather than from the pixels it currently covers: the
  * overlay scales with the zoom, so measuring the screen would make every pinch a resize.
  * What the reader resized is the shape, and that is what this answers about.
+ *
+ * The font size is the other input, and it has to be one: xterm sizes its canvas as
+ * `cols` × `rows` × the font, so a `+` that only made the text bigger would leave the grid
+ * derived from the old cell and the emulator drawing past the frame — which
+ * `TerminalPanel.css` clips rather than scrolls. A larger font in the same block is
+ * therefore fewer columns and fewer rows, reported through the same route a corner drag
+ * uses. It is defaulted, so a caller that has no opinion still gets the block's own.
  */
-export function terminalGrid(size: Size): { cols: number; rows: number } {
-  const usableWidth = Math.max(0, (size?.width ?? 0) - TERMINAL_CHROME.width);
-  const usableHeight = Math.max(0, (size?.height ?? 0) - TERMINAL_CHROME.height);
+export function terminalGrid(
+  size: Size,
+  fontSize: number = TERMINAL_FONT_SIZE
+): { cols: number; rows: number } {
+  const cell = terminalCell(fontSize);
+  const chrome = terminalChrome(fontSize);
+  const usableWidth = Math.max(0, (size?.width ?? 0) - chrome.width);
+  const usableHeight = Math.max(0, (size?.height ?? 0) - chrome.height);
   return {
-    cols: Math.max(20, Math.floor(usableWidth / TERMINAL_CELL.width)),
-    rows: Math.max(4, Math.floor(usableHeight / TERMINAL_CELL.height)),
+    cols: Math.max(20, Math.floor(usableWidth / cell.width)),
+    rows: Math.max(4, Math.floor(usableHeight / cell.height)),
   };
 }
 

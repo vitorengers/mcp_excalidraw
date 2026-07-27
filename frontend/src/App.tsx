@@ -30,8 +30,10 @@ import type { CardImplementState, DraftBlock, MirrorColumn } from '../../src/cor
 import type { ProjectBoard } from '../../src/core/project-board-types'
 import { TerminalPanel } from './components/TerminalPanel'
 import {
+  TERMINAL_FONT_SIZE,
   TERMINAL_KIND,
   TERMINAL_SIZE,
+  clampTerminalFont,
   terminalBlockElement,
   terminalGrid,
   terminalOrigin
@@ -142,12 +144,14 @@ const MIRROR_GAP = 120;
 const MIRROR_HOTKEY_CODE = 'KeyB';
 
 /**
- * The key that jumps the viewport to the terminal.
+ * The key that brings the terminal back, whatever "back" means at the time.
  *
  * `Alt+T`, alongside `Alt+B` for the mirror: the same reasoning about who owns which keys,
- * and `T` for the thing it brings into view. It does a little more than the mirror's key —
- * with no block on the board it places one first, which is the way back from having deleted
- * a shape that is derived and therefore never restored from anywhere.
+ * and `T` for the thing it brings into view. It does more than the mirror's key, because
+ * the terminal has three ways of being absent and this is the one answer to all of them —
+ * scroll to the block, place one if the board has none, and open a session if none is
+ * running. It used to stand down in exactly the two cases that needed it most: a shell that
+ * had exited, and a board where the first attempt to open one failed.
  */
 const TERMINAL_HOTKEY_CODE = 'KeyT';
 
@@ -169,6 +173,26 @@ const TERMINAL_RESIZE_DEBOUNCE_MS = 400;
  * while it is still standing where it was put.
  */
 const TERMINAL_AWAITING_MIRROR = 'awaitingMirror';
+
+/**
+ * How long to wait before putting an erased block back.
+ *
+ * Not immediately: the erase arrives as a scene change, and re-placing the block inside the
+ * handler for that change would put it under a pointer that is still erasing. Long enough
+ * for the gesture to finish, short enough that the block reads as never having gone.
+ */
+const TERMINAL_RESTORE_DELAY_MS = 250;
+
+/**
+ * Where the reader's terminal font size is kept.
+ *
+ * In `localStorage` alongside the theme, and global rather than per board: it is a viewing
+ * preference about the reader's eyes, not a fact about a project, and the same eyes read
+ * every board. Deliberately **not** `customData` — the block is derived and stripped at
+ * both doors, so a size stored there would be dropped on the way to the store and read as
+ * the block forgetting it.
+ */
+const TERMINAL_FONT_STORAGE_KEY = 'excalidraw-terminal-font-size';
 
 type CustomData = Record<string, unknown> | null | undefined;
 
@@ -1078,6 +1102,17 @@ function App(): JSX.Element {
   const autoSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const syncInFlightRef = useRef<boolean>(false)
   const suppressAutoSyncCountRef = useRef<number>(0)
+  /**
+   * A sync that was asked for while the counter was up, and still owes the server a write.
+   *
+   * `scheduleAutoSync` used to answer a refusal by returning, which armed nothing and left
+   * nothing to re-arm it: the change waited for some *later* change that happened not to be
+   * suppressed. That is #92 — a block dropped with `+` sat in the browser alone until the
+   * next thing the reader did carried it, and a research run clicked in between answered
+   * `Element … not found`. The refusal is remembered here instead, and honoured the moment
+   * the counter drops back to zero.
+   */
+  const autoSyncPendingRef = useRef<boolean>(false)
   const userInteractedRef = useRef<boolean>(false)
 
   /** The last set of rejected hotkey claims that was printed, so it is printed once. */
@@ -1223,6 +1258,21 @@ function App(): JSX.Element {
     })
   }
 
+  /**
+   * Drop the counter, and let through a sync that was refused while it was up.
+   *
+   * Every release goes through here, because a refusal remembered by `scheduleAutoSync` is
+   * only worth remembering if something acts on it, and this is the one moment the answer
+   * can change. Still suppressed after the decrement — updates nest — means the next
+   * release is the one that will do it.
+   */
+  const releaseAutoSyncSuppression = (): void => {
+    suppressAutoSyncCountRef.current = Math.max(0, suppressAutoSyncCountRef.current - 1)
+    if (suppressAutoSyncCountRef.current > 0) return
+    if (!autoSyncPendingRef.current) return
+    scheduleAutoSync()
+  }
+
   const applySceneUpdateWithoutAutoSync = (
     api: ExcalidrawImperativeAPI,
     scene: Parameters<ExcalidrawImperativeAPI['updateScene']>[0]
@@ -1230,7 +1280,7 @@ function App(): JSX.Element {
     suppressAutoSyncCountRef.current += 1
     api.updateScene(scene)
     setTimeout(() => {
-      suppressAutoSyncCountRef.current = Math.max(0, suppressAutoSyncCountRef.current - 1)
+      releaseAutoSyncSuppression()
     }, 0)
   }
 
@@ -1257,7 +1307,10 @@ function App(): JSX.Element {
     if (!autoSyncHoldRef.current) return
     clearTimeout(autoSyncHoldRef.current)
     autoSyncHoldRef.current = null
-    suppressAutoSyncCountRef.current = Math.max(0, suppressAutoSyncCountRef.current - 1)
+    // The new board's scene is already on screen by the time this runs, so a sync refused
+    // during the switch is now a sync of that board into its own store — which is what the
+    // hold was protecting, not something it was meant to lose.
+    releaseAutoSyncSuppression()
   }
 
   // ─── The GitHub project mirror ──────────────────────────────
@@ -1735,6 +1788,35 @@ function App(): JSX.Element {
    */
   const terminalOpenRef = useRef<boolean>(false)
 
+  /**
+   * Whether the shell behind the open session has gone, for the same paths.
+   *
+   * It is not the opposite of `terminalOpenRef`: a session that ended leaves the block on
+   * the board saying so, so the block is still drawn and the overlay still has state. What
+   * it changes is what the key does — start another shell rather than scroll to a dead one
+   * — and whether an erase is undone, because there is nothing left to protect once the
+   * shell has exited.
+   */
+  const terminalEndedRef = useRef<string | null>(null)
+
+  /**
+   * Where the block was last seen, so putting it back is putting it *back*.
+   *
+   * The reader is expected to move and resize this one, and a restore that re-anchored it
+   * past the mirror would answer an accidental erase by also undoing that. Reset on a board
+   * switch: the next board's block is not this one's.
+   *
+   * `awaitingMirror` comes along because it is a fact about *this* placement — a block put
+   * down before the first poll is standing in the mirror's slot, and an erase and a restore
+   * in that window must not lose the mark that gets it out again.
+   */
+  const terminalPlacementRef = useRef<
+    { x: number; y: number; width: number; height: number; awaitingMirror: boolean } | null
+  >(null)
+
+  /** A restore already scheduled, so a burst of scene changes queues one and not thirty. */
+  const terminalRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const [terminalRect, setTerminalRect] = useState<{
     rect: Rect
     zoom: number
@@ -1746,13 +1828,34 @@ function App(): JSX.Element {
   const terminalResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   /**
+   * How big the terminal's text is, before the board's zoom multiplies it.
+   *
+   * The reader's, set by the `+` and `-` on the block's header and remembered across
+   * reloads the way the theme is. It is an input to the grid rather than a display tweak:
+   * bigger text in the same block is fewer columns and fewer rows, because xterm sizes its
+   * canvas from `cols` × `rows` × the font and anything past the frame is clipped rather
+   * than scrolled. See `terminalGrid` in `src/core/terminal-block.ts`.
+   */
+  const [terminalFont, setTerminalFont] = useState<number>(() => {
+    if (typeof window === 'undefined') return TERMINAL_FONT_SIZE
+    try {
+      return clampTerminalFont(window.localStorage?.getItem(TERMINAL_FONT_STORAGE_KEY))
+    } catch (error) {
+      console.warn('Failed to read the terminal font size from localStorage:', error)
+      return TERMINAL_FONT_SIZE
+    }
+  })
+  /** The same value for the report path, which runs from timers and closes over its scope. */
+  const terminalFontRef = useRef<number>(terminalFont)
+
+  /**
    * Put the block on the board, if a session is open and it is not there already.
    *
    * Placed once and then left alone, unlike the mirror, which repaints on a timer: the
    * reader is expected to move and resize this one, and a redraw that re-anchored it every
    * twenty seconds would undo that. What does bring it back is a scene that was replaced
-   * wholesale — a reload, a tab switch — and the hotkey, which is the way back from having
-   * deleted it.
+   * wholesale — a reload, a tab switch — the hotkey, and the board noticing it has gone
+   * while the shell is still running (`scheduleTerminalRestore` below).
    *
    * Placed once is also why it goes on the *far left*, past the mirror: the documentation is
    * the only thing on this board that grows, it grows down and right, and a shape that never
@@ -1762,8 +1865,13 @@ function App(): JSX.Element {
     const api = excalidrawAPIRef.current
     if (!api || !terminalOpenRef.current) return
 
-    const scene = api.getSceneElementsIncludingDeleted()
-    const existing = scene.find((element) => !element.isDeleted && isTerminalElement(element))
+    // The live scene, deliberately: what goes back into `updateScene` runs through
+    // `convertToExcalidrawElements`, which rebuilds each element from its skeleton and has
+    // no `isDeleted` to rebuild from. Handed the tombstones, it returns them alive — so a
+    // block placed one tick after an erase used to put back everything else the eraser had
+    // just taken, including the shapes the reader meant to remove.
+    const scene = api.getSceneElements()
+    const existing = scene.find((element) => isTerminalElement(element))
     if (existing) {
       if (options.scroll) {
         api.scrollToContent([existing] as unknown as ExcalidrawElement[], { fitToViewport: true, animate: true })
@@ -1771,23 +1879,37 @@ function App(): JSX.Element {
       return
     }
 
-    // What this board authored, which is neither the mirror nor a terminal block that is on
-    // its way out. Only used when there is no mirror to measure against.
-    const anchors = scene.filter((element) => !element.isDeleted && !isDerivedElement(element))
-    const bounds = boundsOf(anchors)
+    // Where it was, if this board has had it on screen. Only a block that has never been
+    // placed is measured against the mirror: the arithmetic answers where a terminal *goes*,
+    // not where this one was dragged to before it was erased. The mark travels with the
+    // remembered placement, because a block erased before the first poll landed is still
+    // standing in the mirror's slot and still has to be moved out of it.
+    const remembered = terminalPlacementRef.current
+    const block = remembered
+      ? terminalBlockElement(
+        { x: remembered.x, y: remembered.y },
+        { width: remembered.width, height: remembered.height },
+        remembered.awaitingMirror ? { [TERMINAL_AWAITING_MIRROR]: true } : {}
+      )
+      : (() => {
+        // What this board authored, which is neither the mirror nor a terminal block that is
+        // on its way out. Only used when there is no mirror to measure against.
+        const bounds = boundsOf(scene.filter((element) => !isDerivedElement(element)))
 
-    // The mirror is what the block clears when the board has one, and its left edge is read
-    // from the shapes themselves rather than recomputed: `renderMirror` is the authority on
-    // where it went, and two derivations of one number is how they come to disagree.
-    const mirror = boundsOf(scene.filter((element) => !element.isDeleted && isMirrorElement(element)))
+        // The mirror is what the block clears when the board has one, and its left edge is
+        // read from the shapes themselves rather than recomputed: `renderMirror` is the
+        // authority on where it went, and two derivations of one number is how they come to
+        // disagree.
+        const mirror = boundsOf(scene.filter(isMirrorElement))
 
-    const block = terminalBlockElement(
-      terminalOrigin(bounds, mirror),
-      TERMINAL_SIZE,
-      // Placed against a mirror that has not been polled yet, so it is standing in the
-      // mirror's own slot. `renderMirror` moves it aside on the first board that lands.
-      mirror ? {} : { [TERMINAL_AWAITING_MIRROR]: true }
-    )
+        return terminalBlockElement(
+          terminalOrigin(bounds, mirror),
+          TERMINAL_SIZE,
+          // Placed against a mirror that has not been polled yet, so it is standing in the
+          // mirror's own slot. `renderMirror` moves it aside on the first board that lands.
+          mirror ? {} : { [TERMINAL_AWAITING_MIRROR]: true }
+        )
+      })()
     applySceneUpdateWithoutAutoSync(api, {
       elements: convertElementsPreservingImageProps([
         ...(scene as unknown as Partial<ExcalidrawElement>[]),
@@ -1805,6 +1927,32 @@ function App(): JSX.Element {
   }
 
   /**
+   * Put the block back after the board loses it while the shell is still running.
+   *
+   * Excalidraw's eraser respects exactly one thing — `locked` — and locking the block would
+   * take away the selection, the drag and the corner resize that *are* the interface here.
+   * So the block stays erasable and the erase is undone instead, which is also the only
+   * answer that keeps the shell reachable: nothing in the erase path kills it, so a block
+   * that stayed gone left a live process with the one-per-board slot taken, its output going
+   * into state nothing drew, and no way to Ctrl+C it — the keyboard reaches the shell only
+   * through the overlay.
+   *
+   * Only while there is something to protect. Once the shell has exited the block is a
+   * notice, and a notice the reader clears should stay cleared; Alt+T starts another.
+   *
+   * On a timer rather than at once, because this is noticed from inside the scene-change
+   * handler and the pointer that erased it may still be down.
+   */
+  const scheduleTerminalRestore = (): void => {
+    if (terminalRestoreTimerRef.current) return
+    terminalRestoreTimerRef.current = setTimeout(() => {
+      terminalRestoreTimerRef.current = null
+      if (!terminalOpenRef.current || terminalEndedRef.current) return
+      ensureTerminalBlock()
+    }, TERMINAL_RESTORE_DELAY_MS)
+  }
+
+  /**
    * Open a session for the active board, or adopt the one that is already running.
    *
    * 409 is not a failure here: a reload, a second window or a tab switched away and back
@@ -1819,6 +1967,7 @@ function App(): JSX.Element {
       const body = await response.json().catch(() => ({}))
       if (!response.ok && response.status !== 409) {
         terminalOpenRef.current = false
+        terminalEndedRef.current = null
         setTerminal({ status: null, output: '', ended: null })
         return
       }
@@ -1831,6 +1980,10 @@ function App(): JSX.Element {
         ? await fetch(apiUrl('/api/terminal')).then((r) => r.json()).catch(() => null)
         : null
       terminalOpenRef.current = true
+      // Set here as well as by the effect that follows `terminal.ended`: a shell that has
+      // just replaced one that exited must not be treated as ended for the frame or two
+      // before React commits, and the restore reads this ref rather than the state.
+      terminalEndedRef.current = null
       setTerminal({
         status: session
           ? {
@@ -1924,7 +2077,17 @@ function App(): JSX.Element {
     const element = elements.find((candidate) => !candidate.isDeleted && isTerminalElement(candidate))
     if (!element) {
       setTerminalRect((current) => (current === null ? current : null))
+      // This is where the block going missing is first noticed — an erase, a delete, a
+      // selection cleared with the rest of the canvas — and while a shell is running it is
+      // undone rather than reported.
+      scheduleTerminalRestore()
       return
+    }
+
+    // Where the reader has it, kept so a restore is a restore rather than a re-anchoring.
+    terminalPlacementRef.current = {
+      x: element.x, y: element.y, width: element.width, height: element.height,
+      awaitingMirror: customDataOf(element)[TERMINAL_AWAITING_MIRROR] === true
     }
 
     const [minX, minY, maxX, maxY] = getCommonBounds([element])
@@ -1962,15 +2125,27 @@ function App(): JSX.Element {
       return next
     })
 
-    // Reported on the end of the gesture rather than during it: a resize crosses every size
-    // between where it started and where it lands, and reporting each one would be a
-    // request per frame.
-    //
-    // A report that does not land is undone rather than forgotten. The signature stands for
-    // "the server knows this size", so leaving it set after a failed request would mean the
-    // block never mentions that size again — and with a PTY behind the session that is not
-    // a stale label any more, it is a shell repainting to a width the block no longer has.
-    const grid = terminalGrid({ width: element.width, height: element.height })
+    reportTerminalGrid({ width: element.width, height: element.height })
+  }
+
+  /**
+   * Tell the shell what grid the block now stands for.
+   *
+   * Two things move it: the corner being dragged, and the `+` and `-` on the header. They
+   * are the same event as far as the shell is concerned — the screen it repaints into got
+   * bigger or smaller — so they share one route, one debounce and one retry.
+   *
+   * Reported on the end of the gesture rather than during it: a resize crosses every size
+   * between where it started and where it lands, and reporting each one would be a request
+   * per frame. A run of clicks on `+` coalesces the same way.
+   *
+   * A report that does not land is undone rather than forgotten. The signature stands for
+   * "the server knows this size", so leaving it set after a failed request would mean the
+   * block never mentions that size again — and with a PTY behind the session that is not a
+   * stale label any more, it is a shell repainting to a width the block no longer has.
+   */
+  const reportTerminalGrid = (size: { width: number; height: number }): void => {
+    const grid = terminalGrid(size, terminalFontRef.current)
     const signature = `${grid.cols}x${grid.rows}`
     if (signature === terminalGridRef.current) return
     terminalGridRef.current = signature
@@ -1996,21 +2171,62 @@ function App(): JSX.Element {
     terminalResizeTimerRef.current = setTimeout(() => report(1), TERMINAL_RESIZE_DEBOUNCE_MS)
   }
 
+  /**
+   * The reader moved the text, from the buttons on the block's header.
+   *
+   * Clamped here, once, rather than in the arithmetic: `terminalGrid` answers about the
+   * font it is given, and holding a size down inside it would report a grid nobody chose.
+   */
+  const changeTerminalFont = (next: number): void => {
+    const size = clampTerminalFont(next)
+    setTerminalFont((current) => (current === size ? current : size))
+  }
+
+  // Remembered, and the grid re-derived from the block it is already on. A font change is a
+  // resize the reader did not drag: the block kept its size and the screen inside it did
+  // not, so the shell has to be told the same way a corner drag tells it.
+  useEffect(() => {
+    terminalFontRef.current = terminalFont
+    try {
+      window.localStorage?.setItem(TERMINAL_FONT_STORAGE_KEY, String(terminalFont))
+    } catch (error) {
+      console.warn('Failed to save the terminal font size to localStorage:', error)
+    }
+    // The block's own size, from where the restore path already keeps it: a font change is
+    // a resize the reader did not drag, so it re-derives the grid from the same shape.
+    const placement = terminalPlacementRef.current
+    if (placement) reportTerminalGrid(placement)
+    // Only the font: this is what the reader changed, and the block's own size arrives
+    // through `syncTerminalBlock` with its own report.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terminalFont])
+
   // One session per board, opened when the board is shown. Nothing is closed on the way
   // out: a terminal you switched away from keeps its shell and its transcript, and the
   // server closes every session when it goes down.
   useEffect(() => {
     if (!excalidrawAPI) return
     terminalOpenRef.current = false
+    terminalEndedRef.current = null
     terminalGridRef.current = ''
+    // The next board's block is not this one's, and a restore there must measure the
+    // content rather than reuse where the reader had dragged a different project's.
+    terminalPlacementRef.current = null
     setTerminal({ status: null, output: '', ended: null })
     setTerminalRect(null)
     void openTerminal()
   }, [activeWorkspace, excalidrawAPI])
 
+  // The state is what the block draws; the ref is what the handlers read. Both paths that
+  // set `ended` go through here, including the socket's `terminal_exit`.
+  useEffect(() => {
+    terminalEndedRef.current = terminal.ended
+  }, [terminal.ended])
+
   useEffect(() => {
     return () => {
       if (terminalResizeTimerRef.current) clearTimeout(terminalResizeTimerRef.current)
+      if (terminalRestoreTimerRef.current) clearTimeout(terminalRestoreTimerRef.current)
     }
   }, [])
 
@@ -2019,7 +2235,6 @@ function App(): JSX.Element {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.code !== TERMINAL_HOTKEY_CODE || !event.altKey || event.ctrlKey || event.metaKey) return
-      if (!terminalOpenRef.current) return
 
       // A text field owns the keyboard — including this feature's own prompt, where Alt+T
       // has to be a keystroke rather than a jump.
@@ -2033,6 +2248,17 @@ function App(): JSX.Element {
       if ((api.getAppState() as unknown as Record<string, unknown>).editingTextElement) return
 
       event.preventDefault()
+
+      // The key used to stand down here, which made it inert in the two cases a reader
+      // actually reaches for it: a shell that exited, and a board whose own attempt to open
+      // one failed. Both are answered by asking for a session — `openTerminal` adopts a 409,
+      // so a key pressed while one is quietly already running draws that one instead of
+      // starting a second.
+      if (!terminalOpenRef.current || terminalEndedRef.current) {
+        void openTerminal().then(() => ensureTerminalBlock({ scroll: true }))
+        return
+      }
+
       ensureTerminalBlock({ scroll: true })
     }
 
@@ -3090,18 +3316,36 @@ function App(): JSX.Element {
     if (!userInteractedRef.current) {
       return
     }
+    // Refused, not dropped: `releaseAutoSyncSuppression` comes back to it. Returning
+    // without this is #92 — the change is left with no timer behind it and nothing that
+    // would ever arm one.
     if (suppressAutoSyncCountRef.current > 0) {
+      autoSyncPendingRef.current = true
       return
     }
+    autoSyncPendingRef.current = false
     if (autoSyncTimerRef.current) {
       clearTimeout(autoSyncTimerRef.current)
     }
 
     autoSyncTimerRef.current = setTimeout(() => {
       autoSyncTimerRef.current = null
-      if (suppressAutoSyncCountRef.current > 0 || syncInFlightRef.current) {
+      // Suppressed by the time it fired: the debounce it waited out is spent, so the write
+      // is owed again rather than forgotten.
+      if (suppressAutoSyncCountRef.current > 0) {
+        autoSyncPendingRef.current = true
         return
       }
+      // A sync already on the wire cannot be assumed to carry this change — it read the
+      // scene before it. Wait out another debounce rather than returning, which is the same
+      // silent loss one branch up.
+      if (syncInFlightRef.current) {
+        scheduleAutoSync()
+        return
+      }
+      // Nothing is owed once this runs: it writes the scene as it stands, which is every
+      // change that was refused while the timer was out.
+      autoSyncPendingRef.current = false
       void syncToBackend({ silent: true })
     }, AUTO_SYNC_DEBOUNCE_MS)
   }
@@ -3294,6 +3538,8 @@ function App(): JSX.Element {
             status={terminal.status}
             ended={terminal.ended}
             onInput={sendTerminalInput}
+            fontSize={terminalFont}
+            onFontSize={changeTerminalFont}
           />
         </div>
       </div>
