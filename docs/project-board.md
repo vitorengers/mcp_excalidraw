@@ -156,22 +156,31 @@ until the issue exists. The mirror leaves room for it at the top of its column.
 Blocks stack **newest on top**, the same rule the cards follow, ordered by the
 `draftCreatedAt` the `+` stamps onto each one — a timestamp seeded into an id would have been a
 weaker key, and an id is the one field anything on the canvas is free to rewrite. A block made
-before that field existed carries none; those keep the order the scene holds them in, below the
-dated ones, so an old scene still lays out the same way twice running.
+before that field existed carries none; for those the stamp in the id is read instead, and a block
+with neither keeps the order the scene holds it in, below the dated ones, so an old scene still
+lays out the same way twice running.
 
-That field does not survive the browser, so the id is read as a fallback. `draftCreatedAt` is
-written on every block and comes back from `POST /api/elements` unchanged, but by the time a block
-is in the scene its `customData` holds `kind`, `projectBoardDraft` and `sectionOptionId` — written
-in the same object literal — and not this one. Something between `instantiateIssueBlock` and the
-scene drops it. Without the fallback every column sorted by arrival instead:
-`(b.createdAt ?? 0) - (a.createdAt ?? 0)` is zero for every pair, the sort is stable, and the
-newest block landed at the bottom. The weak key that survives beats the strong one that does not.
+**Nothing drops that field.** This page used to say something between `instantiateIssueBlock` and
+the scene did, and that the id was the only key that survived. It was wrong, and the code was
+patched around it. `draftCreatedAt` survives `convertToExcalidrawElements`, the round trip through
+`POST /api/elements`, and a reload: with the fallback taken out altogether the drafts still stack
+newest-first, which is the only way to show that the field rather than the id is doing the work,
+because the `+` builds both from one `Date.now()` and they otherwise agree by construction.
+`scripts/check-board-drafts-browser.mjs` now reads the field back out of the scene after a click,
+and then sets one block's field against what its own id says to prove which of the two is read.
 
-This was invisible for a while because the check that covers it could not click the `+` at all:
-its server ran without `EXCALIDRAW_LIBRARY`, the library came back empty, and
-`addIssueBlockToColumn` warns to the console and returns when no template carries
-`customData.kind === "issue"`. Every click was a silent no-op, so the ordering assertions never
-reached the thing they were about.
+What that belief was actually looking at is worth keeping, because it is a trap this project has
+in writing (`docs/trap-stale-server.md`): a scene whose blocks carry exactly `kind`,
+`projectBoardDraft` and `sectionOptionId` and no timestamp is what the `+` wrote *before* the field
+was added. The browser check drives a Chrome against `dist/frontend`, never against the source, so
+a `vite build` that was not re-run — or an old server still serving the one it has — is enough to
+read the previous version's behaviour off a screen and take it for the current one's. The reading
+was of an artifact, not of a bug.
+
+That run was also the first in which the `+` could be clicked at all: the check's server ran
+without `EXCALIDRAW_LIBRARY`, the library came back empty, and `addIssueBlockToColumn` warns to the
+console and returns when no template carries `customData.kind === "issue"`. Every click was a
+silent no-op, so the ordering assertions had never reached the thing they were about.
 
 A block grows as its title is typed, because an Excalidraw container grows to fit the text bound
 to it, and everything below it in the column moves down as it does — on the keystroke, not on the
