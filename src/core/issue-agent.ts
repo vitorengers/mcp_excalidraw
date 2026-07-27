@@ -42,7 +42,18 @@ well be in something else. Every development artifact in this project is English
 observation verbatim when its exact wording is the evidence; translate everything else.
 
 Create the issue with \`gh\` in this repository, add it to the configured project, and return
-only the issue URL on a line of its own.`;
+only the issue URL on a line of its own.
+
+You may put helpers to work — sub-agents, background tasks, whatever the investigation
+needs. Two things stay yours and do not transfer with the work:
+
+- **Creating the issue.** A helper investigates and reports its findings back to you; it
+  never runs \`gh issue create\` itself. Nothing downstream counts issues, so three helpers
+  that each create one leave three issues for one observation and no error anywhere.
+- **Finishing.** Only what *you* print is read. Whoever did the work, and whatever a helper
+  already created, you print the issue URL yourself, last, on a line of its own — and you
+  wait for every helper to come back before you do. A run that ends without that line leaves
+  the board waiting forever on an issue that already exists.`;
 
 /**
  * PATH for the agent, with the GitHub CLI added when it is missing.

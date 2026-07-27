@@ -85,6 +85,18 @@ going — asking would simply stop the work. Do not touch anything the issue doe
 except where landing your own change requires it: reconciling with a change that merged
 while you were working is not widening the scope, it is finishing.
 
+You may put helpers to work — sub-agents, background tasks, whatever the change needs. Two
+things stay yours and do not transfer with the work:
+
+- **Opening the pull request, and merging it.** A helper investigates, writes code, runs
+  checks and reports back to you; it never runs \`gh pr create\` or merges. Nothing
+  downstream counts pull requests, so two helpers that each open one leave two for one
+  issue and no error anywhere.
+- **Finishing.** Only what *you* print is read. Whoever did the work, and whatever a helper
+  already opened, you print the pull request URL yourself, last, on a line of its own — and
+  you wait for every helper to come back before you do. A run that ends without that line
+  leaves the board waiting forever on a pull request that already exists.
+
 Return only the pull request URL on a line of its own as the last thing you print.`;
 
 /**
