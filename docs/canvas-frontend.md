@@ -9,8 +9,8 @@
 - **The documentation panel** — `DocsPanel.tsx` holds what it shows, `AnchoredDocsPanel.tsx`
   where it sits; the Docs block card covers both
 - **The collapsible image and issue blocks**, both hung off `customData`
-- **The terminal** (`TerminalPanel.tsx`) — a shell the server owns, drawn as an overlay over a
-  block on the right of the board; the Terminal card has it
+- **The terminal** (`TerminalPanel.tsx`) — a shell the server owns on a PTY, drawn by xterm.js
+  as an overlay over a block on the right of the board; the Terminal card has it
 - **Autosync** back into the active workspace's store
 
 Everything project-specific lives in `customData`, never in a parallel data structure. That is
@@ -63,6 +63,7 @@ startup, and a click landing on the label instead of the box. Type-checking says
 any of them.
 
 Several features now drive a real Chrome over the DevTools protocol to answer for themselves —
-`scripts/check-board-drafts-browser.mjs`, `scripts/check-terminal-browser.mjs` and
-`scripts/check-refresh-connect-browser.mjs` among them, all through `ws` rather than a
-browser-automation dependency. Everything else in here is still verified by hand.
+`scripts/check-board-drafts-browser.mjs`, `scripts/check-terminal-browser.mjs`,
+`scripts/check-terminal-ansi-browser.mjs` and `scripts/check-refresh-connect-browser.mjs` among
+them, all through `ws` rather than a browser-automation dependency. Everything else in here is
+still verified by hand.

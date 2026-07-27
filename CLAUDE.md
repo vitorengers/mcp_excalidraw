@@ -40,12 +40,39 @@ workspace, start their own canvas server on a free port and kill it —
 `--url http://127.0.0.1:3838` and run against a server started separately, which must be a
 separate, empty instance rather than the board you are using.
 
+## Every change updates both halves of the board
+
+The Board Tool board (`docs/board.excalidraw`) is cut into two marked sections, each with a key
+that scrolls onto it — see [docs/board-sections.md](docs/board-sections.md).
+
+- **Project structure** (`Alt+P`) — what the tool is: the architecture, the blocks on the canvas,
+  how to try it. Undated, always describing the present.
+- **Development** (`Alt+G`) — how it got that way: the traps already paid for, what is next, and
+  [docs/development-log.md](docs/development-log.md), one dated entry per merged pull request.
+
+An implementation is **not finished** until both are true of what it just landed:
+
+1. **The log has its entry**, at the top of the table, written before the merge: the ISO date, the
+   issue, the pull request, and what was decided — the decision, not the diff. `git log` already
+   has the diff. Because the entry is written first, the log runs one merge ahead of `git log`;
+   the check only fails the other way, on a merge with no entry.
+2. **The structure map reflects any architecture or feature change.** The boundary is a file, a
+   route, a block kind or a feature added or removed. A race fixed and a label repositioned change
+   no architecture and belong in the log only — a rule that fires on every change gets ignored.
+3. **A new tracked `docs/*.md` gets a card**, in whichever section it belongs to. A document no
+   block points at is a document nobody opens.
+
+`node scripts/check-board-map.mjs` enforces all three, plus the section marks themselves. This is
+board data, so it lands the same way everything else does: on the branch, in the pull request,
+never straight onto `main`.
+
 ## Verifying
 
 ```
 ./node_modules/.bin/tsc          # the server
 ./node_modules/.bin/vite build   # the frontend
 node scripts/check-<name>.mjs
+node scripts/check-board-map.mjs # the board and the log still describe what landed
 ```
 
 **Compiling is not working, and this project has paid for that repeatedly.** Three real defects in

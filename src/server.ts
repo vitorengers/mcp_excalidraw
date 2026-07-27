@@ -31,7 +31,14 @@ import { z } from 'zod';
 import WebSocket from 'ws';
 import { isMainModule } from './core/entry.js';
 import { writePidFile, removePidFile } from './core/pidfile.js';
-import { loadWorkspaces, Workspace } from './core/workspaces.js';
+import {
+  addWorkspace,
+  loadWorkspaces,
+  readWorkspaceConfig,
+  writeWorkspaceConfig,
+  Workspace
+} from './core/workspaces.js';
+import { listDirectories } from './core/directory-browse.js';
 import { runIssueAgent } from './core/issue-agent.js';
 import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
 import {
@@ -44,7 +51,7 @@ import {
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
 import type { IssueDetail } from './core/github-issue.js';
 import { IssueMemo, memoWindow } from './core/issue-memo.js';
-import { TerminalSession, shellCommandFrom } from './core/terminal-session.js';
+import { TerminalSession, loadPty, shellCommandFrom } from './core/terminal-session.js';
 import { issueBlockAppearance } from './core/issue-appearance.js';
 import { runImplementAgent } from './core/implement-agent.js';
 import {
@@ -1030,6 +1037,97 @@ app.get('/api/workspaces', async (_req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to load workspaces:', error);
     res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/**
+ * The guard every route below shares.
+ *
+ * These write files this machine owns, and one of them lists its directories, so reaching
+ * them from the network would be strictly worse than reaching the routes that only read a
+ * project. Same shape as the issue block's guard, and for the same reason.
+ */
+function offLoopback(res: Response, what: string): boolean {
+  if (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost') return false;
+  res.status(403).json({
+    success: false,
+    error: `${what} only while the server is bound to loopback.`
+  });
+  return true;
+}
+
+/**
+ * Add a project to the registry.
+ *
+ * The registry is re-read per request, so an appended entry is live on the next call with
+ * no restart — which is what makes a `+` on the tab strip cheap rather than a feature with
+ * a server bounce in the middle of it.
+ */
+app.post('/api/workspaces', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Projects are added')) return;
+
+  try {
+    const result = await addWorkspace(process.env.EXCALIDRAW_WORKSPACES, {
+      path: typeof req.body?.path === 'string' ? req.body.path : '',
+      ...(typeof req.body?.id === 'string' ? { id: req.body.id } : {}),
+      ...(typeof req.body?.distro === 'string' ? { distro: req.body.distro } : {})
+    });
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, error: result.error });
+    }
+    logger.info(`Workspace "${result.workspace.id}" added at ${result.workspace.path}`);
+    res.status(201).json({ success: true, workspace: result.workspace, workspaces: result.workspaces });
+  } catch (error) {
+    logger.error('Failed to add a workspace:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/** A project's config as it is on disk, which is what an editor has to start from. */
+app.get('/api/workspaces/:id/config', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Project settings are read')) return;
+
+  try {
+    const result = await readWorkspaceConfig(process.env.EXCALIDRAW_WORKSPACES, req.params.id ?? '');
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, error: result.error });
+    }
+    res.json({ success: true, config: result.config });
+  } catch (error) {
+    logger.error('Failed to read a workspace config:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.put('/api/workspaces/:id/config', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Project settings are saved')) return;
+
+  try {
+    const result = await writeWorkspaceConfig(
+      process.env.EXCALIDRAW_WORKSPACES,
+      req.params.id ?? '',
+      req.body?.config
+    );
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, error: result.error });
+    }
+    res.json({ success: true, workspace: result.workspace, workspaces: result.workspaces });
+  } catch (error) {
+    logger.error('Failed to write a workspace config:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/** The project picker's other half — see `src/core/directory-browse.ts` for why. */
+app.get('/api/fs/directories', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Directories are listed')) return;
+
+  const asked = typeof req.query.path === 'string' ? req.query.path : '';
+  try {
+    const listing = await listDirectories(asked);
+    res.json({ success: true, ...listing });
+  } catch (error) {
+    res.status(400).json({ success: false, error: `Cannot list ${asked || 'the roots'}: ${(error as Error).message}` });
   }
 });
 
@@ -2100,7 +2198,11 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: `Workspace is unusable: ${workspace.error}` });
   }
 
-  const shellCommand = shellCommandFrom(TERMINAL_SETTING, workspace);
+  // Which mode this session will be in has to be settled before the shell is named: the
+  // default shell is spelled differently for each. PowerShell's `-Command -` refuses to
+  // start at all when stdin is a terminal, so a PTY session asks for the plain REPL.
+  const pty = await loadPty();
+  const shellCommand = shellCommandFrom(TERMINAL_SETTING, workspace, pty ? 'pty' : 'pipe');
   if (!shellCommand) {
     return res.status(404).json({
       success: false,
@@ -2122,11 +2224,15 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
         if (terminalSessions.get(workspaceId) === session) terminalSessions.delete(workspaceId);
         broadcast({ type: 'terminal_exit', code } as WebSocketMessage, workspaceId);
       }
-    });
+    }, pty);
   } catch (error) {
     logger.error('Could not start a terminal:', error);
     return res.status(500).json({ success: false, error: (error as Error).message });
   }
+
+  // A ConPTY reports no process id until its console host has connected, and a session
+  // announced before then would carry a 0 into the block and into `taskkill` on the way out.
+  await session.started;
 
   terminalSessions.set(workspaceId, session);
   broadcast({
