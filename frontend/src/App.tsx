@@ -25,6 +25,14 @@ import {
 } from '../../src/core/project-board-layout'
 import type { CardImplementState, DraftBlock, MirrorColumn } from '../../src/core/project-board-layout'
 import type { ProjectBoard } from '../../src/core/project-board-types'
+import { TerminalPanel } from './components/TerminalPanel'
+import {
+  TERMINAL_KIND,
+  TERMINAL_SIZE,
+  terminalBlockElement,
+  terminalGrid,
+  terminalOrigin
+} from '../../src/core/terminal-block'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
@@ -128,6 +136,19 @@ const MIRROR_GAP = 120;
  */
 const MIRROR_HOTKEY_CODE = 'KeyB';
 
+/**
+ * The key that jumps the viewport to the terminal.
+ *
+ * `Alt+T`, alongside `Alt+B` for the mirror: the same reasoning about who owns which keys,
+ * and `T` for the thing it brings into view. It does a little more than the mirror's key —
+ * with no block on the board it places one first, which is the way back from having deleted
+ * a shape that is derived and therefore never restored from anywhere.
+ */
+const TERMINAL_HOTKEY_CODE = 'KeyT';
+
+/** How long to wait before telling the server the block was resized. */
+const TERMINAL_RESIZE_DEBOUNCE_MS = 400;
+
 type CustomData = Record<string, unknown> | null | undefined;
 
 const customDataOf = (element: { customData?: CustomData } | undefined): Record<string, unknown> =>
@@ -136,6 +157,21 @@ const customDataOf = (element: { customData?: CustomData } | undefined): Record<
 /** Elements the mirror owns. Everything else on the canvas is the board's own drawing. */
 const isMirrorElement = (element: { customData?: CustomData }): boolean =>
   customDataOf(element).kind === MIRROR_KIND;
+
+/** The block the terminal is drawn over. */
+const isTerminalElement = (element: { customData?: CustomData }): boolean =>
+  customDataOf(element).kind === TERMINAL_KIND;
+
+/**
+ * Shapes this board does not author, and therefore never saves.
+ *
+ * The mirror is rebuilt from GitHub and the terminal exists for as long as its shell does.
+ * Both are stripped before the autosync, and both again by `scripts/export-board.mjs` —
+ * two doors for one rule, because the element store is shared and only one of them needs
+ * to be missed.
+ */
+const isDerivedElement = (element: { customData?: CustomData }): boolean =>
+  isMirrorElement(element) || isTerminalElement(element);
 
 /**
  * A block the `+` dropped, waiting for its run to produce a real card.
@@ -1063,7 +1099,11 @@ function App(): JSX.Element {
     const tombstones = scene.filter((element) => element.isDeleted && !isMirrorElement(element))
     const own = scene.filter((element) => !element.isDeleted && !isMirrorElement(element))
     const drafts = own.filter(isDraftBlock)
+    // The terminal is left out of the measurement for the reason the drafts are: it is
+    // placed *from* the board's own bounds, on the other side, so measuring against it
+    // would walk the mirror further left every time the terminal moved right.
     const anchors = own.filter((element) => !isDraftBlock(element)
+      && !isTerminalElement(element)
       && !(element.containerId && drafts.some((draft) => draft.id === element.containerId)))
 
     const width = boardWidth(board.sections.length)
@@ -1410,6 +1450,265 @@ function App(): JSX.Element {
     renderMirror(board)
   }
 
+  // ─── The terminal ───────────────────────────────────────────
+  //
+  // A block on the right of the board, mirroring the mirror: the project's own columns on
+  // one side, a shell running in the project on the other. The shape is derived, like the
+  // mirror's cards — it is rebuilt whenever a session is there to draw it, and it is stripped
+  // before the autosync and before the export, because a saved terminal is a dead frame
+  // around a session that has ended.
+
+  interface TerminalStatus {
+    cwd: string
+    shell: string
+    cols: number
+    rows: number
+  }
+
+  const [terminal, setTerminal] = useState<{
+    status: TerminalStatus | null
+    output: string
+    /** Why the block is inert, once it is: the shell exited, or the server refused. */
+    ended: string | null
+  }>({ status: null, output: '', ended: null })
+
+  /**
+   * Whether a session is open, for the paths that cannot read state.
+   *
+   * The WebSocket handlers are attached at mount and close over a scope where this is still
+   * its initial value, and the scene-replacing paths run from inside them. Same reason
+   * `activeWorkspaceRef` exists.
+   */
+  const terminalOpenRef = useRef<boolean>(false)
+
+  const [terminalRect, setTerminalRect] = useState<{
+    rect: Rect
+    zoom: number
+    suppressed: boolean
+  } | null>(null)
+
+  /** The grid last reported, so a pan or a re-render does not re-report the same size. */
+  const terminalGridRef = useRef<string>('')
+  const terminalResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /**
+   * Put the block on the board, if a session is open and it is not there already.
+   *
+   * Placed once and then left alone, unlike the mirror, which repaints on a timer: the
+   * reader is expected to move and resize this one, and a redraw that re-anchored it every
+   * twenty seconds would undo that. What does bring it back is a scene that was replaced
+   * wholesale — a reload, a tab switch — and the hotkey, which is the way back from having
+   * deleted it.
+   */
+  const ensureTerminalBlock = (options: { scroll?: boolean } = {}): void => {
+    const api = excalidrawAPIRef.current
+    if (!api || !terminalOpenRef.current) return
+
+    const scene = api.getSceneElementsIncludingDeleted()
+    const existing = scene.find((element) => !element.isDeleted && isTerminalElement(element))
+    if (existing) {
+      if (options.scroll) {
+        api.scrollToContent([existing] as unknown as ExcalidrawElement[], { fitToViewport: true, animate: true })
+      }
+      return
+    }
+
+    // "The right side" measured against what this board authored, which is neither the
+    // mirror on the left nor a terminal block that is on its way out.
+    const anchors = scene.filter((element) => !element.isDeleted && !isDerivedElement(element))
+    const bounds = anchors.length > 0
+      ? (() => {
+        const [minX, minY, maxX, maxY] = getCommonBounds(anchors as readonly NonDeletedExcalidrawElement[])
+        return { minX, minY, maxX, maxY }
+      })()
+      : null
+
+    const block = terminalBlockElement(terminalOrigin(bounds), TERMINAL_SIZE)
+    applySceneUpdateWithoutAutoSync(api, {
+      elements: convertElementsPreservingImageProps([
+        ...(scene as unknown as Partial<ExcalidrawElement>[]),
+        block as unknown as Partial<ExcalidrawElement>
+      ]) as ExcalidrawElement[],
+      captureUpdate: CaptureUpdateAction.NEVER
+    })
+
+    if (options.scroll) {
+      const placed = api.getSceneElements().filter((element) => isTerminalElement(element))
+      if (placed.length > 0) {
+        api.scrollToContent(placed as unknown as ExcalidrawElement[], { fitToViewport: true, animate: true })
+      }
+    }
+  }
+
+  /**
+   * Open a session for the active board, or adopt the one that is already running.
+   *
+   * 409 is not a failure here: a reload, a second window or a tab switched away and back
+   * all arrive at a server that still owns the shell, and the right answer to "there is
+   * already one" is to draw it rather than to start another. 404 and 403 are the guards —
+   * the feature is off, or the server is reachable from the network — and both mean no
+   * block at all.
+   */
+  const openTerminal = async (): Promise<void> => {
+    try {
+      const response = await fetch(apiUrl('/api/terminal'), { method: 'POST' })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok && response.status !== 409) {
+        terminalOpenRef.current = false
+        setTerminal({ status: null, output: '', ended: null })
+        return
+      }
+
+      const session = body?.session ?? null
+      // A session that was already running has a transcript, and the socket only replays it
+      // on connect — which for this tab already happened. Read once, and only in that case:
+      // a session that has just started has nothing to catch up on.
+      const caught = response.status === 409
+        ? await fetch(apiUrl('/api/terminal')).then((r) => r.json()).catch(() => null)
+        : null
+      terminalOpenRef.current = true
+      setTerminal({
+        status: session
+          ? { cwd: session.cwd, shell: session.shell, cols: session.cols, rows: session.rows }
+          : null,
+        output: typeof caught?.scrollback === 'string' ? caught.scrollback : '',
+        ended: null
+      })
+      ensureTerminalBlock()
+    } catch (error) {
+      console.warn('Could not open a terminal:', error)
+    }
+  }
+
+  /** Send one line to the shell. The echo comes back over the socket, like any other output. */
+  const sendTerminalInput = (line: string): void => {
+    void fetch(apiUrl('/api/terminal/input'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: `${line}\n` })
+    }).catch((error) => console.warn('Could not send to the terminal:', error))
+  }
+
+  /**
+   * Follow the block: where it is on screen, and what size it now stands for.
+   *
+   * The rect is in viewport coordinates, the same arithmetic the documentation card uses,
+   * so the overlay pans and zooms with the shape. The grid is in *scene* units, so a pinch
+   * is not a resize — what the reader resized is the block, and that is what the server is
+   * told about.
+   */
+  const syncTerminalBlock = (
+    elements: readonly ExcalidrawElement[] | undefined,
+    appState: Record<string, any> | undefined
+  ): void => {
+    if (!appState || !elements || !terminalOpenRef.current) {
+      setTerminalRect((current) => (current === null ? current : null))
+      return
+    }
+
+    const element = elements.find((candidate) => !candidate.isDeleted && isTerminalElement(candidate))
+    if (!element) {
+      setTerminalRect((current) => (current === null ? current : null))
+      return
+    }
+
+    const [minX, minY, maxX, maxY] = getCommonBounds([element])
+    const topLeft = sceneCoordsToViewportCoords({ sceneX: minX, sceneY: minY }, appState as any)
+    const bottomRight = sceneCoordsToViewportCoords({ sceneX: maxX, sceneY: maxY }, appState as any)
+    const next = {
+      rect: {
+        x: topLeft.x - appState.offsetLeft,
+        y: topLeft.y - appState.offsetTop,
+        width: bottomRight.x - topLeft.x,
+        height: bottomRight.y - topLeft.y
+      },
+      zoom: appState.zoom?.value ?? 1,
+      // Hidden mid-gesture, the way the documentation card is: a DOM overlay lags a shape
+      // being dragged by a frame, which reads as the terminal coming loose from its block.
+      suppressed: Boolean(
+        appState.selectedElementsAreBeingDragged ||
+        appState.isRotating ||
+        appState.resizingElement
+      )
+    }
+
+    setTerminalRect((current) => {
+      if (
+        current &&
+        current.rect.x === next.rect.x &&
+        current.rect.y === next.rect.y &&
+        current.rect.width === next.rect.width &&
+        current.rect.height === next.rect.height &&
+        current.zoom === next.zoom &&
+        current.suppressed === next.suppressed
+      ) {
+        return current
+      }
+      return next
+    })
+
+    // Reported on the end of the gesture rather than during it: a resize crosses every size
+    // between where it started and where it lands, and reporting each one would be a
+    // request per frame.
+    const grid = terminalGrid({ width: element.width, height: element.height })
+    const signature = `${grid.cols}x${grid.rows}`
+    if (signature === terminalGridRef.current) return
+    terminalGridRef.current = signature
+    if (terminalResizeTimerRef.current) clearTimeout(terminalResizeTimerRef.current)
+    terminalResizeTimerRef.current = setTimeout(() => {
+      terminalResizeTimerRef.current = null
+      void fetch(apiUrl('/api/terminal/resize'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(grid)
+      }).catch(() => undefined)
+    }, TERMINAL_RESIZE_DEBOUNCE_MS)
+  }
+
+  // One session per board, opened when the board is shown. Nothing is closed on the way
+  // out: a terminal you switched away from keeps its shell and its transcript, and the
+  // server closes every session when it goes down.
+  useEffect(() => {
+    if (!excalidrawAPI) return
+    terminalOpenRef.current = false
+    terminalGridRef.current = ''
+    setTerminal({ status: null, output: '', ended: null })
+    setTerminalRect(null)
+    void openTerminal()
+  }, [activeWorkspace, excalidrawAPI])
+
+  useEffect(() => {
+    return () => {
+      if (terminalResizeTimerRef.current) clearTimeout(terminalResizeTimerRef.current)
+    }
+  }, [])
+
+  // On `window`, for the reason Alt+B is: Excalidraw never sees a key pressed outside its
+  // canvas, and the point of this one is to work from anywhere on the page.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.code !== TERMINAL_HOTKEY_CODE || !event.altKey || event.ctrlKey || event.metaKey) return
+      if (!terminalOpenRef.current) return
+
+      // A text field owns the keyboard — including this feature's own prompt, where Alt+T
+      // has to be a keystroke rather than a jump.
+      const active = document.activeElement as HTMLElement | null
+      if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) {
+        return
+      }
+
+      const api = excalidrawAPIRef.current
+      if (!api) return
+      if ((api.getAppState() as unknown as Record<string, unknown>).editingTextElement) return
+
+      event.preventDefault()
+      ensureTerminalBlock({ scroll: true })
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   useEffect(() => {
     return () => {
       if (autoSyncTimerRef.current) {
@@ -1618,6 +1917,9 @@ function App(): JSX.Element {
             elements: convertedElements,
             captureUpdate: CaptureUpdateAction.NEVER
           })
+          // The store holds no terminal block — it is derived and never synced — and this
+          // just replaced the scene with what the store holds.
+          ensureTerminalBlock()
         }
       }
 
@@ -1730,6 +2032,9 @@ function App(): JSX.Element {
           if ((data as any).files) {
             excalidrawAPI.addFiles(Object.values((data as any).files))
           }
+          // The scene was just replaced wholesale, and the terminal's block is derived, so
+          // the store this arrived from has never heard of it. Put it back.
+          ensureTerminalBlock()
           break
 
         case 'files_added':
@@ -2011,6 +2316,61 @@ function App(): JSX.Element {
           }
           break
 
+        // ─── The terminal ────────────────────────────────────
+        //
+        // The only messages here that carry bytes rather than shapes. They are per-board,
+        // like every element event, because a shell belongs to one project.
+
+        case 'terminal_session': {
+          const session = (data as any).session ?? null
+          terminalOpenRef.current = Boolean(session)
+          setTerminal({
+            status: session
+              ? { cwd: session.cwd, shell: session.shell, cols: session.cols, rows: session.rows }
+              : null,
+            // The replay, whole: this arrives on connect for a session that was already
+            // running, so it is a transcript rather than an increment.
+            output: typeof (data as any).scrollback === 'string' ? (data as any).scrollback : '',
+            ended: null
+          })
+          ensureTerminalBlock()
+          break
+        }
+
+        case 'terminal_output':
+          setTerminal((current) => (
+            current.status === null
+              ? current
+              : { ...current, output: `${current.output}${(data as any).data ?? ''}` }
+          ))
+          break
+
+        case 'terminal_resized':
+          setTerminal((current) => (
+            current.status === null
+              ? current
+              : {
+                ...current,
+                status: {
+                  ...current.status,
+                  cols: (data as any).cols ?? current.status.cols,
+                  rows: (data as any).rows ?? current.status.rows
+                }
+              }
+          ))
+          break
+
+        case 'terminal_exit':
+          // The block stays on the board and says what happened. Removing it would answer
+          // a shell that exited by taking the evidence away.
+          setTerminal((current) => ({
+            ...current,
+            ended: `the shell exited${(data as any).code === null || (data as any).code === undefined
+              ? ''
+              : ` with code ${(data as any).code}`}`
+          }))
+          break
+
         default:
           console.log('Unknown WebSocket message type:', data.type)
       }
@@ -2066,12 +2426,19 @@ function App(): JSX.Element {
       // 1. Get current elements, deleted ones included. The backend reconciles by
       // version and never treats absence as a deletion, so tombstones have to travel
       // explicitly — otherwise deleting a shape here would leave it alive there.
-      // The project mirror is derived from GitHub and rebuilt from it, so it is not this
-      // board's to save. Left in, it would be stored, re-sent on every connection and
-      // exported into the committed board file — a stale copy of something that already
-      // has one authority.
-      const currentElements = api.getSceneElementsIncludingDeleted()
-        .filter((element) => !isMirrorElement(element))
+      // The project mirror is derived from GitHub and rebuilt from it, and the terminal's
+      // block exists for as long as its shell does, so neither is this board's to save.
+      // Left in, they would be stored, re-sent on every connection and exported into the
+      // committed board file — a stale copy of something that already has one authority.
+      //
+      // A label bound to one goes with it. Excalidraw offers to bind text to any selected
+      // shape — the hint says so, on the terminal block as on anything else — and that label
+      // carries no `kind` of its own, so on its own terms it looks authored. Stored, it
+      // would be a text element whose container the store has never heard of.
+      const scene = api.getSceneElementsIncludingDeleted()
+      const derivedIds = new Set(scene.filter(isDerivedElement).map((element) => element.id))
+      const currentElements = scene.filter((element) => !isDerivedElement(element)
+        && !(element.containerId && derivedIds.has(element.containerId)))
       console.log(`Syncing ${currentElements.length} elements to backend`)
 
       // 3. Convert to backend format
@@ -2245,6 +2612,9 @@ function App(): JSX.Element {
               // Order matters: syncSelectedDoc settles which shape is anchored, and this
               // then works out where that shape is.
               syncDocsAnchor(_elements, appState as unknown as Record<string, any>)
+              // Same arithmetic, its own overlay: the terminal follows its block wherever
+              // the board is panned, zoomed or the shape dragged to.
+              syncTerminalBlock(_elements, appState as unknown as Record<string, any>)
               settleMirrorDrag(_elements, appState as unknown as Record<string, unknown>)
               // After settling a drag, so a card that just changed column is not re-slotted
               // against the board it is about to leave.
@@ -2283,6 +2653,18 @@ function App(): JSX.Element {
             onResetImplement={resetImplementOnBlock}
             onResetIssue={resetIssueOnBlock}
             onAddComment={addObservationToIssue}
+          />
+
+          {/* Also a sibling of the canvas, and for the same reason: the transcript is not a
+              scene element, so it cannot be exported, synced or committed. */}
+          <TerminalPanel
+            rect={terminalRect?.rect ?? null}
+            zoom={terminalRect?.zoom ?? 1}
+            suppressed={terminalRect?.suppressed ?? false}
+            output={terminal.output}
+            status={terminal.status}
+            ended={terminal.ended}
+            onSubmit={sendTerminalInput}
           />
         </div>
       </div>

@@ -42,6 +42,7 @@ import {
   NotOnThisBoard
 } from './core/project-board.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
+import { TerminalSession, shellCommandFrom } from './core/terminal-session.js';
 import { issueBlockAppearance } from './core/issue-appearance.js';
 import { runImplementAgent } from './core/implement-agent.js';
 import {
@@ -177,6 +178,21 @@ wss.on('connection', (ws: WebSocket, request) => {
     timestamp: new Date().toISOString()
   };
   ws.send(JSON.stringify(syncMessage));
+
+  // A terminal session outlives the socket watching it — a reload, a tab switched away and
+  // back, a second window — so the transcript is replayed here rather than being lost with
+  // whichever socket happened to receive it. Sent only when there is a session: a board with
+  // none must not be told about a feature that is switched off.
+  const terminal = terminalSessions.get(workspaceId);
+  if (terminal) {
+    ws.send(JSON.stringify({
+      type: 'terminal_session',
+      workspace: workspaceId,
+      session: terminal.summary(),
+      scrollback: terminal.scrollback,
+      sequence: terminal.sequence
+    }));
+  }
 
   ws.on('close', () => {
     clients.delete(ws);
@@ -1895,6 +1911,206 @@ app.get('/api/library', async (req: Request, res: Response) => {
 
   res.json({ success: true, libraryItems, errors });
 });
+
+// ─── The terminal ─────────────────────────────────────────────
+//
+// A shell the server owns, running in a workspace, streaming as it goes. It is a strictly
+// worse thing to leave reachable than the issue block — that one spawns a process with a
+// fixed prompt, this one runs whatever arrives — so it copies the issue block's guards
+// exactly: opt in by environment variable, loopback only, one session per workspace.
+//
+// `EXCALIDRAW_TERMINAL` unset means these routes do not exist. Not "answer 403", not
+// "answer with an empty session": 404, the same shape the issue block uses, so a canvas
+// that never turned it on cannot tell a disabled feature from an absent one.
+const TERMINAL_SETTING = process.env.EXCALIDRAW_TERMINAL || null;
+
+/** One session per board, which is what makes a second request a conflict. */
+const terminalSessions = new Map<string, TerminalSession>();
+
+/**
+ * The two guards, in one place.
+ *
+ * Returns true when the request has been answered and the caller must stop. Written once
+ * rather than per route because five routes with the guards copied five times is five
+ * chances to leave one out, and the one left out would be the hole.
+ */
+function terminalRefused(res: Response): boolean {
+  if (!TERMINAL_SETTING) {
+    res.status(404).json({
+      success: false,
+      error: 'The terminal is disabled. Set EXCALIDRAW_TERMINAL to enable it.'
+    });
+    return true;
+  }
+  // A shell on this port is remote code execution for anyone who can reach it.
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    res.status(403).json({
+      success: false,
+      error: 'The terminal only runs while the server is bound to loopback.'
+    });
+    return true;
+  }
+  return false;
+}
+
+/** The session for a board, or a 404 saying there is none. */
+function requireTerminal(req: Request, res: Response): TerminalSession | null {
+  const workspaceId = workspaceIdFrom(req);
+  const session = terminalSessions.get(workspaceId);
+  if (!session) {
+    res.status(404).json({ success: false, error: 'No terminal session is open for this board.' });
+    return null;
+  }
+  return session;
+}
+
+app.post('/api/terminal', async (req: Request, res: Response) => {
+  if (terminalRefused(res)) return;
+
+  const workspaceId = workspaceIdFrom(req);
+  const existing = terminalSessions.get(workspaceId);
+  if (existing) {
+    // 409 rather than a second shell: two shells in one repository is the collision the
+    // implement agent's worktrees exist to avoid, and here nobody asked for a second one.
+    return res.status(409).json({
+      success: false,
+      error: 'A terminal session is already open for this board.',
+      session: existing.summary()
+    });
+  }
+
+  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace) {
+    return res.status(400).json({
+      success: false,
+      error: `Workspace "${workspaceId}" is not registered, so there is no project to run in.`
+    });
+  }
+  if (workspace.error) {
+    return res.status(400).json({ success: false, error: `Workspace is unusable: ${workspace.error}` });
+  }
+
+  const shellCommand = shellCommandFrom(TERMINAL_SETTING, workspace);
+  if (!shellCommand) {
+    return res.status(404).json({
+      success: false,
+      error: 'The terminal is disabled. Set EXCALIDRAW_TERMINAL to enable it.'
+    });
+  }
+
+  let session: TerminalSession;
+  try {
+    session = new TerminalSession(workspace, shellCommand, {
+      onOutput: (data, sequence) => {
+        broadcast({ type: 'terminal_output', data, sequence } as WebSocketMessage, workspaceId);
+      },
+      onExit: (code) => {
+        // Dropped from the map here rather than on the DELETE, because a shell that ended
+        // on its own — `exit`, or a crash — has to free the slot too. Only if it is still
+        // the current one: a session opened after this one exited must not be evicted by
+        // its predecessor's event.
+        if (terminalSessions.get(workspaceId) === session) terminalSessions.delete(workspaceId);
+        broadcast({ type: 'terminal_exit', code } as WebSocketMessage, workspaceId);
+      }
+    });
+  } catch (error) {
+    logger.error('Could not start a terminal:', error);
+    return res.status(500).json({ success: false, error: (error as Error).message });
+  }
+
+  terminalSessions.set(workspaceId, session);
+  broadcast({
+    type: 'terminal_session',
+    session: session.summary(),
+    scrollback: session.scrollback,
+    sequence: session.sequence
+  } as WebSocketMessage, workspaceId);
+
+  // 202, like starting an agent: the shell is running, and what it produces arrives over
+  // the socket rather than in this response.
+  res.status(202).json({ success: true, session: session.summary() });
+});
+
+app.get('/api/terminal', (req: Request, res: Response) => {
+  if (terminalRefused(res)) return;
+
+  const session = terminalSessions.get(workspaceIdFrom(req));
+  res.json({
+    success: true,
+    session: session ? session.summary() : null,
+    scrollback: session?.scrollback ?? '',
+    sequence: session?.sequence ?? 0
+  });
+});
+
+app.post('/api/terminal/input', (req: Request, res: Response) => {
+  if (terminalRefused(res)) return;
+  const session = requireTerminal(req, res);
+  if (!session) return;
+
+  const data = typeof req.body?.data === 'string' ? req.body.data : '';
+  if (!data) {
+    return res.status(400).json({ success: false, error: 'Nothing to send: "data" must be a non-empty string.' });
+  }
+
+  // 202 rather than 200: the shell has been handed the bytes, and what it does with them
+  // comes back over the socket. Waiting here for output would be waiting for a prompt that
+  // a piped shell never prints.
+  res.status(202).json({ success: true, sequence: session.write(data) });
+});
+
+app.post('/api/terminal/resize', (req: Request, res: Response) => {
+  if (terminalRefused(res)) return;
+  const session = requireTerminal(req, res);
+  if (!session) return;
+
+  const cols = Number(req.body?.cols);
+  const rows = Number(req.body?.rows);
+  if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols < 1 || rows < 1) {
+    return res.status(400).json({ success: false, error: 'cols and rows must both be positive numbers.' });
+  }
+
+  session.resize(Math.floor(cols), Math.floor(rows));
+  broadcast({
+    type: 'terminal_resized',
+    cols: Math.floor(cols),
+    rows: Math.floor(rows)
+  } as WebSocketMessage, workspaceIdFrom(req));
+  res.json({ success: true, session: session.summary() });
+});
+
+app.delete('/api/terminal', (req: Request, res: Response) => {
+  if (terminalRefused(res)) return;
+  const session = requireTerminal(req, res);
+  if (!session) return;
+
+  const workspaceId = workspaceIdFrom(req);
+  session.close();
+  terminalSessions.delete(workspaceId);
+  res.json({ success: true, closed: true });
+});
+
+/**
+ * Nothing outlives the server.
+ *
+ * A shell is a process, and a process whose parent has gone is a process nobody can stop
+ * from the board any more — the same shape as the constraint `docs/issue-block.md` records
+ * about a reset: nothing here can reach into a process the server no longer owns. So the
+ * sessions are closed on the way out rather than left to be inherited.
+ */
+function closeAllTerminals(): void {
+  for (const session of terminalSessions.values()) session.close();
+  terminalSessions.clear();
+}
+
+// On `exit` alone, and not on SIGTERM or SIGINT. Importing this module must not start the
+// server — `isMainModule` at the bottom of the file is that rule — and a signal handler
+// registered here would be registered by an importer too, which in Node means Ctrl+C stops
+// terminating that process. `exit` has no such effect, it fires on the way out of the
+// shutdown path the signals already have, and `close()` is synchronous, which is what an
+// exit handler needs.
+process.on('exit', closeAllTerminals);
 
 // ─── Docs API (markdown shown for the selected element) ───────
 //
