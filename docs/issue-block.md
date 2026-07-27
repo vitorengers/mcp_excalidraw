@@ -26,9 +26,47 @@ There is no time limit on the run, and a block stuck in `running` can be reset �
 
 ## Reference images
 
-A block can carry images as well as text. Select it, pick them with **Attach reference
-images** in the panel, and the agent looks at them while it investigates — a screenshot of
-the thing that is wrong says in one image what a paragraph gets approximately.
+A block can carry images as well as text. Select it and either press **Ctrl+V** with a
+screenshot on the clipboard or pick a file with **Attach reference images**; the agent looks
+at them while it investigates — a screenshot of the thing that is wrong says in one image
+what a paragraph gets approximately.
+
+**The paste is the way a screenshot actually arrives.** `Win+Shift+S` and `PrtScn` produce a
+bitmap with no path on disk, which is precisely what a file picker cannot reach, so while
+attaching was picker-only the flow was: paste into another application, save a file, then
+find that file in the picker. Nothing below the entry point had to change — an image read off
+a `paste` event *is* a `File`, already typed `image/png` — so a pasted attachment and a picked
+one are the same thing from `attachIssueImages` onwards.
+
+### Which handler wins
+
+Excalidraw registers its own `paste` on `document` and turns the image into a scene element.
+The ordinary gesture — click the block, the card opens, Ctrl+V — leaves focus inside the
+Excalidraw container with the cursor over the canvas, which is *exactly* the case Excalidraw
+claims: a handler scoped to the card would never fire in the one case the feature is for. So
+the panel captures at `document`, ahead of the bubble-phase listener there, and stops the
+event.
+
+**A selected draft block therefore changes what Ctrl+V does on the canvas, and that is the
+decision.** The alternative — requiring a click into the card first — is discoverable only if
+the card says so, and the block is selected because the reader just chose it. What the panel
+does *not* take is bounded to match:
+
+- nothing selected, or a block whose state is `running` or `created`, and the listener is not
+  registered at all — the card is where it lives, and the card is not there;
+- anything being typed into keeps its own paste, so Excalidraw's text editor and the
+  observation box are untouched;
+- a clipboard with no image on it is let through rather than swallowed.
+
+The card says so too: the hint under the button names the keystroke, because a gesture nothing
+on screen mentions is a gesture nobody tries.
+
+`src/core/pasted-images.ts` owns the three decisions — which of a clipboard's contents is an
+image, whether the block showing may take one, and what to call a file that arrived without a
+name. `panelTakesPaste` is the same condition that puts the button on screen, written once so
+the two cannot drift. `check-pasted-images.mjs` holds the arithmetic and
+`check-pasted-images-browser.mjs` drives a real Chrome, because which of two `document`
+listeners wins is not a question a type check can be asked.
 
 **They are reference material, not issue content, and that boundary is forced rather than
 chosen.** `gh issue create` has no attachment flag, and the endpoint GitHub's own web client
@@ -71,8 +109,9 @@ Three things are deliberate:
 - **The store is in memory.** Files are not written to disk and not exported with the board,
   so an attachment does not survive a restart of the server. Attach and run in one sitting.
 
-Attaching is offered only before the run. Once a block has an issue there is nothing left for
-an image to inform, and attaching one does not make the block runnable again.
+Attaching is offered only before the run — by either route. Once a block has an issue there is
+nothing left for an image to inform, and attaching one does not make the block runnable again.
+Issue #53's **Add observations** is what a created block gets instead.
 
 ## What a block looks like
 
