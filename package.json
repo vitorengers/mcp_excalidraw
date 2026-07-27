@@ -97,6 +97,7 @@
     "src/**/*",
     "dist/**/*",
     "skills/**/*",
+    "docs/*.md",
     "*.d.ts",
     "README.md",
     "LICENSE"
