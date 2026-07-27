@@ -151,7 +151,66 @@
             color: #666;
         }
 
+        /*
+         * Excalidraw's theme tokens, declared where this app's own overlays can reach them.
+         *
+         * The docs card, the project tabs and the dialogs are all styled with these
+         * variables so that they follow the canvas into dark mode. But Excalidraw scopes
+         * them to its own root element — `.excalidraw` and `.excalidraw.theme--dark` — and
+         * every one of those overlays is a *sibling* of the canvas rather than a child of
+         * it, deliberately, so that none of them can become a scene element and reach a PNG
+         * export. Outside that subtree the variables were simply undefined, in both themes:
+         * the card was painted from its hard-coded fallbacks, and the declarations with no
+         * fallback fell through to whatever the page inherited. In dark mode that put the
+         * inherited near-white body colour on the white fallback card — 1.28:1, which is
+         * text nobody can read.
+         *
+         * So the values are copied here, keyed off the same `data-theme` the canvas is
+         * mirrored into. Copying rather than inventing a palette is what keeps the overlays
+         * looking like part of the board; the cost is that an upstream rename has to be
+         * followed here, which is what `scripts/check-docs-panel-theme-browser.mjs` notices.
+         *
+         * The grey ramp is the one exception to a straight copy. Excalidraw does not invert
+         * it per theme — it keeps one ramp and picks a different step per rule under
+         * `.theme--dark`, which a stylesheet outside its subtree cannot do. Mirroring the
+         * ramp (n becomes 100-n) gives each token the role it already had: 10 stays the
+         * quiet fill behind code, 30 stays a border, 60 and 70 stay muted text.
+         *
+         * Declaring *some* of the set is worse than declaring none, and this was nearly
+         * shipped that way: with the foreground themed but `--color-primary-light` left
+         * out, the selected project tab kept its light fallback and took the new near-white
+         * label. Every variable the overlays reference is therefore listed here — the list
+         * is `grep -o 'var(--[a-z0-9-]*' frontend/src/components/*.css`.
+         */
+        .app[data-theme="light"] {
+            --island-bg-color: #ffffff;
+            --input-bg-color: #ffffff;
+            --text-primary-color: #1b1b1f;
+            --color-primary-light: #e3e2fe;
+            --color-gray-10: #f5f5f5;
+            --color-gray-20: #ebebeb;
+            --color-gray-30: #d6d6d6;
+            --color-gray-60: #7a7a7a;
+            --color-gray-70: #5c5c5c;
+            --color-gray-80: #3d3d3d;
+            --color-primary: #6965db;
+            --color-danger: #db6965;
+        }
+
         .app[data-theme="dark"] {
+            --island-bg-color: #232329;
+            --input-bg-color: #121212;
+            --text-primary-color: #e3e3e8;
+            --color-primary-light: #4f4d6f;
+            --color-gray-10: #1e1e1e;
+            --color-gray-20: #3d3d3d;
+            --color-gray-30: #5c5c5c;
+            --color-gray-60: #b8b8b8;
+            --color-gray-70: #d6d6d6;
+            --color-gray-80: #ebebeb;
+            --color-primary: #a8a5ff;
+            --color-danger: #ffa8a5;
+
             background-color: #121212;
             color: #e3e3e8;
         }
