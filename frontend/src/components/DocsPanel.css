@@ -1,5 +1,12 @@
 /* Docs panel. Colours come from Excalidraw's own theme variables so the panel
-   follows the canvas into dark mode instead of staying stubbornly light. */
+   follows the canvas into dark mode instead of staying stubbornly light.
+
+   The card is a sibling of the canvas, not a child of it, so Excalidraw's own `.excalidraw`
+   scope never reaches it; the variables are declared for it on `.app[data-theme=…]` in
+   `frontend/index.html`. Deliberately no fallbacks here: the ones that used to be here were
+   light values, they were what the card was actually painted with in *both* themes, and in
+   dark mode a white fallback card under the page's inherited near-white text is what made
+   the panel unreadable. A fallback that can disagree with the theme is worse than none. */
 
 /* The card the panel lives in, anchored beside the shape it describes.
    Position comes from the component; everything the reader sees is here. */
@@ -10,8 +17,8 @@
   flex-direction: column;
   overflow: hidden;
   border-radius: 8px;
-  border: 1px solid var(--color-gray-30, #ced4da);
-  background: var(--island-bg-color, #fff);
+  border: 1px solid var(--color-gray-30);
+  background: var(--island-bg-color);
   box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
   /* A shape is dragged by grabbing it — the card must not become a drag handle for
      the canvas underneath, but it must remain scrollable and clickable itself. */
@@ -36,15 +43,15 @@
   border: none;
   border-radius: 4px;
   background: none;
-  color: var(--color-gray-60, #868e96);
+  color: var(--color-gray-60);
   font-size: 1.125rem;
   line-height: 1;
   cursor: pointer;
 }
 
 .docs-card__close:hover {
-  background: var(--color-gray-10, #f1f3f5);
-  color: var(--text-primary-color, #1e1e1e);
+  background: var(--color-gray-10);
+  color: var(--text-primary-color);
 }
 
 .element-docs {
@@ -63,7 +70,7 @@
 }
 
 .element-docs__error {
-  color: var(--color-danger, #e03131);
+  color: var(--color-danger);
 }
 
 /*
@@ -168,9 +175,9 @@
   width: 100%;
   margin: 0 0 1rem;
   padding: 0.5rem;
-  border: 1px solid var(--color-gray-30, #ced4da);
+  border: 1px solid var(--color-gray-30);
   border-radius: 6px;
-  background: var(--island-bg-color, #fff);
+  background: var(--island-bg-color);
   color: inherit;
   font: inherit;
   font-size: 0.8125rem;
@@ -178,7 +185,7 @@
 }
 
 .element-docs__collapse:hover {
-  background: var(--color-gray-10, #f1f3f5);
+  background: var(--color-gray-10);
 }
 
 .element-docs__issue {
@@ -189,7 +196,7 @@
   display: inline-block;
   font-weight: 600;
   font-size: 0.8125rem;
-  color: var(--color-primary, #1971c2);
+  color: var(--color-primary);
   word-break: break-all;
 }
 
@@ -197,7 +204,7 @@
 .element-docs__observation {
   margin-top: 16px;
   font-size: 13px;
-  color: var(--color-gray-60, #868e96);
+  color: var(--color-gray-60);
 }
 
 .element-docs__observation summary {
@@ -234,7 +241,7 @@
 }
 
 .element-docs__action:disabled {
-  color: var(--color-gray-60, #868e96);
+  color: var(--color-gray-60);
   cursor: default;
 }
 
@@ -249,9 +256,9 @@
   min-height: 120px;
   margin: 0 0 8px;
   padding: 0.5rem;
-  border: 1px solid var(--color-gray-30, #ced4da);
+  border: 1px solid var(--color-gray-30);
   border-radius: 6px;
-  background: var(--island-bg-color, #fff);
+  background: var(--island-bg-color);
   color: inherit;
   font: inherit;
   font-size: 0.8125rem;
@@ -263,26 +270,26 @@
    what was answered. */
 .element-docs__comments {
   margin-top: 1rem;
-  border-top: 1px solid var(--color-gray-30, #ced4da);
+  border-top: 1px solid var(--color-gray-30);
 }
 
 .element-docs__comments-title {
   font-size: 0.8125rem;
   font-weight: 700;
   margin: 0.75rem 0 0.5rem;
-  color: var(--color-gray-60, #868e96);
+  color: var(--color-gray-60);
 }
 
 .element-docs__comment {
   margin: 0 0 0.75rem;
   padding-left: 0.75rem;
-  border-left: 3px solid var(--color-gray-30, #ced4da);
+  border-left: 3px solid var(--color-gray-30);
 }
 
 .element-docs__comment-meta {
   margin: 0 0 0.25rem;
   font-size: 0.75rem;
-  color: var(--color-gray-60, #868e96);
+  color: var(--color-gray-60);
 }
 
 /* Reference images, shown while the block is still an observation. */
@@ -299,10 +306,10 @@
   position: relative;
   width: 88px;
   height: 88px;
-  border: 1px solid var(--color-gray-30, #ced4da);
+  border: 1px solid var(--color-gray-30);
   border-radius: 6px;
   overflow: hidden;
-  background: var(--color-gray-10, #f1f3f5);
+  background: var(--color-gray-10);
 }
 
 .element-docs__image img {
@@ -318,7 +325,7 @@
   justify-content: center;
   height: 100%;
   font-size: 11px;
-  color: var(--color-gray-60, #868e96);
+  color: var(--color-gray-60);
 }
 
 .element-docs__image-remove {
