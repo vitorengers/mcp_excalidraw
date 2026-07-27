@@ -47,12 +47,24 @@ export interface DocsPanelBodyProps {
   /** Set when the selected shape is an image that can be collapsed. */
   collapsible?: CollapsibleTarget | null
   onToggleCollapse?: (id: string) => void
-  /** Set when the selected shape is an issue block. */
+  /** Set when the selected shape stands for an issue — an authored block or a mirrored card. */
   issue?: IssueTarget | null
   onCreateIssue?: (id: string) => void
-  onImplementIssue?: (id: string) => void
+  /**
+   * Both take the issue rather than an element id: a mirrored card has no element on the
+   * server to name, so the issue URL is the only handle the two shapes share. Both answer
+   * with an error to show, or null — a card has no element for a failure to arrive on.
+   */
+  onImplementIssue?: (issue: IssueTarget) => Promise<string | null>
   /** Clears a `running` state whose agent is gone. Does not stop a live run. */
-  onResetImplement?: (id: string) => void
+  onResetImplement?: (issue: IssueTarget) => Promise<string | null>
+}
+
+/** What is known about implementing the issue, wherever it was learned. */
+interface ImplementView {
+  state: 'running' | 'done' | 'failed' | null
+  url: string | null
+  error: string | null
 }
 
 /**
@@ -68,6 +80,19 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
 }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
   const [issueDetail, setIssueDetail] = useState<IssueDetailState>({ status: 'idle' })
+  const [implement, setImplement] = useState<ImplementView>({ state: null, url: null, error: null })
+
+  // An authored block carries a copy of the state, which arrives over the socket and is
+  // what makes a block read correctly before any fetch lands. A card carries none, so this
+  // simply never fires for one.
+  useEffect(() => {
+    if (!issue?.implementState) return
+    setImplement({
+      state: issue.implementState,
+      url: issue.implementUrl ?? null,
+      error: issue.implementError ?? null
+    })
+  }, [issue?.implementState, issue?.implementUrl, issue?.implementError])
 
   useEffect(() => {
     if (!docKey) {
@@ -106,21 +131,24 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
     return () => { cancelled = true }
   }, [docKey, workspace])
 
-  const issueId = issue?.id ?? null
   const issueState = issue?.state ?? null
+  const issueUrl = issue?.issueUrl ?? null
 
-  // The issue is read on selection, not stored on the element — so an edit made on
-  // GitHub shows up here without the board being touched.
+  // Read by issue URL, not by element id: a mirrored card is drawn from GitHub and never
+  // reaches the server, so it has no id to ask about — but it has the issue, which is the
+  // thing being read. Read on selection rather than stored, so an edit made on GitHub
+  // shows up here without the board being touched.
   useEffect(() => {
-    if (!issueId || issueState !== 'created') {
+    if (!issueUrl || issueState !== 'created') {
       setIssueDetail({ status: 'idle' })
+      setImplement({ state: null, url: null, error: null })
       return
     }
 
     let cancelled = false
     setIssueDetail({ status: 'loading' })
 
-    fetch(`/api/issue-block/${encodeURIComponent(issueId)}/issue?workspace=${encodeURIComponent(workspace)}`)
+    fetch(`/api/issue?url=${encodeURIComponent(issueUrl)}&workspace=${encodeURIComponent(workspace)}`)
       .then(async (response) => {
         const body = await response.json().catch(() => ({}))
         if (cancelled) return
@@ -138,13 +166,42 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
           state: body.issue?.state ?? '',
           number: body.issue?.number ?? 0
         })
+        setImplement({
+          state: body.implement?.state ?? null,
+          url: body.implement?.url ?? null,
+          error: body.implement?.error ?? null
+        })
       })
       .catch((error: Error) => {
         if (!cancelled) setIssueDetail({ status: 'error', message: error.message })
       })
 
     return () => { cancelled = true }
-  }, [issueId, issueState, workspace])
+  }, [issueUrl, issueState, workspace])
+
+  // An authored block hears the result over the socket, as an element update. A card
+  // cannot — there is no element — so while a run is in flight it asks. This reads only
+  // the record, so it costs no `gh` process.
+  useEffect(() => {
+    if (!issueUrl || implement.state !== 'running') return
+
+    let cancelled = false
+    const timer = setInterval(() => {
+      fetch(`/api/implement?url=${encodeURIComponent(issueUrl)}&workspace=${encodeURIComponent(workspace)}`)
+        .then((response) => response.json())
+        .then((body) => {
+          if (cancelled || !body?.success) return
+          setImplement({
+            state: body.implement?.state ?? null,
+            url: body.implement?.url ?? null,
+            error: body.implement?.error ?? null
+          })
+        })
+        .catch(() => undefined)
+    }, 4000)
+
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [issueUrl, implement.state, workspace])
 
   return (
     <div className="element-docs">
@@ -166,18 +223,18 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                   part of reading it, and a reader who has decided should not have to
                   scroll a body this long to act. */}
               <div className="element-docs__implement">
-                {issue.implementState === 'done' && issue.implementUrl && (
+                {implement.state === 'done' && implement.url && (
                   <a
                     className="element-docs__issue-link"
-                    href={issue.implementUrl}
+                    href={implement.url}
                     target="_blank"
                     rel="noreferrer"
                   >
-                    Implemented · {issue.implementUrl.replace(/^https:\/\/github\.com\//, '')}
+                    Implemented · {implement.url.replace(/^https:\/\/github\.com\//, '')}
                   </a>
                 )}
 
-                {issue.implementState === 'running' && (
+                {implement.state === 'running' && (
                   <>
                     <p className="element-docs__hint">
                       An agent is implementing this issue in the project. There is no time
@@ -190,7 +247,11 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                       <button
                         type="button"
                         className="element-docs__collapse"
-                        onClick={() => onResetImplement(issue.id)}
+                        onClick={async () => {
+                          const error = await onResetImplement(issue)
+                          if (error) setImplement((current) => ({ ...current, error }))
+                          else setImplement({ state: null, url: null, error: null })
+                        }}
                       >
                         Reset — the run was lost
                       </button>
@@ -198,15 +259,22 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                   </>
                 )}
 
-                {issue.implementState === 'failed' && (
-                  <p className="element-docs__error">{issue.implementError ?? 'The run failed.'}</p>
+                {implement.state === 'failed' && (
+                  <p className="element-docs__error">{implement.error ?? 'The run failed.'}</p>
                 )}
 
-                {issue.implementState !== 'done' && issue.implementState !== 'running' && onImplementIssue && (
+                {implement.state !== 'done' && implement.state !== 'running' && onImplementIssue && (
                   <button
                     type="button"
                     className="element-docs__collapse"
-                    onClick={() => onImplementIssue(issue.id)}
+                    onClick={async () => {
+                      // Optimistic, because the run itself answers immediately and the
+                      // result arrives later — over the socket for a block, by asking for
+                      // a card.
+                      setImplement({ state: 'running', url: null, error: null })
+                      const error = await onImplementIssue(issue)
+                      if (error) setImplement({ state: 'failed', url: null, error })
+                    }}
                   >
                     Implement / Fix
                   </button>
