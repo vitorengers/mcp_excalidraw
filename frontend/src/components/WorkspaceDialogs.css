@@ -1,0 +1,149 @@
+.workspace-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.workspace-dialog,
+.workspace-config {
+  background: var(--island-bg-color, #fff);
+  color: var(--text-primary-color, #1e1e1e);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  padding: 18px 20px;
+  width: min(560px, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.workspace-dialog__title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.workspace-dialog__path {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  padding: 7px 9px;
+  border: 1px solid var(--color-gray-30, #ced4da);
+  border-radius: 5px;
+  background: var(--input-bg-color, #fff);
+  color: inherit;
+}
+
+.workspace-dialog__where {
+  margin: 10px 0 4px;
+  color: var(--color-gray-70, #495057);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.workspace-dialog__browser {
+  margin-top: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--color-gray-30, #ced4da);
+  border-radius: 5px;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-dialog__entry {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.workspace-dialog__entry:hover {
+  background: var(--color-gray-10, #f1f3f5);
+}
+
+.workspace-dialog__entry--up {
+  font-weight: 600;
+}
+
+.workspace-dialog__error {
+  margin: 10px 0 0;
+  color: var(--color-danger, #e03131);
+}
+
+.workspace-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.workspace-dialog__actions button {
+  font: inherit;
+  padding: 6px 14px;
+  border-radius: 5px;
+  border: 1px solid var(--color-gray-30, #ced4da);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.workspace-dialog__submit,
+.workspace-config__save {
+  background: var(--color-primary, #6965db);
+  border-color: var(--color-primary, #6965db);
+  color: #fff;
+}
+
+.workspace-dialog__actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.workspace-config__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+.workspace-config__label {
+  flex: 0 0 140px;
+  color: var(--color-gray-70, #495057);
+}
+
+.workspace-config__field,
+.workspace-config__select {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  padding: 5px 8px;
+  border: 1px solid var(--color-gray-30, #ced4da);
+  border-radius: 5px;
+  background: var(--input-bg-color, #fff);
+  color: inherit;
+}
+
+.workspace-config__agent {
+  border: 1px solid var(--color-gray-30, #ced4da);
+  border-radius: 6px;
+  padding: 10px 12px 4px;
+  margin: 12px 0 0;
+}
+
+.workspace-config__agent legend {
+  padding: 0 6px;
+  font-weight: 600;
+}
+
+.workspace-config__loading {
+  margin: 0;
+  color: var(--color-gray-70, #495057);
+}

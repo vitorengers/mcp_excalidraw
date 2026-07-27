@@ -35,6 +35,7 @@ import {
   terminalOrigin
 } from '../../src/core/terminal-block'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
+import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
 // Type definitions
@@ -581,6 +582,15 @@ function App(): JSX.Element {
   // Boards, one per project
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [activeWorkspace, setActiveWorkspace] = useState<string>('default')
+  /**
+   * Whether a registry exists at all, which is not the same as it having projects in it.
+   *
+   * An empty registry is a board waiting for its first project and has to show the `+`
+   * that adds one; no registry at all has nowhere to put it.
+   */
+  const [workspacesConfigured, setWorkspacesConfigured] = useState<boolean>(false)
+  /** Which dialog is open, if any: the project picker or one project's settings. */
+  const [workspaceDialog, setWorkspaceDialog] = useState<'add' | 'config' | null>(null)
   // WebSocket handlers close over their creation-time scope, so the ref is what the
   // async paths read — the state alone would send stale ids after a tab switch.
   const activeWorkspaceRef = useRef<string>('default')
@@ -1883,6 +1893,7 @@ function App(): JSX.Element {
         if (cancelled || !result?.success) return
         const list: WorkspaceSummary[] = result.workspaces ?? []
         setWorkspaces(list)
+        setWorkspacesConfigured(Boolean(result.configured))
         // The socket opens before this response lands, so it is already watching the
         // default board. Switching rather than assigning reconnects it, otherwise the
         // first tab would render highlighted while showing the default board's scene.
@@ -1935,6 +1946,21 @@ function App(): JSX.Element {
     }
     setIsConnected(false)
     connectWebSocket()
+  }
+
+  /**
+   * A project the `+` has just registered.
+   *
+   * The list is replaced from the response rather than re-fetched, and the board switches
+   * to the new tab in the same turn: the registry is read per request, so the entry is
+   * already live, and a reload here would throw away every unsynced shape on the board
+   * that was open.
+   */
+  const adoptWorkspace = (workspace: WorkspaceSummary, list: WorkspaceSummary[]): void => {
+    setWorkspaces(list)
+    setWorkspacesConfigured(true)
+    setWorkspaceDialog(null)
+    switchWorkspace(workspace.id)
   }
 
   // Reloaded per board: a project may ship its own shapes on top of the shared set.
@@ -2623,8 +2649,28 @@ function App(): JSX.Element {
       <WorkspaceTabs
         workspaces={workspaces}
         activeId={activeWorkspace}
+        configured={workspacesConfigured}
         onSelect={switchWorkspace}
+        onAdd={() => setWorkspaceDialog('add')}
+        onConfigure={() => setWorkspaceDialog('config')}
       />
+
+      {workspaceDialog === 'add' && (
+        <AddWorkspaceDialog
+          onClose={() => setWorkspaceDialog(null)}
+          onAdded={adoptWorkspace}
+        />
+      )}
+
+      {workspaceDialog === 'config' && (
+        <WorkspaceConfigDialog
+          workspaceId={activeWorkspace}
+          onClose={() => setWorkspaceDialog(null)}
+          // Only the list is replaced: the board is already showing this project, so
+          // switching to it again would empty the scene and reconnect for nothing.
+          onSaved={(_workspace, list) => { setWorkspaces(list); setWorkspaceDialog(null) }}
+        />
+      )}
 
       {/* Header */}
       <div className="header">
