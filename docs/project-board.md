@@ -64,6 +64,53 @@ every twenty seconds, and only while the tab is on screen. A run that just finis
 immediately rather than waiting out the interval: that is the one moment the project changed for a
 reason the canvas already knows about.
 
+## Where the region sits
+
+Measured **once**, against the board's own content, and then kept. The first time there is
+anything on the canvas to measure against, the mirror's right edge is put one gap — 120 — to the
+left of the leftmost thing the board has authored, with its top level with the topmost. From
+then on that origin is what the region is drawn from: the poll re-reads GitHub, never the canvas.
+
+It used to be recomputed on every poll from `minX - 120 - boardWidth(sections)`, storing neither
+number, and that gave it two independent ways to move with nobody touching anything:
+
+- **its own width.** Pinned by its *right* edge and drawn leftward, a column added on GitHub did
+  not extend the region toward the board — it moved every column that was already there 324
+  further away from it, the first one included, which is where the `+` is and where an
+  observation gets written. The `No Status` section is appended only while something is in it, so
+  that could happen and unhappen on its own, twenty seconds after an item lost its status.
+- **the bounding box.** `minX` and `minY` were measured over *everything else on the canvas*, so
+  any element added, dragged or erased anywhere that changed the scene's leftmost or topmost
+  coordinate dragged the whole region along by the same delta on the next poll.
+
+That is #99 — a region that drifted up and to the left over days, with no action to connect it to
+because half of it had none.
+
+**Which edge survives a width change is the trade this settles, and it is the left one.** A
+mirror whose width is set by GitHub cannot keep both. The left edge is where the `+` sits, and —
+since #96 — it is the edge the terminal block is anchored to, a block placed once and never moved
+aside, so a jump in it is a jump into something that will not give way. A column appearing
+therefore grows the region to
+the *right*, into the gap and, past that, toward the board's own content. That is a collision a
+reader can see and connect to the column that caused it, which is what the drift never was.
+
+The price is the one the terminal already pays for the same decision: a board whose content is
+moved wholesale leaves the region where it was put. A reload re-measures, which is what puts it
+back.
+
+What may be measured against is one predicate, `mirrorAnchors`, stated the way the autosync and
+the export state theirs: not the mirror's own shapes, or it would re-anchor to itself; not the
+terminal blocks, which are placed *from* this region's own left edge, so measuring against one
+would walk the mirror onto it and it leftward again on every pass; not the draft blocks,
+which live inside the region; and **not a label bound to any of those**. Excalidraw binds text to
+whatever is selected and that text carries no `kind` of its own, so a title bound to the terminal
+— the one block the reader is expected to drag — looked authored, and dragging it up and to the
+left moved the mirror while the block itself was ignored.
+
+`scripts/check-mirror-anchor.mjs` has the arithmetic and
+`scripts/check-mirror-anchor-browser.mjs` drives a real Chrome across a poll that adds a column,
+because the whole question here is what a poll does to a placement.
+
 ## Two guards
 
 Both routes are **loopback only**. The move route because it writes — a canvas reachable from the

@@ -6,9 +6,9 @@
  * for its card, a draft block holding the top of a column — and arithmetic can be checked
  * without driving a browser. The component that also did the arithmetic could not be.
  *
- * Everything here is in **scene coordinates**. The caller decides where the region sits;
- * `mirrorWidth` is exported so it can place the mirror by its right edge, which is what
- * anchoring it to the left of the board's own content needs.
+ * Everything here is in **scene coordinates**. Where the region sits is `resolveMirrorOrigin`'s
+ * answer, measured once against the board's own content and then kept; `mirrorWidth` is what
+ * the caller hands it, being the whole width the mirror is about to draw.
  *
  * Not every column here is GitHub's. The first one is the canvas's own — where the `+`
  * drops an observation, and the only column on the mirror no option is behind. It is added
@@ -26,12 +26,24 @@ import {
   NOTES_OPTION_ID,
   NOTES_NAME,
 } from './project-board-types.js';
+import { TERMINAL_KIND } from './terminal-block.js';
 
 // Re-exported so the canvas can name the notes column without importing two modules.
 export { NOTES_OPTION_ID, NOTES_NAME } from './project-board-types.js';
 
 /** The mark that says an element belongs to the mirror rather than to the board. */
 export const MIRROR_KIND = 'project-board';
+
+/**
+ * Distance between the mirror's right edge and the board's own left edge, the first time
+ * the region is placed.
+ *
+ * Beside the arithmetic that uses it rather than in the component, because the component is
+ * no longer the only thing that has to agree about it: `check-mirror-anchor.mjs` asks what
+ * the region is anchored to, and a constant it had to copy would be a second definition to
+ * drift from this one.
+ */
+export const MIRROR_GAP = 120;
 
 /** The document behind the region, shown when its header is selected. */
 export const MIRROR_DOC_KEY = 'project-board';
@@ -201,6 +213,99 @@ function draftsByColumn(drafts: DraftBlock[]): Map<string, DraftBlock[]> {
 export function boardWidth(sectionCount: number): number {
   const columns = Math.max(1, sectionCount);
   return PADDING * 2 + columns * COLUMN_WIDTH + (columns - 1) * COLUMN_GAP;
+}
+
+/** Enough of an element to decide whether the region may be measured against it. */
+export interface AnchorCandidate {
+  id?: string;
+  isDeleted?: boolean;
+  containerId?: string | null;
+  customData?: Record<string, unknown> | null;
+}
+
+/** The left and top of a bounding box — the two numbers a placement needs. */
+export interface AnchorBounds {
+  minX: number;
+  minY: number;
+}
+
+/** An origin, and whether it is one worth keeping. */
+export interface MirrorOrigin {
+  origin: { x: number; y: number };
+  /**
+   * Whether the caller should remember it. A measured origin is; the empty-canvas fallback
+   * is not, or a mirror that rendered before the scene arrived would stay where an empty
+   * board put it for the rest of the session.
+   */
+  settled: boolean;
+}
+
+const kindOf = (element: AnchorCandidate): unknown => (element.customData ?? {}).kind;
+
+const isDraft = (element: AnchorCandidate): boolean =>
+  (element.customData ?? {}).projectBoardDraft === true && !element.containerId;
+
+/**
+ * The elements the region is allowed to be measured against.
+ *
+ * Three places drop derived shapes and two of them also drop **a label bound to one** —
+ * Excalidraw binds text to whatever is selected, and that text carries no `kind` of its own,
+ * so on its own terms it looks authored. This is the third: the mirror's own measurement,
+ * which used to exclude the terminal blocks but not a title bound to one. Bind a title to a
+ * block the reader is expected to drag, drag it up and to the left, and the block was
+ * ignored while its label was not.
+ *
+ * Left out, and why each one:
+ *
+ * - the mirror's own shapes, or the region would re-anchor to itself;
+ * - the terminal blocks, which are placed *from* the board's bounds on the other side, so
+ *   measuring against them would walk the two regions apart;
+ * - the draft blocks, which live inside the mirror;
+ * - anything whose container is one of those, which is the rule this adds to the terminal.
+ */
+export function mirrorAnchors<T extends AnchorCandidate>(elements: readonly T[]): T[] {
+  const alive = elements.filter((element) => !element.isDeleted && kindOf(element) !== MIRROR_KIND);
+  const derived = new Set(alive
+    .filter((element) => isDraft(element) || kindOf(element) === TERMINAL_KIND)
+    .map((element) => element.id));
+  return alive.filter((element) => !derived.has(element.id)
+    && !(element.containerId && derived.has(element.containerId)));
+}
+
+/**
+ * Where the mirror's top-left corner goes.
+ *
+ * **Once, and then kept.** The region used to recompute this on every twenty-second poll
+ * from `minX - MIRROR_GAP - width`, storing neither number, which gave it two independent
+ * ways to move on its own: a column added on GitHub made it wider and, being pinned by its
+ * right edge, pushed every column that was already there one column-width further left; and
+ * any element added, moved or erased anywhere on the canvas that changed the scene's
+ * leftmost or topmost coordinate dragged the whole region along with it. That is the drift
+ * #99 recorded, and neither half needed the mirror or the board's content to be touched.
+ *
+ * So the measurement happens once, the first time there is something to measure against,
+ * and the answer is remembered. What is pinned from then on is the **left** edge: a mirror
+ * whose width is set by GitHub cannot keep both, and the left one is where the `+` is, where
+ * an observation is written, and — once #96 lands — where the terminal will sit. A column
+ * appearing therefore grows the region to the right, toward the board's own content, which
+ * is a collision the reader can see and connect to something rather than a drift they cannot.
+ *
+ * The price is the terminal's own: a board whose content is moved wholesale leaves the
+ * region behind. A reload re-measures, which is what puts it back.
+ *
+ * An empty canvas has no left edge to anchor to, so the region starts one gap left of the
+ * origin — the only case where a constant is honest, and the one origin not worth keeping.
+ */
+export function resolveMirrorOrigin(
+  remembered: { x: number; y: number } | null | undefined,
+  bounds: AnchorBounds | null | undefined,
+  width: number
+): MirrorOrigin {
+  if (remembered) return { origin: { x: remembered.x, y: remembered.y }, settled: true };
+  if (!bounds || !Number.isFinite(bounds.minX) || !Number.isFinite(bounds.minY)) {
+    return { origin: { x: -(width + MIRROR_GAP), y: 0 }, settled: false };
+  }
+  return { origin: { x: bounds.minX - MIRROR_GAP - width, y: bounds.minY }, settled: true };
 }
 
 function rectangle(partial: Partial<MirrorElement> & { id: string; x: number; y: number; width: number; height: number; customData: Record<string, unknown> }): MirrorElement {

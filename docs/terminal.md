@@ -231,6 +231,12 @@ on its own terms it looks authored. Both doors drop anything whose container is 
 without that, a text element whose container the store has never heard of ends up in the
 committed board file.
 
+There is a third place that rule has to be stated, and #99 is where it was missing: the mirror's
+own measurement (`mirrorAnchors` in `src/core/project-board-layout.ts`). It left these blocks out
+and took their labels in, so binding a title to a block the reader is expected to drag, and then
+dragging it, moved the *other* region. All three now say the same thing about a label as about
+its container.
+
 Nothing about the PTY changed this. The emulator is DOM, the transcript is the server's, and
 neither has ever been an element.
 
@@ -242,21 +248,37 @@ top of it — the mirror's own arithmetic, applied a second time. With a `github
 region to clear is the mirror; with none the mirror stays dormant, its slot is free, and the
 block takes it, one gap left of the content. So every region follows a board that grew instead
 of sitting at a coordinate somebody once picked, and the mirror and the terminal are each left
-out of the other's measurement, or each pass would walk them further apart.
+out of the other's measurement, or each pass would walk them further apart. Since #99 that
+exclusion covers **a label bound to either**, which is the rule the autosync and the export
+already stated.
 
-Placed **once**, unlike the mirror, which repaints on a timer: this one is expected to be moved
-and resized, and a redraw that re-anchored it every twenty seconds would undo that.
+Placed **once**, and since #99 the mirror is too. That used to be the difference between them:
+this block is expected to be moved and resized, and a redraw that re-anchored it every twenty
+seconds would undo that, while the mirror repainted on the timer and re-measured every time. The
+re-measuring is what let the mirror drift away from the board on its own, so both regions now
+resolve an origin the first time there is something to measure against and keep it.
+`docs/project-board.md` has which edge the mirror pins and what that costs.
+
+What still differs is what happens next. This block is the reader's to drag, and where it was
+dragged is remembered and preferred over the rule above; the mirror has no such gesture, being
+repainted from GitHub, so its origin only ever comes from the measurement.
 
 **Which side follows from that.** Placed once means the block never moves aside, so it cannot
 sit on the edge the board grows into — and the documentation, the only thing here that grows,
 grows down and right. It was on the right until #96, and anything authored past the right edge
-as it stood when the session opened ran straight into a block that would not budge. The mirror
-never had that problem because it repaints; putting the place-once shape behind it puts it on
-the edge nothing runs into.
+as it stood when the session opened ran straight into a block that would not budge. Behind the
+mirror is the edge nothing runs into, and #99 is what makes that true of the mirror as well:
+the region is pinned by its **left** edge now, so a column added on GitHub grows it rightward,
+into the gap it keeps from the board, instead of stepping 324 leftward onto this block. #96
+chose this side while the mirror still moved on every poll; the two decisions have to hold
+together, and pinning that edge is what makes them.
 
 The invariant this depends on is the other half of the same reading: **the documentation grows
-down and right.** Growing it leftward walks the mirror left on the next poll, and the mirror
-walks into the terminal — so content that has to extend leftward should be moved right instead.
+down and right.** Content extended leftward does not move the mirror on the next poll any more —
+neither region re-anchors while the session is open — but both re-measure on a reload, and the
+mirror re-measured against content that now reaches further left comes back further left, with
+the terminal placed from it. So content that has to extend leftward should still be moved right
+instead; what changed is when the collision shows up, not that it does.
 
 **One exception to "placed once."** A session opens on a `POST` that spawns a shell; the mirror
 arrives on a poll that spawns a `gh`. On a board that has a project the block is therefore

@@ -24,6 +24,8 @@ import {
   layoutMirror,
   mirrorWidth,
   columnAt,
+  mirrorAnchors,
+  resolveMirrorOrigin,
   MIRROR_KIND,
   NOTES_OPTION_ID
 } from '../../src/core/project-board-layout'
@@ -132,9 +134,6 @@ const AUTO_SYNC_DEBOUNCE_MS = 1200;
  * being spawned all day.
  */
 const PROJECT_BOARD_POLL_MS = 20000;
-
-/** Distance between the mirror's right edge and the board's own left edge. */
-const MIRROR_GAP = 120;
 
 /**
  * The key that jumps the viewport to the mirror.
@@ -1344,9 +1343,21 @@ function App(): JSX.Element {
   /** The draft heights the mirror was last laid out for; a change is what re-slots it. */
   const draftGeometryRef = useRef<string>('')
 
+  /**
+   * Where this board's mirror was put, once something measured it.
+   *
+   * The region used to be re-measured on every poll, which is what let it drift away from
+   * the board's own content with nobody touching either (#99). It is decided once now and
+   * kept — the terminal's model, and for the terminal's reason: a redraw that re-anchored a
+   * region every twenty seconds is a redraw that moves it. Reset on a board switch, because
+   * the next board's content is not this one's.
+   */
+  const mirrorOriginRef = useRef<{ x: number; y: number } | null>(null)
+
   const clearMirror = (): void => {
     projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, signature: '' }
     draftGeometryRef.current = ''
+    mirrorOriginRef.current = null
     const api = excalidrawAPIRef.current
     if (!api) return
     const scene = api.getSceneElementsIncludingDeleted()
@@ -1361,10 +1372,11 @@ function App(): JSX.Element {
   /**
    * Draw the mirror for a board that was just read.
    *
-   * Anchored to the left of whatever else is on the canvas and recomputed every time, so
-   * the region follows a board that grew rather than sitting at a coordinate somebody
-   * once picked. Draft blocks are excluded from that measurement: they live *inside* the
-   * mirror, and measuring against them would walk the region further left on every pass.
+   * Anchored to the left of whatever else is on the canvas — measured **once**, and then
+   * kept. Recomputing it on every poll is what let the region drift away from the board's
+   * own content with nobody touching either (#99); `resolveMirrorOrigin` has the whole of
+   * that reasoning, and `mirrorAnchors` says which elements the measurement is allowed to
+   * see. Both live beside the layout arithmetic so a check can ask them without a browser.
    */
   const renderMirror = (board: ProjectBoard): void => {
     const api = excalidrawAPIRef.current
@@ -1381,19 +1393,25 @@ function App(): JSX.Element {
     // placed *from* this region's own left edge, so measuring against it would walk the
     // mirror left onto the block, and the block left again, on every pass. Since #96 the
     // two sit side by side on the same side of the content, which makes this load bearing
-    // rather than merely tidy.
-    const anchors = own.filter((element) => !isDraftBlock(element)
-      && !isTerminalElement(element)
-      && !(element.containerId && drafts.some((draft) => draft.id === element.containerId)))
+    // rather than merely tidy. A title bound to the block goes with the block — that is
+    // the rule the other two doors already state, and `mirrorAnchors` is where all of it
+    // is now said once, so a check can ask it without a browser.
+    const anchors = mirrorAnchors(own)
 
-    // The notes column is drawn too, and it is as wide as the rest, so the region the
-    // mirror is anchored by has to include it.
+    // The notes column is drawn too, and it is as wide as the rest, so the width the first
+    // measurement places the region by has to include it — `mirrorWidth`, not `boardWidth`,
+    // which counts only the options the project declares.
     const width = mirrorWidth(board)
-    let origin = { x: -(width + MIRROR_GAP), y: 0 }
-    if (anchors.length > 0) {
-      const [minX, minY] = getCommonBounds(anchors as readonly NonDeletedExcalidrawElement[])
-      origin = { x: minX - MIRROR_GAP - width, y: minY }
-    }
+    const bounds = anchors.length > 0
+      ? (() => {
+        const [minX, minY] = getCommonBounds(anchors as readonly NonDeletedExcalidrawElement[])
+        return { minX, minY }
+      })()
+      : null
+    const { origin, settled } = resolveMirrorOrigin(mirrorOriginRef.current, bounds, width)
+    // Only a measured origin is remembered. A poll that ran before the scene arrived would
+    // otherwise pin the region where an empty canvas put it for the rest of the session.
+    if (settled) mirrorOriginRef.current = origin
 
     // The blocks the `+` dropped hold the top of their column, newest first, and the
     // mirrored cards start below them. Both halves of that arithmetic come from
@@ -2951,8 +2969,10 @@ function App(): JSX.Element {
     setDismissedAnchorId(null)
     lastSelectedIdRef.current = null
     // The mirror belongs to one project. Keeping the last board would let a stale set of
-    // columns decide where a card dragged on the new board was dropped.
+    // columns decide where a card dragged on the new board was dropped, and keeping where
+    // that project's region was placed would anchor this one to the other board's content.
     projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, signature: '' }
+    mirrorOriginRef.current = null
 
     pendingSceneWorkspaceRef.current = workspaceId
     holdAutoSyncForSwitch()
