@@ -152,25 +152,33 @@ function lostTheConfigLock(result: CommandResult): boolean {
 }
 
 /**
- * `git worktree add`, waited through another process's `.git/config.lock`.
+ * `git worktree add`, cut from the default branch and given no upstream of its own.
  *
- * Every worktree shares the main repository's `.git/config` — git keeps a per-worktree one
- * only when `extensions.worktreeConfig` is set, and this repository does not set it. The
- * branch is cut from `origin/HEAD`, so git sets up upstream tracking, and that writes
- * `branch.<name>.remote` and `branch.<name>.merge` in two separate transactions, each taking
- * the lock. **Git neither waits on that lock nor retries**: it fails on the spot with
- * `File exists`, and the run dies before its agent is ever spawned.
+ * **`--no-track` is two fixes in one.** Cut from `origin/HEAD`, `-b` takes that
+ * remote-tracking start point as an upstream to configure, and leaves the branch with
+ * `branch.<name>.merge = refs/heads/main`. That is an upstream nobody wants: `git pull` in the
+ * worktree fast-forwards the feature branch onto whatever the default branch gained while the
+ * agent was working, and a bare `git push` under `push.default=simple` is refused because the
+ * upstream's name does not match the branch's. The upstream an agent actually wants is written
+ * by its own first `git push -u origin issue-N`, so the right thing to hand it is none at all.
  *
- * Waiting is what removes the class, because the other writers are not all ours. Every agent
+ * Writing none is also what stops this call taking `.git/config.lock`. Every worktree shares
+ * the main repository's `.git/config` — git keeps a per-worktree one only when
+ * `extensions.worktreeConfig` is set, and this repository does not set it — and configuring an
+ * upstream wrote `branch.<name>.remote` and `branch.<name>.merge` into it in two separate
+ * transactions, each taking the lock. **Git neither waits on that lock nor retries**: it failed
+ * on the spot with `File exists`, and the run died before its agent was ever spawned.
+ *
+ * The wait below stays, because the writers taking that lock are not all ours. Every agent
  * working in a worktree eventually runs `git push -u`, which writes those same two keys into
  * that same shared file, and the server cannot serialise a process it does not own.
  *
  * A failed attempt is not a no-op. Git rolls the checkout back but **keeps the branch it just
  * created**, so re-running the same command answers `a branch named 'issue-96' already
  * exists` — a second failure, for a different reason, that looks nothing like the first. The
- * branch is deleted between attempts, which makes each attempt a true re-run of the first,
- * upstream configuration included. Only a branch this call created is deleted: one that was
- * already there is checked out rather than created, and takes no config lock to begin with.
+ * branch is deleted between attempts, which makes each attempt a true re-run of the first.
+ * Only a branch this call created is deleted: one that was already there is checked out rather
+ * than created, and takes no config lock to begin with.
  */
 async function addWorktree(
   workspace: Workspace,
@@ -181,7 +189,7 @@ async function addWorktree(
   const branchExisted = await git(workspace, at, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
   const args = branchExisted.ok
     ? ['worktree', 'add', argPath(workspace, target), branch]
-    : ['worktree', 'add', argPath(workspace, target), '-b', branch, await baseRef(workspace)];
+    : ['worktree', 'add', '--no-track', argPath(workspace, target), '-b', branch, await baseRef(workspace)];
 
   const deadline = Date.now() + CONFIG_LOCK_WAIT_MS;
   for (;;) {
