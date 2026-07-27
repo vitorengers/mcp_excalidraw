@@ -346,6 +346,119 @@ export async function ensureWorktree(
   return { ...target, branch };
 }
 
+/**
+ * A checkout left behind by a run, and how much work is sitting in it.
+ *
+ * The two counts are the evidence, not decoration: they are what tells a resumed agent how
+ * much of what it is about to read was written by somebody else, and they are what a panel
+ * would have to say to justify offering to resume at all.
+ */
+export interface HeldWorktree extends ImplementWorktree {
+  /** The directory name the checkout was created under — `issue-49`. */
+  name: string;
+  /** Commits on its branch that the base branch does not have. */
+  commits: number;
+  /** Paths `git status --porcelain` reports: uncommitted, staged or untracked. */
+  changes: number;
+}
+
+/** One `worktree …` block of `git worktree list --porcelain`, as far as this cares. */
+interface ListedWorktree {
+  path: string;
+  branch: string | null;
+}
+
+function parseWorktreeList(porcelain: string): ListedWorktree[] {
+  const listed: ListedWorktree[] = [];
+  let current: ListedWorktree | null = null;
+  for (const raw of porcelain.split('\n')) {
+    const line = raw.trim();
+    if (line.startsWith('worktree ')) {
+      current = { path: line.slice('worktree '.length).trim(), branch: null };
+      listed.push(current);
+    } else if (current && line.startsWith('branch ')) {
+      current.branch = line.slice('branch '.length).trim().replace(/^refs\/heads\//, '');
+    }
+  }
+  return listed;
+}
+
+function countOf(result: CommandResult): number {
+  const parsed = Number(result.stdout.trim());
+  return result.ok && Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Every `issue-<n>` checkout under this project's worktree root that still holds work.
+ *
+ * This is the whole of "detect an interrupted run", and it deliberately persists nothing.
+ * A record written to disk can disagree with reality — it can be written and never cleaned,
+ * or cleaned and never written — whereas the worktree **is** the work, so it cannot lie about
+ * it. It also covers the case a record never could: an agent that died before the server got
+ * round to writing anything about it still left its checkout behind.
+ *
+ * The price is that it says nothing about *when* a run started or how far it got, and that
+ * it cannot tell a run that was killed from one that finished and left a dirty tree. Both are
+ * "there is work here that nobody is doing", which is the question being asked.
+ *
+ * A clean checkout with nothing ahead of the base is not reported, and that is the right
+ * answer rather than a gap: there is nothing in it to resume.
+ */
+export async function worktreesHoldingWork(workspace: Workspace): Promise<HeldWorktree[]> {
+  const at = workspaceDirectory(workspace);
+  const inside = await git(workspace, at, ['rev-parse', '--is-inside-work-tree']);
+  if (!inside.ok || inside.stdout.trim() !== 'true') return [];
+
+  const listed = await git(workspace, at, ['worktree', 'list', '--porcelain']);
+  if (!listed.ok) return [];
+
+  const root = worktreeRoot(workspace);
+  const rootPath = argPath(workspace, root);
+  const base = await baseRef(workspace);
+  const held: HeldWorktree[] = [];
+
+  for (const entry of parseWorktreeList(listed.stdout)) {
+    // Only checkouts this module made: under the project's own worktree root, and named the
+    // way `worktreeName` names them. The main working tree is excluded by both.
+    const name = entry.path.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop() ?? '';
+    if (!/^issue-.+/.test(name)) continue;
+    if (!samePath(`${rootPath}/${name}`, entry.path)) continue;
+
+    const directory: ImplementWorktree = {
+      path: path.join(root.path, name),
+      innerPath: `${root.innerPath}/${name}`,
+      branch: entry.branch ?? name,
+    };
+    // Git lists a checkout until somebody prunes it, so the directory may well be gone.
+    if (!fs.existsSync(directory.path)) continue;
+
+    const status = await git(workspace, directory, ['status', '--porcelain']);
+    const changes = status.ok
+      ? status.stdout.split('\n').filter((line) => line.trim()).length
+      : 0;
+    const commits = countOf(await git(workspace, directory, ['rev-list', '--count', `${base}..HEAD`]));
+    if (!changes && !commits) continue;
+
+    held.push({ ...directory, name, commits, changes });
+  }
+
+  return held;
+}
+
+/**
+ * `owner/name` as the repository's own `origin` declares it, or null.
+ *
+ * The fallback for a board whose `board.config.json` names no `repo`. Read rather than
+ * guessed: reconstructing an issue URL from a branch name needs a repository, and inventing
+ * one would point the panel at somebody else's issue.
+ */
+export async function originRepo(workspace: Workspace): Promise<string | null> {
+  const remote = await git(workspace, workspaceDirectory(workspace), ['remote', 'get-url', 'origin']);
+  if (!remote.ok) return null;
+  const match = remote.stdout.trim().match(/github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/*$/i);
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+
 export interface WorktreeRelease {
   /** False when the worktree was kept, which is what `path` is then for. */
   removed: boolean;

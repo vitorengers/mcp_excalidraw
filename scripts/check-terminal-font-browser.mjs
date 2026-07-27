@@ -17,6 +17,9 @@
  * corner afterwards. And does the size survive a reload, which is a decision this change
  * made rather than a finding the issue settled.
  *
+ * The same question about the *bottom* row is `check-terminal-rows-browser.mjs`, which #104
+ * added — the cell height was wrong before the buttons existed, so it is not this check's.
+ *
  * Chrome is driven over the DevTools protocol through `ws`, the way
  * `check-terminal-browser.mjs` does it. Self-contained otherwise: it builds a throwaway
  * workspace, starts its own canvas server and kills both. Run `./node_modules/.bin/tsc` and
@@ -477,11 +480,9 @@ try {
   //
   // Width only, deliberately. Measured across the whole range, xterm's cell width is dead
   // linear in the font — 0.586px per font pixel from 8 to 24, against the 0.585 the block
-  // is drawn with — so the columns fit at every step with a pixel or two to spare. Its cell
-  // *height* is not the font times the line height: xterm measures the font's own line box
-  // first, which is a little over 1em, so a row is nearer 1.55 × the font than the 1.35
-  // `TERMINAL_CELL` assumes. That gap is there at 13 with no buttons pressed — it is what
-  // this change found rather than what it caused, and it belongs to its own issue.
+  // is drawn with — so the columns fit at every step with a pixel or two to spare. The
+  // height was not linear and was not this check's to fix: `check-terminal-rows-browser.mjs`
+  // is the vertical half, added by #104, and it sweeps the range because it has to.
   scene = await evaluate(PROBE);
   check('the emulator is drawing inside the frame, not past the right of it',
         scene.card.screen.right <= scene.card.body.right + 1,

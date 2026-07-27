@@ -12,7 +12,7 @@
  * only a block that already has an issue has anything to implement.
  */
 import { AgentUsage } from './agent-usage.js';
-import { ImplementWorktree } from './implement-worktree.js';
+import { HeldWorktree, ImplementWorktree } from './implement-worktree.js';
 import { applyAgentSettings, AgentRun, runAgent } from './issue-agent.js';
 import { Workspace } from './workspaces.js';
 
@@ -151,6 +151,49 @@ not reach into theirs. Anything you leave uncommitted keeps the worktree alive a
 a worktree with nothing outstanding is removed when the run ends.`;
 }
 
+/**
+ * The section that says the previous attempt is still in the room — or nothing at all.
+ *
+ * Nothing at all is the important half once more: a run started fresh must send the prompt it
+ * sent before this existed, byte for byte.
+ *
+ * **This is the agent reading a diff, not the agent remembering.** Resuming the previous
+ * agent's own session would be better — its transcript holds what it had decided and what it
+ * had already ruled out, which no diff can reconstruct — and Claude Code does offer
+ * `--resume <session-id>` alongside `-p`. It is not what this does, for a reason that is about
+ * where the id could live rather than about the flag. Detection here is derived from the
+ * worktree and persists nothing; a session id is not in the worktree, so carrying one across a
+ * restart means a file on disk, which is the persistence this deliberately does without. It
+ * would also mean the server appending flags to a command line somebody else wrote, and
+ * assuming that command is Claude Code — the same rewrite `agent-usage.ts` refuses to make for
+ * `--output-format`. So the agent is told, plainly, that the work is not its own and that it
+ * has to read it before it can trust it.
+ *
+ * The counts are given rather than left to be discovered because they set the expectation: an
+ * agent told there are eleven modified files and no commits knows before it looks that nothing
+ * there has been reviewed by anyone, including the process that wrote it.
+ */
+export function resumeSection(worktree: HeldWorktree | null | undefined): string {
+  if (!worktree) return '';
+
+  const left = [
+    worktree.commits
+      ? `${worktree.commits} commit(s) on this branch that the default branch does not have`
+      : null,
+    worktree.changes ? `${worktree.changes} path(s) with uncommitted changes` : null,
+  ].filter(Boolean).join(', and ') || 'no visible change';
+
+  return `\n\n---\n\nYou are resuming an implementation that was interrupted. A previous attempt at
+this issue ran in this same checkout and its process died before it finished — it was not
+cancelled, and it did not report anything. What it left behind is here: ${left}.
+
+None of that was reviewed, verified or explained, and nothing recorded why any of it was
+written. So read it before you write anything: \`git status\`, \`git diff\`, and \`git log\`
+against the default branch. Then decide whether to build on it or to discard it and start the
+change again, and say which you chose and why in the pull request. Do not assume it is correct
+because it is there, and do not begin writing on top of it without having looked.`;
+}
+
 export async function runImplementAgent(
   workspace: Workspace,
   issueUrl: string,
@@ -158,6 +201,12 @@ export async function runImplementAgent(
     agentCommand: string;
     timeoutMs?: number | null;
     worktree?: ImplementWorktree | null;
+    /**
+     * What a previous attempt left in that worktree, when this run is resuming one.
+     *
+     * Null for every ordinary run, which is what keeps the prompt unchanged for one.
+     */
+    resuming?: HeldWorktree | null;
     /**
      * Where the run's token totals go while it runs, for a command that streams them.
      *
@@ -171,7 +220,11 @@ export async function runImplementAgent(
 ): Promise<AgentRun> {
   const worktree = options.worktree ?? null;
   const prompt = `${IMPLEMENT_AGENT_PROMPT}\n\n---\n\nThe issue to implement:\n\n${issueUrl}`
-    + worktreeSection(worktree);
+    + worktreeSection(worktree)
+    // After the worktree paragraph, because it is about what is *in* the checkout that one
+    // has just introduced — and because that paragraph ends by saying a worktree is kept when
+    // work is left in it, which is precisely how this one came to exist.
+    + resumeSection(options.resuming ?? null);
   // Workspace first, environment second. `IMPLEMENT_TIMEOUT_MS` stays what it always was:
   // the board's own default, now the value a project falls back to rather than the only
   // value there is.

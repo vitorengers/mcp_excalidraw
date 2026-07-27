@@ -43,6 +43,7 @@ import {
   terminalOrigin
 } from '../../src/core/terminal-block'
 import type { Bounds } from '../../src/core/terminal-block'
+import { terminalLineBox } from './terminal-metrics'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
@@ -858,8 +859,15 @@ function App(): JSX.Element {
    * Same shape as the run that created the issue, and running for the same reason: the
    * work takes long enough that a block which still looks idle invites a second click,
    * and two agents writing to one repository is a worse outcome than a slow one.
+   *
+   * `resume` continues an attempt whose server did not survive it, in the checkout that
+   * attempt left behind. The server refuses it unless it agrees there is one to continue, so
+   * a resume can never quietly become a fresh run over work nobody read.
    */
-  const implementIssueFromBlock = async (target: IssueTarget): Promise<string | null> => {
+  const implementIssueFromBlock = async (
+    target: IssueTarget,
+    resume = false
+  ): Promise<string | null> => {
     if (!target.issueUrl) return 'This block has no issue to implement yet.'
 
     setIssue((current) => (current?.id === target.id ? { ...current, implementState: 'running' } : current))
@@ -877,7 +885,7 @@ function App(): JSX.Element {
       const response = await fetch(apiUrl('/api/implement'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: target.issueUrl })
+        body: JSON.stringify({ url: target.issueUrl, ...(resume ? { resume: true } : {}) })
       })
       if (!response.ok) {
         const body = await response.json().catch(() => ({}))
@@ -2573,7 +2581,11 @@ function App(): JSX.Element {
     size: { width: number; height: number },
     sessions: string[]
   ): void => {
-    const grid = terminalGrid(size, terminalFontRef.current)
+    // Measured here rather than remembered: a row is the font's own line box times the line
+    // height the emulator was given, and only the browser that resolved the font knows the
+    // first of those. See `frontend/src/terminal-metrics.ts`.
+    const font = terminalFontRef.current
+    const grid = terminalGrid(size, font, terminalLineBox(font))
     const signature = `${grid.cols}x${grid.rows}`
     const stale = sessions.filter((id) => terminalGridRef.current.get(id) !== signature)
     if (stale.length === 0) return

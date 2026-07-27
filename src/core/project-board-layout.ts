@@ -77,7 +77,7 @@ const NO_STATUS_STROKE = '#adb5bd';
 const NO_STATUS_FILL = '#f1f3f5';
 
 /** A card whose issue is being implemented, or has been. Anything else is unmarked. */
-export type CardImplementState = 'running' | 'done' | 'failed';
+export type CardImplementState = 'running' | 'done' | 'failed' | 'interrupted';
 
 export interface MirrorElement {
   id: string;
@@ -519,7 +519,10 @@ export function layoutBoard(
       // Whether an agent is on this issue, which the column cannot say: a card is in a
       // column because somebody put it there. `failed` is left unmarked on purpose — the
       // run is over and nothing is being implemented, which is what an unmarked card
-      // already means; the panel is where the failure is reported.
+      // already means; the panel is where the failure is reported. `interrupted` is unmarked
+      // for the same reason and one more: nothing is being implemented there either, and a
+      // card that changed outline on its own at every restart would be the board walking
+      // backwards while somebody is looking at it.
       const run = card.url ? implementing[card.url] : undefined;
       const outlined = run === 'running' || run === 'done';
 
