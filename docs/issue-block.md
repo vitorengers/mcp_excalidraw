@@ -487,9 +487,77 @@ create is "what is running right now", and until this existed the state was reac
 issue URL at a time, by a caller who already knew which URL to ask about. Finished runs are listed
 too, because one of the things worth knowing is which run left a worktree behind.
 
-State still lives in memory, so a restart loses it while the worktrees survive on disk. Nothing
-reconciles the two: a worktree left by a run the server has forgotten stays where it is, which is
-the same trade the **Reset — the run was lost** affordance already makes.
+### A run that lost its server
+
+State lives in a `Map`, so a restart empties it — and until this, a run killed with its server
+came back as *nothing*. The board said nothing had gone wrong: the cards sat in **In Progress**,
+exactly where a healthy run puts them, while `GET /api/implement` on the restarted process
+answered `0 runs recorded`. One of the worktrees held eleven modified files and no commits at
+all — 377 lines that existed only as a dirty working tree, held by nobody — and the only control
+the panel offered was **Implement / Fix**, which would have put a fresh agent in a directory full
+of changes it did not write, with nothing telling it they were there.
+
+**The fact is derived rather than kept.** At startup the server reads the worktrees:
+`src/core/implement-recovery.ts` walks `git worktree list`, keeps the `issue-<n>` checkouts under
+the project's own worktree root, and reports any with commits the base branch does not have or a
+dirty tree. Those become `ImplementRecord`s in state `interrupted`, with the checkout's path and
+its counts. Nothing is written to disk. A file could be written and never cleaned, or cleaned and
+never written; the worktree *is* the work, so it cannot disagree with itself — and it is true even
+for a run the server never got round to recording. A clean checkout with nothing ahead is not
+reported, which is the right answer rather than a gap: there is nothing in it to resume.
+
+The issue URL is reconstructed from the checkout name and the repository — `repo` in
+`board.config.json` first, then `origin` — because `issue-49` is only half of an issue URL. A
+board that declares neither gets a warning and no records rather than a URL pointing at somebody
+else's issue.
+
+**Two things this deliberately does not do.** It does not commit on anyone's behalf: a commit
+nobody wrote, with a message claiming nothing, is a commit somebody has to interpret later. And it
+does not move the card. A stranded `In Progress` card is wrong, but a card that walks backwards on
+its own while a person is looking at the board is worse — and the argument for the server writing
+the moves in the first place, that the agent is the one participant that cannot report its own
+crash, says nothing about who undoes a move when the *server* is what crashed.
+
+The price of deriving is that it cannot say *when* a run started, and cannot tell a run that was
+killed from one that finished and left a dirty checkout behind. Both read as "there is work here
+that nobody is doing", which is the question being asked. So a run whose pull request was merged
+while its worktree stayed dirty comes back as `interrupted` after a restart. `DELETE
+/api/implement` clears the record, but the next startup finds the worktree again — the way to
+settle it is to finish or discard what is in the checkout, and the panel says so.
+
+### Resuming one
+
+An `interrupted` run offers **Resume** in the panel, beside **Implement / Fix** rather than
+instead of it: continuing somebody else's half-finished change and throwing it away and starting
+again are both defensible, and they have to stay two decisions. `POST /api/implement` takes
+`resume: true`, and refuses with 409 unless the server agrees there is an interrupted run to
+continue — so a resume can never quietly become a fresh run over work nobody read. Everything else
+is the run that already existed: the same per-issue guard, the same cap, the same worktree, which
+`ensureWorktree` reuses because the checkout is named after the issue.
+
+What changes is a paragraph of the prompt. The agent is told that a previous attempt ran in this
+same checkout, that its process died rather than it giving up, how much it left — commits ahead
+and uncommitted paths — and that none of it was reviewed, verified or explained. Then it is told
+to read it (`git status`, `git diff`, `git log` against the default branch) and to decide whether
+to build on it or discard it, saying which in the pull request.
+
+**Resuming the previous agent's own session would be better and is not what this does.** Claude
+Code's `--resume <session-id>` composes with `-p`, and a transcript holds what an agent had
+decided and already ruled out, which no diff reconstructs. The obstacle is where the id could
+live: detection here persists nothing, and a session id is not in the worktree, so carrying one
+across a restart means a file on disk — the persistence this deliberately does without. It would
+also mean the server appending flags to a command line somebody else wrote and assuming that
+command is Claude Code, which is the same rewrite the token counting refuses to make for
+`--output-format`. If the session id ever does get a home that survives a restart, the two
+compose: resume the session *and* keep the paragraph, for the case where the session is gone and
+the worktree is not.
+
+`scripts/check-implement-resume.mjs` kills a server mid-run and asserts the restarted one reports
+the run as interrupted rather than as absent, that a checkout with nothing in it is reported as
+nothing, that Resume is refused for anything that is not interrupted, and that resuming does not
+become a second run. `scripts/check-implement-resume-browser.mjs` does the half that only a
+browser can answer: that the button is on screen for an interrupted run, absent for an untouched
+one, and that clicking it continues in the same checkout.
 
 ### What the agent is told
 

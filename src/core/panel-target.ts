@@ -12,6 +12,7 @@
  * sits in was a real defect once, and it compiled perfectly.
  */
 
+import { PanelRunState } from './issue-appearance.js';
 import { MIRROR_KIND } from './project-board-layout.js';
 
 export interface PanelElement {
@@ -43,7 +44,7 @@ export interface IssueTargetData {
    */
   images: string[];
   /** Set once an agent has been asked to implement the issue. */
-  implementState: 'running' | 'done' | 'failed' | null;
+  implementState: PanelRunState;
   implementUrl: string | null;
   implementError: string | null;
   /**
@@ -87,10 +88,12 @@ function asString(value: unknown): string | null {
  *
  * Narrowed rather than cast, because this is now read off a shape as well as off the
  * server's own record: a `customData.implementState` the mirror never writes must read as
- * "nothing known", not as a fourth state the panel has no branch for.
+ * "nothing known", not as a fifth state the panel has no branch for.
  */
-function asRunState(value: unknown): IssueTargetData['implementState'] {
-  return value === 'running' || value === 'done' || value === 'failed' ? value : null;
+function asRunState(value: unknown): PanelRunState {
+  return value === 'running' || value === 'done' || value === 'failed' || value === 'interrupted'
+    ? value
+    : null;
 }
 
 /** A list of ids, or an empty one — never undefined, so the panel can just map over it. */
