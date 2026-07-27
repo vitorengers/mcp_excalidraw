@@ -163,15 +163,35 @@ neither has ever been an element.
 
 ## Where it sits, and how it is drawn
 
-"The right side" is a rule, not a pixel column: `maxX + 120`, level with the top of whatever the
-board has authored. That is the mirror's own arithmetic with the sign flipped — the mirror is
-`minX - gap - width` (`src/core/project-board-layout.ts`) — and it means both regions follow a
-board that grew instead of sitting at a coordinate somebody once picked. The mirror and the
-terminal are each left out of the other's measurement, or they would walk away from the content
-in opposite directions on every pass.
+Left to right the canvas reads **terminal | mirror | content**. "The far left" is a rule, not a
+pixel column: the block is `left - 120 - width` of the region it has to clear, level with the
+top of it — the mirror's own arithmetic, applied a second time. With a `githubProject` the
+region to clear is the mirror; with none the mirror stays dormant, its slot is free, and the
+block takes it, one gap left of the content. So every region follows a board that grew instead
+of sitting at a coordinate somebody once picked, and the mirror and the terminal are each left
+out of the other's measurement, or each pass would walk them further apart.
 
 Placed **once**, unlike the mirror, which repaints on a timer: this one is expected to be moved
 and resized, and a redraw that re-anchored it every twenty seconds would undo that.
+
+**Which side follows from that.** Placed once means the block never moves aside, so it cannot
+sit on the edge the board grows into — and the documentation, the only thing here that grows,
+grows down and right. It was on the right until #96, and anything authored past the right edge
+as it stood when the session opened ran straight into a block that would not budge. The mirror
+never had that problem because it repaints; putting the place-once shape behind it puts it on
+the edge nothing runs into.
+
+The invariant this depends on is the other half of the same reading: **the documentation grows
+down and right.** Growing it leftward walks the mirror left on the next poll, and the mirror
+walks into the terminal — so content that has to extend leftward should be moved right instead.
+
+**One exception to "placed once."** A session opens on a `POST` that spawns a shell; the mirror
+arrives on a poll that spawns a `gh`. On a board that has a project the block is therefore
+placed before there is a mirror to anchor it to, lands in the mirror's own slot, and would sit
+under it for the rest of the session. It is marked `customData.awaitingMirror` when that
+happens, and the first board that lands moves it aside and takes the mark off — once, and only
+while the block is still exactly where it was put, so a reader who has already dragged it keeps
+their own placement.
 
 The block itself is a plain rectangle, and everything that reads as a terminal is a DOM overlay
 positioned over its bounds (`frontend/src/components/TerminalPanel.tsx`). Inside that overlay is

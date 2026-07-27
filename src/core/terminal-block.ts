@@ -20,11 +20,12 @@ export const TERMINAL_KIND = 'terminal';
 export const TERMINAL_ELEMENT_ID = 'terminal-block';
 
 /**
- * Distance between the board's own right edge and the terminal's left edge.
+ * Distance between the terminal's right edge and whatever it sits to the left of.
  *
- * The same 120 the mirror leaves on the left. The symmetry is the point: the mirror is
- * `minX - gap - width` and this is `maxX + gap`, so both regions follow content that grew
- * instead of sitting at a coordinate somebody once picked.
+ * The same 120 the mirror leaves between itself and the board. Both regions are
+ * `left - gap - width`, so the canvas reads terminal | mirror | content from the left and
+ * every region follows content that grew instead of sitting at a coordinate somebody
+ * once picked.
  */
 export const TERMINAL_GAP = 120;
 
@@ -54,18 +55,36 @@ export interface Bounds { minX: number; minY: number; maxX: number; maxY: number
 /**
  * Where the block goes for a board with this much on it.
  *
- * "The right side" is a rule, not a pixel column: the caller measures whatever the board
- * has authored — leaving out the mirror and the terminal itself, which are derived — and
- * the block lands one gap beyond its right edge, level with its top.
+ * "The far left" is a rule, not a pixel column: the caller measures the region the block
+ * has to clear, and the block lands one gap to the left of it, level with its top.
  *
- * An empty board has no right edge to anchor to, so the block starts one gap right of the
- * origin. That is the only case where a constant is honest.
+ * Which region that is depends on whether the board has a mirror. **With one, it is the
+ * mirror** — the leftmost thing on the canvas, and the only region that repaints, so it can
+ * afford something in the way of where it grows. **With none** — a project that names no
+ * `githubProject`, so the mirror stays dormant — the slot the mirror would have had is free
+ * and the block takes it, one gap left of the content.
+ *
+ * The side matters because of *when* the block is anchored. Unlike the mirror it is placed
+ * once and then left alone, since the reader is expected to move and resize it; a shape that
+ * never moves aside cannot sit on the edge the board grows into. The documentation is the
+ * only thing here that grows and it grows down and right, so the left is the edge nothing
+ * runs into. This was the other way round until #96, and anything authored past the right
+ * edge as it stood when the session opened ran straight into the block.
+ *
+ * An empty board with no mirror has no edge to anchor to at all, so the block starts one gap
+ * right of the origin. That is the only case where a constant is honest.
  */
-export function terminalOrigin(bounds: Bounds | null | undefined): Point {
-  if (!bounds || !Number.isFinite(bounds.maxX) || !Number.isFinite(bounds.minY)) {
-    return { x: TERMINAL_GAP, y: 0 };
-  }
-  return { x: bounds.maxX + TERMINAL_GAP, y: bounds.minY };
+export function terminalOrigin(
+  bounds: Bounds | null | undefined,
+  mirror?: Bounds | null | undefined,
+  size: Size = TERMINAL_SIZE
+): Point {
+  const usable = (region: Bounds | null | undefined): region is Bounds =>
+    Boolean(region) && Number.isFinite(region!.minX) && Number.isFinite(region!.minY);
+
+  const clear = usable(mirror) ? mirror : (usable(bounds) ? bounds : null);
+  if (!clear) return { x: TERMINAL_GAP, y: 0 };
+  return { x: clear.minX - TERMINAL_GAP - size.width, y: clear.minY };
 }
 
 /**

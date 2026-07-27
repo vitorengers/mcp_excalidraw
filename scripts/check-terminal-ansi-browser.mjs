@@ -336,7 +336,7 @@ const script = isWindows
 try {
   await waitFor(async () => (await fetch(`${BASE}/health`)).ok, 'the canvas server');
 
-  // Something authored, so "the right side" has a right side to be on.
+  // Something authored, so the block has content to be placed away from.
   await api('/api/elements', {
     method: 'POST',
     body: JSON.stringify({ type: 'rectangle', x: 0, y: 0, width: 200, height: 140,
