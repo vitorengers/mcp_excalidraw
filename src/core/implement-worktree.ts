@@ -47,6 +47,20 @@ function exec(command: string, args: string[], cwd?: string): Promise<CommandRes
   });
 }
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * How long a run waits for someone else's `.git/config.lock`, and how often it looks again.
+ *
+ * Git holds that lock for a couple of writes and releases it in milliseconds, so two seconds
+ * is generous for real contention — on Windows an attempt costs a process spawn, so a window
+ * measured in hundreds of milliseconds buys only one or two of them. It still fails fast on a
+ * stale lock left behind by a crashed git, which is a real state and has to be reported
+ * rather than waited on forever.
+ */
+const CONFIG_LOCK_WAIT_MS = 2000;
+const CONFIG_LOCK_POLL_MS = 50;
+
 /** Run git the way the workspace's own environment runs it, in the directory given. */
 function git(workspace: Workspace, at: AgentDirectory, args: string[]): Promise<CommandResult> {
   if (workspace.environment.kind === 'wsl') {
@@ -130,6 +144,72 @@ async function baseRef(workspace: Workspace): Promise<string> {
     if (exists.ok) return candidate;
   }
   return 'HEAD';
+}
+
+/** Git's own words when another process holds the lock on the shared config file. */
+function lostTheConfigLock(result: CommandResult): boolean {
+  return /could not lock config file/i.test(`${result.stderr}\n${result.stdout}`);
+}
+
+/**
+ * `git worktree add`, waited through another process's `.git/config.lock`.
+ *
+ * Every worktree shares the main repository's `.git/config` — git keeps a per-worktree one
+ * only when `extensions.worktreeConfig` is set, and this repository does not set it. The
+ * branch is cut from `origin/HEAD`, so git sets up upstream tracking, and that writes
+ * `branch.<name>.remote` and `branch.<name>.merge` in two separate transactions, each taking
+ * the lock. **Git neither waits on that lock nor retries**: it fails on the spot with
+ * `File exists`, and the run dies before its agent is ever spawned.
+ *
+ * Waiting is what removes the class, because the other writers are not all ours. Every agent
+ * working in a worktree eventually runs `git push -u`, which writes those same two keys into
+ * that same shared file, and the server cannot serialise a process it does not own.
+ *
+ * A failed attempt is not a no-op. Git rolls the checkout back but **keeps the branch it just
+ * created**, so re-running the same command answers `a branch named 'issue-96' already
+ * exists` — a second failure, for a different reason, that looks nothing like the first. The
+ * branch is deleted between attempts, which makes each attempt a true re-run of the first,
+ * upstream configuration included. Only a branch this call created is deleted: one that was
+ * already there is checked out rather than created, and takes no config lock to begin with.
+ */
+async function addWorktree(
+  workspace: Workspace,
+  at: AgentDirectory,
+  target: AgentDirectory,
+  branch: string
+): Promise<CommandResult> {
+  const branchExisted = await git(workspace, at, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
+  const args = branchExisted.ok
+    ? ['worktree', 'add', argPath(workspace, target), branch]
+    : ['worktree', 'add', argPath(workspace, target), '-b', branch, await baseRef(workspace)];
+
+  const deadline = Date.now() + CONFIG_LOCK_WAIT_MS;
+  for (;;) {
+    const attempt = await git(workspace, at, args);
+    if (attempt.ok || !lostTheConfigLock(attempt)) return attempt;
+    if (Date.now() >= deadline) return attempt;
+    if (!branchExisted.ok) await git(workspace, at, ['branch', '-D', branch]);
+    await delay(CONFIG_LOCK_POLL_MS);
+  }
+}
+
+/**
+ * One `git worktree add` at a time per repository, so we never contend with ourselves.
+ *
+ * The retry above covers the writers the server does not own; this covers the ones it does.
+ * Two implementations started in the same second both reached `git worktree add`, and one
+ * lost — serialising them means that collision never reaches the retry at all.
+ *
+ * **Around the git call only.** `linkDependencies` is the slow half of creating a worktree,
+ * twenty thousand hard links of it, and it writes nothing into `.git/config`. Holding a lock
+ * across it would make every run wait out every earlier run's dependencies for no reason.
+ */
+const worktreeAdds = new Map<string, Promise<unknown>>();
+
+function serialiseWorktreeAdd<T>(repository: string, add: () => Promise<T>): Promise<T> {
+  const queued = (worktreeAdds.get(repository) ?? Promise.resolve()).catch(() => {}).then(add);
+  worktreeAdds.set(repository, queued.catch(() => {}));
+  return queued;
 }
 
 /**
@@ -240,14 +320,17 @@ export async function ensureWorktree(
     return { ...target, branch: current.ok ? current.stdout : branch };
   }
 
-  const branchExists = await git(workspace, at, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
-  const args = branchExists.ok
-    ? ['worktree', 'add', argPath(workspace, target), branch]
-    : ['worktree', 'add', argPath(workspace, target), '-b', branch, await baseRef(workspace)];
-
-  const added = await git(workspace, at, args);
+  const added = await serialiseWorktreeAdd(workspace.path, () => addWorktree(workspace, at, target, branch));
   if (!added.ok) {
-    throw new Error(`Could not create a worktree at ${target.path}: ${added.stderr || added.stdout}`);
+    const detail = added.stderr || added.stdout;
+    // A lock still held after the whole window is a state of its own — usually a
+    // `.git/config.lock` a crashed git left behind — and saying so is the difference
+    // between a one-line fix and an afternoon.
+    throw new Error(lostTheConfigLock(added)
+      ? `Could not create a worktree at ${target.path}: .git/config.lock was still held after `
+        + `${CONFIG_LOCK_WAIT_MS}ms. Another git process is writing the shared config, or a crashed `
+        + `one left the lock behind — delete .git/config.lock if nothing else is running. ${detail}`
+      : `Could not create a worktree at ${target.path}: ${detail}`);
   }
 
   await linkDependencies(workspace, target);
