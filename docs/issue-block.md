@@ -315,6 +315,35 @@ branch inside a checkout that already is one; still isolated, but the branch the
 was expected on goes unused. A workspace with no worktree gets no such paragraph, and sends
 the prompt it sent before this existed, byte for byte.
 
+### Landing against a branch that moved
+
+One checkout per run made parallel implementations routine, and parallel implementations made the
+base move under a run: four agents cut from one commit, three merge, and the fourth's pull request
+will not. That happened the day worktrees landed.
+
+The agent already had what it needed — full permissions, `git` and `gh` — and was in fact
+attempting the rebase unprompted. What was missing was the instruction, and one sentence pointed
+the other way: *"Do not touch anything the issue does not cover"* reads, to a literal agent, as a
+reason not to touch the change that just landed.
+
+So the prompt now says the default branch may have moved while the run was working, and asks for
+the branch to be brought up to date **before the pull request is opened and again before it is
+merged** — current at open time is routinely not current at merge time. Conflicts are named as
+part of the job rather than a reason to stop, with two qualifications that matter more than the
+instruction itself: find out what the other change was for before touching it, because a conflict
+resolved without reading the other side is a guess that compiles; and keeping one side wholesale is
+refused in either direction, since silently dropping the change that just merged is the cheapest
+wrong answer available.
+
+When it genuinely cannot reconcile them it leaves the pull request open, says which files and what
+the disagreement is, and stops. A merge that quietly discards someone else's work is worse than one
+that waits for a person. And the scope sentence now carries its exception: reconciling with a
+change that merged mid-run is not widening the scope, it is finishing.
+
+`scripts/check-implement-prompt.mjs` captures the prompt as the agent receives it, over stdin,
+through the real composition path. It is a lint over instructions and says so: it cannot show that
+an agent obeys, only fail when the guidance is dropped or reworded away.
+
 ## No time limit, and the way back
 
 **Neither agent has a ceiling by default.** Implementing never did: a clock that kills a

@@ -27,6 +27,13 @@ import { Workspace } from './workspaces.js';
  * The rest is what an unattended run needs and an attended one gets for free: verify
  * instead of assuming, do not widen the scope, and — since nobody can answer a question
  * mid-run — decide the issue's open questions rather than stall on them.
+ *
+ * Step 5 exists because worktrees changed what a run is. When implementations were
+ * serialised, the branch a run cut from was still there when it finished; now four can be
+ * live at once and three can merge while the fourth works. The agent has the permissions
+ * and the tools to reconcile that itself, and was already doing so unprompted — but the
+ * instruction not to widen the scope reads, to a literal agent, as a reason not to touch
+ * the change that just landed. So the carve-out is explicit: reconciling is finishing.
  */
 export const IMPLEMENT_AGENT_PROMPT = `You will implement a GitHub issue in this repository, end to end.
 
@@ -55,12 +62,27 @@ Then:
    check scripts — and read the output. Compiling is not working. If the project's workflow
    asks for a check written against the old code first, do that: a check written after the
    fix tends to describe the fix rather than the defect.
-5. Report faithfully. If part of the issue is not done, say which part and why. A partial
+5. Land it against the branch as it is now, not as it was when you started. Other
+   implementations run at the same time as yours, so the default branch may have moved while
+   you were working. Bring your branch up to date with it before you open the pull request,
+   and again before you merge — a branch that was current at open time is often not current
+   by merge time.
+   If that raises conflicts, resolve them; that is part of the job, not a reason to stop.
+   Find out what the other change was for before you touch it — \`gh pr view\`, \`git log\`,
+   the diff itself — and reconcile the two intents. Keeping one side wholesale and dropping
+   the other is not resolution in either direction, and a conflict resolved without reading
+   the other side is a guess that compiles.
+   If you genuinely cannot reconcile them, leave the pull request open, say which files and
+   what the disagreement is, and stop. A merge that quietly discards someone else's work is
+   worse than one that waits for a person.
+6. Report faithfully. If part of the issue is not done, say which part and why. A partial
    implementation described accurately is worth more than a complete one claimed falsely.
 
 You are running unattended. Nobody can answer a question while you work, so where the issue
 leaves something open, make the defensible call, state it in the pull request, and keep
-going — asking would simply stop the work. Do not touch anything the issue does not cover.
+going — asking would simply stop the work. Do not touch anything the issue does not cover,
+except where landing your own change requires it: reconciling with a change that merged
+while you were working is not widening the scope, it is finishing.
 
 Return only the pull request URL on a line of its own as the last thing you print.`;
 
