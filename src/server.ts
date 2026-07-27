@@ -44,7 +44,7 @@ import {
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
 import type { IssueDetail } from './core/github-issue.js';
 import { IssueMemo, memoWindow } from './core/issue-memo.js';
-import { TerminalSession, shellCommandFrom } from './core/terminal-session.js';
+import { TerminalSession, loadPty, shellCommandFrom } from './core/terminal-session.js';
 import { issueBlockAppearance } from './core/issue-appearance.js';
 import { runImplementAgent } from './core/implement-agent.js';
 import {
@@ -2086,7 +2086,11 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: `Workspace is unusable: ${workspace.error}` });
   }
 
-  const shellCommand = shellCommandFrom(TERMINAL_SETTING, workspace);
+  // Which mode this session will be in has to be settled before the shell is named: the
+  // default shell is spelled differently for each. PowerShell's `-Command -` refuses to
+  // start at all when stdin is a terminal, so a PTY session asks for the plain REPL.
+  const pty = await loadPty();
+  const shellCommand = shellCommandFrom(TERMINAL_SETTING, workspace, pty ? 'pty' : 'pipe');
   if (!shellCommand) {
     return res.status(404).json({
       success: false,
@@ -2108,11 +2112,15 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
         if (terminalSessions.get(workspaceId) === session) terminalSessions.delete(workspaceId);
         broadcast({ type: 'terminal_exit', code } as WebSocketMessage, workspaceId);
       }
-    });
+    }, pty);
   } catch (error) {
     logger.error('Could not start a terminal:', error);
     return res.status(500).json({ success: false, error: (error as Error).message });
   }
+
+  // A ConPTY reports no process id until its console host has connected, and a session
+  // announced before then would carry a 0 into the block and into `taskkill` on the way out.
+  await session.started;
 
   terminalSessions.set(workspaceId, session);
   broadcast({
