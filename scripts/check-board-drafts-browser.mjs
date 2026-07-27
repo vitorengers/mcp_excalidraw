@@ -10,6 +10,12 @@
  * without waiting for the twenty-second poll. It earned its place: it caught a second
  * draft still overlapping the one being typed into, which the pure check could not see.
  *
+ * It also reads the **section header** back out of the scene after a click. `check-board-counts.mjs`
+ * covers what the header says; this covers whether the click redraws it at all, which is the
+ * half that compiles either way — the count is drawn from the same relayout the block itself
+ * triggers, so a drop that moved the cards but left the header stale would look identical here
+ * until somebody read the text.
+ *
  * It also asserts what orders that stack. `customData.draftCreatedAt` is the key; the stamp
  * in the element id is only a fallback for blocks made before the field existed. Both are
  * written from one `Date.now()`, so they agree by construction and a passing order proves
@@ -270,7 +276,9 @@ const GRAB_API = `(() => {
 const PROBE = `(() => {
   const api = window.__boardCheckApi;
   if (!api) return { error: 'no api handle' };
-  const out = { drafts: [], cards: [], add: null };
+  const out = { drafts: [], cards: [], add: null, headers: {} };
+  const sections = [];
+  const labels = [];
   for (const element of api.getSceneElements()) {
     const custom = element.customData || {};
     if (custom.projectBoardDraft && !element.containerId) {
@@ -283,6 +291,19 @@ const PROBE = `(() => {
     if (custom.kind === 'project-board' && custom.role === 'add') {
       out.add = { x: element.x, y: element.y, w: element.width, h: element.height };
     }
+    // The header is a rectangle; what a reader actually sees is the text bound to it, so
+    // both halves are collected and joined once the whole scene has been walked.
+    if (custom.kind === 'project-board' && custom.role === 'section') {
+      sections.push({ id: element.id, col: custom.sectionOptionId });
+    }
+    if (element.containerId && custom.kind === 'project-board' && custom.role === 'label') {
+      labels.push({ containerId: element.containerId, text: element.text || '' });
+    }
+  }
+  for (const section of sections) {
+    const label = labels.find((entry) => entry.containerId === section.id);
+    // A label may be wrapped over two lines; the header reads as one sentence either way.
+    out.headers[section.col] = label ? label.text.replace(/\\s*\\n\\s*/g, ' ') : null;
   }
   const state = api.getAppState();
   out.view = { scrollX: state.scrollX, scrollY: state.scrollY, zoom: state.zoom.value,
@@ -353,6 +374,12 @@ try {
   await shot('01-mirror');
 
   console.log('1. the + drops its block above the blocks already in the column');
+  // What the header said before anything was dropped: the three mirrored cards, and no
+  // second number, because there is nothing yet for a second number to count.
+  const headerBefore = scene.headers[TODO.id];
+  check('the header starts on the mirrored cards alone',
+        headerBefore === 'Todo (3)', JSON.stringify(scene.headers));
+
   const plus = toViewport(scene, scene.add.x + scene.add.w / 2, scene.add.y + scene.add.h / 2);
   await click(plus.x, plus.y);
   await sleep(900);
@@ -362,6 +389,13 @@ try {
   check('above every Todo card',
         scene.drafts.length === 1 && todoCards(scene).every((card) => card.y >= scene.drafts[0].y + scene.drafts[0].h),
         `${JSON.stringify(scene.drafts[0])} vs ${JSON.stringify(todoCards(scene))}`);
+  // #79: the block just dropped was invisible to the only number above it. The count is
+  // read off the scene rather than off the layout, because the layout is where it was
+  // already right — the question here is whether the click redraws the header at all.
+  check('and the header now counts it, drafts first',
+        scene.headers[TODO.id] === 'Todo (1 / 3)', JSON.stringify(scene.headers));
+  check('while a column that can hold no drafts keeps its single number',
+        scene.headers[DOING.id] === 'In Progress (1)', JSON.stringify(scene.headers));
 
   // The second one is where the report came from: it went underneath the first.
   await click(plus.x, plus.y);
@@ -378,6 +412,8 @@ try {
   check('the cards start below both of them',
         todoCards(scene).every((card) => scene.drafts.every((draft) => card.y >= draft.y + draft.h)),
         JSON.stringify(scene));
+  check('and the header moved with the second one, on the click rather than on the poll',
+        scene.headers[TODO.id] === 'Todo (2 / 3)', JSON.stringify(scene.headers));
 
   console.log('\n2. typing into a block pushes what is below it down, with no wait for the poll');
   const top = scene.drafts[0];
@@ -432,6 +468,8 @@ try {
   check('the blocks still stack newest-first',
         scene.drafts.length === 2 && scene.drafts[0].id === top.id,
         scene.drafts.map((draft) => `${draft.id}@${draft.y}`).join(' | '));
+  check('and the header still counts two drafts — typing into one does not make a third',
+        scene.headers[TODO.id] === 'Todo (2 / 3)', JSON.stringify(scene.headers));
   const column = [...scene.drafts, ...todoCards(scene)].sort((a, b) => a.y - b.y);
   check('and nothing in the column overlaps anything else',
         column.every((box, index) => index === 0 || box.y >= column[index - 1].y + column[index - 1].h),
