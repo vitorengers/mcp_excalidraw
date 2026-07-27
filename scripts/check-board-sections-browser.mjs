@@ -185,6 +185,12 @@ const altPress = async (code, key, virtualKey) => {
   await sleep(1400);
 };
 
+async function click(x, y) {
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1, buttons: 1 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, buttons: 0 });
+  await sleep(300);
+}
+
 async function doubleClick(x, y) {
   for (const clickCount of [1, 2]) {
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount, buttons: 1 });
@@ -233,6 +239,13 @@ const PROBE = `(() => {
                width: state.width, height: state.height };
   out.editing = Boolean(state.editingTextElement);
   out.active = document.activeElement ? document.activeElement.tagName : null;
+  out.focused = String((document.activeElement || {}).className || '');
+
+  // The strip along the bottom of the terminal block is the one part of the overlay that
+  // takes a pointer; clicking it hands the keyboard to the shell's own emulator.
+  const prompt = document.querySelector('.terminal-card__prompt');
+  const box = prompt ? prompt.getBoundingClientRect() : null;
+  out.prompt = box ? { x: box.left + box.width / 2, y: box.top + box.height / 2 } : null;
   return out;
 })()`;
 
@@ -350,18 +363,23 @@ try {
 
   console.log('\n3. and while the terminal prompt is');
   await waitFor(async () => (await evaluate(PROBE)).terminal, 'the terminal block');
-  await evaluate("document.querySelector('.terminal-card__input').focus()");
-  check('the prompt takes focus',
-        await evaluate("document.activeElement.className.includes('terminal-card__input')"));
-
+  // Alt+T first: the block sits off to the right of the board, and a prompt strip that is
+  // not on screen is not a prompt strip anyone can click.
+  await altPress('KeyT', 't', 84);
+  await waitFor(async () => (await evaluate(PROBE)).prompt, 'the terminal overlay to render');
   scene = await evaluate(PROBE);
+  await click(scene.prompt.x, scene.prompt.y);
+  scene = await evaluate(PROBE);
+  check('clicking the prompt strip puts the keyboard in the terminal',
+        /xterm/.test(scene.focused), scene.focused);
+
   const parked = { ...scene.view };
   await altPress('KeyG', 'g', 71);
   scene = await evaluate(PROBE);
   check('Alt+G leaves the board where it was while a command is being written',
         Math.abs(scene.view.scrollX - parked.scrollX) < 1 && Math.abs(scene.view.scrollY - parked.scrollY) < 1,
         `${JSON.stringify(parked)} → ${JSON.stringify(scene.view)}`);
-  await evaluate("document.querySelector('.terminal-card__input').blur()");
+  await evaluate('document.activeElement && document.activeElement.blur()');
   await sleep(200);
 
   console.log('\n4. a section cannot take a key this canvas already owns');

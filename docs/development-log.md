@@ -37,6 +37,8 @@ rule lives.
 
 | Date | Issue | PR | What was decided |
 |---|---|---|---|
+| 2026-07-27 | #75 | #88 | The terminal gets a real PTY, and an emulator to draw it. `claude` typed into the block never entered its interface: a process spawned on three pipes sees `stdin.isTTY` false, and every full-screen program asks that first. `@lydell/node-pty` is an optional dependency with prebuilts, so a checkout without it still compiles and falls back to the pipes — the block says which of the two modes it got, because the same feature behaving differently on two machines with no way to tell is worse than either. |
+| 2026-07-27 | #82 | #87 | A `+` that adds a project, and per-project agent settings. The registry was read-only in code and every agent setting was a module constant read once at startup, so adding a project meant hand-editing a JSON file outside this repository and one board ran every project's agents at the same model. The registry is read per request and written back through a temp file and a rename, so unknown keys survive rather than being re-serialised from the shape this code happens to know. |
 | 2026-07-27 | #79 | #83 | A column's count is what it holds, and a draft is held: the number beside a column counts drafts too, so a block dropped by the `+` stops being invisible to the header above it. |
 | 2026-07-27 | #78 | #81 | Enter finishes an observation and Shift+Enter breaks the line. Excalidraw's own label editor takes Enter as a newline, so the block needed its own answer rather than a button nobody presses. |
 | 2026-07-27 | #77 | #80 | The implement agent researches too. Both agents are pointed at the project's own record for anything the repository does not settle, rather than one of them guessing from the prompt. |
