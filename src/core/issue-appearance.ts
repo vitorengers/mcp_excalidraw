@@ -72,6 +72,9 @@ export interface IssueClosure {
 const isClosed = (githubState: string | null | undefined): boolean =>
   typeof githubState === 'string' && githubState.toUpperCase() === 'CLOSED';
 
+/** A run as a shape or a record reports it, including "nothing known about one". */
+export type PanelRunState = 'running' | 'done' | 'failed' | 'interrupted' | null;
+
 /**
  * Whether the panel offers **Implement / Fix**.
  *
@@ -82,13 +85,38 @@ const isClosed = (githubState: string | null | undefined): boolean =>
  *
  * A `null` state is an issue not read yet, not an open one — the button stays, because a
  * control that appeared a second after every selection would read as a glitch.
+ *
+ * An `interrupted` run keeps it, deliberately, alongside **Resume**. Starting over on work
+ * somebody else began is sometimes the right call — a previous attempt can have gone the wrong
+ * way entirely — and it has to stay possible and stay a separate decision from continuing.
  */
 export function offersImplement(input: {
   githubState: string | null;
-  implementState: 'running' | 'done' | 'failed' | null;
+  implementState: PanelRunState;
 }): boolean {
   if (isClosed(input.githubState)) return false;
   return input.implementState !== 'running' && input.implementState !== 'done';
+}
+
+/**
+ * Whether the panel offers **Resume**.
+ *
+ * Only for a run the server found interrupted, which means only for one with a checkout still
+ * holding work. Everything else has nothing to continue: a `failed` run reported its own
+ * failure and its worktree was released, a `done` one has its pull request, a `running` one is
+ * being worked on right now, and a `null` one never started.
+ *
+ * Separate from `offersImplement` rather than a mode of it, because the two answer different
+ * questions — "is there anything left to do" and "is there anything already done" — and a
+ * single control that silently changed meaning depending on state is how somebody starts over
+ * on top of work they did not know was there.
+ */
+export function offersResume(input: {
+  githubState: string | null;
+  implementState: PanelRunState;
+}): boolean {
+  if (isClosed(input.githubState)) return false;
+  return input.implementState === 'interrupted';
 }
 
 export interface ClosureView {

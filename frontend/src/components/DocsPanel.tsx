@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { closureView, offersImplement } from '../../../src/core/issue-appearance'
-import type { ClosingPullRequest } from '../../../src/core/issue-appearance'
+import { closureView, offersImplement, offersResume } from '../../../src/core/issue-appearance'
+import type { ClosingPullRequest, PanelRunState } from '../../../src/core/issue-appearance'
 import { clipboardImages, isWritableTarget, panelTakesPaste } from '../../../src/core/pasted-images'
 import { recallIssue, rememberImplement, rememberIssue } from '../issue-cache'
 import './DocsPanel.css'
@@ -26,7 +26,7 @@ export interface IssueTarget {
   /** Files attached as reference material for the run, by id in the server's file store. */
   images?: string[]
   /** Set once an agent has been asked to implement the issue. */
-  implementState?: 'running' | 'done' | 'failed' | null
+  implementState?: PanelRunState
   implementUrl?: string | null
   implementError?: string | null
   /**
@@ -154,7 +154,13 @@ export interface DocsPanelBodyProps {
    * server to name, so the issue URL is the only handle the two shapes share. Both answer
    * with an error to show, or null — a card has no element for a failure to arrive on.
    */
-  onImplementIssue?: (issue: IssueTarget) => Promise<string | null>
+  /**
+   * `resume` continues an attempt whose server did not survive it, in the checkout that
+   * attempt left behind, rather than starting the issue again from nothing. It is the same
+   * call because it is the same run — one parameter rather than a second handler, so the two
+   * cannot drift into disagreeing about which issue is being worked on.
+   */
+  onImplementIssue?: (issue: IssueTarget, resume?: boolean) => Promise<string | null>
   /** Clears a `running` state whose agent is gone. Does not stop a live run. */
   onResetImplement?: (issue: IssueTarget) => Promise<string | null>
   /** The same, for the run that researches the issue. Neither run has a time limit. */
@@ -169,7 +175,7 @@ export interface DocsPanelBodyProps {
 
 /** What is known about implementing the issue, wherever it was learned. */
 interface ImplementView {
-  state: 'running' | 'done' | 'failed' | null
+  state: PanelRunState
   url: string | null
   error: string | null
   /** The two ends of the run, ISO. `endedAt` null while it is still going. */
@@ -588,6 +594,36 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
     closedBy: issueDetail.status === 'loaded' ? issueDetail.closedBy : []
   })
 
+  /**
+   * Start the run behind either button.
+   *
+   * Optimistic, because the run itself answers immediately and the result arrives later —
+   * over the socket for a block, by asking for a card. The clock starts from here for the
+   * same reason, and is replaced by the server's own instant the moment one arrives.
+   *
+   * Written through to what is remembered as well, or the next selection would paint the
+   * record from before the click and offer to start the run a second time.
+   *
+   * One function for both controls: what differs between resuming and starting over is a
+   * flag the server reads, and everything the panel does about it — the optimistic state,
+   * the cache, the failure — is identical.
+   */
+  const startRun = async (resume: boolean): Promise<void> => {
+    if (!issue || !onImplementIssue) return
+
+    const started: ImplementView = {
+      ...NO_IMPLEMENT, state: 'running', startedAt: new Date().toISOString()
+    }
+    setImplement(started)
+    if (issueUrl) rememberImplement(workspace, issueUrl, started)
+    const error = await onImplementIssue(issue, resume)
+    if (error) {
+      const failed: ImplementView = { ...NO_IMPLEMENT, state: 'failed', error }
+      setImplement(failed)
+      if (issueUrl) rememberImplement(workspace, issueUrl, failed)
+    }
+  }
+
   return (
     <div className="element-docs">
       {issue && (
@@ -654,6 +690,21 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                   </>
                 )}
 
+                {/* Not a failure and not a run: an attempt whose server died, found again by
+                    looking at the checkout it left behind. Said in words because the board
+                    deliberately draws it as nothing — a card that changed outline on its own
+                    at every restart would be worse than one that stayed put. */}
+                {implement.state === 'interrupted' && (
+                  <p className="element-docs__hint">
+                    {implement.error
+                      ?? 'A previous attempt at this issue was interrupted and its checkout still holds work.'}
+                    {' '}Resume continues in that checkout, after reading what is in it;
+                    Implement / Fix starts the issue again. There is nothing to reset — this is
+                    read from the checkout, so it comes back until the work there is finished or
+                    thrown away.
+                  </p>
+                )}
+
                 {implement.state === 'failed' && (
                   <p className="element-docs__error">{implement.error ?? 'The run failed.'}</p>
                 )}
@@ -694,31 +745,25 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                     </button>
                   )}
 
+                  {/* Before Implement / Fix, because for an interrupted run it is the
+                      answer more often — and because the two must not be one control that
+                      changes meaning with the state, which is how somebody starts over on
+                      top of work they did not know was there. */}
+                  {offersResume({ githubState, implementState: implement.state }) && onImplementIssue && (
+                    <button
+                      type="button"
+                      className="element-docs__collapse element-docs__action"
+                      onClick={() => startRun(true)}
+                    >
+                      Resume
+                    </button>
+                  )}
+
                   {offersImplement({ githubState, implementState: implement.state }) && onImplementIssue && (
                     <button
                       type="button"
                       className="element-docs__collapse element-docs__action"
-                      onClick={async () => {
-                        // Optimistic, because the run itself answers immediately and the
-                        // result arrives later — over the socket for a block, by asking for
-                        // a card. The clock starts from here for the same reason, and is
-                        // replaced by the server's own instant the moment one arrives.
-                        //
-                        // Written through to what is remembered as well, or the next
-                        // selection would paint the record from before the click and offer
-                        // to start the run a second time.
-                        const started: ImplementView = {
-                          ...NO_IMPLEMENT, state: 'running', startedAt: new Date().toISOString()
-                        }
-                        setImplement(started)
-                        if (issueUrl) rememberImplement(workspace, issueUrl, started)
-                        const error = await onImplementIssue(issue)
-                        if (error) {
-                          const failed: ImplementView = { ...NO_IMPLEMENT, state: 'failed', error }
-                          setImplement(failed)
-                          if (issueUrl) rememberImplement(workspace, issueUrl, failed)
-                        }
-                      }}
+                      onClick={() => startRun(false)}
                     >
                       Implement / Fix
                     </button>
