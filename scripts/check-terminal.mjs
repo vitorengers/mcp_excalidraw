@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Checks the terminal the canvas hosts on the right of the board.
+ * Checks the terminal the canvas hosts on the far left of the board.
  *
  * The feature spawns a shell with full access to a repository on an API that has no
  * authentication, so most of these cases are about the guards rather than about the shell:
@@ -278,20 +278,65 @@ const stubCommand = `node "${stubShell.replace(/\\/g, '/')}"`;
 
 try {
   // ─── 1. The block's placement, before any of it runs ────────
-  console.log('1. the block is placed by the mirror\'s rule with the sign flipped');
+  //
+  // The block is placed once and then left alone, so it has to sit on the edge the board
+  // does *not* grow into. The documentation is the only thing here that grows, and it grows
+  // right; so the block goes on the far left, past the mirror, which repaints on a timer and
+  // can therefore afford to be in the way of something.
+  console.log('1. the block is placed to the left of the mirror, on the edge nothing grows into');
   const block = await importDist(join('core', 'terminal-block.js'), 'the terminal block module');
   if (block) {
     const { TERMINAL_KIND, TERMINAL_GAP, TERMINAL_SIZE, terminalOrigin, terminalBlockElement, terminalGrid } = block;
 
     check('the kind is "terminal"', TERMINAL_KIND === 'terminal', String(TERMINAL_KIND));
+
+    // What the two regions look like on a board that has a project: the content, and the
+    // mirror one gap to the left of it with its own width. The numbers are `renderMirror`'s
+    // arithmetic worked out by hand, so this case cannot drift with it silently.
     const bounds = { minX: -400, minY: 120, maxX: 900, maxY: 700 };
-    const origin = terminalOrigin(bounds);
-    check('anchored to the right edge of the content, not to a fixed column',
-          origin.x === bounds.maxX + TERMINAL_GAP, `${JSON.stringify(origin)} for ${JSON.stringify(bounds)}`);
-    check('and to the top of it, the way the mirror is', origin.y === bounds.minY, String(origin.y));
-    const moved = terminalOrigin({ ...bounds, maxX: bounds.maxX + 1000 });
-    check('a board that grew moves the block with it', moved.x === origin.x + 1000, `${origin.x} → ${moved.x}`);
-    check('an empty board still gets an origin', Number.isFinite(terminalOrigin(null).x));
+    const mirror = { minX: -1000, minY: 120, maxX: -520, maxY: 940 };
+
+    const origin = terminalOrigin(bounds, mirror);
+    check('anchored to the mirror\'s left edge, not to a fixed column',
+          origin.x === mirror.minX - TERMINAL_GAP - TERMINAL_SIZE.width,
+          `${JSON.stringify(origin)} for a mirror at ${mirror.minX}`);
+    check('and to the top of it, the way the mirror is level with the content',
+          origin.y === mirror.minY, String(origin.y));
+    check('so the block is clear of the mirror rather than under it',
+          origin.x + TERMINAL_SIZE.width <= mirror.minX,
+          `block ends at ${origin.x + TERMINAL_SIZE.width}, mirror starts at ${mirror.minX}`);
+
+    // The point of the whole arrangement: the documentation grows rightward, and the block
+    // that is never re-anchored is no longer on that edge.
+    const grewRight = terminalOrigin({ ...bounds, maxX: bounds.maxX + 1000 }, mirror);
+    check('a board that grew rightward leaves the block exactly where it was',
+          grewRight.x === origin.x, `${origin.x} → ${grewRight.x}`);
+
+    // And the parenthesis in the observation: growing leftward walks the mirror left on the
+    // next poll, so the block has to be measured from the mirror and not from the content.
+    const grewLeft = terminalOrigin({ ...bounds, minX: bounds.minX - 1000 },
+                                    { ...mirror, minX: mirror.minX - 1000 });
+    check('a board that grew leftward walks the mirror left, and the block with it',
+          grewLeft.x === origin.x - 1000, `${origin.x} → ${grewLeft.x}`);
+    check('and the block is still clear of the mirror that moved',
+          grewLeft.x + TERMINAL_SIZE.width <= mirror.minX - 1000,
+          `block ends at ${grewLeft.x + TERMINAL_SIZE.width}, mirror starts at ${mirror.minX - 1000}`);
+
+    // A board with no `githubProject` grows no mirror at all, so the slot the mirror would
+    // have had is free and the block takes it.
+    const noMirror = terminalOrigin(bounds, null);
+    check('with no mirror the block takes the mirror\'s own slot',
+          noMirror.x === bounds.minX - TERMINAL_GAP - TERMINAL_SIZE.width,
+          `${JSON.stringify(noMirror)} for content starting at ${bounds.minX}`);
+    check('level with the content\'s top', noMirror.y === bounds.minY, String(noMirror.y));
+    check('and it is the same call with the mirror left out, not a second rule',
+          terminalOrigin(bounds).x === noMirror.x,
+          `${terminalOrigin(bounds).x} vs ${noMirror.x}`);
+
+    check('an empty board still gets a finite origin', Number.isFinite(terminalOrigin(null).x));
+    check('an empty board that already has a mirror is measured against it',
+          terminalOrigin(null, mirror).x === mirror.minX - TERMINAL_GAP - TERMINAL_SIZE.width,
+          String(terminalOrigin(null, mirror).x));
 
     const element = terminalBlockElement(origin, TERMINAL_SIZE);
     check('the block is marked derived', element.customData?.kind === TERMINAL_KIND,
@@ -474,13 +519,25 @@ try {
   const empty = await call(BASE, '/api/terminal/input', { method: 'POST', body: JSON.stringify({}) });
   check('input with nothing in it is a 400', empty.status === 400, `got ${empty.status}`);
 
-  // ─── 8. One session per workspace ───────────────────────────
-  console.log('\n8. a second session for the same board is refused, not spawned');
+  // ─── 8. A second session is a second shell, and the first is untouched ──
+  //
+  // This used to be the 409 case. The cap moved from 1 to N (#94) and
+  // `scripts/check-terminal-tabs.mjs` owns what that means; what is still this file's
+  // business is that the session it has been driving all along is not disturbed by another
+  // one appearing beside it. Closed again straight away, because the cases below address the
+  // routes without naming a session, which is only unambiguous while there is one.
+  console.log('\n8. a second session is a second shell, and the first is left alone');
   const second = await call(BASE, '/api/terminal', { method: 'POST' });
-  check('409 Conflict', second.status === 409, `got ${second.status} ${JSON.stringify(second.body)}`);
+  check('202 Accepted', second.status === 202, `got ${second.status} ${JSON.stringify(second.body)}`);
+  check('with a process of its own', alive(second.body?.session?.pid) && second.body?.session?.pid !== pid,
+        `${pid} → ${second.body?.session?.pid}`);
   const status = await call(BASE, '/api/terminal');
-  check('and the one session is untouched', Boolean(pid) && status.body?.session?.pid === pid,
-        `${status.body?.session?.pid} vs ${pid}`);
+  check('and the first session is untouched',
+        Boolean(pid) && (status.body?.sessions ?? []).some((one) => one.pid === pid),
+        JSON.stringify((status.body?.sessions ?? []).map((one) => one.pid)));
+  await call(BASE, `/api/terminal?sessionId=${second.body?.session?.id}`, { method: 'DELETE' });
+  await waitFor(async () => ((await call(BASE, '/api/terminal')).body?.sessions ?? []).length === 1,
+                'the second session to go again');
 
   // ─── 9. Resizing ───────────────────────────────────────────
   console.log('\n9. the block\'s size reaches the session');
@@ -490,8 +547,8 @@ try {
         JSON.stringify(resized.body?.session));
   const afterResize = await call(BASE, '/api/terminal');
   check('so a later reader sees it too',
-        afterResize.body?.session?.cols === 132 && afterResize.body?.session?.rows === 43,
-        JSON.stringify(afterResize.body?.session));
+        afterResize.body?.sessions?.[0]?.cols === 132 && afterResize.body?.sessions?.[0]?.rows === 43,
+        JSON.stringify(afterResize.body?.sessions));
   check('every viewer hears about it',
         viewer.messages.some((message) => message.type === 'terminal_resized' && message.cols === 132),
         JSON.stringify(viewer.messages.filter((message) => message.type === 'terminal_resized')));
@@ -502,9 +559,10 @@ try {
   console.log('\n10. a socket that connects late replays the scrollback');
   const late = watch(PORT);
   await late.open;
-  await waitFor(() => late.messages.some((message) => message.type === 'terminal_session'),
-                'the session to be announced to a new socket');
-  const announced = late.messages.find((message) => message.type === 'terminal_session');
+  await waitFor(() => late.messages.some((message) => message.type === 'terminal_sessions'),
+                'the live sessions to be announced to a new socket');
+  // The whole live set, so a viewer can reconcile rather than merely add to what it has.
+  const announced = late.messages.find((message) => message.type === 'terminal_sessions')?.sessions?.[0];
   check('the session is announced', Boolean(announced?.session), JSON.stringify(announced ?? null));
   check('with the scrollback that was already produced',
         containsPath(announced?.scrollback, projectDir) && String(announced?.scrollback).includes('banana'),
@@ -571,7 +629,7 @@ try {
         `${ticksAfterClose} → ${ticks()} bytes, so it kept ticking`);
 
   const gone = await call(BASE, '/api/terminal');
-  check('no session is reported any more', !gone.body?.session, JSON.stringify(gone.body));
+  check('no session is reported any more', (gone.body?.sessions ?? []).length === 0, JSON.stringify(gone.body));
   const closeAgain = await call(BASE, '/api/terminal', { method: 'DELETE' });
   check('closing what is already closed is a 404', closeAgain.status === 404, `got ${closeAgain.status}`);
 
@@ -582,8 +640,8 @@ try {
   check('with a process of its own', reopened.body?.session?.pid !== pid && alive(reopened.body?.session?.pid),
         `${pid} → ${reopened.body?.session?.pid}`);
   check('and an empty transcript',
-        !String((await call(BASE, '/api/terminal')).body?.scrollback ?? '').includes('banana'),
-        String((await call(BASE, '/api/terminal')).body?.scrollback ?? '').slice(-200));
+        !String((await call(BASE, '/api/terminal')).body?.sessions?.[0]?.scrollback ?? '').includes('banana'),
+        String((await call(BASE, '/api/terminal')).body?.sessions?.[0]?.scrollback ?? '').slice(-200));
 
   console.log('\n14. and a server going down does not leave a shell behind');
   const survivor = reopened.body?.session?.pid;

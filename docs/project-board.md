@@ -1,9 +1,14 @@
 # Project board mirror
 
-A region on the left of the canvas showing the workspace's GitHub project: one section per
-column, newest issue on top, cards you can drag between columns with the move travelling back to
-GitHub. Dormant unless a project names a `githubProject`, so a board that has none never grows
-one.
+A region to the left of the board's own content, showing the workspace's GitHub project: one
+section per column, newest issue on top, cards you can drag between columns with the move
+travelling back to GitHub. Dormant unless a project names a `githubProject`, so a board that has
+none never grows one.
+
+Not the leftmost region since #96: the terminal sits one gap further left again, anchored to
+this one (`docs/terminal.md`). It has to be, because the mirror repaints every twenty seconds
+and the terminal is placed once — so the shape that never moves aside belongs where nothing is
+coming.
 
 Nothing here names a column. That is the whole point — a fourth option added on GitHub is a
 fourth section on the next poll, with nothing edited in this repository.

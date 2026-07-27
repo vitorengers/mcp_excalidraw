@@ -102,12 +102,16 @@ if (has('terminalCell', terminalCell)) {
         JSON.stringify(terminalCell()));
 }
 if (has('terminalChrome', terminalChrome)) {
+  // 84 rather than the 62 this was written with: #94 added the tab strip, which is `em` like
+  // the rest of the frame. The number is the measurement, not the point — what the two cases
+  // hold to is that it is a real one and that it scales.
   const chrome = terminalChrome(TERMINAL_FONT_SIZE);
-  check('the frame at the default is the measured 20 × 62',
-        Math.abs(chrome.width - 20) < 0.001 && Math.abs(chrome.height - 62) < 0.001,
+  check('the frame at the default is the measured 20 × 84',
+        Math.abs(chrome.width - 20) < 0.001 && Math.abs(chrome.height - 84) < 0.001,
         JSON.stringify(chrome));
-  // The header, the prompt strip and the padding are all `em`, so they grow with the text
-  // they hold. A frame that stayed 62 would hand the emulator rows the block cannot show.
+  // The header, the tab strip, the prompt strip and the padding are all `em`, so they grow
+  // with the text they hold. A frame that stood still would hand the emulator rows the block
+  // cannot show.
   const doubled = terminalChrome(TERMINAL_FONT_SIZE * 2);
   check('and it grows with the text, because every part of it is sized in em',
         Math.abs(doubled.height - chrome.height * 2) < 0.001,

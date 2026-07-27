@@ -53,7 +53,7 @@ import {
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
 import type { IssueDetail } from './core/github-issue.js';
 import { IssueMemo, memoWindow } from './core/issue-memo.js';
-import { TerminalSession, loadPty, shellCommandFrom } from './core/terminal-session.js';
+import { TERMINAL_SESSION_LIMIT, TerminalSession, loadPty, shellCommandFrom } from './core/terminal-session.js';
 import { issueBlockAppearance } from './core/issue-appearance.js';
 import { runImplementAgent } from './core/implement-agent.js';
 import {
@@ -193,17 +193,20 @@ wss.on('connection', (ws: WebSocket, request) => {
   ws.send(JSON.stringify(syncMessage));
 
   // A terminal session outlives the socket watching it — a reload, a tab switched away and
-  // back, a second window — so the transcript is replayed here rather than being lost with
-  // whichever socket happened to receive it. Sent only when there is a session: a board with
-  // none must not be told about a feature that is switched off.
-  const terminal = terminalSessions.get(workspaceId);
-  if (terminal) {
+  // back, a second window — so every live transcript is replayed here rather than being lost
+  // with whichever socket happened to receive it.
+  //
+  // The whole set, and sent even when it is empty, because this is what a viewer reconciles
+  // its tabs against: a session that ended while the tab was disconnected has to be *absent*
+  // from a list rather than merely unmentioned, or the block would keep a tab for a shell
+  // that has gone. Gated on the feature being on rather than on there being a session, for
+  // the reason the old code gated on the session: a board that never turned this on is told
+  // nothing at all about it.
+  if (TERMINAL_SETTING) {
     ws.send(JSON.stringify({
-      type: 'terminal_session',
+      type: 'terminal_sessions',
       workspace: workspaceId,
-      session: terminal.summary(),
-      scrollback: terminal.scrollback,
-      sequence: terminal.sequence
+      sessions: Array.from(terminalSessionsFor(workspaceId).values()).map(terminalReplay)
     }));
   }
 
@@ -2145,15 +2148,49 @@ app.get('/api/library', async (req: Request, res: Response) => {
 // A shell the server owns, running in a workspace, streaming as it goes. It is a strictly
 // worse thing to leave reachable than the issue block — that one spawns a process with a
 // fixed prompt, this one runs whatever arrives — so it copies the issue block's guards
-// exactly: opt in by environment variable, loopback only, one session per workspace.
+// exactly: opt in by environment variable, loopback only, and a capped number of sessions
+// per workspace.
+//
+// The count was one and is now `TERMINAL_SESSION_LIMIT`, which is a guard **relaxed** rather
+// than removed: a page that could ask in a loop would otherwise be asking for as many shells
+// as it liked. The other two are untouched.
 //
 // `EXCALIDRAW_TERMINAL` unset means these routes do not exist. Not "answer 403", not
 // "answer with an empty session": 404, the same shape the issue block uses, so a canvas
 // that never turned it on cannot tell a disabled feature from an absent one.
 const TERMINAL_SETTING = process.env.EXCALIDRAW_TERMINAL || null;
 
-/** One session per board, which is what makes a second request a conflict. */
-const terminalSessions = new Map<string, TerminalSession>();
+/**
+ * Every session, by board and then by id.
+ *
+ * Two levels rather than a joined key, because both questions get asked: "which sessions
+ * does this board have" is the list a viewer connects into, and "which session is this" is
+ * every route below.
+ */
+const terminalSessions = new Map<string, Map<string, TerminalSession>>();
+
+/** What the next session on a board is called. Never reused, so an id is never ambiguous. */
+const terminalCounters = new Map<string, number>();
+
+function terminalSessionsFor(workspaceId: string): Map<string, TerminalSession> {
+  const existing = terminalSessions.get(workspaceId);
+  if (existing) return existing;
+  const created = new Map<string, TerminalSession>();
+  terminalSessions.set(workspaceId, created);
+  return created;
+}
+
+/** Short and readable, because it is also what a tab on the block is labelled with. */
+function nextTerminalId(workspaceId: string): string {
+  const next = (terminalCounters.get(workspaceId) ?? 0) + 1;
+  terminalCounters.set(workspaceId, next);
+  return `s${next}`;
+}
+
+/** One session, as a viewer that has not been watching needs it. */
+function terminalReplay(session: TerminalSession): Record<string, unknown> {
+  return { session: session.summary(), scrollback: session.scrollback, sequence: session.sequence };
+}
 
 /**
  * The two guards, in one place.
@@ -2181,29 +2218,59 @@ function terminalRefused(res: Response): boolean {
   return false;
 }
 
-/** The session for a board, or a 404 saying there is none. */
+/**
+ * The session a request names, or the answer explaining why there is none.
+ *
+ * The id is optional, and what makes that safe is that its absence is never *guessed* at.
+ * With one session open there is nothing to be ambiguous between, and the routes stay
+ * scriptable by hand the way `docs/terminal.md` describes them. With several, an unnamed
+ * request is a 400 that lists them rather than a shell chosen by iteration order — "whichever
+ * one is open" is precisely the defect that made tabs impossible.
+ */
 function requireTerminal(req: Request, res: Response): TerminalSession | null {
-  const workspaceId = workspaceIdFrom(req);
-  const session = terminalSessions.get(workspaceId);
-  if (!session) {
+  const sessions = terminalSessionsFor(workspaceIdFrom(req));
+  const named = typeof req.body?.sessionId === 'string'
+    ? req.body.sessionId
+    : (typeof req.query.sessionId === 'string' ? req.query.sessionId : null);
+
+  if (named) {
+    const session = sessions.get(named);
+    if (!session) {
+      res.status(404).json({ success: false, error: `No terminal session "${named}" is open for this board.` });
+      return null;
+    }
+    return session;
+  }
+
+  if (sessions.size === 0) {
     res.status(404).json({ success: false, error: 'No terminal session is open for this board.' });
     return null;
   }
-  return session;
+  if (sessions.size > 1) {
+    res.status(400).json({
+      success: false,
+      error: `This board has ${sessions.size} terminal sessions open, so the request must name one in "sessionId".`,
+      sessions: Array.from(sessions.keys())
+    });
+    return null;
+  }
+  return sessions.values().next().value ?? null;
 }
 
 app.post('/api/terminal', async (req: Request, res: Response) => {
   if (terminalRefused(res)) return;
 
   const workspaceId = workspaceIdFrom(req);
-  const existing = terminalSessions.get(workspaceId);
-  if (existing) {
-    // 409 rather than a second shell: two shells in one repository is the collision the
-    // implement agent's worktrees exist to avoid, and here nobody asked for a second one.
+  const sessions = terminalSessionsFor(workspaceId);
+  if (sessions.size >= TERMINAL_SESSION_LIMIT) {
+    // Still a 409, and still for the same reason it was one when the cap was 1: the number
+    // of shells a board may run is a guard, and a request past it is a conflict with that
+    // guard rather than a request that failed. It names the cap, because a refusal that does
+    // not say what the limit is leaves a caller retrying against a wall it cannot see.
     return res.status(409).json({
       success: false,
-      error: 'A terminal session is already open for this board.',
-      session: existing.summary()
+      error: `This board already has ${sessions.size} terminal sessions open, which is the cap of ${TERMINAL_SESSION_LIMIT}. Close one first.`,
+      sessions: Array.from(sessions.values()).map((one) => one.summary())
     });
   }
 
@@ -2231,19 +2298,20 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
     });
   }
 
+  const sessionId = nextTerminalId(workspaceId);
   let session: TerminalSession;
   try {
-    session = new TerminalSession(workspace, shellCommand, {
+    session = new TerminalSession(sessionId, workspace, shellCommand, {
       onOutput: (data, sequence) => {
-        broadcast({ type: 'terminal_output', data, sequence } as WebSocketMessage, workspaceId);
+        broadcast({ type: 'terminal_output', sessionId, data, sequence } as WebSocketMessage, workspaceId);
       },
       onExit: (code) => {
         // Dropped from the map here rather than on the DELETE, because a shell that ended
         // on its own — `exit`, or a crash — has to free the slot too. Only if it is still
-        // the current one: a session opened after this one exited must not be evicted by
-        // its predecessor's event.
-        if (terminalSessions.get(workspaceId) === session) terminalSessions.delete(workspaceId);
-        broadcast({ type: 'terminal_exit', code } as WebSocketMessage, workspaceId);
+        // the one under that id: ids are never reused, so this is belt and braces, but a
+        // session evicting a successor is exactly the bug the old single-slot map could have.
+        if (sessions.get(sessionId) === session) sessions.delete(sessionId);
+        broadcast({ type: 'terminal_exit', sessionId, code } as WebSocketMessage, workspaceId);
       }
     }, pty);
   } catch (error) {
@@ -2255,7 +2323,7 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
   // announced before then would carry a 0 into the block and into `taskkill` on the way out.
   await session.started;
 
-  terminalSessions.set(workspaceId, session);
+  sessions.set(sessionId, session);
   broadcast({
     type: 'terminal_session',
     session: session.summary(),
@@ -2268,15 +2336,21 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
   res.status(202).json({ success: true, session: session.summary() });
 });
 
+// A list, in the order the sessions were opened, each with its own transcript. Not "the
+// session and its scrollback" any more: the singular was the shape of the old rule, and a
+// caller that reads one field cannot tell a board with two tabs from a board with one.
 app.get('/api/terminal', (req: Request, res: Response) => {
   if (terminalRefused(res)) return;
 
-  const session = terminalSessions.get(workspaceIdFrom(req));
+  const sessions = terminalSessionsFor(workspaceIdFrom(req));
   res.json({
     success: true,
-    session: session ? session.summary() : null,
-    scrollback: session?.scrollback ?? '',
-    sequence: session?.sequence ?? 0
+    limit: TERMINAL_SESSION_LIMIT,
+    sessions: Array.from(sessions.values()).map((session) => ({
+      ...session.summary(),
+      scrollback: session.scrollback,
+      sequence: session.sequence
+    }))
   });
 });
 
@@ -2310,6 +2384,7 @@ app.post('/api/terminal/resize', (req: Request, res: Response) => {
   session.resize(Math.floor(cols), Math.floor(rows));
   broadcast({
     type: 'terminal_resized',
+    sessionId: session.id,
     cols: Math.floor(cols),
     rows: Math.floor(rows)
   } as WebSocketMessage, workspaceIdFrom(req));
@@ -2321,10 +2396,11 @@ app.delete('/api/terminal', (req: Request, res: Response) => {
   const session = requireTerminal(req, res);
   if (!session) return;
 
-  const workspaceId = workspaceIdFrom(req);
   session.close();
-  terminalSessions.delete(workspaceId);
-  res.json({ success: true, closed: true });
+  // By id, not by board: closing one tab must leave the others running, and a delete keyed
+  // on the workspace would take the whole strip with it.
+  terminalSessionsFor(workspaceIdFrom(req)).delete(session.id);
+  res.json({ success: true, closed: true, sessionId: session.id });
 });
 
 /**
@@ -2336,7 +2412,9 @@ app.delete('/api/terminal', (req: Request, res: Response) => {
  * sessions are closed on the way out rather than left to be inherited.
  */
 function closeAllTerminals(): void {
-  for (const session of terminalSessions.values()) session.close();
+  for (const sessions of terminalSessions.values()) {
+    for (const session of sessions.values()) session.close();
+  }
   terminalSessions.clear();
 }
 

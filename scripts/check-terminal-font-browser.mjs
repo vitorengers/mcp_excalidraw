@@ -153,7 +153,9 @@ const api = (path, options = {}) => request(`${BASE}${path}${path.includes('?') 
   ...options,
 });
 
-const session = async () => (await (await api('/api/terminal')).json())?.session ?? null;
+// The board's one session: `GET /api/terminal` lists them since #94, and nothing here opens
+// a second, so the first is the one every case below is about.
+const session = async () => ((await (await api('/api/terminal')).json())?.sessions ?? [])[0] ?? null;
 
 // ─── Talking to Chrome ────────────────────────────────────────
 
@@ -507,12 +509,33 @@ try {
 
   console.log('\n5. the block is still a block: selectable, and resizable by its corner');
   const held = { w: scene.block.w, h: scene.block.h, cols: largest.cols };
+
+  // A viewport of this case's own, rather than the one Alt+T fitted.
+  //
+  // The corner handle sits *on* the block's bottom-right vertex, so the press has to be that
+  // point converted back — and `(clientX / zoom) - scrollX` does not always give the vertex
+  // back exactly. A tenth of a picometre past it reads as the shape rather than the handle,
+  // and the block moves instead of growing: the case then fails on floating point rather
+  // than on anything the code did. Round numbers, chosen here, convert back exactly. Fitting
+  // also leaves the corner hard against the bottom of the window, with no room to drag it.
+  {
+    const zoom = 0.8;
+    await evaluate(`window.__terminalCheckApi.updateScene({ appState: { scrollX: ${300 / zoom - scene.block.x}, scrollY: ${(150 - scene.view.offsetTop) / zoom - scene.block.y}, zoom: { value: ${zoom} } } })`);
+    await sleep(400);
+    scene = await evaluate(PROBE);
+  }
+
   const centre = toViewport(scene, scene.block.x + scene.block.w / 2, scene.block.y + scene.block.h / 2);
   await click(centre.x, centre.y);
   scene = await evaluate(PROBE);
   check('clicking it through the overlay still selects it',
         scene.selected.includes(scene.block.id), JSON.stringify(scene.selected));
 
+  // Two pixels inside the corner, not exactly on it. The handle is centred on the vertex, so
+  // both land on it — but the vertex itself is the boundary, and converting it back to scene
+  // coordinates lands a hair *outside* the shape when the block sits at a negative x, which
+  // is where it lives since #96. Excalidraw then reads the press as a drag of the shape and
+  // the block moves instead of growing, which is a case failing on floating point.
   const corner = toViewport(scene, scene.block.x + scene.block.w, scene.block.y + scene.block.h);
   await drag(corner, { x: corner.x + 200, y: corner.y + 140 });
   scene = await evaluate(PROBE);
