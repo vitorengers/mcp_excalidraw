@@ -538,6 +538,33 @@ function App(): JSX.Element {
   }
 
   /**
+   * Clear a `running` research run whose agent is gone.
+   *
+   * The run has no time limit, so nothing else ever clears that state — and the create
+   * control is hidden while it holds, which would leave a lost run holding the block for
+   * good. Addressed by element id, unlike the implement reset: an observation is only ever
+   * a block, so there is no mirrored card to reach here.
+   */
+  const resetIssueOnBlock = async (target: IssueTarget): Promise<string | null> => {
+    try {
+      const response = await fetch(apiUrl(`/api/issue-block/${target.id}`), { method: 'DELETE' })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        return body?.error ?? `HTTP ${response.status}`
+      }
+      // Mirrors what the server writes, rather than waiting for it to arrive: a block that
+      // already has an issue goes back to showing it, one that has none to offering a run.
+      setIssue((current) =>
+        current?.id === target.id
+          ? { ...current, state: current.issueUrl ? 'created' : 'draft', issueError: null }
+          : current)
+      return null
+    } catch (error) {
+      return (error as Error).message
+    }
+  }
+
+  /**
    * Ask an agent to implement the issue this block produced.
    *
    * Same shape as the run that created the issue, and running for the same reason: the
@@ -2083,6 +2110,7 @@ function App(): JSX.Element {
             onDetachImage={detachIssueImage}
             onImplementIssue={implementIssueFromBlock}
             onResetImplement={resetImplementOnBlock}
+            onResetIssue={resetIssueOnBlock}
           />
         </div>
       </div>

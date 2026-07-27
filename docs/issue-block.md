@@ -21,6 +21,9 @@ own text, or from a text element bound to it. State lands back on the element as
 
 A second click while a run is in flight gets 409. So does a block that already has an issue.
 
+There is no time limit on the run, and a block stuck in `running` can be reset —
+[No time limit, and the way back](#no-time-limit-and-the-way-back) covers both agents.
+
 ## Reference images
 
 A block can carry images as well as text. Select it, pick them with **Attach reference
@@ -143,24 +146,6 @@ It is best-effort by design: no project, no such column, an issue that is not on
 `gh` that fails are all logged and nothing more. The run still starts. `docs/project-board.md` has
 the column-resolution rule and `projectInProgressColumn`.
 
-### No time limit, and the way back
-
-Researching an issue keeps its twenty-minute ceiling: it is bounded work, and that number
-came from a real run. **Implementing has none.** A clock that kills a working agent halfway
-through a change leaves a branch nobody asked for and no pull request, which is worse than
-a run that takes an hour. `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` (seconds) puts a ceiling
-back for anyone who wants one.
-
-The ceiling was not decoration, though — its job was that a wedged run could not hold a
-block in `running` forever. With it gone, that guarantee comes from the card instead: a
-running block offers **Reset — the run was lost**, and `DELETE /api/issue-block/:id/implement`
-clears the state.
-
-That reset clears state; it does not stop an agent. Nothing here can reach into a process
-the server no longer owns. What it does do is refuse — 409 — while a run is in flight *in
-this process*, which is the case that matters: the element cannot tell a live run from an
-abandoned one, and the server can.
-
 ### One checkout per run
 
 Every implementation gets a **git worktree of its own** — `<project>-worktrees/issue-<n>`, on a
@@ -238,13 +223,54 @@ branch inside a checkout that already is one; still isolated, but the branch the
 was expected on goes unused. A workspace with no worktree gets no such paragraph, and sends
 the prompt it sent before this existed, byte for byte.
 
+## No time limit, and the way back
+
+**Neither agent has a ceiling by default.** Implementing never did: a clock that kills a
+working agent halfway through a change leaves a branch nobody asked for and no pull request.
+Researching kept twenty minutes for a while, on the premise that it was bounded work —
+reading and drafting, and the number came from a real run. That premise went. The
+investigation also reads reference images, existing issues and the project's own
+documentation now, and a real run was killed at 1200s **having already created its issue**,
+reported as a failure with no URL. `EXCALIDRAW_ISSUE_AGENT_TIMEOUT` and
+`EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` (both in seconds) put a ceiling back for anyone who
+wants one.
+
+A killed run was supposed to be survivable: on timeout the run salvages a URL from whatever
+the agent printed, so a slow success is not reported as a failure. **That is not a guarantee,
+and it was documented as one.** The configured command is `claude -p` with no
+`--output-format stream-json`, so its stdout arrives only at process exit — at the kill there
+is nothing to read. The salvage is kept because it does work for a command that streams, but
+what stops the trap is the ceiling not firing.
+
+The ceiling was not decoration, though — its job was that a wedged run could not hold a block
+in `running` forever. With it gone, that guarantee comes from the card instead. A running
+block offers **Reset — the run was lost**:
+
+- `DELETE /api/issue-block/:id` clears a stuck research run — `issueState` and `issueError`.
+  The issue it produced, if it got that far, is left alone, which is what stops a reset
+  becoming a second issue for one observation: `POST` still refuses a block that has an
+  `issueUrl`.
+- `DELETE /api/issue-block/:id/implement`, and `DELETE /api/implement` for a mirrored card,
+  clear a stuck implementation.
+
+Either reset clears state; neither stops an agent. Nothing here can reach into a process the
+server no longer owns, and a button that claimed to would be lying. What they do is refuse —
+409 — while a run is in flight *in this process*, which is the case that matters: the state
+on the element cannot tell a live run from an abandoned one, and the server can. In-flight
+runs are tracked in memory, so a restart is precisely when a `running` element has no run
+behind it and the reset is the only way out.
+
 ## Configuration
 
 ```
 EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob"'
-EXCALIDRAW_ISSUE_AGENT_TIMEOUT=1200
 EXCALIDRAW_IMPLEMENT_CONCURRENCY=4
 ```
+
+`EXCALIDRAW_ISSUE_AGENT_TIMEOUT=1200` used to be here, and pinning it in the environment is
+how the twenty minutes outlived the code default. **Whatever starts the board sets these
+variables and lives outside this repository** — `start-board.ps1`, per `HANDOFF.md` — so a
+board still exporting a ceiling keeps it until that file is edited by hand.
 
 **Pin the model and the effort.** Without `--model` and `--effort` the agent inherits whatever
 `~/.claude/settings.json` happens to say, so changing the model of an interactive session
