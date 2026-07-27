@@ -134,6 +134,26 @@ if (has('terminalCell', terminalCell)) {
   check('two line boxes a pixel apart are two different cells',
         terminalCell(TERMINAL_FONT_SIZE, 15).height < terminalCell(TERMINAL_FONT_SIZE, 16).height,
         `${terminalCell(TERMINAL_FONT_SIZE, 15).height} → ${terminalCell(TERMINAL_FONT_SIZE, 16).height}`);
+
+  // The measured advance, which is #115's half of the same argument. A cell width measured
+  // against one typeface says nothing about another, and this block changed typeface — so
+  // the width stopped being a constant the same way the height did. xterm does no arithmetic
+  // on it at all: `device.cell.width` is the measured advance and `css.cell.width` divides
+  // it straight back out, so what is passed is the number rather than an input to a formula.
+  const narrow = terminalCell(TERMINAL_FONT_SIZE, null, 7.15);
+  check('a measured advance is the cell width, untouched',
+        Math.abs(narrow.width - 7.15) < 0.001, JSON.stringify(narrow));
+  check('and it leaves the row alone, which is the other measurement\'s business',
+        narrow.height === cell.height, JSON.stringify(narrow));
+  check('an advance the browser could not measure falls back to the widest the stack can be',
+        terminalCell(TERMINAL_FONT_SIZE, null, null).width === cell.width
+        && terminalCell(TERMINAL_FONT_SIZE, null, 0).width === cell.width
+        && terminalCell(TERMINAL_FONT_SIZE, null, Number.NaN).width === cell.width,
+        `${terminalCell(TERMINAL_FONT_SIZE, null, 0).width}`);
+  // The fallback is deliberately the *wider* of the two faces the stack can resolve, so an
+  // unmeasured block reports fewer columns than it can draw rather than more than it can.
+  check('and that fallback is no narrower than the primary face really is',
+        cell.width > 7.15, `${cell.width} against the 7.15 the face measures at 13`);
 }
 if (has('terminalChrome', terminalChrome)) {
   // 84 rather than the 62 this was written with: #94 added the tab strip, which is `em` like
@@ -232,6 +252,15 @@ if (has('terminalGrid', terminalGrid)) {
   check('the grid with no measurement is the grid at the fallback cell',
         JSON.stringify(terminalGrid(TERMINAL_SIZE, TERMINAL_FONT_SIZE, null)) === JSON.stringify(base),
         JSON.stringify(terminalGrid(TERMINAL_SIZE, TERMINAL_FONT_SIZE, null)));
+
+  // And the advance reaches the grid, which is #115's half: a narrower glyph measured off
+  // the face that really loaded is more columns told to the shell, and the rows are untouched.
+  const narrow = terminalGrid(TERMINAL_SIZE, TERMINAL_FONT_SIZE, null, 7.15);
+  const wide = terminalGrid(TERMINAL_SIZE, TERMINAL_FONT_SIZE, null, 9);
+  check('a measured advance moves the columns', narrow.cols > wide.cols,
+        `${wide.cols} at a 9px glyph → ${narrow.cols} at 7.15px`);
+  check('and only the columns', narrow.rows === wide.rows && narrow.rows === base.rows,
+        `${base.rows}, ${wide.rows}, ${narrow.rows}`);
 
   // A block dragged to nothing is still a grid a shell can repaint into, at any font.
   const tiny = terminalGrid({ width: 0, height: 0 }, TERMINAL_FONT_RANGE?.max ?? 24);

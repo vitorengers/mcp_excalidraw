@@ -4,7 +4,13 @@
  * Arithmetic only, in a module both the browser and the checks can read — the same split
  * the project mirror's layout already uses. The browser owns the drawing; nothing here
  * knows about Excalidraw beyond the shape of an element literal.
+ *
+ * The colours the shape is drawn in are not here. They belong to the same palette the overlay
+ * and the emulator read, which is `terminal-palette.ts`; this module imports two of them and
+ * decides none.
  */
+
+import { TERMINAL_INK, TERMINAL_PAPER } from './terminal-palette.js';
 
 /**
  * The mark that makes a shape the terminal's, and keeps it out of the two doors that save
@@ -81,16 +87,44 @@ export const TERMINAL_SIZE = { width: 760, height: 480 };
 export const TERMINAL_FONT_SIZE = 13;
 
 /**
+ * The face the board itself is drawn in, as far as a terminal can have it.
+ *
+ * The blocks are lettered in Excalifont, and #115 asked for the terminal to be lettered the
+ * same way. It cannot be, literally: xterm draws column N at N × the cell width, and
+ * Excalifont is proportional, so the emulator would stop being one. What it can have is the
+ * **monospaced member of the same family** — Excalidraw 0.18's font picker offers exactly
+ * Excalifont (hand-drawn), Nunito (normal) and Comic Shanns (code), and Comic Shanns is
+ * metrically monospaced: every glyph measures 0.55 × the font size, at every size.
+ *
+ * Nothing is shipped or preloaded for it. Excalidraw registers all of its faces on
+ * `document.fonts` whether or not the scene uses them — `Fonts.loadFontFaces` walks
+ * `_Fonts.registered` and adds every non-local one — so the family resolves from the
+ * stylesheet in the same document as the overlay. What it does *not* do is load them, which
+ * is what `frontend/src/terminal-metrics.ts` is for.
+ */
+export const TERMINAL_FONT_FACE = 'Comic Shanns';
+
+/**
+ * What is drawn if the face above never arrives.
+ *
+ * The stack the block used to be drawn in, kept whole rather than replaced. A web font that
+ * fails is not a hypothetical here: the face is registered by a dependency and loaded on
+ * demand, so anything between the block appearing and the load finishing renders in this.
+ */
+export const TERMINAL_FALLBACK_FONT_FAMILY =
+  "'Cascadia Code', 'Cascadia Mono', Menlo, Consolas, 'Courier New', monospace";
+
+/**
  * The monospace stack the emulator draws in.
  *
- * Here rather than in `TerminalPanel.tsx` because the cell height below is *this font's*
- * line box and nothing else's: a measurement taken against one stack and an emulator opened
- * with another would be two different fonts agreeing on a number. `TerminalPanel.css` repeats
- * it for the frame's own text, which a stylesheet cannot import; the two that must not drift
- * are the emulator and the measurement, and they both read this.
+ * Here rather than in `TerminalPanel.tsx` because the cell below is *this font's* and nothing
+ * else's: a measurement taken against one stack and an emulator opened with another would be
+ * two different fonts agreeing on a number. `TerminalPanel.css` repeats it for the frame's
+ * own text, which a stylesheet cannot import; the two that must not drift are the emulator
+ * and the measurement, and they both read this.
  */
 export const TERMINAL_FONT_FAMILY =
-  "'Cascadia Code', 'Cascadia Mono', Menlo, Consolas, 'Courier New', monospace";
+  `'${TERMINAL_FONT_FACE}', ${TERMINAL_FALLBACK_FONT_FAMILY}`;
 
 /**
  * The line height the emulator is given, and the only part of a row this code chooses.
@@ -98,29 +132,43 @@ export const TERMINAL_FONT_FAMILY =
  * xterm multiplies it by the font's **measured** line box, not by the font size — see
  * `terminalCell`. Passed to `new Terminal({ lineHeight })` from here so the multiplier the
  * grid is derived from is the multiplier the emulator was actually given.
+ *
+ * It was `1.35` while the block drew in the Cascadia stack, whose line box is a little over
+ * `1em`; a row came out around `1.55 ×` the font, which is comfortable. Comic Shanns has a
+ * much taller box — `1.72 ×` the font size, measured across the whole range — so the same
+ * multiplier would have made a row `2.3 ×` the font and cost the default block seven of its
+ * twenty rows to leading nobody asked for. The face brings its own space, so this stops
+ * adding any: `1` is also the smallest value xterm will take, which is the one place the
+ * arithmetic here and the emulator's own validation meet.
  */
-export const TERMINAL_LINE_HEIGHT = 1.35;
+export const TERMINAL_LINE_HEIGHT = 1;
 
 /**
  * The font's own line box, per font pixel, for a cell nobody has measured.
  *
  * A fallback rather than a fact: it is what the grid falls back to off the browser — in
  * `check-terminal-font.mjs`, and in a browser too old to answer `fontBoundingBoxAscent`.
- * Rounded **up** from what this machine's stack reports (1.12–1.17em across the range), so
- * an unmeasured row is never shorter than a real one: too tall costs the reader a row at the
+ * Rounded **up** from the tallest face `TERMINAL_FONT_FAMILY` can resolve to, so an
+ * unmeasured row is never shorter than a real one: too tall costs the reader a row at the
  * bottom of the block, too short costs them rows they cannot reach at all.
+ *
+ * That is Comic Shanns, at `1.72–1.75em` across the range — the fallback stack behind it is
+ * around `1.15em`, so this is deliberately generous to the one that is not the primary face.
  */
-export const TERMINAL_LINE_BOX = 1.2;
+export const TERMINAL_LINE_BOX = 1.75;
 
 /**
  * One character cell, in scene units at 100% zoom.
  *
- * The **width** is measured and linear: this machine's stack reports 0.5859px of advance per
- * font pixel at every size in the range, and 7.6 at 13 is a shade under it, so a block sized
- * to 80 columns holds 80 columns with a pixel or two to spare.
+ * Both halves are fallbacks now, and both are deliberately the **widest and tallest** answer
+ * the font stack can give rather than the likeliest one. The primary face measures 0.55 of
+ * advance per font pixel and the stack behind it 0.5859, so `7.6` at 13 describes the
+ * fallback: a caller with nothing measured then reports slightly *fewer* columns than the
+ * block can draw, which costs a column, where the other way round costs the reader the right
+ * hand edge of every line — `TerminalPanel.css` clips what the frame cannot hold rather than
+ * scrolling it. Same argument as `TERMINAL_LINE_BOX`, same direction.
  *
- * The **height** is the fallback described above, and unlike the width it is not what a row
- * really is — see `terminalCell` for the one that is.
+ * Neither is what a cell really is — see `terminalCell` for the ones that are.
  */
 export const TERMINAL_CELL = {
   width: 7.6,
@@ -203,22 +251,32 @@ const scaleOf = (fontSize: number): number => {
  * a line box of its own. A machine that resolves Consolas where this one resolves Cascadia
  * Code gets its own answer rather than this one's.
  *
- * `undefined` is the offline caller and the browser that cannot answer, and falls back to
- * `TERMINAL_LINE_BOX`.
+ * `advance` is the same story for the **width**, and #115 is why it stopped being a constant:
+ * a cell width measured against one typeface says nothing about another, and this block
+ * changed typeface. xterm does no arithmetic on it at all — `device.cell.width` is the
+ * measured advance and `css.cell.width` divides it back out — so unlike the row this is the
+ * number itself rather than a formula around it.
+ *
+ * `undefined` for either is the offline caller and the browser that cannot answer, and falls
+ * back to `TERMINAL_CELL`.
  */
 export function terminalCell(
   fontSize: number = TERMINAL_FONT_SIZE,
-  lineBox?: number | null
+  lineBox?: number | null,
+  advance?: number | null
 ): Size {
   const scale = scaleOf(fontSize);
-  const measured = Number(lineBox);
+  const measuredBox = Number(lineBox);
+  const measuredAdvance = Number(advance);
   return {
-    width: TERMINAL_CELL.width * scale,
-    height: Number.isFinite(measured) && measured > 0
+    width: Number.isFinite(measuredAdvance) && measuredAdvance > 0
+      ? measuredAdvance
+      : TERMINAL_CELL.width * scale,
+    height: Number.isFinite(measuredBox) && measuredBox > 0
       // xterm rounds the line box up to whole device pixels before it multiplies, and floors
       // the product. Both are reproduced rather than approximated: a cell half a pixel out
       // is a row over the edge on a tall enough block.
-      ? Math.max(1, Math.floor(Math.ceil(measured) * TERMINAL_LINE_HEIGHT))
+      ? Math.max(1, Math.floor(Math.ceil(measuredBox) * TERMINAL_LINE_HEIGHT))
       : TERMINAL_CELL.height * scale,
   };
 }
@@ -283,16 +341,17 @@ export function terminalOrigin(
  * therefore fewer columns and fewer rows, reported through the same route a corner drag
  * uses. It is defaulted, so a caller that has no opinion still gets the block's own.
  *
- * `lineBox` is the third input and the one that is not arithmetic: the font's own line box
- * at that size, as the browser measured it. See `terminalCell` for why a row cannot be
- * derived without it.
+ * `lineBox` and `advance` are the inputs that are not arithmetic: the font's own line box and
+ * its advance width at that size, as the browser measured them. See `terminalCell` for why
+ * neither half of a cell can be derived without being measured.
  */
 export function terminalGrid(
   size: Size,
   fontSize: number = TERMINAL_FONT_SIZE,
-  lineBox?: number | null
+  lineBox?: number | null,
+  advance?: number | null
 ): { cols: number; rows: number } {
-  const cell = terminalCell(fontSize, lineBox);
+  const cell = terminalCell(fontSize, lineBox, advance);
   const chrome = terminalChrome(fontSize);
   const usableWidth = Math.max(0, (size?.width ?? 0) - chrome.width);
   const usableHeight = Math.max(0, (size?.height ?? 0) - chrome.height);
@@ -325,10 +384,12 @@ export function terminalBlockElement(
     y: origin.y,
     width: size.width,
     height: size.height,
-    // Dark, so the block reads as a terminal at any zoom — including one too far out for
-    // the overlay's text to be legible, which is when the shape is all there is to read.
-    backgroundColor: '#1e1e2e',
-    strokeColor: '#4c4f69',
+    // Paper, and the same paper the overlay paints, so the two read as one object. This
+    // used to be dark for the zoom argument — the shape is all there is to read once the
+    // overlay's text is too small — and that argument did not go away, it moved: see
+    // `TERMINAL_BAND` in `terminal-palette.ts` for what carries it now.
+    backgroundColor: TERMINAL_PAPER,
+    strokeColor: TERMINAL_INK,
     fillStyle: 'solid',
     strokeWidth: 2,
     roughness: 0,

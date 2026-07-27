@@ -300,6 +300,72 @@ screen at any zoom, because it is a reading column pinned beside a shape. This o
 shape: the zoom scales the font and leaves the grid alone, so a terminal zoomed out is the same
 screen drawn smaller rather than a different number of columns.
 
+## Paper, and the hand-drawn code face
+
+Until #115 the block was dark — a Catppuccin Mocha surface on a `#1e1e2e` rectangle — and this
+document said why twice: *a terminal that follows the canvas into light mode stops looking like
+one*, and *the dark fill is what reads as a terminal at a zoom where the shape is all there is
+to read*. Both were written about a board that has since changed. Every other region of this one
+is a pale block with a hand-drawn label, and the terminal had become the single rectangle in
+another design language. So it is **paper in both themes** now, in the same design as the
+blocks around it.
+
+**One palette, in `src/core/terminal-palette.ts`.** Three different things draw this block —
+the shape is an Excalidraw rectangle with a fill and a stroke, the emulator is xterm and takes a
+theme object, the frame around it is a stylesheet — and each of them used to carry its own
+hexes. A stylesheet cannot import TypeScript, so the way the three are held together is that
+`TerminalPanel.tsx` writes `TERMINAL_CSS_VARS` onto the card's own root and `TerminalPanel.css`
+reads nothing but `var(--terminal-*)`. On the card rather than on `:root`, so two terminal
+blocks are two independent surfaces and nothing leaks onto the canvas.
+
+**The face is `Comic Shanns`, and it is not shipped.** The blocks are lettered in Excalifont,
+which is what the observation asked for, and an emulator cannot draw in it: xterm puts column N
+at N × the cell width and Excalifont is proportional. What it can have is the monospaced member
+of the same family — Excalidraw 0.18's picker offers exactly Excalifont (hand-drawn), Nunito
+(normal) and Comic Shanns (code) — and Comic Shanns is metrically monospaced, every glyph 0.55 ×
+the font size at every size. Excalidraw registers all of its faces on `document.fonts` whether
+or not the scene uses them, so it resolves from the stylesheet with no `@font-face` of ours and
+nothing to preload. What Excalidraw does **not** do is load them: all four faces are registered
+and none of them is fetched until something asks to draw with it, which is what
+`terminalFontReady()` in `frontend/src/terminal-metrics.ts` is for. Two things depend on that
+having happened, and both are in *Where a cell comes from* below.
+
+**All twenty-one theme entries are set.** The old theme set five and let the other sixteen fall
+through to xterm's own, which are tuned for a dark background: on paper its yellow came out at
+2.3:1, its bright white at 1.1:1 — not a colour anyone chose, the colour nobody set. The
+sixteen here are Catppuccin **Latte** hues darkened until each one clears **3:1** against the
+paper, which `check-terminal-paper-browser.mjs` asserts of a real render rather than of the
+module.
+
+The greys are the awkward part and no light terminal theme escapes it. On a dark background the
+ramp runs black → bright white from least ink to most; on paper "white" is the colour of the
+page, so a program asking for white text is asking for nothing. The ramp is therefore read as
+**contrast** rather than as lightness: `brightBlack` is the dim one every tool uses for comments,
+`brightWhite` is the strongest ink, and "bright" throughout means *more ink* rather than more
+light. The cost is that `black` and `white` end up two similar greys, so a program that
+distinguishes those two will not be distinguished here.
+
+**What says "terminal" when the text has gone.** That was the dark fill's other job, and paper
+cannot do it — at a zoom where the overlay's text is four pixels tall there is nothing to read
+but the shape, and a pale rectangle on a board of pale rectangles is one more block. So the
+identity moves from the fill to a **band**: the header and the prompt row are each a solid dark
+strip, and what is left is a paper card with a bar top and bottom. A band is an area rather than
+a glyph, so it survives being shrunk; the check asserts it at zoom 0.15, where the card's text
+is under five pixels and none of it can be read.
+
+Three things the issue left open, decided here:
+
+- **Paper in both themes**, rather than paper in light and dark in dark. The canvas has a theme
+  the terminal has always ignored, and following it would mean two palettes to keep legible
+  instead of one — for a surface whose whole point is that it matches the blocks beside it,
+  which do not follow it either.
+- **One look, not a choice for the reader.** The font size became a header control in #103
+  because a grid the shell is told is a real constraint on a real block. A colour scheme is not
+  that, and a preference nobody asked for is a preference that has to be kept working.
+- **Programs that assume a dark terminal are out of scope.** `COLORFGBG` is not set, so `vim` —
+  and Claude Code, which this surface was built for — pick foregrounds against a background
+  nobody told them about. Left alone until it proves unreadable.
+
 ## The font size is an input to the grid
 
 The reader sets it, with `−` and `+` on the block's own header, between 8 and 24. What the zoom
@@ -331,15 +397,41 @@ keyboard every keystroke is the shell's, so `Ctrl+-` would reach the shell and n
 
 ## Where a cell comes from
 
-A column and a row are answered differently, and #104 is why.
+**Both halves are measured, in the browser, every time the grid is worked out**, and the two
+got there by different routes: the row in #104, the column in #115.
 
-The **width** is a constant, because it really is one: this stack advances 0.586px per font
-pixel at every size in the range, against the 0.585 `TERMINAL_CELL.width` is drawn with, so the
-columns fit at every step with a pixel or two to spare.
+The **width** was a constant for as long as there was one typeface, and #104 said so: the stack
+advanced 0.586px per font pixel at every size in the range, against the 0.585
+`TERMINAL_CELL.width` was drawn with. What ended that was the typeface changing. Comic Shanns
+advances **0.55**, five per cent narrower, which is seven columns of a default block — and a
+column constant carried across a face change is the same defect as the row one, in the other
+direction. A cell measured against one typeface says nothing about another, and the face is now
+a *web font*, so "the font this page resolved" is not even fixed for the life of the page.
 
-The **height** is measured, in the browser, every time the grid is worked out. It could not be
-a constant, and the one it had was wrong. `TERMINAL_LINE_HEIGHT` is `1.35` and reads as *"a row
-is 1.35 × the font"* — but that is the `lineHeight` xterm is **given**, and xterm never applies
+So the advance is measured too, and xterm does no arithmetic on it at all: `device.cell.width`
+**is** the measured advance and `css.cell.width` divides it straight back out, so unlike the row
+what is passed in is the number rather than an input to a formula. The direction of the error
+matters and decides the fallback: too narrow a cell reports more columns than the frame can
+draw, and the overshoot is clipped rather than scrolled; too wide only costs a column. So
+`TERMINAL_CELL.width` stays at the **widest** face the stack can resolve to.
+
+Two things follow from the face being loaded rather than present:
+
+- **xterm measures its cell at `open()`**, and a face that has not arrived is measured as the
+  fallback and kept for good. Opening later would mean no emulator while the transcript is
+  arriving, so the measurement is redone instead: `terminalFontReady()` resolves, and the
+  emulator is asked to re-measure by setting `fontFamily` to the fallback and then back. Two
+  writes, because xterm's options service fires only on a value that *changed* — setting it to
+  what it already is does nothing at all.
+- **A block placed before the face lands reported the fallback's grid**, and nothing would have
+  corrected it: the error is always in the safe direction, so it is a narrower terminal rather
+  than a clipped one, and no assertion anywhere would go red. `App.tsx` re-reports every block's
+  grid once the face is in. A block placed after that has measured the real face already,
+  because the measurement asks the browser every time rather than remembering.
+
+The **height** could not be a constant either, and the one it had was wrong.
+`TERMINAL_LINE_HEIGHT` was `1.35` and read as *"a row is 1.35 × the font"* — but that is the
+`lineHeight` xterm is **given**, and xterm never applies
 it to the font size. It measures the font's own line box first, as
 `fontBoundingBoxAscent + fontBoundingBoxDescent`, and multiplies that:
 `floor(charHeight × lineHeight)`, in `DomRenderer._updateDimensions`. For this stack the line
@@ -358,8 +450,16 @@ So `frontend/src/terminal-metrics.ts` asks the browser, by the same route xterm'
 box into `terminalCell()`, which does xterm's arithmetic on it. `src/core/terminal-block.ts`
 stays arithmetic-only and DOM-free, so the offline checks still import it; a caller with nothing
 to pass, or a browser too old to report `fontBoundingBoxAscent`, gets `TERMINAL_LINE_BOX` —
-`1.2`, rounded **up** from the 1.12–1.17 this machine reports, because too tall costs the reader
-a row at the bottom and too short costs them rows they cannot reach at all.
+`1.75`, rounded **up** from the tallest face the stack can resolve to, because too tall costs
+the reader a row at the bottom and too short costs them rows they cannot reach at all.
+
+**`TERMINAL_LINE_HEIGHT` is `1` since #115**, and that is the same measurement arriving in the
+other place. `1.35` was comfortable over the Cascadia stack's line box of a little over `1em`.
+Comic Shanns' box is `1.72 ×` the font size, so the same multiplier would have made a row
+`2.3 ×` the font and spent seven of the default block's twenty rows on leading nobody asked for.
+The face brings its own space, so this stops adding any — and `1` is also the smallest value
+xterm will accept, which is the one point where the arithmetic here and the emulator's own
+validation meet.
 
 The font family and the line height live in `terminal-block.ts` for the same reason the
 measurement does: the emulator is opened with both of them, so a grid derived from one font and
@@ -473,14 +573,23 @@ taken.
   real pointer, the grid the *shell* was told changing with them, a line exactly as wide as the
   header's claim drawn with its last column inside the block, the shape still selectable and
   still resizable by its corner afterwards, and the size still there after a reload.
-- `scripts/check-terminal-rows-browser.mjs` — the vertical half of that, and #104's. At zoom 1,
+- `scripts/check-terminal-rows-browser.mjs` — #104's, and since #115 **both** axes. At zoom 1,
   where a scene unit is a pixel, at the default size and at both ends of the range: the screen
-  xterm drew inside the frame that holds it, the rows the *shell* was told no more than the
-  frame can draw and no more than two fewer, and a marked last line printed into the bottom row
-  and seen inside the block. Every number is read off the render, because a check that divided
-  by the same wrong cell the code did would have agreed with it.
+  xterm drew inside the frame that holds it, and the rows *and columns* the shell was told no
+  more than the frame can draw and no more than two fewer. Plus a marked last line printed into
+  the bottom row and seen inside the block. Every number is read off the render, because a check
+  that divided by the same wrong cell the code did would have agreed with it. The width half was
+  seen to fail against the face swapped with the cell left behind: 97 columns claimed of 104 at
+  13px, 159 of 170 at 8px, 51 of 55 at 24px.
+- `scripts/check-terminal-paper-browser.mjs` — the look, in Chrome, and every case in it is one
+  the source cannot answer. The overlay's computed background and the rectangle's fill are the
+  same paper; the four Comic Shanns faces are registered on the document *and* loaded; the rows
+  ask for the face first and the glyphs really are 0.55 wide per font pixel, which is how a
+  fallback gives itself away; all sixteen ANSI colours, printed by a real shell and read back
+  off the render, clear 3:1 against the paper they are drawn on; and at zoom 0.15, where the
+  card's text is under five pixels, a band of its own colour still crosses the block.
 
-All ten were written first and seen to fail against the code as it stood.
+All eleven were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.
