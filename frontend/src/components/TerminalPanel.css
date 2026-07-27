@@ -1,0 +1,89 @@
+/* The terminal, drawn over the block that stands for it.
+
+   Dark in both themes, unlike the documentation card: this is a terminal, and a terminal
+   that follows the canvas into light mode stops looking like one. The block underneath is
+   filled to match, so the two read as one object at any zoom. */
+
+.terminal-card {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+  border-radius: 8px;
+  padding: 0.35em 0.5em 0.4em;
+  color: #cdd6f4;
+  font-family: 'Cascadia Code', 'Cascadia Mono', Menlo, Consolas, 'Courier New', monospace;
+  line-height: 1.35;
+  /* Transparent to the pointer, so Excalidraw keeps the block: clicking selects it,
+     dragging moves it, and the corner handles still resize it. Only the prompt row takes
+     the pointer back, and it says so itself. */
+  pointer-events: none;
+}
+
+.terminal-card__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid rgb(205 214 244 / 18%);
+  color: #a6adc8;
+  font-size: 0.85em;
+}
+
+.terminal-card__where {
+  overflow: hidden;
+  white-space: nowrap;
+  /* The tail of a path says which project this is; the head is the same for all of them. */
+  direction: rtl;
+  text-overflow: ellipsis;
+}
+
+.terminal-card__grid {
+  flex: 0 0 auto;
+  opacity: 0.7;
+}
+
+.terminal-card__body {
+  flex: 1 1 auto;
+  margin: 0.3em 0 0;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+}
+
+.terminal-card__prompt {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  margin-top: 0.25em;
+  padding-top: 0.25em;
+  border-top: 1px solid rgb(205 214 244 / 18%);
+  /* The one part of the overlay that is not transparent to the pointer: a command has to
+     be clicked into and typed into, and Excalidraw binds every bare letter to a tool. */
+  pointer-events: auto;
+}
+
+.terminal-card__caret {
+  flex: 0 0 auto;
+  color: #a6e3a1;
+}
+
+.terminal-card__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+
+.terminal-card__input::placeholder {
+  color: #6c7086;
+}

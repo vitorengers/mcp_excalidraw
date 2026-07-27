@@ -13,6 +13,21 @@ Nothing short of driving a real browser would have caught any of them. Every ser
 behaviour has a `scripts/check-*.mjs`; the frontend has none, and it is where the blocks
 actually live.
 
+## Stream the agents into the terminal
+
+The terminal (`docs/terminal.md`) is a surface that carries a byte stream over the WebSocket and
+draws it on the board. What it does not yet carry is the output of the two agents this board
+already spawns — and that was the destination the observation behind #51 actually named. The
+terminal was the step it asked for first.
+
+It is a small change on the server and deliberately not part of building the surface: `runAgent`
+already receives the chunks (`src/core/issue-agent.ts`), and today it accumulates them and reads
+the result once the process exits, which is exactly why a block can say a run is `running` and
+nothing more. Broadcasting them makes the agent a second producer on a surface that exists.
+
+The open question is whose terminal it is. One session per board is the current rule, and an
+agent writing into the session somebody is typing in would interleave with them.
+
 ## Two smaller things the map turned up
 
 **Neither the MCP tools nor the CLI are workspace-aware.** `src/core/canvas-client.ts` never

@@ -186,7 +186,12 @@ export type WebSocketMessageType =
   | 'export_image_request'
   | 'set_viewport'
   | 'files_added'
-  | 'file_deleted';
+  | 'file_deleted'
+  // The terminal, which is the one thing here that carries bytes rather than shapes.
+  | 'terminal_session'
+  | 'terminal_output'
+  | 'terminal_resized'
+  | 'terminal_exit';
 
 export interface InitialElementsMessage extends WebSocketMessage {
   type: 'initial_elements';
@@ -275,6 +280,38 @@ export interface SetViewportMessage extends WebSocketMessage {
   zoom?: number;
   offsetX?: number;
   offsetY?: number;
+}
+
+// ─── Terminal messages ────────────────────────────────────────
+//
+// The transport had no vocabulary for a byte stream: every message above is element- or
+// canvas-shaped. These carry the session's output, and they are the reason `broadcast`
+// takes a workspace — a shell belongs to one board and its output must not reach another.
+
+/** Sent to a socket that connects while a session is running, and when one opens. */
+export interface TerminalSessionMessage extends WebSocketMessage {
+  type: 'terminal_session';
+  session: Record<string, unknown> | null;
+  /** The transcript so far, so a reconnecting viewer is not left staring at a blank block. */
+  scrollback: string;
+  sequence: number;
+}
+
+export interface TerminalOutputMessage extends WebSocketMessage {
+  type: 'terminal_output';
+  data: string;
+  sequence: number;
+}
+
+export interface TerminalResizedMessage extends WebSocketMessage {
+  type: 'terminal_resized';
+  cols: number;
+  rows: number;
+}
+
+export interface TerminalExitMessage extends WebSocketMessage {
+  type: 'terminal_exit';
+  code: number | null;
 }
 
 // Snapshot types

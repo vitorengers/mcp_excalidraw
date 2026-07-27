@@ -9,6 +9,8 @@
 - **The documentation panel** — `DocsPanel.tsx` holds what it shows, `AnchoredDocsPanel.tsx`
   where it sits; the Docs block card covers both
 - **The collapsible image and issue blocks**, both hung off `customData`
+- **The terminal** (`TerminalPanel.tsx`) — a shell the server owns, drawn as an overlay over a
+  block on the right of the board; the Terminal card has it
 - **Autosync** back into the active workspace's store
 
 Everything project-specific lives in `customData`, never in a parallel data structure. That is
@@ -30,4 +32,9 @@ switching tabs while a request is in flight otherwise lands the answer in the wr
 
 Three defects here compiled cleanly and did not work: a panel that never opened, a race in tab
 startup, and a click landing on the label instead of the box. Type-checking says nothing about
-any of them. There is still no automated browser test — that is the next thing worth building.
+any of them.
+
+Two features now drive a real Chrome over the DevTools protocol to answer for themselves —
+`scripts/check-board-drafts-browser.mjs` and `scripts/check-terminal-browser.mjs`, both through
+`ws` rather than a browser-automation dependency. Everything else in here is still verified by
+hand.
