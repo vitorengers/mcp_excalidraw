@@ -39,8 +39,15 @@ import {
   NoProjectConfigured,
   NotOnThisBoard
 } from './core/project-board.js';
-import { fetchIssue } from './core/github-issue.js';
+import { fetchIssue, isIssueUrl } from './core/github-issue.js';
 import { runImplementAgent } from './core/implement-agent.js';
+import {
+  ImplementRecord,
+  clearImplement,
+  isImplementing,
+  readImplement,
+  writeImplement
+} from './core/implement-state.js';
 import { layoutLabel, DEFAULT_BOUND_TEXT_FONT_SIZE } from './core/text-layout.js';
 import {
   elementsFor,
@@ -1169,31 +1176,139 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
 // issue blocks must not quietly enable repository writes.
 const IMPLEMENT_AGENT_COMMAND = process.env.EXCALIDRAW_IMPLEMENT_AGENT || null;
 
-/** Elements with an implementation in flight. One block, one pull request. */
-const implementRunsInFlight = new Set<string>();
+/**
+ * Write an implementation's state everywhere it is shown.
+ *
+ * The record against the issue URL is the truth. The copy on the elements is a convenience
+ * with one job: a block has to read correctly with nothing selected and with no network,
+ * which is the same reason the issue title is kept on the element. Every element carrying
+ * this issue gets the copy, so an authored block and a mirrored card cannot disagree.
+ *
+ * `null` clears rather than writes, which is what the reset does.
+ */
+function recordImplement(
+  workspaceId: string,
+  issueUrl: string,
+  record: ImplementRecord | null
+): void {
+  if (record) writeImplement(workspaceId, issueUrl, record);
+  else clearImplement(workspaceId, issueUrl);
 
-app.post('/api/issue-block/:id/implement', async (req: Request, res: Response) => {
-  const elementId = req.params.id ?? '';
+  const store = elementsFor(workspaceId);
+  for (const [id, element] of store) {
+    const custom = (element.customData ?? {}) as Record<string, unknown>;
+    if (custom.issueUrl !== issueUrl) continue;
 
+    const { implementState, implementUrl, implementError, ...rest } = custom;
+    const updated: ServerElement = {
+      ...element,
+      customData: record
+        ? {
+            ...rest,
+            implementState: record.state,
+            implementUrl: record.url,
+            implementError: record.error
+          }
+        : rest,
+      updatedAt: new Date().toISOString(),
+      version: (element.version || 0) + 1
+    };
+    store.set(id, updated);
+    broadcast({ type: 'element_updated', element: updated } as ElementUpdatedMessage, workspaceId);
+  }
+}
+
+/**
+ * Start an implementation for one issue, however it was asked for.
+ *
+ * Both routes land here — the element one for an authored block, the URL one for a mirrored
+ * card that has no element at all — so the guards are stated once and cannot drift apart.
+ * Answers immediately and reports over the socket: implementing has no time limit, so a
+ * held-open request would only look like a hang.
+ */
+async function beginImplement(res: Response, workspaceId: string, issueUrl: string): Promise<void> {
+  if (!isIssueUrl(issueUrl)) {
+    res.status(400).json({ success: false, error: `Not a GitHub issue URL: ${issueUrl}` });
+    return;
+  }
+
+  const existing = readImplement(workspaceId, issueUrl);
+  if (existing?.state === 'running') {
+    res.status(409).json({ success: false, error: 'An implementation is already in flight for this issue.' });
+    return;
+  }
+  if (existing?.state === 'done' && existing.url) {
+    // The same reasoning that stops one observation becoming two issues.
+    res.status(409).json({
+      success: false,
+      error: 'This issue already has an implementation.',
+      implementUrl: existing.url
+    });
+    return;
+  }
+
+  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace) {
+    res.status(400).json({
+      success: false,
+      error: `Workspace "${workspaceId}" is not registered, so there is no project to work in.`
+    });
+    return;
+  }
+  if (workspace.error) {
+    res.status(400).json({ success: false, error: `Workspace is unusable: ${workspace.error}` });
+    return;
+  }
+
+  recordImplement(workspaceId, issueUrl, { state: 'running', url: null, error: null });
+  res.status(202).json({ success: true, state: 'running', issueUrl });
+
+  try {
+    const result = await runImplementAgent(workspace, issueUrl, {
+      agentCommand: IMPLEMENT_AGENT_COMMAND as string
+    });
+    if (result.ok && result.url) {
+      recordImplement(workspaceId, issueUrl, { state: 'done', url: result.url, error: null });
+      logger.info(`${issueUrl} implemented at ${result.url}`);
+    } else {
+      recordImplement(workspaceId, issueUrl, { state: 'failed', url: null, error: result.error ?? null });
+      logger.warn(`${issueUrl} implementation failed: ${result.error}`);
+    }
+  } catch (error) {
+    recordImplement(workspaceId, issueUrl, {
+      state: 'failed', url: null, error: (error as Error).message
+    });
+  }
+}
+
+/** The agent writes to the repository, so every entrance carries the same two guards. */
+function implementingRefused(res: Response): boolean {
   if (!IMPLEMENT_AGENT_COMMAND) {
-    return res.status(404).json({
+    res.status(404).json({
       success: false,
       error: 'Implementing is disabled. Set EXCALIDRAW_IMPLEMENT_AGENT to the agent command to enable it.'
     });
+    return true;
   }
-
   // This agent writes to the repository, which makes reaching this route from the network
   // strictly worse than reaching the issue route.
   if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
-    return res.status(403).json({
+    res.status(403).json({
       success: false,
       error: 'Implementing only runs while the server is bound to loopback.'
     });
+    return true;
   }
+  return false;
+}
+
+app.post('/api/issue-block/:id/implement', async (req: Request, res: Response) => {
+  const elementId = req.params.id ?? '';
+  if (implementingRefused(res)) return;
 
   const workspaceId = workspaceIdFrom(req);
-  const store = elementsFor(workspaceId);
-  const element = store.get(elementId);
+  const element = elementsFor(workspaceId).get(elementId);
   if (!element) {
     return res.status(404).json({ success: false, error: `Element ${elementId} not found` });
   }
@@ -1203,65 +1318,25 @@ app.post('/api/issue-block/:id/implement', async (req: Request, res: Response) =
   if (!issueUrl) {
     return res.status(400).json({ success: false, error: 'This block has no issue to implement.' });
   }
-  if (custom.implementUrl) {
-    // The same reasoning that stops one observation becoming two issues.
-    return res.status(409).json({
-      success: false,
-      error: 'This issue already has an implementation.',
-      implementUrl: custom.implementUrl
-    });
-  }
-  if (implementRunsInFlight.has(elementId)) {
-    return res.status(409).json({ success: false, error: 'An implementation is already in flight for this block.' });
+
+  await beginImplement(res, workspaceId, issueUrl);
+});
+
+/**
+ * The same thing, for a shape the server has never seen.
+ *
+ * A mirrored card is drawn from GitHub and never synced, so there is no element id to name
+ * it by — but there is an issue, and the issue is what is being implemented.
+ */
+app.post('/api/implement', async (req: Request, res: Response) => {
+  if (implementingRefused(res)) return;
+
+  const issueUrl = typeof req.body?.url === 'string' ? req.body.url : '';
+  if (!issueUrl) {
+    return res.status(400).json({ success: false, error: 'No issue URL was given.' });
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
-  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
-  if (!workspace) {
-    return res.status(400).json({
-      success: false,
-      error: `Workspace "${workspaceId}" is not registered, so there is no project to work in.`
-    });
-  }
-  if (workspace.error) {
-    return res.status(400).json({ success: false, error: `Workspace is unusable: ${workspace.error}` });
-  }
-
-  implementRunsInFlight.add(elementId);
-  const markState = (state: string, extra: Record<string, unknown> = {}) => {
-    const current = store.get(elementId);
-    if (!current) return;
-    const updated: ServerElement = {
-      ...current,
-      customData: { ...(current.customData ?? {}), implementState: state, ...extra },
-      updatedAt: new Date().toISOString(),
-      version: (current.version || 0) + 1
-    };
-    store.set(elementId, updated);
-    broadcast({ type: 'element_updated', element: updated } as ElementUpdatedMessage, workspaceId);
-  };
-
-  markState('running');
-  // Implementing takes longer than researching. Answering now and reporting over the
-  // socket is the only shape that does not look like a hang.
-  res.status(202).json({ success: true, state: 'running', elementId });
-
-  try {
-    const result = await runImplementAgent(workspace, issueUrl, {
-      agentCommand: IMPLEMENT_AGENT_COMMAND
-    });
-    if (result.ok && result.url) {
-      markState('done', { implementUrl: result.url, implementError: null });
-      logger.info(`Issue block ${elementId} implemented at ${result.url}`);
-    } else {
-      markState('failed', { implementError: result.error });
-      logger.warn(`Issue block ${elementId} implementation failed: ${result.error}`);
-    }
-  } catch (error) {
-    markState('failed', { implementError: (error as Error).message });
-  } finally {
-    implementRunsInFlight.delete(elementId);
-  }
+  await beginImplement(res, workspaceIdFrom(req), issueUrl);
 });
 
 /**
@@ -1278,33 +1353,98 @@ app.post('/api/issue-block/:id/implement', async (req: Request, res: Response) =
  * matters: the state on the element cannot tell a live run from an abandoned one, and the
  * server can.
  */
+function resetImplement(res: Response, workspaceId: string, issueUrl: string): void {
+  if (isImplementing(workspaceId, issueUrl)) {
+    res.status(409).json({
+      success: false,
+      error: 'An implementation is running right now. Resetting would only hide it.'
+    });
+    return;
+  }
+
+  recordImplement(workspaceId, issueUrl, null);
+  res.json({ success: true, issueUrl });
+}
+
 app.delete('/api/issue-block/:id/implement', (req: Request, res: Response) => {
   const elementId = req.params.id ?? '';
   const workspaceId = workspaceIdFrom(req);
-  const store = elementsFor(workspaceId);
-  const element = store.get(elementId);
+  const element = elementsFor(workspaceId).get(elementId);
   if (!element) {
     return res.status(404).json({ success: false, error: `Element ${elementId} not found` });
   }
 
-  if (implementRunsInFlight.has(elementId)) {
-    return res.status(409).json({
+  const custom = (element.customData ?? {}) as Record<string, unknown>;
+  const issueUrl = typeof custom.issueUrl === 'string' ? custom.issueUrl : '';
+  if (!issueUrl) {
+    return res.status(400).json({ success: false, error: 'This block has no issue to reset.' });
+  }
+
+  resetImplement(res, workspaceId, issueUrl);
+});
+
+/**
+ * Just the implementation's state, with no issue read behind it.
+ *
+ * A card with a run in flight has to find out when it finishes, and it cannot be told:
+ * there is no element for the socket to update. So it asks — and asking must not cost a
+ * `gh` process each time, which is what reading through /api/issue would.
+ */
+app.get('/api/implement', (req: Request, res: Response) => {
+  const issueUrl = typeof req.query.url === 'string' ? req.query.url : '';
+  if (!issueUrl) {
+    return res.status(400).json({ success: false, error: 'No issue URL was given.' });
+  }
+  res.json({ success: true, implement: readImplement(workspaceIdFrom(req), issueUrl) });
+});
+
+/** The same reset, for a mirrored card with no element behind it. */
+app.delete('/api/implement', (req: Request, res: Response) => {
+  const issueUrl = typeof req.body?.url === 'string' ? req.body.url : '';
+  if (!issueUrl) {
+    return res.status(400).json({ success: false, error: 'No issue URL was given.' });
+  }
+  resetImplement(res, workspaceIdFrom(req), issueUrl);
+});
+
+/**
+ * The issue behind a card, read live, with whatever is known about implementing it.
+ *
+ * Addressed by URL rather than by element because a mirrored card has no element. The
+ * implement record rides along so selecting a card costs one round trip rather than two.
+ */
+app.get('/api/issue', async (req: Request, res: Response) => {
+  // Reading is not writing, but it still spawns a process holding the user's gh
+  // credentials — the same reason the run route is loopback-only.
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    return res.status(403).json({
       success: false,
-      error: 'An implementation is running right now. Resetting would only hide it.'
+      error: 'Issues only read while the server is bound to loopback.'
     });
   }
 
-  const { implementState, implementUrl, implementError, ...rest } =
-    (element.customData ?? {}) as Record<string, unknown>;
-  const updated: ServerElement = {
-    ...element,
-    customData: rest,
-    updatedAt: new Date().toISOString(),
-    version: (element.version || 0) + 1
-  };
-  store.set(elementId, updated);
-  broadcast({ type: 'element_updated', element: updated } as ElementUpdatedMessage, workspaceId);
-  res.json({ success: true, element: updated });
+  const issueUrl = typeof req.query.url === 'string' ? req.query.url : '';
+  if (!isIssueUrl(issueUrl)) {
+    return res.status(400).json({ success: false, error: `Not a GitHub issue URL: ${issueUrl}` });
+  }
+
+  const workspaceId = workspaceIdFrom(req);
+  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace || workspace.error) {
+    return res.status(400).json({
+      success: false,
+      error: workspace?.error ?? `Workspace "${workspaceId}" is not registered.`
+    });
+  }
+
+  try {
+    const issue = await fetchIssue(workspace, issueUrl);
+    res.json({ success: true, issue, implement: readImplement(workspaceId, issueUrl) });
+  } catch (error) {
+    // 502: the failure is GitHub's or gh's, not the caller's request.
+    res.status(502).json({ success: false, error: (error as Error).message });
+  }
 });
 
 /**

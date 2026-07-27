@@ -544,23 +544,34 @@ function App(): JSX.Element {
    * work takes long enough that a block which still looks idle invites a second click,
    * and two agents writing to one repository is a worse outcome than a slow one.
    */
-  const implementIssueFromBlock = async (elementId: string): Promise<void> => {
-    setIssue((current) => (current?.id === elementId ? { ...current, implementState: 'running' } : current))
+  const implementIssueFromBlock = async (target: IssueTarget): Promise<string | null> => {
+    if (!target.issueUrl) return 'This block has no issue to implement yet.'
+
+    setIssue((current) => (current?.id === target.id ? { ...current, implementState: 'running' } : current))
+    const fail = (message: string): string => {
+      setIssue((current) =>
+        current?.id === target.id
+          ? { ...current, implementState: 'failed', implementError: message }
+          : current)
+      return message
+    }
+
     try {
-      const response = await fetch(apiUrl(`/api/issue-block/${elementId}/implement`), { method: 'POST' })
+      // Addressed by issue URL rather than by element: a mirrored card has no element on
+      // the server, and the issue is what is being implemented either way.
+      const response = await fetch(apiUrl('/api/implement'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: target.issueUrl })
+      })
       if (!response.ok) {
         const body = await response.json().catch(() => ({}))
-        setIssue((current) =>
-          current?.id === elementId
-            ? { ...current, implementState: 'failed', implementError: body?.error ?? `HTTP ${response.status}` }
-            : current)
+        return fail(body?.error ?? `HTTP ${response.status}`)
       }
-      // Success arrives over the WebSocket as an element update, not here.
+      // Success arrives over the WebSocket for a block, and by asking for a card.
+      return null
     } catch (error) {
-      setIssue((current) =>
-        current?.id === elementId
-          ? { ...current, implementState: 'failed', implementError: (error as Error).message }
-          : current)
+      return fail((error as Error).message)
     }
   }
 
@@ -571,26 +582,32 @@ function App(): JSX.Element {
    * The server refuses while a run is in flight, which is the case worth refusing — the
    * element cannot tell a live run from an abandoned one, and the server can.
    */
-  const resetImplementOnBlock = async (elementId: string): Promise<void> => {
+  const resetImplementOnBlock = async (target: IssueTarget): Promise<string | null> => {
+    if (!target.issueUrl) return 'This block has no issue to reset.'
+
+    const fail = (message: string): string => {
+      setIssue((current) =>
+        current?.id === target.id ? { ...current, implementError: message } : current)
+      return message
+    }
+
     try {
-      const response = await fetch(apiUrl(`/api/issue-block/${elementId}/implement`), { method: 'DELETE' })
+      const response = await fetch(apiUrl('/api/implement'), {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: target.issueUrl })
+      })
       if (!response.ok) {
         const body = await response.json().catch(() => ({}))
-        setIssue((current) =>
-          current?.id === elementId
-            ? { ...current, implementError: body?.error ?? `HTTP ${response.status}` }
-            : current)
-        return
+        return fail(body?.error ?? `HTTP ${response.status}`)
       }
       setIssue((current) =>
-        current?.id === elementId
+        current?.id === target.id
           ? { ...current, implementState: null, implementUrl: null, implementError: null }
           : current)
+      return null
     } catch (error) {
-      setIssue((current) =>
-        current?.id === elementId
-          ? { ...current, implementError: (error as Error).message }
-          : current)
+      return fail((error as Error).message)
     }
   }
 

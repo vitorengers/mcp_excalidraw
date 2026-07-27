@@ -12,6 +12,8 @@
  * sits in was a real defect once, and it compiled perfectly.
  */
 
+import { MIRROR_KIND } from './project-board-layout.js';
+
 export interface PanelElement {
   id: string;
   type: string;
@@ -63,6 +65,63 @@ function asString(value: unknown): string | null {
 }
 
 /**
+ * Shapes that stand for a GitHub issue: a block someone authored, and a card the mirror
+ * drew. They are drawn by different code and live in different places — the block is a real
+ * element on the server, the card is redrawn from GitHub on every read and never synced —
+ * but to the panel they are the same thing, and a reader who can act on one should be able
+ * to act on the other.
+ */
+function issueShapeOf(
+  element: PanelElement,
+  elements: readonly PanelElement[]
+): PanelElement | undefined {
+  const stands = (candidate: PanelElement | undefined): boolean => {
+    const custom = candidate?.customData ?? {};
+    return custom.kind === 'issue'
+      || (custom.kind === MIRROR_KIND && custom.role === 'card');
+  };
+
+  if (stands(element)) return element;
+  // Clicking a card usually selects the card, but a click that lands on its label has to
+  // resolve to the same issue — the same walk-up the document below does.
+  if (element.containerId) {
+    const container = elements.find((candidate) => candidate.id === element.containerId);
+    if (stands(container)) return container;
+  }
+  return undefined;
+}
+
+/**
+ * What a mirrored card can say about its issue on its own.
+ *
+ * Almost nothing, deliberately. A card exists because the issue does, so its state is
+ * `created` by construction; everything else — the body, and whether an implementation is
+ * running — is read from the server against the issue URL. Nothing is taken from the card
+ * itself because the mirror redraws it from GitHub on every read, so a card is the wrong
+ * place to remember anything.
+ */
+function mirrorCardIssue(
+  card: PanelElement,
+  elements: readonly PanelElement[]
+): IssueTargetData | null {
+  const issueUrl = asString(card.customData?.issueUrl);
+  if (!issueUrl) return null;
+
+  const label = elements.find((candidate) => candidate.containerId === card.id);
+  return {
+    id: card.id,
+    state: 'created',
+    issueUrl,
+    issueError: null,
+    issueTitle: asString(card.text) ?? asString(label?.text),
+    observation: null,
+    implementState: null,
+    implementUrl: null,
+    implementError: null,
+  };
+}
+
+/**
  * Resolve the selection to what the panel should show.
  *
  * Returns `null` when there is nothing to show — nothing selected, several things
@@ -111,20 +170,23 @@ export function resolvePanelTarget(
   const docKey = docKeyOf(holder);
   const custom = element.customData ?? {};
 
-  const issue: IssueTargetData | null =
-    custom.kind === 'issue'
-      ? {
-          id: element.id,
-          state: (asString(custom.issueState) as IssueTargetData['state']) ?? 'draft',
-          issueUrl: asString(custom.issueUrl),
-          issueError: asString(custom.issueError),
-          issueTitle: asString(custom.issueTitle),
-          observation: asString(custom.observation),
-          implementState: asString(custom.implementState) as IssueTargetData['implementState'],
-          implementUrl: asString(custom.implementUrl),
-          implementError: asString(custom.implementError),
-        }
-      : null;
+  const issueShape = issueShapeOf(element, elements);
+  const issueCustom = issueShape?.customData ?? {};
+  const issue: IssueTargetData | null = !issueShape
+    ? null
+    : issueCustom.kind === MIRROR_KIND
+      ? mirrorCardIssue(issueShape, elements)
+      : {
+          id: issueShape.id,
+          state: (asString(issueCustom.issueState) as IssueTargetData['state']) ?? 'draft',
+          issueUrl: asString(issueCustom.issueUrl),
+          issueError: asString(issueCustom.issueError),
+          issueTitle: asString(issueCustom.issueTitle),
+          observation: asString(issueCustom.observation),
+          implementState: asString(issueCustom.implementState) as IssueTargetData['implementState'],
+          implementUrl: asString(issueCustom.implementUrl),
+          implementError: asString(issueCustom.implementError),
+        };
 
   // An image gets a collapse control whether or not it carries documentation: an image is
   // either big enough to read or small enough to stay out of the way.
@@ -136,7 +198,9 @@ export function resolvePanelTarget(
   if (!docKey && !issue && !collapsible) return null;
 
   return {
-    anchorId: docKey && holder ? holder.id : element.id,
+    // The card hangs off the shape the panel is about, which is not always the shape that
+    // was clicked: a click on a label resolves to the box or the card holding it.
+    anchorId: docKey && holder ? holder.id : (issueShape?.id ?? element.id),
     docKey,
     title: asString(element.text),
     issue,

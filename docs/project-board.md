@@ -117,6 +117,31 @@ deleted — matched on the URL because that is the only thing the block and the 
 A run that failed leaves its block alone: there is nothing to replace it with, and the observation
 is still worth keeping.
 
+## A card is an issue block
+
+Selecting a card opens the same panel an authored block opens: the issue title, its state, its
+body, and **Implement / Fix**. That is what makes deleting the draft honest — the card can do
+everything the block it replaced could, so researching an issue from the board no longer ends by
+taking the description and the implement button away.
+
+It works for any card, including issues that were never drafted here. An issue opened on GitHub
+appears in the mirror and can be implemented from the canvas without a block ever existing for it.
+
+The state of an implementation lives on the **server, against the issue URL** — not in
+`customData` on a shape. A card is redrawn from GitHub on every read and is kept out of the
+autosync, so anything written onto one is gone on the next poll; there is nothing to write to and
+no element id to name it by. Keying on the issue is also the more honest model: whether an issue
+is being implemented is a fact about the issue. Two shapes standing for the same issue cannot
+disagree about it, and one issue cannot become two pull requests because it was asked for through
+both.
+
+The copy on an authored block stays, mirrored from that record, for the reason the issue title
+stays: a block has to read correctly with nothing selected and with no network.
+
+A block hears the result over the WebSocket, as an element update. A card cannot — there is no
+element — so while a run is in flight the panel asks `GET /api/implement`, which reads the record
+and spawns no `gh`.
+
 ## The hotkey
 
 **Alt+B** scrolls the viewport onto the mirror. `Alt` because Excalidraw owns the bare letters —
