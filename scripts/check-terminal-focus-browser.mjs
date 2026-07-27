@@ -164,6 +164,29 @@ const send = (method, params = {}) => new Promise((resolve, reject) => {
   socket.send(JSON.stringify({ id, method, params }));
 });
 
+/**
+ * The clipboard permission, granted over the **browser** target rather than the page's.
+ *
+ * `Browser.grantPermissions` is refused on a page session, and without it Chrome answers
+ * `navigator.clipboard.writeText` with `NotAllowedError` — which the copy case would then be
+ * unable to tell apart from the block never asking.
+ */
+async function grantClipboard() {
+  const endpoint = await waitFor(async () =>
+    (await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).json()).webSocketDebuggerUrl,
+  'the Chrome browser target');
+  await new Promise((resolve, reject) => {
+    const browserSocket = new WebSocket(endpoint);
+    browserSocket.once('open', () => browserSocket.send(JSON.stringify({
+      id: 1,
+      method: 'Browser.grantPermissions',
+      params: { origin: BASE, permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'] },
+    })));
+    browserSocket.once('message', () => { browserSocket.close(); resolve(); });
+    browserSocket.once('error', reject);
+  });
+}
+
 async function attach() {
   const target = await waitFor(async () => {
     const response = await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`);
@@ -381,6 +404,7 @@ try {
     BASE,
   ], { stdio: 'ignore' }));
 
+  await grantClipboard();
   await attach();
   await send('Page.enable');
   await send('Runtime.enable');
@@ -455,27 +479,32 @@ try {
   }
 
   console.log('\n5. Ctrl+C over that selection copies it, rather than interrupting');
-  // The clipboard itself is watched rather than read back. Headless Chrome refuses both
-  // halves of the Clipboard API without a permission this check cannot grant over the page
-  // session, and a case that cannot run says nothing; what it can say is that the block
-  // handed the selected text to the clipboard instead of sending an interrupt to the shell.
+  // The call is wrapped rather than the clipboard read back: `readText` in headless Chrome
+  // waits on a prompt nobody is here to answer even with the permission granted. What the
+  // wrapper records is both halves — the text the block asked to copy, and whether the
+  // browser accepted the write, which is the part a swallowed rejection would have hidden.
   await evaluate(`(() => {
     window.__copied = null;
     const real = navigator.clipboard.writeText.bind(navigator.clipboard);
-    navigator.clipboard.writeText = (text) => { window.__copied = text; return real(text).catch(() => {}); };
+    navigator.clipboard.writeText = (text) => {
+      window.__copied = { text, state: 'pending' };
+      return real(text).then(() => { window.__copied.state = 'ok'; },
+                             (error) => { window.__copied.state = 'refused: ' + error.message; });
+    };
   })()`);
   const screenBefore = scene.card.screen;
   await pressKey('KeyC', 'c', 2, 67);
-  await sleep(500);
+  await sleep(600);
   {
     const copied = await evaluate('window.__copied');
     scene = await evaluate(PROBE);
-    check('the selected text was handed to the clipboard',
-          typeof copied === 'string' && copied.trim().length > 0,
-          JSON.stringify(String(copied).slice(0, 120)));
+    const text = typeof copied?.text === 'string' ? copied.text : '';
+    check('the selected text was handed to the clipboard', text.trim().length > 0,
+          JSON.stringify(copied));
+    check('and the browser took it', copied?.state === 'ok', JSON.stringify(copied?.state));
     check('and it is text that was on the screen',
-          typeof copied === 'string' && String(screenBefore).includes(copied.trim().split('\n')[0].trim()),
-          JSON.stringify(String(copied).slice(0, 120)));
+          text.trim().length > 0 && String(screenBefore).includes(text.trim().split('\n')[0].trim()),
+          JSON.stringify(text.slice(0, 120)));
     check('the selection was let go, so the next Ctrl+C is an interrupt again',
           scene.card.selectionRects === 0, String(scene.card.selectionRects));
   }
