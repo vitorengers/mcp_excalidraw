@@ -73,15 +73,20 @@ export function agentPath(): string {
 }
 
 /**
- * How long a run may take before it is killed.
+ * How long a run may take before it is killed: by default, as long as it takes.
  *
- * Twenty minutes because a real investigation reads source, checks existing issues
- * and drafts prose — the first genuine run overran ten minutes having already created
- * the issue. Override with EXCALIDRAW_ISSUE_AGENT_TIMEOUT (seconds).
+ * It was twenty minutes, on the premise that researching an issue is bounded work. That
+ * premise went: the investigation now also reads reference images, existing issues and the
+ * project's documentation, and a real run was killed at 1200s having already created its
+ * issue. The salvage below could not rescue it either — see the note there. Set
+ * EXCALIDRAW_ISSUE_AGENT_TIMEOUT (seconds) to put a ceiling back.
+ *
+ * The trade is the same one implementing already makes, and is handled the same way: with
+ * no ceiling a wedged run holds the block in `running`, so the block offers a reset.
  */
-export const DEFAULT_TIMEOUT_MS = (() => {
+export const DEFAULT_TIMEOUT_MS: number | null = (() => {
   const configured = Number(process.env.EXCALIDRAW_ISSUE_AGENT_TIMEOUT);
-  return Number.isFinite(configured) && configured > 0 ? configured * 1000 : 1_200_000;
+  return Number.isFinite(configured) && configured > 0 ? configured * 1000 : null;
 })();
 
 export interface IssueAgentResult {
@@ -206,13 +211,13 @@ export interface AgentRun {
 export interface RunAgentOptions {
   agentCommand: string;
   /**
-   * Ceiling on the run, or `null` for none.
+   * Ceiling on the run, or `null` for none — which is now what both agents default to.
    *
-   * A ceiling suits bounded work — researching an issue is reading and drafting, and
-   * twenty minutes was measured against a real run of it. Implementing is not bounded
-   * that way, and killing a working agent partway through a change is worse than
-   * letting it finish. `null` accepts the trade that comes with that: a wedged run has
-   * to be recovered by hand, so something must offer that.
+   * Researching kept twenty minutes for a while, on the premise that it was bounded work.
+   * It is not: killing an agent that has already created its issue reports a failure for
+   * work that succeeded, and killing one partway through a change leaves a branch nobody
+   * asked for. `null` accepts the trade that comes with it: a wedged run has to be
+   * recovered by hand, so something must offer that.
    */
   timeoutMs?: number | null;
   /** Which kind of URL counts as the answer. */
@@ -236,7 +241,8 @@ export async function runAgent(
   options: RunAgentOptions
 ): Promise<AgentRun> {
   const { command, args, cwd } = buildAgentCommand(workspace, options.agentCommand, options.directory);
-  const noun = options.expects === 'pull' ? 'pull request URL' : 'issue URL';
+  // The article travels with the noun. A fixed one reads as "a issue URL".
+  const noun = options.expects === 'pull' ? 'a pull request URL' : 'an issue URL';
 
   logger.info(`Running ${options.what} for workspace "${workspace.id}"`, { command, cwd });
 
@@ -267,12 +273,18 @@ export async function runAgent(
       // The agent may well have finished the visible work and then kept going.
       // Reporting a failure for work that succeeded is worse than reporting a slow
       // success, so salvage the URL from whatever it printed before the kill.
+      //
+      // Kept, but it is not a guarantee, and it was once documented as one: a plain
+      // `claude -p` writes nothing until it exits, so at the kill `stdout` is empty and
+      // there is nothing here to find. It rescues a run only when the command streams —
+      // `--output-format stream-json` — which is why this is no longer the answer to a
+      // ceiling that fires. Not firing at all is.
       const salvaged = extractGithubUrl(stdout, options.expects);
       resolve({
         ok: Boolean(salvaged),
         url: salvaged,
         output: stdout,
-        error: salvaged ? null : `Agent timed out after ${timeoutMs / 1000}s without returning a ${noun}`,
+        error: salvaged ? null : `Agent timed out after ${timeoutMs / 1000}s without returning ${noun}`,
       });
     }, timeoutMs) : null;
 
@@ -300,7 +312,7 @@ export async function runAgent(
         error: code === 0
           ? (url
               ? null
-              : `Agent finished without returning a ${noun}. It said: ${stdout.trim().slice(-600) || '(nothing)'}`)
+              : `Agent finished without returning ${noun}. It said: ${stdout.trim().slice(-600) || '(nothing)'}`)
           : `Agent exited with code ${code}: ${stderr.slice(-500)}`,
       });
     });
