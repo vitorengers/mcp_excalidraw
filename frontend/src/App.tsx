@@ -143,17 +143,28 @@ const MIRROR_GAP = 120;
 const MIRROR_HOTKEY_CODE = 'KeyB';
 
 /**
- * The key that jumps the viewport to the terminal.
+ * The key that brings the terminal back, whatever "back" means at the time.
  *
  * `Alt+T`, alongside `Alt+B` for the mirror: the same reasoning about who owns which keys,
- * and `T` for the thing it brings into view. It does a little more than the mirror's key —
- * with no block on the board it places one first, which is the way back from having deleted
- * a shape that is derived and therefore never restored from anywhere.
+ * and `T` for the thing it brings into view. It does more than the mirror's key, because
+ * the terminal has three ways of being absent and this is the one answer to all of them —
+ * scroll to the block, place one if the board has none, and open a session if none is
+ * running. It used to stand down in exactly the two cases that needed it most: a shell that
+ * had exited, and a board where the first attempt to open one failed.
  */
 const TERMINAL_HOTKEY_CODE = 'KeyT';
 
 /** How long to wait before telling the server the block was resized. */
 const TERMINAL_RESIZE_DEBOUNCE_MS = 400;
+
+/**
+ * How long to wait before putting an erased block back.
+ *
+ * Not immediately: the erase arrives as a scene change, and re-placing the block inside the
+ * handler for that change would put it under a pointer that is still erasing. Long enough
+ * for the gesture to finish, short enough that the block reads as never having gone.
+ */
+const TERMINAL_RESTORE_DELAY_MS = 250;
 
 /**
  * Where the reader's terminal font size is kept.
@@ -1689,6 +1700,29 @@ function App(): JSX.Element {
    */
   const terminalOpenRef = useRef<boolean>(false)
 
+  /**
+   * Whether the shell behind the open session has gone, for the same paths.
+   *
+   * It is not the opposite of `terminalOpenRef`: a session that ended leaves the block on
+   * the board saying so, so the block is still drawn and the overlay still has state. What
+   * it changes is what the key does — start another shell rather than scroll to a dead one
+   * — and whether an erase is undone, because there is nothing left to protect once the
+   * shell has exited.
+   */
+  const terminalEndedRef = useRef<string | null>(null)
+
+  /**
+   * Where the block was last seen, so putting it back is putting it *back*.
+   *
+   * The reader is expected to move and resize this one, and a restore that re-anchored it
+   * to the right of the board would answer an accidental erase by also undoing that. Reset
+   * on a board switch: the next board's block is not this one's.
+   */
+  const terminalPlacementRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
+
+  /** A restore already scheduled, so a burst of scene changes queues one and not thirty. */
+  const terminalRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const [terminalRect, setTerminalRect] = useState<{
     rect: Rect
     zoom: number
@@ -1719,8 +1753,6 @@ function App(): JSX.Element {
   })
   /** The same value for the report path, which runs from timers and closes over its scope. */
   const terminalFontRef = useRef<number>(terminalFont)
-  /** The block's scene size, so a font change can re-derive the grid without a gesture. */
-  const terminalBlockSizeRef = useRef<{ width: number; height: number } | null>(null)
 
   /**
    * Put the block on the board, if a session is open and it is not there already.
@@ -1728,15 +1760,20 @@ function App(): JSX.Element {
    * Placed once and then left alone, unlike the mirror, which repaints on a timer: the
    * reader is expected to move and resize this one, and a redraw that re-anchored it every
    * twenty seconds would undo that. What does bring it back is a scene that was replaced
-   * wholesale — a reload, a tab switch — and the hotkey, which is the way back from having
-   * deleted it.
+   * wholesale — a reload, a tab switch — the hotkey, and the board noticing it has gone
+   * while the shell is still running (`scheduleTerminalRestore` below).
    */
   const ensureTerminalBlock = (options: { scroll?: boolean } = {}): void => {
     const api = excalidrawAPIRef.current
     if (!api || !terminalOpenRef.current) return
 
-    const scene = api.getSceneElementsIncludingDeleted()
-    const existing = scene.find((element) => !element.isDeleted && isTerminalElement(element))
+    // The live scene, deliberately: what goes back into `updateScene` runs through
+    // `convertToExcalidrawElements`, which rebuilds each element from its skeleton and has
+    // no `isDeleted` to rebuild from. Handed the tombstones, it returns them alive — so a
+    // block placed one tick after an erase used to put back everything else the eraser had
+    // just taken, including the shapes the reader meant to remove.
+    const scene = api.getSceneElements()
+    const existing = scene.find((element) => isTerminalElement(element))
     if (existing) {
       if (options.scroll) {
         api.scrollToContent([existing] as unknown as ExcalidrawElement[], { fitToViewport: true, animate: true })
@@ -1744,17 +1781,27 @@ function App(): JSX.Element {
       return
     }
 
-    // "The right side" measured against what this board authored, which is neither the
-    // mirror on the left nor a terminal block that is on its way out.
-    const anchors = scene.filter((element) => !element.isDeleted && !isDerivedElement(element))
-    const bounds = anchors.length > 0
-      ? (() => {
-        const [minX, minY, maxX, maxY] = getCommonBounds(anchors as readonly NonDeletedExcalidrawElement[])
-        return { minX, minY, maxX, maxY }
+    // Where it was, if this board has had it on screen. Only a block that has never been
+    // placed is measured against the content: "the right side" answers where a terminal
+    // *goes*, not where this one was dragged to before it was erased.
+    const remembered = terminalPlacementRef.current
+    const block = remembered
+      ? terminalBlockElement(
+        { x: remembered.x, y: remembered.y },
+        { width: remembered.width, height: remembered.height }
+      )
+      : (() => {
+        // "The right side" measured against what this board authored, which is neither the
+        // mirror on the left nor a terminal block that is on its way out.
+        const anchors = scene.filter((element) => !isDerivedElement(element))
+        const bounds = anchors.length > 0
+          ? (() => {
+            const [minX, minY, maxX, maxY] = getCommonBounds(anchors as readonly NonDeletedExcalidrawElement[])
+            return { minX, minY, maxX, maxY }
+          })()
+          : null
+        return terminalBlockElement(terminalOrigin(bounds), TERMINAL_SIZE)
       })()
-      : null
-
-    const block = terminalBlockElement(terminalOrigin(bounds), TERMINAL_SIZE)
     applySceneUpdateWithoutAutoSync(api, {
       elements: convertElementsPreservingImageProps([
         ...(scene as unknown as Partial<ExcalidrawElement>[]),
@@ -1772,6 +1819,32 @@ function App(): JSX.Element {
   }
 
   /**
+   * Put the block back after the board loses it while the shell is still running.
+   *
+   * Excalidraw's eraser respects exactly one thing — `locked` — and locking the block would
+   * take away the selection, the drag and the corner resize that *are* the interface here.
+   * So the block stays erasable and the erase is undone instead, which is also the only
+   * answer that keeps the shell reachable: nothing in the erase path kills it, so a block
+   * that stayed gone left a live process with the one-per-board slot taken, its output going
+   * into state nothing drew, and no way to Ctrl+C it — the keyboard reaches the shell only
+   * through the overlay.
+   *
+   * Only while there is something to protect. Once the shell has exited the block is a
+   * notice, and a notice the reader clears should stay cleared; Alt+T starts another.
+   *
+   * On a timer rather than at once, because this is noticed from inside the scene-change
+   * handler and the pointer that erased it may still be down.
+   */
+  const scheduleTerminalRestore = (): void => {
+    if (terminalRestoreTimerRef.current) return
+    terminalRestoreTimerRef.current = setTimeout(() => {
+      terminalRestoreTimerRef.current = null
+      if (!terminalOpenRef.current || terminalEndedRef.current) return
+      ensureTerminalBlock()
+    }, TERMINAL_RESTORE_DELAY_MS)
+  }
+
+  /**
    * Open a session for the active board, or adopt the one that is already running.
    *
    * 409 is not a failure here: a reload, a second window or a tab switched away and back
@@ -1786,6 +1859,7 @@ function App(): JSX.Element {
       const body = await response.json().catch(() => ({}))
       if (!response.ok && response.status !== 409) {
         terminalOpenRef.current = false
+        terminalEndedRef.current = null
         setTerminal({ status: null, output: '', ended: null })
         return
       }
@@ -1798,6 +1872,10 @@ function App(): JSX.Element {
         ? await fetch(apiUrl('/api/terminal')).then((r) => r.json()).catch(() => null)
         : null
       terminalOpenRef.current = true
+      // Set here as well as by the effect that follows `terminal.ended`: a shell that has
+      // just replaced one that exited must not be treated as ended for the frame or two
+      // before React commits, and the restore reads this ref rather than the state.
+      terminalEndedRef.current = null
       setTerminal({
         status: session
           ? {
@@ -1891,7 +1969,16 @@ function App(): JSX.Element {
     const element = elements.find((candidate) => !candidate.isDeleted && isTerminalElement(candidate))
     if (!element) {
       setTerminalRect((current) => (current === null ? current : null))
+      // This is where the block going missing is first noticed — an erase, a delete, a
+      // selection cleared with the rest of the canvas — and while a shell is running it is
+      // undone rather than reported.
+      scheduleTerminalRestore()
       return
+    }
+
+    // Where the reader has it, kept so a restore is a restore rather than a re-anchoring.
+    terminalPlacementRef.current = {
+      x: element.x, y: element.y, width: element.width, height: element.height
     }
 
     const [minX, minY, maxX, maxY] = getCommonBounds([element])
@@ -1929,7 +2016,6 @@ function App(): JSX.Element {
       return next
     })
 
-    terminalBlockSizeRef.current = { width: element.width, height: element.height }
     reportTerminalGrid({ width: element.width, height: element.height })
   }
 
@@ -1997,8 +2083,10 @@ function App(): JSX.Element {
     } catch (error) {
       console.warn('Failed to save the terminal font size to localStorage:', error)
     }
-    const size = terminalBlockSizeRef.current
-    if (size) reportTerminalGrid(size)
+    // The block's own size, from where the restore path already keeps it: a font change is
+    // a resize the reader did not drag, so it re-derives the grid from the same shape.
+    const placement = terminalPlacementRef.current
+    if (placement) reportTerminalGrid(placement)
     // Only the font: this is what the reader changed, and the block's own size arrives
     // through `syncTerminalBlock` with its own report.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2010,16 +2098,26 @@ function App(): JSX.Element {
   useEffect(() => {
     if (!excalidrawAPI) return
     terminalOpenRef.current = false
+    terminalEndedRef.current = null
     terminalGridRef.current = ''
-    terminalBlockSizeRef.current = null
+    // The next board's block is not this one's, and a restore there must measure the
+    // content rather than reuse where the reader had dragged a different project's.
+    terminalPlacementRef.current = null
     setTerminal({ status: null, output: '', ended: null })
     setTerminalRect(null)
     void openTerminal()
   }, [activeWorkspace, excalidrawAPI])
 
+  // The state is what the block draws; the ref is what the handlers read. Both paths that
+  // set `ended` go through here, including the socket's `terminal_exit`.
+  useEffect(() => {
+    terminalEndedRef.current = terminal.ended
+  }, [terminal.ended])
+
   useEffect(() => {
     return () => {
       if (terminalResizeTimerRef.current) clearTimeout(terminalResizeTimerRef.current)
+      if (terminalRestoreTimerRef.current) clearTimeout(terminalRestoreTimerRef.current)
     }
   }, [])
 
@@ -2028,7 +2126,6 @@ function App(): JSX.Element {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.code !== TERMINAL_HOTKEY_CODE || !event.altKey || event.ctrlKey || event.metaKey) return
-      if (!terminalOpenRef.current) return
 
       // A text field owns the keyboard — including this feature's own prompt, where Alt+T
       // has to be a keystroke rather than a jump.
@@ -2042,6 +2139,17 @@ function App(): JSX.Element {
       if ((api.getAppState() as unknown as Record<string, unknown>).editingTextElement) return
 
       event.preventDefault()
+
+      // The key used to stand down here, which made it inert in the two cases a reader
+      // actually reaches for it: a shell that exited, and a board whose own attempt to open
+      // one failed. Both are answered by asking for a session — `openTerminal` adopts a 409,
+      // so a key pressed while one is quietly already running draws that one instead of
+      // starting a second.
+      if (!terminalOpenRef.current || terminalEndedRef.current) {
+        void openTerminal().then(() => ensureTerminalBlock({ scroll: true }))
+        return
+      }
+
       ensureTerminalBlock({ scroll: true })
     }
 

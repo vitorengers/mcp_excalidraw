@@ -246,9 +246,42 @@ different character and works from anywhere on the page. It stands down while te
 edited — including while the terminal has the keyboard, where Alt+T has to be a keystroke the
 shell receives rather than a jump.
 
-It does one thing more than Alt+B: with no block on the board it places one first. The shape is
-derived and is restored from nowhere, so deleting it would otherwise be permanent for the rest
-of the session.
+It does more than Alt+B, because the terminal has three ways of being absent and this is the
+one answer to all of them: it scrolls to the block, places one if the board has none, and
+**opens a session if none is running**. That last part is what makes it a way back rather than
+a jump — it used to stand down whenever no session was open, which is to say in exactly the two
+cases a reader reaches for it: a shell that had exited, and a board whose own attempt to open
+one failed. Asking for a session is safe when there already is one, because `openTerminal()`
+adopts a 409 rather than starting a second shell.
+
+The key is on the block as well as in here. When the shell has gone the strip along the bottom
+says so and says to press it — a key written down only in markdown is a key nobody finds, which
+is the half of #93 that was never about the eraser.
+
+## Erasing it does not get rid of it
+
+The block is not `locked`, and `locked` is the only thing Excalidraw's eraser respects
+(`if (element.locked) { return; }`). Locking it would take away the selection, the drag and the
+corner resize that *are* the interface here, so the block stays erasable and **the erase is
+undone instead**: the board notices, in `syncTerminalBlock`, that it has lost a block whose
+shell is still running, and puts one back where the reader had it — the size and the position
+it was erased at, not re-anchored to the right of the board.
+
+That is the only answer that keeps the shell reachable. Nothing in the erase path kills it:
+`DELETE /api/terminal` is never sent by the frontend, so a block that stayed gone left a live
+process with the one-per-board slot still taken, its output accumulating into state nothing
+drew, and no way to Ctrl+C whatever was running in it — the keyboard reaches the shell only
+through the overlay. That is what the observation behind #93 walked into.
+
+**Once the shell has exited, an erase sticks.** The block is a notice by then rather than a
+terminal, and a notice the reader clears should stay cleared. Alt+T starts another.
+
+The restore is on a short timer rather than immediate, because the block going missing is
+noticed from inside the scene-change handler and the pointer that erased it may still be down.
+It puts back only the block: the live scene is what goes into `updateScene`, since
+`convertToExcalidrawElements` rebuilds each element from a skeleton with no `isDeleted` to
+rebuild from, and handed the tombstones it would return everything else the eraser had just
+taken.
 
 ## Checked
 
@@ -264,6 +297,11 @@ of the session.
 - `scripts/check-terminal-ansi-browser.mjs` — also in Chrome: an SGR escape drawn as a colour
   rather than as four characters, a real Ctrl+C interrupting a running command, and the block's
   corner still resizing it afterwards.
+- `scripts/check-terminal-restore-browser.mjs` — also in Chrome: the real eraser tool dragged
+  across the block, and the block back where it was with the same pid behind it; a control shape
+  in the same drag that has to stay erased, so a restore that resurrected the whole scene could
+  not pass; the block still absent from the store afterwards; and the key opening a session
+  after `exit`, and on a page that never opened one, both without a reload.
 - `scripts/check-terminal-font.mjs` — the arithmetic behind the size buttons: the cell, the
   frame and therefore the grid all move with the font, the grid never grows on the way up the
   range, and no size in it asks for a screen the block cannot hold.
@@ -272,7 +310,7 @@ of the session.
   header's claim drawn with its last column inside the block, the shape still selectable and
   still resizable by its corner afterwards, and the size still there after a reload.
 
-All six were written first and seen to fail against the code as it stood.
+All seven were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.
@@ -297,8 +335,11 @@ browser does.
   because it repaints rather than scrolls.
 - **Alt+T fits the block to the viewport, which puts its top edge under Excalidraw's toolbar.**
   The path in the header reads through it awkwardly. Alt+B has the same shape of problem.
-- **One session per board, and no way to restart one from the canvas.** A shell that exited is
-  reported on the block; getting another means reloading the tab.
+- **One session per board, and no way to *close* one from the canvas.** Restarting is Alt+T
+  now, but `DELETE /api/terminal` still has no caller in the frontend: a shell you want gone
+  has to be exited from inside, or the tab reloaded. #93 left this out deliberately — a way to
+  reopen makes "close" its obvious companion, and it is a second decision rather than part of
+  this one.
 - **Whether a shell inside WSL gets a tty of its own has not been established.**
   `scripts/check-terminal.mjs` runs a real WSL-backed session through `wsl.exe` under the
   ConPTY and it behaves — the prompt is there, `pwd` answers with the inner path — but nothing

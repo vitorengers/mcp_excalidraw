@@ -270,8 +270,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       >
         <span className="terminal-card__caret">❯</span>
         <span className="terminal-card__hint">
+          {/* The one place a reader is already looking when the shell has gone, so it is
+              where the way out belongs. Alt+T was written down only in markdown, which is
+              the half of #93 that was never about the eraser. */}
           {ended
-            ? `the shell has gone — ${ended}`
+            ? `the shell has gone — ${ended} — press Alt+T for another`
             : attached
               ? 'typing goes to the shell — click the canvas to give the keyboard back'
               : 'click here to type'}
