@@ -11,12 +11,26 @@ agent being confused, not as the agent being muzzled.
 ## The configuration
 
 ```
-EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob"'
+EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob WebFetch WebSearch"'
 ```
 
 The list is deliberately narrow: `gh` and `git`, plus reading. **No `Write`, no `Edit`, no open
 `Bash`.** The agent opens issues; it does not touch the repository. This is not a formality —
 the block spawns a process with full repository access from an API that has no authentication.
+
+## The same trap, one tool along
+
+An enumerated list is also a deny list, and the trap above is a property of the list rather than
+of `gh`. `WebFetch` and `WebSearch` were missing from it for as long as it existed, while the
+prompt ordered the agent to research whatever the repository does not settle — so the agent was
+told to look something up and refused the means, silently, exiting 0. Confirmed both ways by
+running the command: without them, `Claude requested permissions to use WebFetch, but you
+haven't granted it yet`; with them, the fetch and the search both go through. Same exit code.
+
+They are read-only, so the narrowness that matters — nothing that writes — is untouched. The
+scoped form is `WebFetch(domain:example.com)`, or `WebFetch(domain:*.example.com)` for
+subdomains; `WebSearch` takes no argument. Scoping is left off here because a host nobody
+predicted is refused the same silent way, which is the defect rather than a fix for it.
 
 ## Why quoting matters
 
