@@ -264,6 +264,33 @@ is not what decided it. Step 3 sends the agent to read the project's own documen
 proposing anything, and that project documents in Portuguese, so the agent took the language
 from its surroundings. Nothing in the prompt said otherwise. Now it names English outright.
 
+### What an agent may hand to a helper, and what it may not
+
+Both prompts end on the same contract: **the last line you print is the URL**. The server reads
+exactly that, `extractGithubUrl` over the parent's stdout — so the contract holds only while the
+parent is the one that finishes. Nothing said so until a run broke it.
+
+Asked for orchestration, the issue agent delegated to a background sub-agent. The sub-agent created
+issue #75; the parent sat waiting and printed nothing. The block stayed `running` forever, beside a
+mirrored card for an issue that already existed, and neither `adoptIssueTitle` nor `reconcileDrafts`
+could act — both match on an `issueUrl` the block never received.
+
+So both prompts now say helpers are allowed and name two things that do not travel with the work.
+
+**Creating is the parent's.** A helper investigates and reports back; it never runs
+`gh issue create`, and on the implement side never opens or merges the pull request. This is the
+half that matters more, and not for the reason the failure suggests. The server's guard is one run
+per block — not one `gh issue create` per run. Three helpers that each create leave three issues for
+one observation, and nothing anywhere counts them.
+
+**Finishing is the parent's.** Only what the parent prints is read, so it waits for every helper to
+come back and prints the URL itself, last, whoever did the work and whatever a helper already made.
+
+`scripts/check-agent-delegation.mjs` holds both prompts to those rules. It captures each one as its
+agent receives it, over stdin, through the real composition path — and it says in its own header
+what it is: a lint over instructions. It cannot show an agent obeys. It fails when the guidance is
+dropped or reworded away, which for prose is the regression that actually happens.
+
 ## Implementing the issue
 
 A created block carries an **Implement / Fix** button above the description.
