@@ -21,10 +21,9 @@ import {
   layoutBoard,
   boardWidth,
   columnAt,
-  MIRROR_KIND,
-  CARD_GAP
+  MIRROR_KIND
 } from '../../src/core/project-board-layout'
-import type { MirrorColumn } from '../../src/core/project-board-layout'
+import type { DraftBlock, MirrorColumn } from '../../src/core/project-board-layout'
 import type { ProjectBoard } from '../../src/core/project-board-types'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
@@ -148,6 +147,37 @@ const isMirrorElement = (element: { customData?: CustomData }): boolean =>
 const isDraftBlock = (element: { customData?: CustomData; containerId?: string | null }): boolean =>
   customDataOf(element).projectBoardDraft === true && !element.containerId;
 
+/**
+ * The shape whose label is being typed into, if any.
+ *
+ * Excalidraw edits a bound label in a real textarea over the container, so what is open is
+ * named by the *container*: it is the container that must be left alone while a relayout
+ * moves everything around it.
+ */
+const editingDraftId = (api: ExcalidrawImperativeAPI): string => {
+  const editing = (api.getAppState() as unknown as Record<string, unknown>).editingTextElement as
+    { id?: string; containerId?: string | null } | null | undefined;
+  if (!editing) return '';
+  return String(editing.containerId ?? editing.id ?? '');
+};
+
+/**
+ * A draft block reduced to what the placement needs.
+ *
+ * `draftCreatedAt` is what orders the stack. A block dropped before that field was written
+ * carries none; the layout keeps those in the order they arrive, so an old scene still
+ * lays out the same way twice running.
+ */
+const draftBlockOf = (element: { id: string; height: number; customData?: CustomData }): DraftBlock => {
+  const custom = customDataOf(element);
+  return {
+    id: element.id,
+    sectionOptionId: String(custom.sectionOptionId ?? ''),
+    height: element.height,
+    ...(typeof custom.draftCreatedAt === 'number' ? { createdAt: custom.draftCreatedAt } : {})
+  };
+};
+
 interface LibraryElement {
   id: string;
   type: string;
@@ -184,12 +214,12 @@ const instantiateIssueBlock = (
   template: LibraryElement[],
   placement: { x: number; y: number; width: number },
   sectionOptionId: string,
-  seed: string
+  createdAt: number
 ): Partial<ExcalidrawElement>[] => {
   const shape = template.find((element) => element?.customData?.kind === 'issue')
   if (!shape) return []
 
-  const shapeId = `pbdraft-${seed}`
+  const shapeId = `pbdraft-${createdAt}`
   const labelId = `${shapeId}-label`
   const labelTemplate = template.find((element) => element.containerId === shape.id)
   const height = shape.height
@@ -208,7 +238,11 @@ const instantiateIssueBlock = (
       kind: 'issue',
       // What ties the block to a column, and to the card that will replace it.
       projectBoardDraft: true,
-      sectionOptionId
+      sectionOptionId,
+      // What orders the drafts in a column, newest on top. Written out rather than read
+      // back off the id: a timestamp seeded into an id is a weak key, and an id is the
+      // one field anything on the canvas is free to rewrite.
+      draftCreatedAt: createdAt
     }
   } as unknown as Partial<ExcalidrawElement>
 
@@ -936,8 +970,12 @@ function App(): JSX.Element {
   /** Whether a drag was in flight on the previous change, so its end can be noticed. */
   const mirrorDraggingRef = useRef<boolean>(false)
 
+  /** The draft heights the mirror was last laid out for; a change is what re-slots it. */
+  const draftGeometryRef = useRef<string>('')
+
   const clearMirror = (): void => {
     projectBoardRef.current = { board: null, columns: [], errors: {}, signature: '' }
+    draftGeometryRef.current = ''
     const api = excalidrawAPIRef.current
     if (!api) return
     const scene = api.getSceneElementsIncludingDeleted()
@@ -978,31 +1016,25 @@ function App(): JSX.Element {
       origin = { x: minX - MIRROR_GAP - width, y: minY }
     }
 
-    // Room at the top of a column for the blocks the `+` dropped there, so a mirrored
-    // card cannot land on one.
-    const reservedTop: Record<string, number> = {}
-    for (const draft of drafts) {
-      const column = String(customDataOf(draft).sectionOptionId ?? '')
-      reservedTop[column] = (reservedTop[column] ?? 0) + draft.height + CARD_GAP
-    }
-
+    // The blocks the `+` dropped hold the top of their column, newest first, and the
+    // mirrored cards start below them. Both halves of that arithmetic come from
+    // `layoutBoard`, so the room reserved and the slot a block is put in cannot disagree.
     const layout = layoutBoard(board, origin, {
       errors: projectBoardRef.current.errors,
-      reservedTop
+      drafts: drafts.map(draftBlockOf)
     })
+    const placed = new Map(layout.drafts.map((placement) => [placement.id, placement]))
 
-    // Drafts are slotted above the cards of their own column, in the space just reserved.
-    const placed = new Map<string, { x: number; y: number; width: number }>()
-    for (const column of layout.columns) {
-      let y = column.cardsTop - (reservedTop[column.optionId] ?? 0)
-      for (const draft of drafts) {
-        if (String(customDataOf(draft).sectionOptionId ?? '') !== column.optionId) continue
-        placed.set(draft.id, { x: column.x, y, width: column.width })
-        y += draft.height + CARD_GAP
-      }
-    }
+    // The block being typed into is left exactly where it is: rewriting a container and
+    // its label out from under a caret is how an editor gets closed, or worse, corrupted.
+    // Only that one, though — everything else in the column still makes room for it, and
+    // the block itself does not need to move anyway, being already at the top and only
+    // growing. It is re-slotted when the editor closes, which `frozen` in the signature is
+    // what makes happen.
+    const frozen = editingDraftId(api)
 
     const nextOwn = own.map((element) => {
+      if (frozen && (element.id === frozen || element.containerId === frozen)) return element
       const slot = placed.get(element.containerId ?? '') ?? placed.get(element.id)
       if (!slot) return element
       // A label moves with its container, and keeps its own centring.
@@ -1017,7 +1049,10 @@ function App(): JSX.Element {
       }
     })
 
-    const signature = JSON.stringify([layout.elements, [...placed.entries()]])
+    // `frozen` is part of the signature because it changes what gets written: the pass that
+    // left a block alone must not let the one after the editor closed, which puts it back
+    // in its slot, be skipped as "nothing moved".
+    const signature = JSON.stringify([layout.elements, layout.drafts, frozen])
     if (signature === projectBoardRef.current.signature
         && scene.some((element) => isMirrorElement(element))) {
       // Nothing moved. Redrawing anyway would fight the reader's selection every poll.
@@ -1196,6 +1231,49 @@ function App(): JSX.Element {
   }
 
   /**
+   * Re-slot the mirror when a draft block changed height, or when one came or went.
+   *
+   * An Excalidraw container grows to fit the text bound to it, so a block gets taller with
+   * every keystroke — and nothing was watching that. `refreshProjectBoard` runs on a
+   * twenty-second poll and returns early under a caret, which is precisely when the block
+   * is growing, so the cards below sat still and were overlapped until the editor was left
+   * *and* the next poll came round.
+   *
+   * Off `projectBoardRef` rather than a fresh read: the heights are the only thing that
+   * changed, and asking GitHub about them on every keystroke would be absurd.
+   */
+  const relayoutForDrafts = (
+    elements: readonly ExcalidrawElement[] | undefined,
+    appState: Record<string, unknown> | undefined
+  ): void => {
+    const board = projectBoardRef.current.board
+    if (!board || !elements) return
+
+    // Not mid-gesture: a drag or a resize is still being aimed, and a mirror that
+    // rearranged itself under the pointer would move the target. The signature is left
+    // alone so the relayout happens as soon as the gesture ends.
+    if (appState?.selectedElementsAreBeingDragged || appState?.resizingElement
+        || appState?.newElement) {
+      return
+    }
+
+    // The editor being open is part of the signature: the block under the caret is the one
+    // relayout leaves alone, so closing the editor is itself a reason to lay out again and
+    // put it back in the slot the others made for it.
+    const editing = (appState?.editingTextElement ?? null) as { id?: string; containerId?: string | null } | null
+    const signature = [
+      `editing:${editing ? String(editing.containerId ?? editing.id ?? '') : ''}`,
+      ...elements
+        .filter((element) => !element.isDeleted && isDraftBlock(element))
+        .map((element) => `${element.id}@${Math.round(element.height)}#${customDataOf(element).sectionOptionId ?? ''}`)
+    ].join('|')
+    if (signature === draftGeometryRef.current) return
+    draftGeometryRef.current = signature
+
+    renderMirror(board)
+  }
+
+  /**
    * Drop an issue block at the top of a column.
    *
    * Only the first column, because that is the only one this can honestly create into:
@@ -1217,11 +1295,14 @@ function App(): JSX.Element {
       return
     }
 
+    // `draftsTop`, not `cardsTop`: the block goes above every draft already in the column,
+    // because it is the newest and that is where the newest goes. Dropping it at the card
+    // top would land it under them and let it flash there before the redraw corrected it.
     const created = instantiateIssueBlock(
       template,
-      { x: column.x, y: column.cardsTop, width: column.width },
+      { x: column.x, y: column.draftsTop, width: column.width },
       column.optionId,
-      `${Date.now()}`
+      Date.now()
     )
     if (created.length === 0) return
 
@@ -2078,6 +2159,9 @@ function App(): JSX.Element {
               // then works out where that shape is.
               syncDocsAnchor(_elements, appState as unknown as Record<string, any>)
               settleMirrorDrag(_elements, appState as unknown as Record<string, unknown>)
+              // After settling a drag, so a card that just changed column is not re-slotted
+              // against the board it is about to leave.
+              relayoutForDrafts(_elements, appState as unknown as Record<string, unknown>)
               scheduleAutoSync()
             }}
             initialData={{
