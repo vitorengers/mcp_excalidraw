@@ -192,9 +192,79 @@
   white-space: pre-wrap;
 }
 
-/* The action sits above the description, separated from it. */
+/* The actions sit above the description, separated from it. */
 .element-docs__implement {
   margin: 0.75rem 0 0.25rem;
+}
+
+/* Two actions on one row. Every button in this panel is otherwise a full-width row of
+   its own, so sharing a row takes a wrapper: the margin moves here and each button
+   takes an equal share by flex-basis rather than by the width the class still sets. */
+.element-docs__actions {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 1rem;
+}
+
+.element-docs__action {
+  flex: 1;
+  width: auto;
+  margin: 0;
+  /* The two labels fit side by side at the card's 720px; wrapping one of them would say
+     the row is too narrow, which it is not. */
+  white-space: nowrap;
+}
+
+.element-docs__action:disabled {
+  color: var(--color-gray-60, #868e96);
+  cursor: default;
+}
+
+.element-docs__compose {
+  margin: 0 0 1rem;
+}
+
+.element-docs__draft {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 120px;
+  margin: 0 0 8px;
+  padding: 0.5rem;
+  border: 1px solid var(--color-gray-30, #ced4da);
+  border-radius: 6px;
+  background: var(--island-bg-color, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 0.8125rem;
+  /* Free text with newlines in it — the reader has to be able to make room. */
+  resize: vertical;
+}
+
+/* The conversation under the body: what was asked after the issue was written, and
+   what was answered. */
+.element-docs__comments {
+  margin-top: 1rem;
+  border-top: 1px solid var(--color-gray-30, #ced4da);
+}
+
+.element-docs__comments-title {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  margin: 0.75rem 0 0.5rem;
+  color: var(--color-gray-60, #868e96);
+}
+
+.element-docs__comment {
+  margin: 0 0 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--color-gray-30, #ced4da);
+}
+
+.element-docs__comment-meta {
+  margin: 0 0 0.25rem;
+  font-size: 0.75rem;
+  color: var(--color-gray-60, #868e96);
 }
 
 /* Reference images, shown while the block is still an observation. */

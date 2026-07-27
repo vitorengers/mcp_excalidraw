@@ -39,8 +39,12 @@ in small, reviewable commits.
 
 Then:
 
-1. Read the issue with \`gh issue view\`, all of it. The definition of done is the contract;
-   the assumptions and open questions are part of what you are agreeing to.
+1. Read the issue with \`gh issue view\`, all of it, and its comments with
+   \`gh issue view --comments\` — piped, that flag prints the comments instead of the body,
+   so both calls are needed. The definition of done is the contract; the assumptions and
+   open questions are part of what you are agreeing to. A comment is where whoever opened
+   the issue answers those questions or adds what they left out, so where a comment and the
+   body disagree, the comment is the later word and wins.
 2. Investigate before you change anything. Check the issue's claims against the code. An
    issue can be wrong, out of date, or already fixed — if it is, say so and stop rather
    than implementing something nobody needs. That is a good outcome, not a failed run.

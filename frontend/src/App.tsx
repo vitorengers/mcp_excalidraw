@@ -11,7 +11,7 @@ import {
 } from '@excalidraw/excalidraw'
 import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
 import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/mermaidConverter'
-import { CollapsibleTarget, IssueTarget } from './components/DocsPanel'
+import { CollapsibleTarget, CommentPosted, IssueTarget } from './components/DocsPanel'
 import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
 import type { Rect } from '../../src/core/anchored-placement'
 import { resolvePanelTarget } from '../../src/core/panel-target'
@@ -572,6 +572,35 @@ function App(): JSX.Element {
       return null
     } catch (error) {
       return fail((error as Error).message)
+    }
+  }
+
+  /**
+   * Add an observation to an issue that already exists, as a GitHub comment.
+   *
+   * Nothing on the element changes, and that is deliberate: the issue is still `created`,
+   * an implementation already made is still made, and a comment must not make the block
+   * look runnable again. So this writes no state — it hands back the issue as it now
+   * stands, and the panel renders that.
+   */
+  const addObservationToIssue = async (
+    target: IssueTarget,
+    body: string
+  ): Promise<CommentPosted> => {
+    if (!target.issueUrl) return { error: 'This block has no issue to comment on yet.' }
+
+    try {
+      // By issue URL, like implementing: a mirrored card has no element on the server.
+      const response = await fetch(apiUrl('/api/issue/comment'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: target.issueUrl, body })
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) return { error: payload?.error ?? `HTTP ${response.status}` }
+      return { error: null, issue: payload?.issue ?? null }
+    } catch (error) {
+      return { error: (error as Error).message }
     }
   }
 
@@ -2083,6 +2112,7 @@ function App(): JSX.Element {
             onDetachImage={detachIssueImage}
             onImplementIssue={implementIssueFromBlock}
             onResetImplement={resetImplementOnBlock}
+            onAddComment={addObservationToIssue}
           />
         </div>
       </div>

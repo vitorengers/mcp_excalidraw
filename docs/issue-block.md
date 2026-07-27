@@ -89,6 +89,43 @@ That route shells out to `gh issue view --json` and carries the same loopback gu
 route — reading is not writing, but it still spawns a process holding your `gh` credentials.
 `EXCALIDRAW_GH_COMMAND` overrides the binary so `scripts/check-issue-detail.mjs` can stub it.
 
+## Adding observations
+
+A created block's panel has two actions on one row: **Add observations** and
+**Implement / Fix**. The first opens a box, and what is typed there is posted to the issue as a
+GitHub comment by `POST /api/issue/comment`. The comments are read back with the issue and shown
+under its body.
+
+**It exists because the board asks questions it then has to answer itself.** The issue agent is
+told to end with the open questions rather than fill a gap with a guess; the implement agent is
+told it is unattended and must decide those questions alone. Between the two runs there was
+nowhere to say anything — an answer, or whatever the observation left out, had to be typed on
+github.com in another window.
+
+Four things are deliberate:
+
+- **A comment, not an edit to the body.** It is the one place both the implement agent and a
+  human reviewer read, and it cannot damage a body an agent spent twenty minutes writing. The
+  original `customData.observation` is untouched too.
+- **Verbatim, and therefore on stdin.** A comment is free text — quotes, backticks,
+  `$(echo hi)` — and `runGh` appends its argument to a command line that a WSL workspace runs
+  through `bash -lc`. So the body goes to `gh issue comment --body-file -` through
+  `RunGhOptions.stdin` and never appears in argv; the only thing interpolated is the URL, which
+  `isIssueUrl` has already matched. `scripts/check-issue-comment.mjs` compares what a stub `gh`
+  received on each.
+- **It changes nothing else.** No agent runs, `issueState` stays `created`, a finished
+  implementation is not cleared and the block does not become runnable again. The button is
+  offered for as long as the issue exists, including while an implementation runs — which is
+  exactly when something forgotten tends to turn up. An observation added mid-run reaches
+  GitHub but not the agent already working, which read the issue when it started.
+- **The loopback guard, and only that.** It writes to GitHub, so a canvas reachable from the
+  network must not reach it; but it starts no agent and touches no repository, so it is guarded
+  like `POST /api/project-board/move` rather than like the implement routes.
+
+`IMPLEMENT_AGENT_PROMPT` now sends the agent to `gh issue view --comments` as well as
+`gh issue view` — piped, that flag prints the comments *instead of* the body, so both calls are
+needed — and says that where a comment and the body disagree, the comment is the later word.
+
 ## The prompt
 
 `ISSUE_AGENT_PROMPT` in `src/core/issue-agent.ts` tells the agent to investigate before writing:

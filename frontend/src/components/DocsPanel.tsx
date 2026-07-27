@@ -27,12 +27,85 @@ export interface IssueTarget {
   implementError?: string | null
 }
 
+/** A comment as the server hands it over. */
+export interface IssueCommentData {
+  author: string
+  body: string
+  createdAt: string
+  url: string
+}
+
+/** The issue as the server hands it over, whether read or written. */
+export interface IssueData {
+  title: string
+  body: string
+  state: string
+  number: number
+  comments?: IssueCommentData[]
+}
+
+/** A comment ready to render: its markdown already through `marked` and `DOMPurify`. */
+interface RenderedComment {
+  author: string
+  createdAt: string
+  url: string
+  html: string
+}
+
 /** The issue itself, read live when a created block is selected. */
 type IssueDetailState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'loaded'; title: string; html: string; state: string; number: number }
+  | {
+      status: 'loaded'
+      title: string
+      html: string
+      state: string
+      number: number
+      comments: RenderedComment[]
+    }
   | { status: 'error'; message: string }
+
+/**
+ * Issue text on its way to the DOM as HTML.
+ *
+ * Bodies and comments are written by an agent and by whoever types into GitHub, so a stray
+ * script or `javascript:` href has to be taken out before it can run — the same path the
+ * docs take.
+ */
+const render = (markdown: string): string =>
+  DOMPurify.sanitize(marked.parse(markdown ?? '', { async: false }) as string)
+
+const loadedIssue = (issue: Partial<IssueData>): IssueDetailState => ({
+  status: 'loaded',
+  title: issue.title ?? '',
+  html: render(issue.body ?? ''),
+  state: issue.state ?? '',
+  number: issue.number ?? 0,
+  comments: (issue.comments ?? []).map((comment) => ({
+    author: comment.author ?? '',
+    createdAt: comment.createdAt ?? '',
+    url: comment.url ?? '',
+    html: render(comment.body ?? '')
+  }))
+})
+
+/** A comment's date, in the reader's own format, or nothing if GitHub sent none. */
+function commentDate(iso: string): string {
+  if (!iso) return ''
+  const when = new Date(iso)
+  return Number.isNaN(when.getTime()) ? '' : when.toLocaleDateString()
+}
+
+/** What posting an observation answered with: an error to show, or the issue as it now is. */
+export interface CommentPosted {
+  error: string | null
+  /**
+   * The issue after the comment, when it could be read back. Null is not a failure to
+   * post — it is a post whose read-back failed, and the panel simply shows no more.
+   */
+  issue?: IssueData | null
+}
 
 export interface CollapsibleTarget {
   id: string
@@ -66,6 +139,12 @@ export interface DocsPanelBodyProps {
   onImplementIssue?: (issue: IssueTarget) => Promise<string | null>
   /** Clears a `running` state whose agent is gone. Does not stop a live run. */
   onResetImplement?: (issue: IssueTarget) => Promise<string | null>
+  /**
+   * Adds an observation to the issue as a GitHub comment — an answer to a question the
+   * issue agent left open, or whatever the observation missed. Keyed by issue like the
+   * two above, and for the same reason.
+   */
+  onAddComment?: (issue: IssueTarget, body: string) => Promise<CommentPosted>
 }
 
 /** What is known about implementing the issue, wherever it was learned. */
@@ -84,13 +163,18 @@ interface ImplementView {
  */
 export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   docKey, title, workspace, collapsible, onToggleCollapse, issue, onCreateIssue,
-  onImplementIssue, onResetImplement, onAttachImages, onDetachImage
+  onImplementIssue, onResetImplement, onAddComment, onAttachImages, onDetachImage
 }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
   const [issueDetail, setIssueDetail] = useState<IssueDetailState>({ status: 'idle' })
   const [implement, setImplement] = useState<ImplementView>({ state: null, url: null, error: null })
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
   const [imageError, setImageError] = useState<string | null>(null)
+  // The observation being written, and whether the box for it is open at all.
+  const [composing, setComposing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [posting, setPosting] = useState(false)
+  const [commentError, setCommentError] = useState<string | null>(null)
 
   const attached = issue?.images ?? []
   // A list is a new array on every render; its contents are what the effect depends on.
@@ -166,8 +250,7 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
 
         // The markdown is local and author-controlled, but it still reaches the DOM
         // as HTML — sanitise so a stray script or javascript: href cannot run.
-        const html = DOMPurify.sanitize(marked.parse(body.markdown ?? '', { async: false }) as string)
-        setDoc({ status: 'loaded', key: docKey, html })
+        setDoc({ status: 'loaded', key: docKey, html: render(body.markdown ?? '') })
       })
       .catch((error: Error) => {
         if (!cancelled) setDoc({ status: 'error', key: docKey, message: error.message })
@@ -184,6 +267,12 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   // thing being read. Read on selection rather than stored, so an edit made on GitHub
   // shows up here without the board being touched.
   useEffect(() => {
+    // A half-written observation belongs to the issue it was being written about, so
+    // selecting another shape puts the box away rather than carrying the text across.
+    setComposing(false)
+    setDraft('')
+    setCommentError(null)
+
     if (!issueUrl || issueState !== 'created') {
       setIssueDetail({ status: 'idle' })
       setImplement({ state: null, url: null, error: null })
@@ -201,16 +290,7 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
           setIssueDetail({ status: 'error', message: body?.error ?? `HTTP ${response.status}` })
           return
         }
-        // Issue bodies are written by an agent and by whoever edits them on GitHub —
-        // sanitise for the same reason the docs are sanitised.
-        const html = DOMPurify.sanitize(marked.parse(body.issue?.body ?? '', { async: false }) as string)
-        setIssueDetail({
-          status: 'loaded',
-          title: body.issue?.title ?? '',
-          html,
-          state: body.issue?.state ?? '',
-          number: body.issue?.number ?? 0
-        })
+        setIssueDetail(loadedIssue(body.issue ?? {}))
         setImplement({
           state: body.implement?.state ?? null,
           url: body.implement?.url ?? null,
@@ -308,21 +388,89 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                   <p className="element-docs__error">{implement.error ?? 'The run failed.'}</p>
                 )}
 
-                {implement.state !== 'done' && implement.state !== 'running' && onImplementIssue && (
-                  <button
-                    type="button"
-                    className="element-docs__collapse"
-                    onClick={async () => {
-                      // Optimistic, because the run itself answers immediately and the
-                      // result arrives later — over the socket for a block, by asking for
-                      // a card.
-                      setImplement({ state: 'running', url: null, error: null })
-                      const error = await onImplementIssue(issue)
-                      if (error) setImplement({ state: 'failed', url: null, error })
-                    }}
-                  >
-                    Implement / Fix
-                  </button>
+                {/* Two actions on one row rather than two rows of one. Adding an
+                    observation is offered for as long as the issue exists — including
+                    while an implementation runs, because that is exactly when something
+                    forgotten turns up — so when Implement / Fix is gone it simply takes
+                    the row to itself. */}
+                <div className="element-docs__actions">
+                  {onAddComment && (
+                    <button
+                      type="button"
+                      className="element-docs__collapse element-docs__action"
+                      onClick={() => {
+                        setCommentError(null)
+                        setComposing((open) => !open)
+                      }}
+                    >
+                      Add observations
+                    </button>
+                  )}
+
+                  {implement.state !== 'done' && implement.state !== 'running' && onImplementIssue && (
+                    <button
+                      type="button"
+                      className="element-docs__collapse element-docs__action"
+                      onClick={async () => {
+                        // Optimistic, because the run itself answers immediately and the
+                        // result arrives later — over the socket for a block, by asking for
+                        // a card.
+                        setImplement({ state: 'running', url: null, error: null })
+                        const error = await onImplementIssue(issue)
+                        if (error) setImplement({ state: 'failed', url: null, error })
+                      }}
+                    >
+                      Implement / Fix
+                    </button>
+                  )}
+                </div>
+
+                {composing && onAddComment && (
+                  <div className="element-docs__compose">
+                    <textarea
+                      className="element-docs__draft"
+                      value={draft}
+                      autoFocus
+                      placeholder="Answer a question the issue left open, or add what it missed. Posted to the issue as a comment, exactly as written."
+                      onChange={(event) => setDraft(event.target.value)}
+                    />
+                    <div className="element-docs__actions">
+                      <button
+                        type="button"
+                        className="element-docs__collapse element-docs__action"
+                        disabled={posting || !draft.trim()}
+                        onClick={async () => {
+                          setPosting(true)
+                          setCommentError(null)
+                          const result = await onAddComment(issue, draft)
+                          setPosting(false)
+                          if (result.error) {
+                            // The text stays in the box: it is the only copy of itself.
+                            setCommentError(result.error)
+                            return
+                          }
+                          setDraft('')
+                          setComposing(false)
+                          if (result.issue) setIssueDetail(loadedIssue(result.issue))
+                        }}
+                      >
+                        {posting ? 'Posting…' : 'Post to the issue'}
+                      </button>
+                      <button
+                        type="button"
+                        className="element-docs__collapse element-docs__action"
+                        disabled={posting}
+                        onClick={() => {
+                          setComposing(false)
+                          setDraft('')
+                          setCommentError(null)
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    {commentError && <p className="element-docs__error">{commentError}</p>}
+                  </div>
                 )}
               </div>
 
@@ -337,6 +485,29 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                   className="element-docs__body"
                   dangerouslySetInnerHTML={{ __html: issueDetail.html }}
                 />
+              )}
+
+              {/* Under the body, because that is where they are on GitHub and because an
+                  observation added here is only worth adding if it can be read back. */}
+              {issueDetail.status === 'loaded' && issueDetail.comments.length > 0 && (
+                <section className="element-docs__comments">
+                  <h3 className="element-docs__comments-title">
+                    {issueDetail.comments.length === 1
+                      ? '1 comment'
+                      : `${issueDetail.comments.length} comments`}
+                  </h3>
+                  {issueDetail.comments.map((comment, index) => (
+                    <article key={comment.url || index} className="element-docs__comment">
+                      <p className="element-docs__comment-meta">
+                        {[comment.author, commentDate(comment.createdAt)].filter(Boolean).join(' · ')}
+                      </p>
+                      <div
+                        className="element-docs__body"
+                        dangerouslySetInnerHTML={{ __html: comment.html }}
+                      />
+                    </article>
+                  ))}
+                </section>
               )}
 
               {issue.observation && (
