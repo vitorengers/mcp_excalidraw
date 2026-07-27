@@ -1072,6 +1072,17 @@ function App(): JSX.Element {
   const autoSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const syncInFlightRef = useRef<boolean>(false)
   const suppressAutoSyncCountRef = useRef<number>(0)
+  /**
+   * A sync that was asked for while the counter was up, and still owes the server a write.
+   *
+   * `scheduleAutoSync` used to answer a refusal by returning, which armed nothing and left
+   * nothing to re-arm it: the change waited for some *later* change that happened not to be
+   * suppressed. That is #92 — a block dropped with `+` sat in the browser alone until the
+   * next thing the reader did carried it, and a research run clicked in between answered
+   * `Element … not found`. The refusal is remembered here instead, and honoured the moment
+   * the counter drops back to zero.
+   */
+  const autoSyncPendingRef = useRef<boolean>(false)
   const userInteractedRef = useRef<boolean>(false)
 
   /** The last set of rejected hotkey claims that was printed, so it is printed once. */
@@ -1217,6 +1228,21 @@ function App(): JSX.Element {
     })
   }
 
+  /**
+   * Drop the counter, and let through a sync that was refused while it was up.
+   *
+   * Every release goes through here, because a refusal remembered by `scheduleAutoSync` is
+   * only worth remembering if something acts on it, and this is the one moment the answer
+   * can change. Still suppressed after the decrement — updates nest — means the next
+   * release is the one that will do it.
+   */
+  const releaseAutoSyncSuppression = (): void => {
+    suppressAutoSyncCountRef.current = Math.max(0, suppressAutoSyncCountRef.current - 1)
+    if (suppressAutoSyncCountRef.current > 0) return
+    if (!autoSyncPendingRef.current) return
+    scheduleAutoSync()
+  }
+
   const applySceneUpdateWithoutAutoSync = (
     api: ExcalidrawImperativeAPI,
     scene: Parameters<ExcalidrawImperativeAPI['updateScene']>[0]
@@ -1224,7 +1250,7 @@ function App(): JSX.Element {
     suppressAutoSyncCountRef.current += 1
     api.updateScene(scene)
     setTimeout(() => {
-      suppressAutoSyncCountRef.current = Math.max(0, suppressAutoSyncCountRef.current - 1)
+      releaseAutoSyncSuppression()
     }, 0)
   }
 
@@ -1251,7 +1277,10 @@ function App(): JSX.Element {
     if (!autoSyncHoldRef.current) return
     clearTimeout(autoSyncHoldRef.current)
     autoSyncHoldRef.current = null
-    suppressAutoSyncCountRef.current = Math.max(0, suppressAutoSyncCountRef.current - 1)
+    // The new board's scene is already on screen by the time this runs, so a sync refused
+    // during the switch is now a sync of that board into its own store — which is what the
+    // hold was protecting, not something it was meant to lose.
+    releaseAutoSyncSuppression()
   }
 
   // ─── The GitHub project mirror ──────────────────────────────
@@ -3207,18 +3236,36 @@ function App(): JSX.Element {
     if (!userInteractedRef.current) {
       return
     }
+    // Refused, not dropped: `releaseAutoSyncSuppression` comes back to it. Returning
+    // without this is #92 — the change is left with no timer behind it and nothing that
+    // would ever arm one.
     if (suppressAutoSyncCountRef.current > 0) {
+      autoSyncPendingRef.current = true
       return
     }
+    autoSyncPendingRef.current = false
     if (autoSyncTimerRef.current) {
       clearTimeout(autoSyncTimerRef.current)
     }
 
     autoSyncTimerRef.current = setTimeout(() => {
       autoSyncTimerRef.current = null
-      if (suppressAutoSyncCountRef.current > 0 || syncInFlightRef.current) {
+      // Suppressed by the time it fired: the debounce it waited out is spent, so the write
+      // is owed again rather than forgotten.
+      if (suppressAutoSyncCountRef.current > 0) {
+        autoSyncPendingRef.current = true
         return
       }
+      // A sync already on the wire cannot be assumed to carry this change — it read the
+      // scene before it. Wait out another debounce rather than returning, which is the same
+      // silent loss one branch up.
+      if (syncInFlightRef.current) {
+        scheduleAutoSync()
+        return
+      }
+      // Nothing is owed once this runs: it writes the scene as it stands, which is every
+      // change that was refused while the timer was out.
+      autoSyncPendingRef.current = false
       void syncToBackend({ silent: true })
     }, AUTO_SYNC_DEBOUNCE_MS)
   }
