@@ -1,8 +1,19 @@
 /* The terminal, drawn over the block that stands for it.
 
-   Dark in both themes, unlike the documentation card: this is a terminal, and a terminal
-   that follows the canvas into light mode stops looking like one. The block underneath is
-   filled to match, so the two read as one object at any zoom. */
+   Paper in both themes since #115, and the block underneath is filled to match, so the two
+   read as one object at any zoom. It used to be dark in both themes, for two reasons written
+   down here and in `terminal-block.ts`: a terminal that follows the canvas into light mode
+   stops looking like one, and a dark shape is what says "terminal" at a zoom too far out for
+   any of this text to be legible. The first is what #115 reversed — every other region of
+   this board is a pale block with a hand-drawn label, and this was the one rectangle in
+   another design language. The second is still true, and the header and prompt bands below
+   are what carries it now: two dark strips across a paper card, which are areas rather than
+   glyphs and survive being shrunk.
+
+   Not one colour here is chosen here. They arrive as custom properties from
+   `src/core/terminal-palette.ts`, which the emulator's theme and the shape's fill read too —
+   the whole point of that module is that a stylesheet cannot import TypeScript, and three
+   copies of one palette is how the old one drifted. */
 
 .terminal-card {
   position: absolute;
@@ -13,8 +24,13 @@
   box-sizing: border-box;
   border-radius: 8px;
   padding: 0.35em 0.5em 0.4em;
-  color: #cdd6f4;
-  font-family: 'Cascadia Code', 'Cascadia Mono', Menlo, Consolas, 'Courier New', monospace;
+  /* The overlay paints the surface, rather than letting the shape's fill show through it.
+     Both are the same paper, so this changes nothing to look at — what it buys is that the
+     frame's own bands and chips have something to be drawn on that is not "whatever the
+     reader last set the rectangle to". */
+  background: var(--terminal-paper);
+  color: var(--terminal-ink);
+  font-family: 'Comic Shanns', 'Cascadia Code', 'Cascadia Mono', Menlo, Consolas, 'Courier New', monospace;
   line-height: 1.35;
   /* Transparent to the pointer, so Excalidraw keeps the block: clicking selects it,
      dragging moves it, and the corner handles still resize it. Only the prompt row takes
@@ -22,15 +38,20 @@
   pointer-events: none;
 }
 
+/* The title bar, and half of what says "terminal" once the text is too small to read. A
+   solid band rather than a rule under a row of words: a rule is one pixel and disappears,
+   a band is an area and only gets shorter. */
 .terminal-card__header {
   flex: 0 0 auto;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 0.75em;
-  padding-bottom: 0.25em;
-  border-bottom: 1px solid rgb(205 214 244 / 18%);
-  color: #a6adc8;
+  margin: -0.35em -0.5em 0;
+  padding: 0.15em 0.5em 0.2em;
+  border-radius: 6px 6px 0 0;
+  background: var(--terminal-band);
+  color: var(--terminal-band-dim);
   font-size: 0.85em;
 }
 
@@ -40,11 +61,12 @@
   /* The tail of a path says which project this is; the head is the same for all of them. */
   direction: rtl;
   text-overflow: ellipsis;
+  color: var(--terminal-band-ink);
 }
 
 .terminal-card__grid {
   flex: 0 0 auto;
-  opacity: 0.7;
+  opacity: 0.8;
 }
 
 /* The reader's text size, and the second thing on this overlay that is not transparent to
@@ -63,10 +85,10 @@
      it claims to be. */
   min-width: 1.3em;
   padding: 0 0.2em;
-  border: 1px solid rgb(205 214 244 / 25%);
+  border: 1px solid rgb(255 255 255 / 25%);
   border-radius: 0.35em;
-  background: rgb(205 214 244 / 10%);
-  color: #cdd6f4;
+  background: rgb(255 255 255 / 10%);
+  color: var(--terminal-band-ink);
   font: inherit;
   line-height: 1.25;
   pointer-events: auto;
@@ -74,7 +96,7 @@
 }
 
 .terminal-card__font-step:hover {
-  background: rgb(205 214 244 / 22%);
+  background: rgb(255 255 255 / 22%);
 }
 
 /* At either end of the range. Still a button, and still swallowing the click: a `+` that
@@ -87,16 +109,17 @@
 .terminal-card__font-size {
   min-width: 1.4em;
   text-align: center;
-  opacity: 0.7;
+  opacity: 0.8;
 }
 
 .terminal-card__mode {
   flex: 0 0 auto;
   padding: 0 0.4em;
   border-radius: 0.5em;
-  background: rgb(205 214 244 / 12%);
+  background: rgb(255 255 255 / 14%);
+  color: var(--terminal-band-ink);
   font-size: 0.85em;
-  opacity: 0.8;
+  opacity: 0.85;
 }
 
 /* The tabs, one per shell in this block.
@@ -123,19 +146,19 @@
   align-items: center;
   gap: 0.3em;
   padding: 0.05em 0.15em 0.05em 0.5em;
-  border: 1px solid rgb(205 214 244 / 18%);
+  border: 1px solid var(--terminal-rule);
   border-radius: 0.4em;
-  background: rgb(205 214 244 / 6%);
-  color: #a6adc8;
+  background: var(--terminal-chip);
+  color: var(--terminal-ink-dim);
   /* The chips are the pointer-taking part, and the only one in this row. */
   pointer-events: auto;
   cursor: pointer;
 }
 
 .terminal-card__tab--active {
-  border-color: #a6e3a1;
-  background: rgb(166 227 161 / 14%);
-  color: #cdd6f4;
+  border-color: var(--terminal-accent);
+  background: var(--terminal-paper);
+  color: var(--terminal-ink);
 }
 
 /* A shell that has gone still has a tab — the transcript is the evidence — but it should not
@@ -148,25 +171,25 @@
 .terminal-card__tab-close {
   padding: 0 0.25em;
   border-radius: 0.3em;
-  color: #6c7086;
+  color: var(--terminal-ink-dim);
 }
 
 .terminal-card__tab-close:hover {
-  background: rgb(243 139 168 / 25%);
-  color: #f38ba8;
+  background: var(--terminal-selection);
+  color: var(--terminal-alert);
 }
 
 .terminal-card__control {
   padding: 0.05em 0.4em;
   border-radius: 0.4em;
-  color: #a6adc8;
+  color: var(--terminal-ink-dim);
   pointer-events: auto;
   cursor: pointer;
 }
 
 .terminal-card__control:hover {
-  background: rgb(205 214 244 / 14%);
-  color: #cdd6f4;
+  background: var(--terminal-chip);
+  color: var(--terminal-ink);
 }
 
 /* Still there, still saying what it is for, and refusing rather than disappearing: a `+`
@@ -207,14 +230,17 @@
   overflow: hidden !important;
 }
 
+/* The other band, and the bottom half of what the block reads as when it is small. */
 .terminal-card__prompt {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 0.4em;
-  margin-top: 0.25em;
-  padding-top: 0.25em;
-  border-top: 1px solid rgb(205 214 244 / 18%);
+  margin: 0.25em -0.5em -0.4em;
+  padding: 0.2em 0.5em;
+  border-radius: 0 0 6px 6px;
+  background: var(--terminal-band);
+  color: var(--terminal-band-dim);
   overflow: hidden;
   white-space: nowrap;
   /* The one part of the overlay that is not transparent to the pointer. It does not take
@@ -225,13 +251,12 @@
 
 .terminal-card__caret {
   flex: 0 0 auto;
-  color: #a6e3a1;
+  color: var(--terminal-band-accent);
 }
 
 .terminal-card__hint {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: #6c7086;
   text-overflow: ellipsis;
 }

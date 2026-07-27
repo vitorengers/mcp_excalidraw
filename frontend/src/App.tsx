@@ -43,7 +43,7 @@ import {
   terminalOrigin
 } from '../../src/core/terminal-block'
 import type { Bounds } from '../../src/core/terminal-block'
-import { terminalLineBox } from './terminal-metrics'
+import { terminalAdvance, terminalFontReady, terminalLineBox } from './terminal-metrics'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
@@ -2581,11 +2581,13 @@ function App(): JSX.Element {
     size: { width: number; height: number },
     sessions: string[]
   ): void => {
-    // Measured here rather than remembered: a row is the font's own line box times the line
-    // height the emulator was given, and only the browser that resolved the font knows the
-    // first of those. See `frontend/src/terminal-metrics.ts`.
+    // Measured here rather than remembered, and both halves of the cell: a row is the font's
+    // own line box times the line height the emulator was given, a column is its advance
+    // width, and only the browser that resolved the font knows either. Since #115 the face
+    // is a web font, so "the font this page resolved" is not even fixed for the life of the
+    // page. See `frontend/src/terminal-metrics.ts`.
     const font = terminalFontRef.current
-    const grid = terminalGrid(size, font, terminalLineBox(font))
+    const grid = terminalGrid(size, font, terminalLineBox(font), terminalAdvance(font))
     const signature = `${grid.cols}x${grid.rows}`
     const stale = sessions.filter((id) => terminalGridRef.current.get(id) !== signature)
     if (stale.length === 0) return
@@ -2654,6 +2656,29 @@ function App(): JSX.Element {
     // through `syncTerminalBlocks` with its own report.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminalFont])
+
+  // The same report again, once the face has actually arrived.
+  //
+  // Since #115 the block draws in a web font, and a block placed before it loads measured
+  // the fallback stack instead: five per cent wider a glyph, which is seven columns of a
+  // default block reported away and never asked for again. Nothing goes wrong — the grid
+  // only ever comes out *smaller* than the block can hold, so it is a narrower terminal
+  // rather than a clipped one, which is exactly why it needs a line of its own rather than
+  // being left to the next corner drag to fix.
+  //
+  // Mount only, and that is enough: a block placed after this has measured the real face
+  // already, because `terminalAdvance` asks the browser every time rather than remembering.
+  useEffect(() => {
+    let cancelled = false
+    void terminalFontReady().then(() => {
+      if (cancelled) return
+      for (const [elementId, block] of terminalGeometryRef.current) {
+        reportTerminalGrid(elementId, block, block.sessions)
+      }
+    })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // The board's sessions are adopted when the board is shown, and one is opened if it has
   // none. Nothing is closed on the way out: a terminal you switched away from keeps its
