@@ -242,27 +242,26 @@ function label(
 }
 
 /**
- * What a section header says it holds.
+ * What a section header says it holds: one number, counting everything in the column.
  *
- * Two populations sit under one header and the count used to see one of them: the mirrored
- * cards. The blocks the `+` dropped were laid out by this same function and counted by
- * nothing, so a first column holding three drafts and no cards read `Todo (0)` — every
- * observation waiting to be researched invisible to the only number above it.
+ * Drafts, mirrored cards, and the cards the cap left out. The cap decides what is *drawn*,
+ * never what is *held*, so `, N hidden` qualifies the card side — the only side a cap
+ * applies to — while the total includes them all the same.
  *
- * `drafts / cards`, in that order, because that is the order the request put them in: what
- * was written by hand, and then what already exists as an issue. The **last** number is
- * always the mirrored items, which is what the single number has always meant — so a column
- * with no drafts keeps drawing exactly one, rather than a `/ 0` that is zero by
- * construction. The `+` is on the first column only, so every other column would otherwise
- * carry a permanent zero for a population it can never hold.
+ * It carried two numbers, `drafts / cards`, because two populations shared one column and
+ * the header had to say which was which. They no longer share one: hand-written blocks land
+ * in the first column and a researched issue is moved out of it, so the split is done by the
+ * columns and repeating it here says nothing.
  *
- * `, N hidden` still qualifies the card side, the only side a cap applies to.
+ * **Not a revert to `cards.length + hidden`.** That number counted the mirrored items alone,
+ * which is why a column holding three drafts and no cards read `Todo (0)` — the defect #79
+ * recorded. Reverting would move that defect one column left, onto the column the drafts now
+ * have to themselves. The drafts stay in the sum; only the slash goes.
  */
 function headerText(section: BoardSection, drafts: number): string {
-  const count = section.cards.length + section.hidden;
-  const written = drafts ? `${drafts} / ` : '';
+  const count = drafts + section.cards.length + section.hidden;
   const hidden = section.hidden ? `, ${section.hidden} hidden` : '';
-  return `${section.name} (${written}${count}${hidden})`;
+  return `${section.name} (${count}${hidden})`;
 }
 
 function cardText(title: string, number: number | null, error: string | undefined): string {

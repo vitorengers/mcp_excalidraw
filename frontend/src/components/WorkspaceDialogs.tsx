@@ -136,6 +136,7 @@ interface ConfigDraft {
   githubProject: string
   projectField: string
   projectCardLimit: string
+  projectTodoColumn: string
   projectInProgressColumn: string
   issue: AgentDraft
   implement: AgentDraft
@@ -206,6 +207,7 @@ export const WorkspaceConfigDialog: React.FC<{
           githubProject: text(config.githubProject),
           projectField: text(config.projectField),
           projectCardLimit: number(config.projectCardLimit),
+          projectTodoColumn: text(config.projectTodoColumn),
           projectInProgressColumn: text(config.projectInProgressColumn),
           issue: agentDraft(agents.issue),
           implement: agentDraft(agents.implement)
@@ -238,6 +240,7 @@ export const WorkspaceConfigDialog: React.FC<{
           githubProject: orNull(draft.githubProject),
           projectField: orNull(draft.projectField),
           projectCardLimit: draft.projectCardLimit.trim() && Number.isInteger(cards) && cards > 0 ? cards : null,
+          projectTodoColumn: orNull(draft.projectTodoColumn),
           projectInProgressColumn: orNull(draft.projectInProgressColumn),
           agents: { issue: agentPatch(draft.issue), implement: agentPatch(draft.implement) }
         }
@@ -326,6 +329,9 @@ export const WorkspaceConfigDialog: React.FC<{
             {field('GitHub project', 'githubProject', 'https://github.com/users/…/projects/5')}
             {field('Project field', 'projectField', 'Status')}
             {field('Cards per column', 'projectCardLimit')}
+            {/* The two columns this server writes: where a researched issue lands, and
+                where an implementation does. Blank means the option GitHub names itself. */}
+            {field('Todo column', 'projectTodoColumn', 'Todo')}
             {field('In-progress column', 'projectInProgressColumn', 'In Progress')}
 
             {/*

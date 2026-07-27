@@ -278,6 +278,7 @@ try {
   check('the settings dialog is on screen', settings);
   await type('.workspace-config__field[data-field="name"]', 'First Project');
   await type('.workspace-config__field[data-field="repo"]', 'vitorengers/first');
+  await type('.workspace-config__field[data-field="projectTodoColumn"]', 'Ready');
   await type('.workspace-config__field[data-field="agents.implement.model"]', 'claude-opus-5');
   await shot('06-settings-filled');
   check('the settings can be saved', await click('.workspace-config__save'));
@@ -295,6 +296,8 @@ try {
   const onDisk = JSON.parse(readFileSync(join(firstDir, 'board.config.json'), 'utf8'));
   check('the project config on disk has the name', onDisk.name === 'First Project', JSON.stringify(onDisk));
   check('and the repository', onDisk.repo === 'vitorengers/first', JSON.stringify(onDisk));
+  check('and the column a researched issue is moved to',
+        onDisk.projectTodoColumn === 'Ready', JSON.stringify(onDisk));
   check('and the per-project agent model the observation asked for',
         onDisk.agents?.implement?.model === 'claude-opus-5', JSON.stringify(onDisk.agents));
 } catch (error) {
