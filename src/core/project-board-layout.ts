@@ -67,13 +67,50 @@ export interface MirrorColumn {
   name: string;
   x: number;
   width: number;
-  /** Where cards start, so a caller can drop a new block at the top of a column. */
+  /**
+   * The top of the column, above every draft — where a block just dropped belongs, since
+   * drafts stack newest-first and a block just dropped is the newest there is.
+   */
+  draftsTop: number;
+  /** Where the mirrored cards start — below whatever drafts are holding the top. */
   cardsTop: number;
+}
+
+/**
+ * A block the `+` dropped, waiting for the run that turns it into a real card.
+ *
+ * Only what the placement needs: the block itself is the reader's own element, authored
+ * and synced, and this file never draws it — it decides where it goes and how much room
+ * the mirrored cards have to give up for it.
+ */
+export interface DraftBlock {
+  id: string;
+  /** The column the block belongs to. A column the board no longer has is ignored. */
+  sectionOptionId: string;
+  /** The block's current height. It grows as its title is typed, which is the point. */
+  height: number;
+  /**
+   * When the block was made, so drafts stack newest-first the way cards do. A block made
+   * before this was written carries none; those keep the order they were given, below the
+   * dated ones, so an old scene still lays out the same way twice running.
+   */
+  createdAt?: number;
+}
+
+/** Where one draft block goes. The caller moves the element there; this only says where. */
+export interface DraftPlacement {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export interface MirrorLayout {
   elements: MirrorElement[];
   columns: MirrorColumn[];
+  /** Where the draft blocks go, in the space reserved for them at the top of a column. */
+  drafts: DraftPlacement[];
   bounds: { x: number; y: number; width: number; height: number };
 }
 
@@ -85,11 +122,31 @@ export interface LayoutOptions {
    */
   errors?: Record<string, string>;
   /**
-   * Vertical space to leave free at the top of a column, by option id. A `+` drops a real
-   * issue block at the top of the first column; without a reservation the next refresh
-   * would lay a mirrored card straight over it.
+   * The blocks the `+` dropped. Each one holds the top of its column and pushes the
+   * mirrored cards below it down; without that the next refresh would lay a card straight
+   * over a block the reader is still typing into.
    */
-  reservedTop?: Record<string, number>;
+  drafts?: DraftBlock[];
+}
+
+/**
+ * The drafts of each column, newest first.
+ *
+ * Newest-first by analogy with the cards (`toBoard` sorts those the same way): a block
+ * just dropped is the one being worked on, and it belongs where the eye already is.
+ * `sort` is stable, so undated blocks keep their given order among themselves.
+ */
+function draftsByColumn(drafts: DraftBlock[]): Map<string, DraftBlock[]> {
+  const byColumn = new Map<string, DraftBlock[]>();
+  for (const draft of drafts) {
+    const column = byColumn.get(draft.sectionOptionId);
+    if (column) column.push(draft);
+    else byColumn.set(draft.sectionOptionId, [draft]);
+  }
+  for (const column of byColumn.values()) {
+    column.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  }
+  return byColumn;
 }
 
 /** How wide the whole mirror is, before it is laid out. */
@@ -178,9 +235,10 @@ export function layoutBoard(
   options: LayoutOptions = {}
 ): MirrorLayout {
   const errors = options.errors ?? {};
-  const reservedTop = options.reservedTop ?? {};
+  const drafts = draftsByColumn(options.drafts ?? []);
   const elements: MirrorElement[] = [];
   const columns: MirrorColumn[] = [];
+  const placements: DraftPlacement[] = [];
 
   const width = boardWidth(board.sections.length);
   const headerTop = origin.y + TITLE_HEIGHT + COLUMN_GAP;
@@ -248,8 +306,22 @@ export function layoutBoard(
       elements.push(add, label(add, '+', HEADER_FONT_SIZE, stroke));
     }
 
-    let y = cardsTop + (reservedTop[section.optionId] ?? 0);
-    columns.push({ optionId: section.optionId, name: section.name, x, width: COLUMN_WIDTH, cardsTop: y });
+    // The drafts hold the top of the column and the cards start under them. A draft whose
+    // column the board no longer has is left out here and gets no placement: rehoming it
+    // into a column it was never in would be a worse answer than leaving it where it is.
+    let y = cardsTop;
+    for (const draft of drafts.get(section.optionId) ?? []) {
+      placements.push({ id: draft.id, x, y, width: COLUMN_WIDTH, height: draft.height });
+      y += draft.height + CARD_GAP;
+    }
+    columns.push({
+      optionId: section.optionId,
+      name: section.name,
+      x,
+      width: COLUMN_WIDTH,
+      draftsTop: cardsTop,
+      cardsTop: y,
+    });
 
     for (const card of section.cards) {
       const error = errors[card.itemId];
@@ -290,6 +362,7 @@ export function layoutBoard(
   return {
     elements,
     columns,
+    drafts: placements,
     bounds: { x: origin.x, y: origin.y, width, height: bottom + PADDING - origin.y },
   };
 }

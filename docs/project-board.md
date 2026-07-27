@@ -112,6 +112,22 @@ definition of that shape would drift from the one the library ships. It is marke
 `projectBoardDraft` and is a **real, authored** element: it persists, it syncs, and it is yours
 until the issue exists. The mirror leaves room for it at the top of its column.
 
+Blocks stack **newest on top**, the same rule the cards follow, ordered by the
+`draftCreatedAt` the `+` stamps onto each one — a timestamp seeded into an id would have been a
+weaker key, and an id is the one field anything on the canvas is free to rewrite. A block made
+before that field existed carries none; those keep the order the scene holds them in, below the
+dated ones, so an old scene still lays out the same way twice running.
+
+A block grows as its title is typed, because an Excalidraw container grows to fit the text bound
+to it, and everything below it in the column moves down as it does — on the keystroke, not on the
+next poll. The block under the caret is the one thing a relayout leaves alone: rewriting a
+container and its label out from under a text editor is how the editor gets closed, or corrupted.
+It is put back in its slot as soon as the editor closes. All of this is arithmetic, so it lives in
+`layoutBoard` rather than in the component: pass the drafts in and it returns where each one goes
+and how much room the cards give up (`scripts/check-board-drafts.mjs`). What a browser still has to
+confirm is that the arithmetic is wired to a keystroke at all, which
+`scripts/check-board-drafts-browser.mjs` drives a real Chrome to do.
+
 When the run finishes and the refreshed board holds a card with the same `issueUrl`, the draft is
 deleted — matched on the URL because that is the only thing the block and the card provably share.
 A run that failed leaves its block alone: there is nothing to replace it with, and the observation
