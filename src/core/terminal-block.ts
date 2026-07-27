@@ -64,8 +64,10 @@ export function terminalBlockData(customData: unknown): TerminalBlockData {
  * Distance between the board's own right edge and the terminal's left edge.
  *
  * The same 120 the mirror leaves on the left. The symmetry is the point: the mirror is
- * `minX - gap - width` and this is `maxX + gap`, so both regions follow content that grew
- * instead of sitting at a coordinate somebody once picked.
+ * `minX - gap - width` and this is `maxX + gap`, so each region is placed from the board's own
+ * content rather than from a coordinate somebody once picked. Both are placed *once* and then
+ * kept — the mirror since #99, where re-measuring it on every poll turned out to be what let it
+ * drift away from the board on its own.
  */
 export const TERMINAL_GAP = 120;
 

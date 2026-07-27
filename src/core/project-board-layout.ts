@@ -231,15 +231,15 @@ const isDraft = (element: AnchorCandidate): boolean =>
  * Three places drop derived shapes and two of them also drop **a label bound to one** —
  * Excalidraw binds text to whatever is selected, and that text carries no `kind` of its own,
  * so on its own terms it looks authored. This is the third: the mirror's own measurement,
- * which used to exclude the terminal block but not a title bound to it. Bind a title to the
- * one block the reader is expected to drag, drag it up and to the left, and the block was
+ * which used to exclude the terminal blocks but not a title bound to one. Bind a title to a
+ * block the reader is expected to drag, drag it up and to the left, and the block was
  * ignored while its label was not.
  *
  * Left out, and why each one:
  *
  * - the mirror's own shapes, or the region would re-anchor to itself;
- * - the terminal block, which is placed *from* the board's bounds on the other side, so
- *   measuring against it would walk the two regions apart;
+ * - the terminal blocks, which are placed *from* the board's bounds on the other side, so
+ *   measuring against them would walk the two regions apart;
  * - the draft blocks, which live inside the mirror;
  * - anything whose container is one of those, which is the rule this adds to the terminal.
  */

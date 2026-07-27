@@ -232,10 +232,10 @@ without that, a text element whose container the store has never heard of ends u
 committed board file.
 
 There is a third place that rule has to be stated, and #99 is where it was missing: the mirror's
-own measurement (`mirrorAnchors` in `src/core/project-board-layout.ts`). It left the block out
-and took its label in, so binding a title to the one block the reader is expected to drag, and
-then dragging it, moved the *other* region. All three now say the same thing about a label as
-about its container.
+own measurement (`mirrorAnchors` in `src/core/project-board-layout.ts`). It left these blocks out
+and took their labels in, so binding a title to a block the reader is expected to drag, and then
+dragging it, moved the *other* region. All three now say the same thing about a label as about
+its container.
 
 Nothing about the PTY changed this. The emulator is DOM, the transcript is the server's, and
 neither has ever been an element.
