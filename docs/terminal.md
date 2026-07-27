@@ -255,9 +255,44 @@ screen. So the parsing happens in the block, and what it draws is a screen rathe
 
 Where it differs from the documentation card is the zoom. That card stays the same size on
 screen at any zoom, because it is a reading column pinned beside a shape. This one **is** the
-shape: the grid is fixed by the block's *scene* size — the same `cols`×`rows` the shell was told
-— and only the font scales with the board, so a terminal zoomed out is the same screen drawn
-smaller rather than a different number of columns.
+shape: the zoom scales the font and leaves the grid alone, so a terminal zoomed out is the same
+screen drawn smaller rather than a different number of columns.
+
+## The font size is an input to the grid
+
+The reader sets it, with `−` and `+` on the block's own header, between 8 and 24. What the zoom
+multiplies is that size, so the two questions stay separate: the zoom is how close the board is,
+and this is how big the text is on it.
+
+It could not be a display tweak. xterm sizes its canvas as `cols` × `rows` × the font, and the
+grid is derived from a cell that was measured at 13px — so a `+` that only assigned
+`terminal.options.fontSize` would leave the emulator drawing past the frame, and everything past
+the frame is clipped rather than scrolled (below). Bigger text, silently fewer visible columns,
+and no scrollbar to reach them.
+
+So `terminalGrid()` takes the font size as its second argument, and one size feeds three things:
+the cell, the frame — the header, the prompt strip and the padding are all `em`, so the chrome
+grows with the text it holds — and therefore the grid. **A larger font in the same block is
+fewer columns and fewer rows**, reported down the same debounced route a corner drag uses. The
+`cols`×`rows` in the header is the confirmation, because it is what came back from the shell.
+
+Two decisions the observation left open:
+
+- **It survives a reload**, in `localStorage` next to the theme, and it is **global rather than
+  per board**: it is a preference about the reader's eyes, and the same eyes read every project.
+- **It never reaches `customData`.** The block is derived and stripped at both doors, so a size
+  stored on the shape would be dropped on the way to the store and read as the block forgetting
+  it.
+
+Buttons rather than a shortcut, for a reason beyond discoverability: while the terminal has the
+keyboard every keystroke is the shell's, so `Ctrl+-` would reach the shell and not the block.
+
+The one thing measured rather than assumed: xterm's cell **width** is linear in the font —
+0.586px per font pixel across the whole range, against the 0.585 the block is drawn with — so
+the columns fit at every step. Its cell **height** is not the font times the line height; xterm
+measures the font's own line box first, which is a little over `1em`, so a row comes out nearer
+`1.55 ×` the font than the `1.35` `TERMINAL_CELL` assumes. That gap is there at 13px with no
+button pressed, which is why it is not this feature's to fix — see *What it does not do yet*.
 
 **Resizing is Excalidraw's own.** The block is a real scene element, so dragging its corner
 resizes it, dragging its middle moves it, and selecting it opens the usual style panel. That
@@ -267,20 +302,21 @@ clicks would take the shape's handles away with it. The reader's new size reache
 debounced so a drag is one request rather than one per frame.
 
 That is the collision an emulator brings, and this is how it is resolved: **the pointer stays
-with the canvas, and only the keyboard is handed over.** xterm would like the pointer, for
-selection and for scrolling, and taking it would cost the block its handles. So the strip along
-the bottom is one of only two parts of the overlay that take a click, and what the click does is
-focus the terminal. From then on every keystroke goes to the shell — Ctrl+C, arrows, Escape
-included — and none of them reach Excalidraw, which binds every bare letter to a tool. Clicking
-anywhere on the canvas blurs it and gives the keyboard back. The strip says which of the two
-states it is in.
+with the canvas, and it is handed back only where the overlay says what it is for.** xterm would
+like the pointer, for selection and for scrolling, and taking it would cost the block its
+handles. So three small places take a click and nothing else does: the two font buttons on the
+header, the tab chips, and the strip along the bottom — whose click focuses the terminal. From
+then on every keystroke goes to the shell — Ctrl+C, arrows, Escape included — and none of them
+reach Excalidraw, which binds every bare letter to a tool. Clicking anywhere on the canvas blurs
+it and gives the keyboard back. The strip says which of the two states it is in.
 
-The other is the tab strip, and it is **the chips rather than the row they sit in**. The row
-spans the card, the card is the block, and a full-width strip that took the pointer would sit
-over the block's own top edge and swallow the resize handles along it. The chips are inset from
-the card's edges for the same reason — Excalidraw's handles reach a few pixels either side of
-the outline. `scripts/check-terminal-tabs-browser.mjs` drags a corner after everything else it
-does, which is what that paragraph is worth without a browser.
+The tab strip is the newest of the three, and what takes the pointer is **the chips rather than
+the row they sit in**. The row spans the card, the card is the block, and a full-width strip that
+took the pointer would sit over the block's own top edge and swallow the resize handles along it.
+The chips are inset from the card's edges for the same reason — Excalidraw's handles reach a few
+pixels either side of the outline, which is also why the font buttons are as small as a target
+can be and still be one. `scripts/check-terminal-tabs-browser.mjs` drags a corner after
+everything else it does, which is what those two paragraphs are worth without a browser.
 
 ## The hotkey
 
@@ -291,10 +327,46 @@ different character and works from anywhere on the page. It stands down while te
 edited — including while the terminal has the keyboard, where Alt+T has to be a keystroke the
 shell receives rather than a jump.
 
-It does two things more than Alt+B. With no block on the board it places one first — the shape
-is derived and is restored from nowhere, so deleting it would otherwise be permanent for the
-rest of the session. And with **no sessions at all** it opens one, which is the way back from
-closing the last tab.
+It does more than Alt+B, because the terminal has four ways of being absent and this is the one
+answer to all of them: it scrolls to the blocks, places one if the board has none, and **opens a
+session if none is running** — which covers a shell that exited, a board whose own attempt to
+open one failed, and the last tab having been closed with its block. That last part is what
+makes it a way back rather than a jump: the key used to stand down whenever no session was open,
+which is to say in exactly the cases a reader reaches for it.
+
+The key is on the block as well as in here. When a shell has gone the strip along the bottom
+says so and says how to get another — `+` for a tab beside it, or this key — because a key
+written down only in markdown is a key nobody finds, which is the half of #93 that was never
+about the eraser.
+
+## Erasing it does not get rid of it
+
+The block is not `locked`, and `locked` is the only thing Excalidraw's eraser respects
+(`if (element.locked) { return; }`). Locking it would take away the selection, the drag and the
+corner resize that *are* the interface here, so the block stays erasable and **the erase is
+undone instead**: the board notices, in `syncTerminalBlocks`, that it has lost a block whose
+shells are still running, and puts one back where the reader had it — the size and the position
+it was erased at, not re-anchored to the right of the board. A block with two tabs comes back as
+one block with two tabs, because what is remembered is per session and the restore groups the
+orphans by the geometry they share.
+
+That is the only answer that keeps the shells reachable. Nothing in the erase path kills one:
+`DELETE /api/terminal` is never sent by the frontend for an erase, so a block that stayed gone
+left a live process with a slot still taken, its output accumulating into state nothing drew,
+and no way to Ctrl+C whatever was running in it — the keyboard reaches a shell only through the
+overlay. That is what the observation behind #93 walked into.
+
+**Once a shell has exited, an erase sticks.** That tab is a notice by then rather than a
+terminal, and a notice the reader clears should stay cleared, so it is forgotten rather than
+restored. Its block still comes back if any of its other tabs is alive. `+` or Alt+T starts
+another.
+
+The restore is on a short timer rather than immediate, because a block going missing is noticed
+from inside the scene-change handler and the pointer that erased it may still be down. It puts
+back only the block: the live scene is what goes into `updateScene`, since
+`convertToExcalidrawElements` rebuilds each element from a skeleton with no `isDeleted` to
+rebuild from, and handed the tombstones it would return everything else the eraser had just
+taken.
 
 ## Checked
 
@@ -318,8 +390,20 @@ closing the last tab.
 - `scripts/check-terminal-ansi-browser.mjs` — also in Chrome: an SGR escape drawn as a colour
   rather than as four characters, a real Ctrl+C interrupting a running command, and the block's
   corner still resizing it afterwards.
+- `scripts/check-terminal-restore-browser.mjs` — also in Chrome: the real eraser tool dragged
+  across the block, and the block back where it was with the same pid behind it; a control shape
+  in the same drag that has to stay erased, so a restore that resurrected the whole scene could
+  not pass; the block still absent from the store afterwards; and the key opening a session
+  after `exit`, and on a page that never opened one, both without a reload.
+- `scripts/check-terminal-font.mjs` — the arithmetic behind the size buttons: the cell, the
+  frame and therefore the grid all move with the font, the grid never grows on the way up the
+  range, and no size in it asks for a screen the block cannot hold.
+- `scripts/check-terminal-font-browser.mjs` — the buttons themselves, in Chrome. Clicked with a
+  real pointer, the grid the *shell* was told changing with them, a line exactly as wide as the
+  header's claim drawn with its last column inside the block, the shape still selectable and
+  still resizable by its corner afterwards, and the size still there after a reload.
 
-All six were written first and seen to fail against the code as it stood.
+All nine were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.
@@ -331,6 +415,13 @@ browser does.
 - **Nothing streams the agents into it.** That is the destination the observation behind #51
   named, and it is a second producer on this surface rather than part of building it: tap
   `issue-agent.ts` where the chunks arrive and broadcast them. It deserves its own issue.
+- **The block claims about two rows more than it draws, at every font size.** `TERMINAL_CELL`
+  takes a row to be `1.35 ×` the font, which is the line height xterm is given; xterm applies
+  that to the font's *measured* line box, which is a little over `1em`, so a real row is nearer
+  `1.55 ×`. The columns are unaffected — the width is linear and a shade conservative — and the
+  bottom rows are the ones clipped. It predates the size buttons, which found it; correcting the
+  constant changes what every shell is told on every board, and deserves its own issue and its
+  own before-and-after check.
 - **The transcript cannot be scrolled or selected with the mouse.** The body has to stay
   transparent to the pointer for the block underneath to remain a block, so the wheel and a drag
   both belong to the canvas. A taller block shows more; a full-screen program is unaffected,

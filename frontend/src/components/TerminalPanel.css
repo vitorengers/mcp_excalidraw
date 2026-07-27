@@ -47,6 +47,49 @@
   opacity: 0.7;
 }
 
+/* The reader's text size, and the second thing on this overlay that is not transparent to
+   the pointer. Only the two buttons take it — the number between them is a readout, and a
+   readout that swallowed clicks would be a strip of the block that no longer selects it. */
+.terminal-card__font {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.15em;
+}
+
+.terminal-card__font-step {
+  /* Sized in em like everything else in the frame, so the control the font size is set from
+     is itself one of the things that grows — and `terminalChrome()` stays the measurement
+     it claims to be. */
+  min-width: 1.3em;
+  padding: 0 0.2em;
+  border: 1px solid rgb(205 214 244 / 25%);
+  border-radius: 0.35em;
+  background: rgb(205 214 244 / 10%);
+  color: #cdd6f4;
+  font: inherit;
+  line-height: 1.25;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.terminal-card__font-step:hover {
+  background: rgb(205 214 244 / 22%);
+}
+
+/* At either end of the range. Still a button, and still swallowing the click: a `+` that
+   let the pointer through at the top would select the block instead of doing nothing. */
+.terminal-card__font-step--spent {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.terminal-card__font-size {
+  min-width: 1.4em;
+  text-align: center;
+  opacity: 0.7;
+}
+
 .terminal-card__mode {
   flex: 0 0 auto;
   padding: 0 0.4em;

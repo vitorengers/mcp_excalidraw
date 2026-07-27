@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { TERMINAL_FONT_SIZE } from '../../../src/core/terminal-block'
+import { TERMINAL_FONT_RANGE } from '../../../src/core/terminal-block'
 import type { Rect } from '../../../src/core/anchored-placement'
 import './TerminalPanel.css'
 
@@ -39,6 +39,10 @@ export interface TerminalPanelProps {
   onMerge: () => void
   /** Keystrokes, as bytes: `\r` for Enter, `\x03` for Ctrl+C, `ESC [ A` for an arrow. */
   onInput: (sessionId: string, data: string) => void
+  /** The reader's text size, before the board's zoom multiplies it. */
+  fontSize: number
+  /** A new one, from the buttons on the header. Clamped by whoever holds the state. */
+  onFontSize: (next: number) => void
 }
 
 /**
@@ -198,27 +202,39 @@ const TerminalScreen: React.FC<{
  *
  * The difference from the documentation card is the zoom. That card is a reading column
  * pinned *next to* a shape and stays the same size on screen at any zoom. This one *is* the
- * shape: the grid is fixed by the block's scene size — the same `cols`×`rows` the shell was
- * told — and the font scales with the board, so a terminal zoomed out is the same screen
- * drawn smaller rather than a different number of columns.
+ * shape: the zoom scales the font and leaves the grid alone, so a terminal zoomed out is
+ * the same screen drawn smaller rather than a different number of columns.
  *
- * The body is transparent to the pointer on purpose, and that survived both the emulator and
- * the tabs. This is where a terminal in a canvas has to choose: Excalidraw owns clicking,
- * dragging and resizing the block underneath, and an overlay that took pointer events —
- * which is what xterm would like — would take the shape's own handles with it. So the pointer
- * stays with the canvas; only the strip at the bottom takes it, to hand the *keyboard* over,
- * and only the tab chips themselves, to switch, add, close, detach and merge.
+ * The **reader's** font size is a different question, and it does move the grid. `+` and
+ * `-` on the header set the size the zoom multiplies, and because xterm sizes its canvas as
+ * `cols` × `rows` × the font, a bigger font in the same block has to mean fewer columns and
+ * fewer rows — otherwise the emulator draws past the frame and the overshoot is clipped
+ * rather than scrolled. So a step recomputes the grid from the block's scene size at the
+ * new font and reports it down the route a corner drag already uses; what comes back is
+ * what the header shows.
  *
- * The chips are the second pointer-taking region this overlay has ever had, and they are
- * deliberately the *chips* rather than the row they sit in: a full-width strip along the top
- * of the card would sit over the block's own top edge and take the resize handles with it,
- * which is the failure this file has recorded since it was written. They are inset from the
- * card's edges for the same reason, and the browser check drags a corner afterwards to say
- * so.
+ * The body is transparent to the pointer on purpose, and that survived the emulator, the
+ * font buttons and the tabs. This is where a terminal in a canvas has to choose: Excalidraw
+ * owns clicking, dragging and resizing the block underneath, and an overlay that took pointer
+ * events — which is what xterm would like — would take the shape's own handles with it. So
+ * the pointer stays with the canvas, and the three places that take it back say what they are
+ * for: the strip at the bottom hands the *keyboard* over, the two buttons on the header set
+ * the size, and the tab chips switch, add, close, detach and merge. Once the strip has been
+ * clicked every keystroke goes to the shell, Ctrl+C included; clicking anywhere on the canvas
+ * blurs it and gives the keyboard back. The cost is the one the transcript already had: no
+ * selecting or scrolling with the mouse.
+ *
+ * The chips are the newest of the three, and they are deliberately the *chips* rather than
+ * the row they sit in: a full-width strip along the top of the card would sit over the
+ * block's own top edge and take the resize handles with it, which is the failure this file
+ * has recorded since it was written — and the reason the font buttons are as small as a
+ * target can be. They are inset from the card's edges for the same reason, and the browser
+ * check drags a corner afterwards to say so.
  */
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   rect, zoom, suppressed, tabs, activeId, canAdd, canMerge,
-  onSelect, onAdd, onClose, onDetach, onMerge, onInput
+  onSelect, onAdd, onClose, onDetach, onMerge, onInput,
+  fontSize: readerFontSize, onFontSize
 }) => {
   /** Focus handles, one per live screen, so the prompt strip can reach the active one. */
   const focusRef = useRef<Map<string, () => void>>(new Map())
@@ -235,7 +251,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const followRef = useRef(false)
 
   const scale = Math.max(0.35, zoom)
-  const fontSize = TERMINAL_FONT_SIZE * scale
+  // The reader's size is the base and the board's zoom multiplies it, so the two answer
+  // different questions: the zoom is how close the board is, and this is how big the text
+  // is on it. Only the first of them is allowed to leave the grid alone.
+  const fontSize = readerFontSize * scale
   const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null
   const status = active?.status ?? null
 
@@ -254,12 +273,25 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   if (!rect || tabs.length === 0) return null
 
-  /** The one gesture the canvas must not also receive. Excalidraw listens on pointerdown. */
+  /**
+   * The one gesture the canvas must not also receive.
+   *
+   * `pointerdown` rather than `click`, and for the reason the prompt strip gives: this
+   * overlay stops pointer events so that what it does not stop reaches the canvas, and a
+   * handler waiting for the synthesised click would be reasoning about a second event that
+   * the first one's `preventDefault` is entitled to suppress.
+   */
   const takes = (handler: () => void) => (event: React.PointerEvent): void => {
     event.stopPropagation()
     event.preventDefault()
     handler()
   }
+
+  const atFloor = readerFontSize <= TERMINAL_FONT_RANGE.min
+  const atCeiling = readerFontSize >= TERMINAL_FONT_RANGE.max
+  // At either end of the range the step is a no-op rather than a dead button: the click is
+  // still swallowed, so `+` at the top does not fall through and select the block.
+  const stepBy = (delta: number) => takes(() => onFontSize(readerFontSize + delta))
 
   return (
     <div
@@ -281,6 +313,35 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       <div className="terminal-card__header">
         <span className="terminal-card__where" title={status?.cwd ?? ''}>{status?.cwd ?? ''}</span>
         <span className="terminal-card__grid">{status ? `${status.cols}×${status.rows}` : ''}</span>
+
+        {/* The reader's own size, and one of the three things on this overlay that take a
+            click.
+            Buttons rather than a shortcut because while the terminal has the keyboard every
+            keystroke belongs to the shell — Ctrl+- would reach the shell, not the block.
+            They are as small as a target can be and still be one: every pixel that takes
+            the pointer is a pixel that no longer selects or drags the shape underneath.
+            The grid beside them is the confirmation, since it is what the shell was told. */}
+        <span className="terminal-card__font">
+          <button
+            type="button"
+            className={`terminal-card__font-step${atFloor ? ' terminal-card__font-step--spent' : ''}`}
+            title="Smaller text — the same block, so more columns and rows"
+            aria-label="Smaller terminal text"
+            onPointerDown={stepBy(-TERMINAL_FONT_RANGE.step)}
+          >−</button>
+          <span
+            className="terminal-card__font-size"
+            title={`The terminal's text, ${TERMINAL_FONT_RANGE.min}–${TERMINAL_FONT_RANGE.max}. The board's zoom still multiplies it.`}
+          >{readerFontSize}</span>
+          <button
+            type="button"
+            className={`terminal-card__font-step${atCeiling ? ' terminal-card__font-step--spent' : ''}`}
+            title="Bigger text — the same block, so fewer columns and rows"
+            aria-label="Bigger terminal text"
+            onPointerDown={stepBy(TERMINAL_FONT_RANGE.step)}
+          >+</button>
+        </span>
+
         {/* Which of the two modes this session got. A block that says nothing about it is
             how the same feature behaves differently on two machines with no way to tell. */}
         <span
@@ -373,8 +434,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       >
         <span className="terminal-card__caret">❯</span>
         <span className="terminal-card__hint">
+          {/* The one place a reader is already looking when the shell has gone, so it is
+              where the way out belongs. Alt+T was written down only in markdown, which is
+              the half of #93 that was never about the eraser. With tabs there is a nearer
+              way out — `+` opens another shell beside this one — so the hint names both. */}
           {active?.ended
-            ? `the shell has gone — ${active.ended}`
+            ? `the shell has gone — ${active.ended} — press + for another, or Alt+T`
             : attached
               ? 'typing goes to the shell — click the canvas to give the keyboard back'
               : 'click here to type'}

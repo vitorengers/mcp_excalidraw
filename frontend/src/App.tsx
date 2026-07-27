@@ -30,8 +30,10 @@ import type { CardImplementState, DraftBlock, MirrorColumn } from '../../src/cor
 import type { ProjectBoard } from '../../src/core/project-board-types'
 import { TerminalPanel } from './components/TerminalPanel'
 import {
+  TERMINAL_FONT_SIZE,
   TERMINAL_KIND,
   TERMINAL_SIZE,
+  clampTerminalFont,
   terminalBlockData,
   terminalBlockElement,
   terminalGrid,
@@ -142,17 +144,39 @@ const MIRROR_GAP = 120;
 const MIRROR_HOTKEY_CODE = 'KeyB';
 
 /**
- * The key that jumps the viewport to the terminal.
+ * The key that brings the terminal back, whatever "back" means at the time.
  *
  * `Alt+T`, alongside `Alt+B` for the mirror: the same reasoning about who owns which keys,
- * and `T` for the thing it brings into view. It does a little more than the mirror's key —
- * with no block on the board it places one first, which is the way back from having deleted
- * a shape that is derived and therefore never restored from anywhere.
+ * and `T` for the thing it brings into view. It does more than the mirror's key, because
+ * the terminal has three ways of being absent and this is the one answer to all of them —
+ * scroll to the block, place one if the board has none, and open a session if none is
+ * running. It used to stand down in exactly the two cases that needed it most: a shell that
+ * had exited, and a board where the first attempt to open one failed.
  */
 const TERMINAL_HOTKEY_CODE = 'KeyT';
 
 /** How long to wait before telling the server the block was resized. */
 const TERMINAL_RESIZE_DEBOUNCE_MS = 400;
+
+/**
+ * How long to wait before putting an erased block back.
+ *
+ * Not immediately: the erase arrives as a scene change, and re-placing the block inside the
+ * handler for that change would put it under a pointer that is still erasing. Long enough
+ * for the gesture to finish, short enough that the block reads as never having gone.
+ */
+const TERMINAL_RESTORE_DELAY_MS = 250;
+
+/**
+ * Where the reader's terminal font size is kept.
+ *
+ * In `localStorage` alongside the theme, and global rather than per board: it is a viewing
+ * preference about the reader's eyes, not a fact about a project, and the same eyes read
+ * every board. Deliberately **not** `customData` — the block is derived and stripped at
+ * both doors, so a size stored there would be dropped on the way to the store and read as
+ * the block forgetting it.
+ */
+const TERMINAL_FONT_STORAGE_KEY = 'excalidraw-terminal-font-size';
 
 type CustomData = Record<string, unknown> | null | undefined;
 
@@ -1049,6 +1073,17 @@ function App(): JSX.Element {
   const autoSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const syncInFlightRef = useRef<boolean>(false)
   const suppressAutoSyncCountRef = useRef<number>(0)
+  /**
+   * A sync that was asked for while the counter was up, and still owes the server a write.
+   *
+   * `scheduleAutoSync` used to answer a refusal by returning, which armed nothing and left
+   * nothing to re-arm it: the change waited for some *later* change that happened not to be
+   * suppressed. That is #92 — a block dropped with `+` sat in the browser alone until the
+   * next thing the reader did carried it, and a research run clicked in between answered
+   * `Element … not found`. The refusal is remembered here instead, and honoured the moment
+   * the counter drops back to zero.
+   */
+  const autoSyncPendingRef = useRef<boolean>(false)
   const userInteractedRef = useRef<boolean>(false)
 
   /** The last set of rejected hotkey claims that was printed, so it is printed once. */
@@ -1194,6 +1229,21 @@ function App(): JSX.Element {
     })
   }
 
+  /**
+   * Drop the counter, and let through a sync that was refused while it was up.
+   *
+   * Every release goes through here, because a refusal remembered by `scheduleAutoSync` is
+   * only worth remembering if something acts on it, and this is the one moment the answer
+   * can change. Still suppressed after the decrement — updates nest — means the next
+   * release is the one that will do it.
+   */
+  const releaseAutoSyncSuppression = (): void => {
+    suppressAutoSyncCountRef.current = Math.max(0, suppressAutoSyncCountRef.current - 1)
+    if (suppressAutoSyncCountRef.current > 0) return
+    if (!autoSyncPendingRef.current) return
+    scheduleAutoSync()
+  }
+
   const applySceneUpdateWithoutAutoSync = (
     api: ExcalidrawImperativeAPI,
     scene: Parameters<ExcalidrawImperativeAPI['updateScene']>[0]
@@ -1201,7 +1251,7 @@ function App(): JSX.Element {
     suppressAutoSyncCountRef.current += 1
     api.updateScene(scene)
     setTimeout(() => {
-      suppressAutoSyncCountRef.current = Math.max(0, suppressAutoSyncCountRef.current - 1)
+      releaseAutoSyncSuppression()
     }, 0)
   }
 
@@ -1228,7 +1278,10 @@ function App(): JSX.Element {
     if (!autoSyncHoldRef.current) return
     clearTimeout(autoSyncHoldRef.current)
     autoSyncHoldRef.current = null
-    suppressAutoSyncCountRef.current = Math.max(0, suppressAutoSyncCountRef.current - 1)
+    // The new board's scene is already on screen by the time this runs, so a sync refused
+    // during the switch is now a sync of that board into its own store — which is what the
+    // hold was protecting, not something it was meant to lose.
+    releaseAutoSyncSuppression()
   }
 
   // ─── The GitHub project mirror ──────────────────────────────
@@ -1730,6 +1783,52 @@ function App(): JSX.Element {
   const terminalResizeTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
   /**
+   * Every block's scene geometry and what it is holding, from the last time it was drawn.
+   *
+   * Two things read it. A font change is a resize the reader did not drag — the block kept
+   * its size and the screen inside it did not — so the grid has to be re-derived from a
+   * shape nothing is about to report about. And a block that is *gone* has to be put back
+   * where it was (#93/#98), which needs the geometry after the shape has stopped existing.
+   */
+  const terminalGeometryRef = useRef<Map<string, {
+    x: number; y: number; width: number; height: number; sessions: string[]
+  }>>(new Map())
+
+  /**
+   * Where each session's block last was, kept per session rather than per block.
+   *
+   * A block erased takes its id with it, and what has to be restored is *those tabs, there*.
+   * Keyed by session, the restore groups the orphans by the geometry they remember and puts
+   * a block back around each group — which for the ordinary case of one erased block is one
+   * block, at its own size and position.
+   */
+  const terminalHomesRef = useRef<Map<string, { x: number; y: number; width: number; height: number }>>(new Map())
+
+  /** A restore already scheduled, so a burst of scene changes queues one and not thirty. */
+  const terminalRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /**
+   * How big the terminal's text is, before the board's zoom multiplies it.
+   *
+   * The reader's, set by the `+` and `-` on the block's header and remembered across
+   * reloads the way the theme is. It is an input to the grid rather than a display tweak:
+   * bigger text in the same block is fewer columns and fewer rows, because xterm sizes its
+   * canvas from `cols` × `rows` × the font and anything past the frame is clipped rather
+   * than scrolled. See `terminalGrid` in `src/core/terminal-block.ts`.
+   */
+  const [terminalFont, setTerminalFont] = useState<number>(() => {
+    if (typeof window === 'undefined') return TERMINAL_FONT_SIZE
+    try {
+      return clampTerminalFont(window.localStorage?.getItem(TERMINAL_FONT_STORAGE_KEY))
+    } catch (error) {
+      console.warn('Failed to read the terminal font size from localStorage:', error)
+      return TERMINAL_FONT_SIZE
+    }
+  })
+  /** The same value for the report path, which runs from timers and closes over its scope. */
+  const terminalFontRef = useRef<number>(terminalFont)
+
+  /**
    * Write an arrangement of the blocks into the scene, if it is a different one.
    *
    * Every operation on the strip — switching, adding, closing, detaching, merging, and the
@@ -1832,18 +1931,38 @@ function App(): JSX.Element {
     api.getSceneElementsIncludingDeleted()
       .filter((element) => !element.isDeleted && isTerminalElement(element)) as ExcalidrawElement[]
 
-  /** A block for sessions that have nowhere to be, on the right of what the board authored. */
+  /**
+   * A block for sessions that have nowhere to be.
+   *
+   * Three placements, and they answer different questions. `beside` is a detach — the new
+   * block goes next to the one the tab came out of. `at` is a **restore**: the block was
+   * erased and putting it back means putting it *back*, at the size and position the reader
+   * had it, because a restore that re-anchored it to the right of the board would answer an
+   * accidental erase by also undoing a drag. Neither is where a terminal *goes*, which is
+   * the last case: one gap right of what the board has authored.
+   */
   const newTerminalBlock = (
     api: ExcalidrawImperativeAPI,
     sessions: string[],
-    at?: { x: number; y: number; width: number; height: number }
+    where: {
+      beside?: { x: number; y: number; width: number; height: number }
+      at?: { x: number; y: number; width: number; height: number }
+    } = {}
   ): Record<string, unknown> => {
-    if (at) {
+    const beside = where.beside
+    if (beside) {
       return terminalBlockElement(
         // Beside the block it came out of, not on top of it. Where it goes from there is the
         // reader's business — it is an ordinary shape and the canvas moves it.
-        { x: at.x + at.width + 40, y: at.y },
-        { width: at.width, height: at.height },
+        { x: beside.x + beside.width + 40, y: beside.y },
+        { width: beside.width, height: beside.height },
+        { sessions, active: sessions[0] ?? '' }
+      )
+    }
+    if (where.at) {
+      return terminalBlockElement(
+        { x: where.at.x, y: where.at.y },
+        { width: where.at.width, height: where.at.height },
         { sessions, active: sessions[0] ?? '' }
       )
     }
@@ -1868,15 +1987,28 @@ function App(): JSX.Element {
    *
    * The two drift for ordinary reasons and in both directions: a shell exits and its tab has
    * to go, a scene is replaced wholesale and every block with it, a session opened in another
-   * window arrives over the socket with no block to be in. So this is written as "what should
-   * the strip be", not as a patch — it drops tabs for sessions that have gone, drops a block
-   * left with none, and gives every session with nowhere to be a home.
+   * window arrives over the socket with no block to be in, an eraser is dragged across a
+   * block and takes it. So this is written as "what should the strip be", not as a patch —
+   * it drops tabs for sessions that have gone, drops a block left with none, and gives every
+   * session with nowhere to be a home.
+   *
+   * It is also where #93's answer lives, generalised. Excalidraw's eraser respects exactly
+   * one thing — `locked` — and locking a terminal block would take away the selection, the
+   * drag and the corner resize that *are* the interface here. So the block stays erasable
+   * and the erase is undone: an orphan whose shell is still alive is put back in a block at
+   * the geometry it remembers. Nothing in the erase path kills a shell, so a block that
+   * stayed gone would leave a live process with no way to Ctrl+C it — the keyboard reaches
+   * the shell only through the overlay.
+   *
+   * A tab whose shell has already **exited** is not restored, and is forgotten instead. Once
+   * the shell has gone the tab is a notice, and a notice the reader clears stays cleared.
    */
   const reconcileTerminalBlocks = (options: { scroll?: boolean } = {}): void => {
     const api = excalidrawAPIRef.current
     if (!api) return
 
-    const live = Object.keys(terminalSessionsRef.current)
+    const known = terminalSessionsRef.current
+    const live = Object.keys(known)
     const blocks = terminalBlocksOf(api)
     const layout = terminalLayoutOf(blocks)
 
@@ -1892,15 +2024,52 @@ function App(): JSX.Element {
     }
 
     const orphans = live.filter((id) => !claimed.has(id))
+    const cleared = orphans.filter((id) => known[id]?.ended)
+    const homeless = orphans.filter((id) => !known[id]?.ended)
     const added: Record<string, unknown>[] = []
-    if (orphans.length > 0) {
+
+    // Grouped by the geometry they remember, so an erased block with two tabs comes back as
+    // one block with two tabs rather than as two blocks in the same place.
+    const restoring = new Map<string, string[]>()
+    const stray: string[] = []
+    for (const sessionId of homeless) {
+      const home = terminalHomesRef.current.get(sessionId)
+      if (!home) { stray.push(sessionId); continue }
+      const key = `${home.x},${home.y},${home.width},${home.height}`
+      restoring.set(key, [...(restoring.get(key) ?? []), sessionId])
+    }
+    for (const [key, sessions] of restoring) {
+      const [x, y, width, height] = key.split(',').map(Number)
+      added.push(newTerminalBlock(api, sessions, { at: { x, y, width, height } }))
+    }
+
+    // Never on the board before — opened in another window, or the first of them all. It
+    // goes into a block that is already there, or into one placed where a terminal goes.
+    if (stray.length > 0) {
       const host = blocks.find((block) => (layout.get(block.id)?.sessions.length ?? 0) > 0)
       if (host) {
         const entry = layout.get(host.id)!
-        entry.sessions = [...entry.sessions, ...orphans]
+        entry.sessions = [...entry.sessions, ...stray]
         if (!entry.active) entry.active = entry.sessions[0]
+      } else if (added.length > 0) {
+        // A block is already being placed this pass; the strays join it rather than getting
+        // a second one beside it.
+        const first = added[0] as { customData: { sessions: string[]; active: string } }
+        first.customData.sessions = [...first.customData.sessions, ...stray]
       } else {
-        added.push(newTerminalBlock(api, orphans))
+        added.push(newTerminalBlock(api, stray))
+      }
+    }
+
+    if (cleared.length > 0) {
+      writeTerminalSessions((current) => {
+        const next = { ...current }
+        for (const sessionId of cleared) delete next[sessionId]
+        return next
+      })
+      for (const sessionId of cleared) {
+        terminalHomesRef.current.delete(sessionId)
+        terminalGridRef.current.delete(sessionId)
       }
     }
 
@@ -1912,6 +2081,21 @@ function App(): JSX.Element {
         api.scrollToContent(placed as unknown as ExcalidrawElement[], { fitToViewport: true, animate: true })
       }
     }
+  }
+
+  /**
+   * Reconcile shortly, once, after the board has been seen to lose a block.
+   *
+   * On a timer rather than at once, because this is noticed from inside the scene-change
+   * handler and the pointer that erased it may still be down. One timer for a burst of
+   * changes, so an eraser dragged across the canvas queues one restore and not thirty.
+   */
+  const scheduleTerminalRestore = (): void => {
+    if (terminalRestoreTimerRef.current) return
+    terminalRestoreTimerRef.current = setTimeout(() => {
+      terminalRestoreTimerRef.current = null
+      reconcileTerminalBlocks()
+    }, TERMINAL_RESTORE_DELAY_MS)
   }
 
   /**
@@ -2209,53 +2393,128 @@ function App(): JSX.Element {
         active: data.active
       })
 
-      // Reported on the end of the gesture rather than during it: a resize crosses every
-      // size between where it started and where it lands, and reporting each one would be a
-      // request per frame.
-      const grid = terminalGrid({ width: element.width, height: element.height })
-      const signature = `${grid.cols}x${grid.rows}`
-      const stale = data.sessions.filter((id) => terminalGridRef.current.get(id) !== signature)
-      if (stale.length === 0) continue
-      stale.forEach((id) => terminalGridRef.current.set(id, signature))
+      // Where this block is, kept for the two paths that need a shape's size after nothing
+      // is about to report about it: a font change, and a block that has been erased.
+      const geometry = { x: element.x, y: element.y, width: element.width, height: element.height }
+      terminalGeometryRef.current.set(element.id, { ...geometry, sessions: data.sessions })
+      for (const sessionId of data.sessions) terminalHomesRef.current.set(sessionId, geometry)
 
-      const pending = terminalResizeTimersRef.current.get(element.id)
-      if (pending) clearTimeout(pending)
-
-      // A report that does not land is undone rather than forgotten. The signature stands
-      // for "the server knows this size", so leaving it set after a failed request would
-      // mean the block never mentions that size again — and with a PTY behind the session
-      // that is not a stale label any more, it is a shell repainting to a width the block no
-      // longer has.
-      const report = (attempt: number): void => {
-        terminalResizeTimersRef.current.delete(element.id)
-        Promise.all(stale.map((sessionId) => fetch(apiUrl('/api/terminal/resize'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, ...grid })
-        }).then((response) => {
-          if (!response.ok) throw new Error(`the terminal refused the new size: ${response.status}`)
-        }))).catch(() => {
-          // Only while this is still the size being reported: a later gesture has its own
-          // request, and retrying an overtaken one would report a size nobody is looking at.
-          if (stale.some((id) => terminalGridRef.current.get(id) !== signature)) return
-          if (attempt >= 2) { stale.forEach((id) => terminalGridRef.current.delete(id)); return }
-          terminalResizeTimersRef.current.set(
-            element.id,
-            setTimeout(() => report(attempt + 1), TERMINAL_RESIZE_DEBOUNCE_MS)
-          )
-        })
-      }
-      terminalResizeTimersRef.current.set(
-        element.id,
-        setTimeout(() => report(1), TERMINAL_RESIZE_DEBOUNCE_MS)
-      )
+      reportTerminalGrid(element.id, geometry, data.sessions)
     }
+
+    // Blocks that were on the board a moment ago and are not now. An eraser dragged across
+    // one is the case this exists for; a delete and a select-all-and-clear are the same
+    // event as far as this is concerned.
+    const drawn = new Set(views.map((view) => view.elementId))
+    let lost = false
+    for (const elementId of terminalGeometryRef.current.keys()) {
+      if (drawn.has(elementId)) continue
+      terminalGeometryRef.current.delete(elementId)
+      lost = true
+    }
+    // Also a session that has never had a block: one opened in another window arrives over
+    // the socket, and the reconcile that follows it is the same reconcile.
+    const homed = new Set(views.flatMap((view) => view.sessions))
+    const stranded = Object.entries(terminalSessionsRef.current)
+      .some(([sessionId, session]) => !session.ended && !homed.has(sessionId))
+    if (lost || stranded) scheduleTerminalRestore()
 
     const signature = JSON.stringify(views)
     if (signature === terminalViewsRef.current) return
     terminalViewsRef.current = signature
     setTerminalViews(views)
   }
+
+  /**
+   * Tell the shells in one block what grid it now stands for.
+   *
+   * Three things move it: the corner being dragged, the `+` and `-` on the header, and a tab
+   * arriving in a block of a different size. They are the same event as far as a shell is
+   * concerned — the screen it repaints into got bigger or smaller — so they share one route,
+   * one debounce and one retry.
+   *
+   * Reported on the end of the gesture rather than during it: a resize crosses every size
+   * between where it started and where it lands, and reporting each one would be a request
+   * per frame. A run of clicks on `+` coalesces the same way.
+   *
+   * Every session in the block, not just the tab on top. They all draw into the same frame,
+   * so a background tab left at the size it had when it was hidden would repaint to the
+   * wrong width the moment it came back.
+   */
+  const reportTerminalGrid = (
+    elementId: string,
+    size: { width: number; height: number },
+    sessions: string[]
+  ): void => {
+    const grid = terminalGrid(size, terminalFontRef.current)
+    const signature = `${grid.cols}x${grid.rows}`
+    const stale = sessions.filter((id) => terminalGridRef.current.get(id) !== signature)
+    if (stale.length === 0) return
+    stale.forEach((id) => terminalGridRef.current.set(id, signature))
+
+    const pending = terminalResizeTimersRef.current.get(elementId)
+    if (pending) clearTimeout(pending)
+
+    // A report that does not land is undone rather than forgotten. The signature stands
+    // for "the server knows this size", so leaving it set after a failed request would
+    // mean the block never mentions that size again — and with a PTY behind the session
+    // that is not a stale label any more, it is a shell repainting to a width the block no
+    // longer has.
+    const report = (attempt: number): void => {
+      terminalResizeTimersRef.current.delete(elementId)
+      Promise.all(stale.map((sessionId) => fetch(apiUrl('/api/terminal/resize'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, ...grid })
+      }).then((response) => {
+        if (!response.ok) throw new Error(`the terminal refused the new size: ${response.status}`)
+      }))).catch(() => {
+        // Only while this is still the size being reported: a later gesture has its own
+        // request, and retrying an overtaken one would report a size nobody is looking at.
+        if (stale.some((id) => terminalGridRef.current.get(id) !== signature)) return
+        if (attempt >= 2) { stale.forEach((id) => terminalGridRef.current.delete(id)); return }
+        terminalResizeTimersRef.current.set(
+          elementId,
+          setTimeout(() => report(attempt + 1), TERMINAL_RESIZE_DEBOUNCE_MS)
+        )
+      })
+    }
+    terminalResizeTimersRef.current.set(
+      elementId,
+      setTimeout(() => report(1), TERMINAL_RESIZE_DEBOUNCE_MS)
+    )
+  }
+
+  /**
+   * The reader moved the text, from the buttons on a block's header.
+   *
+   * Clamped here, once, rather than in the arithmetic: `terminalGrid` answers about the
+   * font it is given, and holding a size down inside it would report a grid nobody chose.
+   * The size is one preference for the page rather than one per block — it is about the
+   * reader's eyes, and the same eyes read every tab.
+   */
+  const changeTerminalFont = (next: number): void => {
+    const size = clampTerminalFont(next)
+    setTerminalFont((current) => (current === size ? current : size))
+  }
+
+  // Remembered, and every block's grid re-derived from the shape it is already on. A font
+  // change is a resize the reader did not drag: the blocks kept their size and the screens
+  // inside them did not, so the shells have to be told the way a corner drag tells them.
+  useEffect(() => {
+    terminalFontRef.current = terminalFont
+    try {
+      window.localStorage?.setItem(TERMINAL_FONT_STORAGE_KEY, String(terminalFont))
+    } catch (error) {
+      console.warn('Failed to save the terminal font size to localStorage:', error)
+    }
+    for (const [elementId, block] of terminalGeometryRef.current) {
+      reportTerminalGrid(elementId, block, block.sessions)
+    }
+    // Only the font: this is what the reader changed, and a block's own size arrives
+    // through `syncTerminalBlocks` with its own report.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terminalFont])
 
   // The board's sessions are adopted when the board is shown, and one is opened if it has
   // none. Nothing is closed on the way out: a terminal you switched away from keeps its
@@ -2267,6 +2526,10 @@ function App(): JSX.Element {
   useEffect(() => {
     if (!excalidrawAPI || !boardReady) return
     terminalGridRef.current.clear()
+    // The next board's blocks are not this one's, and a restore there must measure the
+    // content rather than reuse where the reader dragged a different project's.
+    terminalGeometryRef.current.clear()
+    terminalHomesRef.current.clear()
     writeTerminalSessions(() => ({}))
     terminalViewsRef.current = ''
     setTerminalViews([])
@@ -2279,6 +2542,7 @@ function App(): JSX.Element {
     return () => {
       for (const timer of terminalResizeTimersRef.current.values()) clearTimeout(timer)
       terminalResizeTimersRef.current.clear()
+      if (terminalRestoreTimerRef.current) clearTimeout(terminalRestoreTimerRef.current)
     }
   }, [])
 
@@ -2287,7 +2551,6 @@ function App(): JSX.Element {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.code !== TERMINAL_HOTKEY_CODE || !event.altKey || event.ctrlKey || event.metaKey) return
-      if (terminalLimitRef.current === 0) return
 
       // A text field owns the keyboard — including this feature's own prompt, where Alt+T
       // has to be a keystroke rather than a jump.
@@ -2301,12 +2564,16 @@ function App(): JSX.Element {
       if ((api.getAppState() as unknown as Record<string, unknown>).editingTextElement) return
 
       event.preventDefault()
-      // With every tab closed there is nothing to bring into view, so this opens one. That
-      // is the answer to what the last `x` does: the block goes with its last tab, and Alt+T
-      // is the way back — which also closes the gap `docs/terminal.md` recorded, that a shell
-      // which had exited could only be replaced by reloading the tab.
-      if (Object.keys(terminalSessionsRef.current).length === 0) {
-        void openTerminalSession()
+
+      // The key answers every way the terminal can be absent, which is what #93 asked of it
+      // and what the tabs added one more of: never opened, every shell exited, the last tab
+      // closed and the block gone with it, or a board whose own attempt to open one failed.
+      // All of them are answered by asking for a session — and it never stands down on a
+      // count it read once, because a key that is inert exactly when a reader reaches for it
+      // is the complaint itself.
+      const running = Object.values(terminalSessionsRef.current).some((session) => !session.ended)
+      if (!running) {
+        void openTerminalSession().then(() => reconcileTerminalBlocks({ scroll: true }))
         return
       }
       reconcileTerminalBlocks({ scroll: true })
@@ -3406,18 +3673,36 @@ function App(): JSX.Element {
     if (!userInteractedRef.current) {
       return
     }
+    // Refused, not dropped: `releaseAutoSyncSuppression` comes back to it. Returning
+    // without this is #92 — the change is left with no timer behind it and nothing that
+    // would ever arm one.
     if (suppressAutoSyncCountRef.current > 0) {
+      autoSyncPendingRef.current = true
       return
     }
+    autoSyncPendingRef.current = false
     if (autoSyncTimerRef.current) {
       clearTimeout(autoSyncTimerRef.current)
     }
 
     autoSyncTimerRef.current = setTimeout(() => {
       autoSyncTimerRef.current = null
-      if (suppressAutoSyncCountRef.current > 0 || syncInFlightRef.current) {
+      // Suppressed by the time it fired: the debounce it waited out is spent, so the write
+      // is owed again rather than forgotten.
+      if (suppressAutoSyncCountRef.current > 0) {
+        autoSyncPendingRef.current = true
         return
       }
+      // A sync already on the wire cannot be assumed to carry this change — it read the
+      // scene before it. Wait out another debounce rather than returning, which is the same
+      // silent loss one branch up.
+      if (syncInFlightRef.current) {
+        scheduleAutoSync()
+        return
+      }
+      // Nothing is owed once this runs: it writes the scene as it stands, which is every
+      // change that was refused while the timer was out.
+      autoSyncPendingRef.current = false
       void syncToBackend({ silent: true })
     }, AUTO_SYNC_DEBOUNCE_MS)
   }
@@ -3621,6 +3906,8 @@ function App(): JSX.Element {
               onDetach={(sessionId) => detachTerminalSession(view.elementId, sessionId)}
               onMerge={() => mergeTerminalBlock(view.elementId)}
               onInput={sendTerminalInput}
+              fontSize={terminalFont}
+              onFontSize={changeTerminalFont}
             />
           ))}
         </div>

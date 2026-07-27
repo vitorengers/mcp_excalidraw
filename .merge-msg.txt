@@ -1,0 +1,23 @@
+Reconcile the tab strip with the erase restore and the font buttons
+
+`main` gained three terminal changes while this branch was building tabs:
+#98 (an erased block is put back where it was, and Alt+T is the way back
+from every way the terminal can be absent), #103 (a reader font size that
+is an input to the grid) and #100 (an autosync the counter refused is owed).
+
+Both terminal intents are kept, generalised from one block to N:
+
+- The restore is the reconcile. `syncTerminalBlocks` notices a block it has
+  lost, and the reconcile puts one back around the orphans at the geometry
+  they remember, per session, so an erased block with two tabs comes back
+  as one block with two tabs. A tab whose shell has already exited is not
+  restored but forgotten, which is #98's "a notice the reader clears stays
+  cleared".
+- Alt+T opens a session whenever none is running, so it still answers a
+  shell that exited, and now also the last tab having been closed.
+- The font size feeds `terminalGrid` for every block, reported through one
+  route per block for all of its tabs. `TERMINAL_CHROME.height` is 84 rather
+  than 62 because the tab strip is part of the frame and the frame is `em`.
+
+Three checks written against the old shape of `GET /api/terminal` are moved
+to the list it now returns.
