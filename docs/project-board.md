@@ -142,16 +142,30 @@ ambiguous — it reads like a drag that did not take — so the message is what 
 
 ## The `+`
 
-The first column carries a `+` that drops an issue block at the top of it. Which column that is
-comes from the project's own ordering rather than from a name written here — by convention it is
-`My Notes`, and a board that calls it something else gets no edit in this repository.
+The notes column carries a `+` that drops an issue block at the top of it. That column is
+**the canvas's own**: it is drawn from a reserved id in `project-board-types.ts`, not from a
+`Status` option, and it is put in front of the project's columns by `layoutMirror` before
+`layoutBoard` sees them. Nothing mirrored can ever be in it, so its header counts drafts and
+nothing else, and a card dragged onto it snaps back in silence — there is no option to write, and
+the reserved id is refused by the `NODE_ID` pattern every write to the project goes through.
 
-It used to be argued the other way round: the `+` was on the first column because GitHub's *Item
-added to project* workflow puts a new issue in the first option, so that was the only column this
-could honestly create into. That is still true of the workflow — it assigns the first option, which
-is what adding #86 to project 5 demonstrated — but it is no longer the reason. The first column is
-where an observation is *written*, and the issue that comes out of it is moved to `Todo` by this
-server the moment it exists. The landing column is no longer decided outside this repository.
+It was an option on GitHub until #97, and drawn on `index === 0`: whichever option the project
+declared first. The argument for that had already been retired — it was originally "the `+` is on
+the first column because *Item added to project* puts a new issue in the first option, so that is
+the only column this can honestly create into", and the `Todo` move made the landing column this
+server's decision instead. What was left was an empty option existing solely to lend its id to
+blocks that live on the canvas: project 5 declared `My Notes` and held 48 items, none of them in
+it. Delete the option and the `+` moves onto `Todo`, where observations and real issues share a
+column again, while every block still carrying the old id names a column the board no longer has —
+placed nowhere, counted by nothing, overlapped by the next redraw.
+
+Blocks naming a column that is gone are **rehomed into the notes column** (`layoutMirror`), which
+is the one rule #97 reverses rather than adds. `layoutBoard` still leaves such a block where it
+sits: none of the project's columns is where it *belongs*, only where it might be guessed to. The
+notes column is where it belongs by construction — every draft was written as an observation.
+
+The name `My Notes` is the one column name in this repository that is a constant, and it has to
+be: every other name is GitHub's because every other column is GitHub's.
 
 The block comes from the library (`docs/blocks.excalidrawlib`, through `GET /api/library`) rather
 than being built here, because what makes a block functional is `customData.kind` and a second
@@ -200,9 +214,9 @@ confirm is that the arithmetic is wired to a keystroke at all, which
 
 When the run finishes and the refreshed board holds a card with the same `issueUrl`, the draft is
 deleted — matched on the URL because that is the only thing the block and the card provably share,
-and **never on the column**, which by then is a different one: the block is in `My Notes` and its
-card has already been moved to `Todo`. A run that failed leaves its block alone: there is nothing
-to replace it with, and the observation is still worth keeping.
+and **never on the column**, which by then is one the card could not be in at all: the block is in
+the notes column and its card is on the project, moved to `Todo`. A run that failed leaves its
+block alone: there is nothing to replace it with, and the observation is still worth keeping.
 
 ## What a section header counts
 
@@ -210,15 +224,19 @@ One number, and it counts **everything the column holds**: the blocks the `+` dr
 mirrored cards, and the cards the cap left out.
 
 ```
-My Notes (5)            two blocks dropped by the +, three issues that already exist
+My Notes (2)            two blocks dropped by the +, and nothing else it could hold
 Todo (1)                one issue, and nothing hand-written under it
 Done (12, 9 hidden)     twelve issues, nine of them left out by projectCardLimit
-My Notes (14, 9 hidden)
+Todo (14, 9 hidden)     one draft, four cards drawn, nine the cap left out
 ```
 
+The notes column is the one case where the number is always the draft count: no project item can
+be in it, so there is nothing else to add. It is still the same rule rather than a special one —
+`headerText` sums drafts, cards and hidden for every column, and two of those are zero here.
+
 It carried two numbers for a while, `drafts / cards`, because two populations shared one column
-and the header had to say which was which. They no longer share one: observations are written in
-the first column and a researched issue is moved out of it, so the split is done by the columns
+and the header had to say which was which. They no longer share one: observations are written in a
+column of their own and a researched issue is moved to `Todo`, so the split is done by the columns
 and repeating it in the header says nothing.
 
 **This is not a revert.** The single number this header had *before* that was `cards + hidden` —
@@ -232,8 +250,8 @@ The cap decides what is *drawn*, never what is *held*, so the hidden cards are i
 The draft count comes from the same `options.drafts` that decides where the blocks go, so the
 header and the column cannot disagree, and it moves on the click that drops a block rather than on
 the next poll. Nothing new is read from GitHub and nothing new is stored. **Which drafts belong to
-a column is decided by `sectionOptionId`, never by a name** — a draft naming a column the board no
-longer has is counted by no header, for the same reason it is placed nowhere.
+a column is decided by `sectionOptionId`, never by a name** — and a draft naming a column that is
+not drawn is counted by the notes column, for the same reason it is placed there.
 
 Splitting the mirrored cards by who created the issue is a different feature and is not this one:
 the provenance does not exist anywhere durable. The agent runs `gh` under the maintainer's own
@@ -248,30 +266,35 @@ because a drop that moved the cards and left the header stale compiles just as w
 
 ## The columns a board is expected to have
 
-Four, in this order: **My Notes**, **Todo**, **In Progress**, **Done**. That is a convention, not
-a rule this code enforces — nothing here creates, renames or reorders a column, and a project with
-three columns or seven still mirrors correctly. What the convention buys is that each column
-answers one question, and the two moves this server writes have somewhere honest to land:
+Four columns are drawn, and only **three of them are on GitHub**: `Todo`, `In Progress`, `Done`,
+in that order. The fourth, `My Notes`, is drawn in front of them by the canvas and exists nowhere
+else. That is a convention, not a rule this code enforces — nothing here creates, renames or
+reorders a `Status` option, and a project with two options or seven still mirrors correctly. What
+the convention buys is that each column answers one question, and the two moves this server writes
+have somewhere honest to land:
 
-| Column | What is in it | What puts it there |
-| --- | --- | --- |
-| My Notes | observations written by hand, not yet issues | the `+`, and nothing else |
-| Todo | issues that exist and are waiting | the server, when a research run finishes |
-| In Progress | issues an agent is working on | the server, when an implementation starts |
-| Done | closed issues | GitHub's own project workflows |
+| Column | Where it lives | What is in it | What puts it there |
+| --- | --- | --- | --- |
+| My Notes | the canvas | observations written by hand, not yet issues | the `+`, and nothing else |
+| Todo | GitHub | issues that exist and are waiting | the server, when a research run finishes |
+| In Progress | GitHub | issues an agent is working on | the server, when an implementation starts |
+| Done | GitHub | closed issues | GitHub's own project workflows |
 
-**Adding the columns is a maintainer's job, done on GitHub.** Not automated, and deliberately:
-`updateProjectV2Field` takes the whole `singleSelectOptions` list and its input carries no option
-ids, so writing a fifth option means rewriting all of them — and every item's `Status` is stored
-against an option id. A convenience that quietly cleared the board is not worth having.
+**The three GitHub columns are a maintainer's job, done on GitHub.** Not automated, and
+deliberately: `updateProjectV2Field` takes the whole `singleSelectOptions` list and its input
+carries no option ids, so writing one more means rewriting all of them — and every item's `Status`
+is stored against an option id. A convenience that quietly cleared the board is not worth having.
+The same arithmetic is why **deleting** an option is a maintainer's step too, and why #97 did not
+delete `My Notes` from project 5 as part of landing: the code stopped depending on it, which is
+the part that can be done safely from here.
 
-Order matters, and it is the load-bearing half. GitHub appends a new option **last**, and the `+`
-is on the **first** column, so a `My Notes` left where GitHub put it would be a column nothing
-writes into and would leave the `+` on `Todo`. *Item added to project* also assigns the first
-option, so with `My Notes` first that is where a newly created issue lands too — which is exactly
-what the move below is for.
+Order still matters for the GitHub half — a project that reorders its options reorders the
+columns, and their hues with them. The notes column is not affected: it is not an option, so
+nothing GitHub does to that list can move it off the front or change what it is called. This is
+what #97 bought. Before it, `My Notes` had to be dragged to the top of a list GitHub appends to,
+and an option deleted or reordered by anyone with write access moved the `+`.
 
-A board that names its columns differently says so in `board.config.json` rather than being
+A board that names its GitHub columns differently says so in `board.config.json` rather than being
 renamed to suit this page; see `projectTodoColumn` and `projectInProgressColumn` below.
 
 ## A card is an issue block
@@ -307,10 +330,12 @@ and spawns no `gh`.
 
 Two transitions, both written by this server, both `moveIssueToColumn`:
 
-- **Research finished** → the issue that came out of it moves to **Todo**. It was created in
-  `My Notes`, because that is where the observation was written and where *Item added to project*
-  leaves it; a researched issue that stayed there would be indistinguishable from one nobody has
-  looked at yet.
+- **Research finished** → the issue that came out of it moves to **Todo**. The observation was
+  written in `My Notes`, which is not on the project, so the issue arrives wherever the project's
+  *Item added to project* workflow puts it — a decision made outside this repository and not
+  readable through the API, which is exactly why the move is worth making. Without it the landing
+  column is whatever somebody configured on GitHub, and a researched issue could be
+  indistinguishable from one nobody has looked at yet.
 - **Implementation started** → that issue's card moves to **In Progress**. Closing and creation
   are already automated by GitHub's own project workflows; this was the one transition nobody
   wrote, which is why it was the one that drifted.

@@ -189,9 +189,10 @@ export function toBoard(raw: unknown, options: ToBoardOptions = {}): ProjectBoar
     };
 
     // An item whose status was never set lands in its own section rather than being
-    // dropped. `+` relies on the project's *Item added to project* workflow to put a new
-    // issue in the first column; if that is ever disabled, this is where those items go,
-    // visibly, instead of disappearing.
+    // dropped. Which column a newly created issue arrives in is the project's *Item added
+    // to project* workflow's decision and cannot be read back through the API — so if that
+    // workflow is disabled, or sets nothing, this is where those items go, visibly,
+    // instead of disappearing.
     const optionId = asString(node.fieldValueByName?.optionId);
     const section = optionId ? sections.get(optionId) : undefined;
     (section ?? untriaged).cards.push(card);

@@ -2,12 +2,13 @@
 /**
  * Checks that a finished research run moves the issue it created into the Todo column.
  *
- * A hand-written block starts in the first column, which is where the `+` drops it and
- * where GitHub's *Item added to project* workflow puts the issue the agent then creates.
- * Nothing moved it out. The column an issue landed in was decided entirely outside this
- * repository — by a project workflow this code cannot read and no check could assert — so
- * "researched" and "not researched yet" shared one column and only a person could tell them
- * apart.
+ * A hand-written block is drafted in the notes column — the canvas's own since #97, and not
+ * on the project at all — and the issue the agent then creates arrives wherever the
+ * project's *Item added to project* workflow puts it. Nothing moved it out. Which column
+ * that is, is decided entirely outside this repository: the workflow's configuration is not
+ * exposed by the API, so no check could assert it and no comment here may claim to know it.
+ * Without this move, "researched" and "not researched yet" are wherever that workflow left
+ * them and only a person can tell them apart.
  *
  * The write belongs to the **server**, for the same reason the In Progress move does
  * (`check-implement-in-progress.mjs`): an agent is the one participant that cannot report
@@ -30,9 +31,17 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+const typesPath = join(repoRoot, 'dist', 'core', 'project-board-types.js');
+if (!existsSync(typesPath)) {
+  console.error('  FAIL  the compiled server exists — dist/core/project-board-types.js not found');
+  console.error('        (run ./node_modules/.bin/tsc first)');
+  process.exit(1);
+}
+const { NOTES_OPTION_ID } = await import(pathToFileURL(typesPath).href);
 
 let failures = 0;
 
@@ -47,10 +56,11 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 //
 // Shaped like the real `gh api graphql` answer, because that is what the reader parses.
 //
-// `Scratch` is the first option, so it is where a new item lands: *Item added to project*
-// assigns the first option, which is what makes this move necessary rather than decorative.
-// It is deliberately not called `My Notes` — no column name in this repository is a
-// constant, and a fixture using the real board's names could hide one that is.
+// `Scratch` is where the fixture's new items sit, standing in for whatever a project's
+// *Item added to project* workflow chose — which this code cannot read, and which is what
+// makes this move necessary rather than decorative. It is deliberately *not* the column
+// this repository would want them in, and deliberately not called `My Notes`: that name now
+// belongs to the canvas's own column, which is not a `Status` option anywhere.
 // `Icebox` exists only so a workspace can name a column *other* than the fallback and be
 // believed: a check where the configured name and the default are the same column cannot
 // tell the two apart.
@@ -83,9 +93,9 @@ function item(id, { number, option }) {
 /**
  * One card per case, so no two cases can be confused for one another.
  *
- * Every one of them sits in the first column, which is where the run that created it will
- * have left it. `PVTI_settled` is the exception, already in Todo, for the case where there
- * is nothing to write.
+ * Every one of them sits in `Scratch`, standing in for wherever the project's own workflow
+ * left the issue the run created. `PVTI_settled` is the exception, already in Todo, for the
+ * case where there is nothing to write.
  */
 const ITEMS = [
   item('PVTI_default', { number: 31, option: SCRATCH }),
@@ -327,13 +337,20 @@ async function settle(workspaceId, elementId) {
   return await blockState(workspaceId, elementId);
 }
 
-/** A hand-written block, exactly as the `+` leaves one: an observation and no issue. */
+/**
+ * A hand-written block, exactly as the `+` leaves one: an observation and no issue.
+ *
+ * Its `sectionOptionId` is the reserved notes id, read from the module that owns it — the
+ * `+` has stamped that rather than an option id since #97. The server never reads the
+ * field, so nothing below turns on it; writing an option id here would simply describe a
+ * block this canvas no longer produces.
+ */
 async function draftBlock(workspaceId) {
   const created = await call(`/api/elements?workspace=${workspaceId}`, {
     method: 'POST',
     body: JSON.stringify({
       type: 'rectangle', x: 0, y: 0, width: 400, height: 120,
-      customData: { kind: 'issue', projectBoardDraft: true, sectionOptionId: SCRATCH.id },
+      customData: { kind: 'issue', projectBoardDraft: true, sectionOptionId: NOTES_OPTION_ID },
     }),
   });
   return created.body.element.id;
