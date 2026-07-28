@@ -23,7 +23,7 @@ import { existsSync, statSync } from 'fs';
 import { delimiter, isAbsolute, join } from 'path';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
-import { agentEnv, buildAgentCommand } from './issue-agent.js';
+import { AgentDirectory, agentEnv, buildAgentCommand } from './issue-agent.js';
 
 /**
  * How much transcript is kept for a socket that connects late.
@@ -181,12 +181,18 @@ export function shellCommandFrom(
  * the path the distro names, because a Windows UNC path is not a working directory `git`
  * in there can act on. That trap is already paid for once, and paying for it twice is how
  * the two paths drift.
+ *
+ * `directory` is the same argument the agents already pass, and it arrives here for the same
+ * reason: an implementation runs in `<project>-worktrees/issue-<n>` rather than in the
+ * project, so a session hosting one has to start there. Omitted — which is every session a
+ * reader opens — the shell starts in the project, exactly as it did.
  */
 export function buildTerminalCommand(
   workspace: Workspace,
-  shellCommand: string
+  shellCommand: string,
+  directory?: AgentDirectory | null
 ): { command: string; args: string[]; cwd: string | undefined } {
-  return buildAgentCommand(workspace, shellCommand);
+  return buildAgentCommand(workspace, shellCommand, directory);
 }
 
 /**
@@ -313,6 +319,48 @@ export function trimScrollback(text: string, limit: number): string {
   return text.slice(cut);
 }
 
+/**
+ * Whose session this is, when the board opened it for something rather than for a reader.
+ *
+ * The leftover `docs/whats-next.md` named: a session the server opened for an agent is one
+ * nobody typed into, and a tab labelled `s4` beside three shells the reader started is
+ * indistinguishable from them. Null for every session a reader opens, which is what keeps
+ * those tabs exactly what they were.
+ */
+export interface TerminalSessionOwner {
+  /** Which of the board's agents is running here. */
+  agent: 'implement';
+  /** The issue it is working on, which is the thing worth clicking through to. */
+  issueUrl: string;
+  /** What the tab says. Short enough to be one: `#128`. */
+  label: string;
+}
+
+/**
+ * What a session is opened with, beyond the shell itself.
+ *
+ * Every field is absent for a session a reader opened, and that is the point: the three
+ * together are the whole of what makes an agent's session different from a shell's, so a
+ * reader's session takes the path it took before any of this existed.
+ */
+export interface TerminalSessionOptions {
+  /** Where the shell starts, when that is not the project directory. */
+  directory?: AgentDirectory | null;
+  owner?: TerminalSessionOwner | null;
+  /**
+   * Written to the process's stdin once, which is then closed.
+   *
+   * This is how an agent's prompt arrives, and it is **why an owned session runs on pipes**.
+   * A pseudoterminal has no end of file to send: measured on ConPTY, a child reading stdin
+   * sees neither `^Z` nor `^D` as one and simply goes on reading, so a `claude -p` handed
+   * its prompt that way would wait forever for a prompt that never ended. The constructor
+   * therefore ignores the PTY binding when this is set, rather than leaving the trap for a
+   * caller to fall into — and `mode` in the summary says `pipe`, so the block does not
+   * claim otherwise. `docs/terminal.md` records the measurement.
+   */
+  input?: string | null;
+}
+
 export interface TerminalSessionSummary {
   /**
    * Which session this is, on a board that may have several.
@@ -334,6 +382,8 @@ export interface TerminalSessionSummary {
   rows: number;
   /** Set once the shell has exited; null while it is running. */
   exitCode: number | null;
+  /** Whose session this is, or null for one a reader opened. */
+  owner: TerminalSessionOwner | null;
 }
 
 export interface TerminalSessionHooks {
@@ -355,6 +405,7 @@ export class TerminalSession {
   readonly cwd: string;
   readonly shell: string;
   readonly mode: TerminalMode;
+  readonly owner: TerminalSessionOwner | null;
   readonly startedAt = new Date().toISOString();
 
   /**
@@ -380,22 +431,33 @@ export class TerminalSession {
   private hasExited = false;
   private exitCode: number | null = null;
   private closing = false;
+  /** Whether stdin was spent on a prompt, which is what makes this session read-only. */
+  private readonly promptSent: boolean;
 
   constructor(
     id: string,
     workspace: Workspace,
     shellCommand: string,
     hooks: TerminalSessionHooks,
-    pty: PtyModule | null = null
+    pty: PtyModule | null = null,
+    options: TerminalSessionOptions = {}
   ) {
-    const { command, args, cwd } = buildTerminalCommand(workspace, shellCommand);
+    const directory = options.directory ?? null;
+    const { command, args, cwd } = buildTerminalCommand(workspace, shellCommand, directory);
+    // A process that is handed a prompt is handed it on pipes, whichever binding is
+    // available — see `TerminalSessionOptions.input` for the measurement that settles it.
+    const binding = options.input ? null : pty;
     this.id = id;
     this.workspaceId = workspace.id;
     this.shell = shellCommand;
-    this.mode = pty ? 'pty' : 'pipe';
+    this.mode = binding ? 'pty' : 'pipe';
+    this.owner = options.owner ?? null;
+    this.promptSent = Boolean(options.input);
     // What the shell itself will report from `pwd`, which for a WSL project is not the
     // path this process used to spawn it.
-    this.cwd = workspace.environment.kind === 'wsl' ? workspace.innerPath : (cwd ?? workspace.path);
+    this.cwd = workspace.environment.kind === 'wsl'
+      ? (directory?.innerPath ?? workspace.innerPath)
+      : (cwd ?? workspace.path);
     this.hooks = hooks;
 
     logger.info(`Starting terminal "${id}" for workspace "${workspace.id}"`, { command, cwd: this.cwd, mode: this.mode });
@@ -405,8 +467,8 @@ export class TerminalSession {
     // opened on a board that has been up for hours is not nested inside anything.
     const env = agentEnv();
 
-    if (pty) {
-      this.pty = pty.spawn(resolveExecutable(command, env.PATH ?? ''), args, {
+    if (binding) {
+      this.pty = binding.spawn(resolveExecutable(command, env.PATH ?? ''), args, {
         // What the shell is told it is talking to. Without it a program has no way to know
         // it may use colour, and `TERM=dumb` is what an unset one is taken to mean.
         name: 'xterm-256color',
@@ -436,6 +498,12 @@ export class TerminalSession {
     // information — an error belongs after the command that caused it.
     this.child.stderr?.on('data', (chunk: string) => this.emit(chunk));
     this.child.stdin?.on('error', () => { /* the shell may be gone before a write lands */ });
+
+    // The prompt, and then the end of file the agent is waiting for. Not echoed into the
+    // transcript the way `write()` echoes what was typed: several hundred words of
+    // instruction ahead of the first line the agent prints would bury the run in the thing
+    // the tab was opened to watch.
+    if (options.input) this.child.stdin?.end(options.input);
 
     this.child.on('error', (error) => {
       this.emit(`\n[the shell could not be started: ${error.message}]\n`);
@@ -472,6 +540,7 @@ export class TerminalSession {
       cols: this.cols,
       rows: this.rows,
       exitCode: this.exitCode,
+      owner: this.owner,
     };
   }
 
@@ -490,6 +559,10 @@ export class TerminalSession {
    */
   write(data: string): number {
     if (!this.alive) return this.sequenceNumber;
+    // A session that was handed a prompt has had its stdin closed behind it, so there is
+    // nothing for a keystroke to reach. Echoing it anyway would put the reader's typing in
+    // the transcript and let it read as though the agent had received it.
+    if (this.promptSent) return this.sequenceNumber;
     if (this.pty) {
       this.pty.write(data);
       return this.sequenceNumber;
