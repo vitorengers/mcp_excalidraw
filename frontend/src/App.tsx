@@ -848,6 +848,9 @@ const HEARTBEAT_INTERVAL_MS = 10000
 /** Ceiling on holding autosync off during a board switch, if the new scene never lands. */
 const BOARD_SWITCH_HOLD_MS = 8000
 
+/** Where this browser remembers whether Excalidraw's own menus are hidden. */
+const CHROME_STORAGE_KEY = 'excalidraw-canvas-chrome'
+
 function App(): JSX.Element {
   const [excalidrawAPI, setExcalidrawAPI] = useState<ExcalidrawAPIRefValue | null>(null)
   // Ref so WS message handlers (captured in stale closures) always see the latest API instance
@@ -880,6 +883,30 @@ function App(): JSX.Element {
       console.warn('Failed to read theme from localStorage:', error)
     }
     return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  })
+
+  /**
+   * Whether Excalidraw's own chrome is hidden: the hamburger, the properties island that
+   * appears beside a selected shape, and the toolbar.
+   *
+   * Kept here rather than on the server, and deliberately. This is what one reader is
+   * looking at, not board state: sent to the store it would reach every other tab and every
+   * other person on the board, and hide their menus because somebody else wanted the room.
+   * `localStorage` is where the theme already keeps the same kind of setting, and it gives
+   * the two things the observation asked for at once — one setting for every project tab in
+   * this browser, and still there after a reload.
+   *
+   * Read as a string rather than as a boolean so that an absent key and a key saying
+   * `visible` are the same thing: nothing changes for anyone who never presses the button.
+   */
+  const [chromeHidden, setChromeHidden] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    try {
+      return window.localStorage?.getItem(CHROME_STORAGE_KEY) === 'hidden'
+    } catch (error) {
+      console.warn('Failed to read the menu setting from localStorage:', error)
+      return false
+    }
   })
 
   // Boards, one per project
@@ -4328,6 +4355,18 @@ function App(): JSX.Element {
     }, AUTO_SYNC_DEBOUNCE_MS)
   }
 
+  const toggleChrome = (): void => {
+    setChromeHidden((hidden) => {
+      const next = !hidden
+      try {
+        window.localStorage?.setItem(CHROME_STORAGE_KEY, next ? 'hidden' : 'visible')
+      } catch (error) {
+        console.warn('Failed to save the menu setting to localStorage:', error)
+      }
+      return next
+    })
+  }
+
   const clearCanvas = async (): Promise<void> => {
     if (excalidrawAPI) {
       try {
@@ -4359,7 +4398,10 @@ function App(): JSX.Element {
   }
 
   return (
-    <div className="app" data-theme={theme}>
+    // `data-chrome` beside `data-theme`, and for the same reason: both are settings the
+    // stylesheet in `index.html` reads, and both have to be readable from *above* the
+    // Excalidraw subtree — the rules that hide its menus select down into it from here.
+    <div className="app" data-theme={theme} data-chrome={chromeHidden ? 'hidden' : 'visible'}>
       <WorkspaceTabs
         workspaces={workspaces}
         activeId={activeWorkspace}
@@ -4429,6 +4471,24 @@ function App(): JSX.Element {
               )}
             </div>
           </div>
+
+          {/*
+            In the header, which is a sibling of the canvas container rather than a child of
+            it — so this is the one control that cannot hide itself, and there is always a
+            way back. Excalidraw's own two modes are keyboard-only for the same reason and
+            answer it worse: `Alt+Z` leaves the hamburger and the toolbar where they are, and
+            `Alt+R` takes editing with it.
+          */}
+          <button
+            className="btn-secondary chrome-toggle"
+            onClick={toggleChrome}
+            aria-pressed={chromeHidden}
+            title={chromeHidden
+              ? 'Show Excalidraw’s toolbar, properties panel and menu'
+              : 'Hide Excalidraw’s toolbar, properties panel and menu. Tools keep their keyboard shortcuts.'}
+          >
+            {chromeHidden ? 'Show Menus' : 'Hide Menus'}
+          </button>
 
           <button className="btn-secondary" onClick={clearCanvas}>Clear Canvas</button>
         </div>

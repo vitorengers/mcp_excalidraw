@@ -12,11 +12,40 @@
 - **The terminal** (`TerminalPanel.tsx`) — a shell the server owns on a PTY, drawn by xterm.js
   as an overlay over a block on the right of the board; the Terminal card has it
 - **Autosync** back into the active workspace's store
+- **Hide Menus** — a header button that takes Excalidraw's own chrome off the board
 
 Everything project-specific lives in `customData`, never in a parallel data structure. That is
 the whole reason the blocks survive a round-trip through Excalidraw: the library preserves
 `customData` it does not understand, so a shape stays a docs block or an issue block through
 every edit, undo and re-render.
+
+## Hiding Excalidraw's own menus
+
+`Hide Menus`, beside `Clear Canvas`, takes away the three pieces of chrome Excalidraw draws over
+the board: the hamburger at the top left, the properties island that appears beside a selected
+shape, and the toolbar across the top. Pressing it again brings them back. The setting is one per
+browser, kept in `localStorage` under `excalidraw-canvas-chrome` the way the theme is, so it
+holds across a reload and is the same on every project tab — and never reaches the store or
+anybody else's tab, because it is what one reader is looking at rather than board state.
+
+**Nothing here uses `viewModeEnabled`.** Selecting and drawing keep working with the chrome
+hidden; the tools stay reachable by their keyboard shortcuts. View mode turns a main-button
+press into a pan, and this board opens the documentation panel — and the implement queue — off
+`selectedElementIds`, so it would be an off switch for the product rather than a display setting.
+`zenModeEnabled` was the other candidate and only moves one of the three.
+
+Excalidraw offers no prop that removes the hamburger, so the mechanism is **CSS over its own
+class names** — `App-menu_top__left` and `shapes-section` — keyed off `data-chrome` on the app
+root, in `frontend/index.html`'s style block, where this app already reaches into Excalidraw's
+styling. The library trigger and the footer stay: they were not named, and the library trigger is
+how blocks reach a board. It shares a three-column grid with the two that go, so it is pinned to
+its column rather than left to slide left into the space they vacate.
+
+**Two things are unreachable while the chrome is hidden**, accepted rather than solved: the
+light/dark switch lives in the hamburger, as do Export and Save as image. Showing the menus again
+is how you reach them.
+
+`scripts/check-chrome-toggle-browser.mjs` drives a real Chrome over all of it.
 
 ## Opening a board
 
