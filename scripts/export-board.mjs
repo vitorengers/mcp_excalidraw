@@ -2,8 +2,9 @@
 /**
  * Export a workspace's board to a .excalidraw file, without the diff noise.
  *
- * The store is memory only — nothing loads or saves `board` from board.config.json — so a
- * board that is not exported dies with the process. Exporting straight from the API is not
+ * The store is memory only, and this is the whole of the write half: a board is read back from
+ * `board` at startup (#184) and never written there, so a change that is not exported here dies
+ * with the process. Exporting straight from the API is not
  * enough on its own: the server stamps every element with `syncedAt`, `source` and friends,
  * which change on every export and turn a no-op into a full-file diff. Strip those, sort by
  * id, and the diff shows only what actually moved.
