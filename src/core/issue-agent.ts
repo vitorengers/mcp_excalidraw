@@ -259,6 +259,26 @@ export interface AgentDirectory {
  * `directory` overrides where the agent starts, and is how an implementation is put in a
  * worktree of its own rather than in the one directory every run used to share. Omitted,
  * the agent starts in the project itself, which is what reading a repository wants.
+ *
+ * **`--exec`, not `--`, and that is the whole of it.** `wsl.exe <command>` runs the command
+ * through the distro's *default shell*, so `-- bash -lc "<command>"` had a shell in front of
+ * the shell that was asked for and the string was parsed twice. Quoting survived that, which
+ * is what made it invisible — the argument count was right and every argument looked whole —
+ * but the outer shell expanded every `$name` inside the quotes first, single quotes included,
+ * because by the time the inner shell saw the string the variable was already gone rather
+ * than quoted.
+ *
+ * It took the project board mirror out entirely on any WSL workspace: `readProjectBoard`
+ * sends a *parameterised* query, so `$login`, `$number` and `$field` reached GitHub as
+ * nothing at all and every poll answered `Expected VAR_SIGN, actual: COLON (":") at [1, 7]`.
+ * The query was written on one line, without a quote or a line break in it, precisely so no
+ * shell could break it; `$` is the character that reasoning did not cover, and a second shell
+ * is what made it matter. Every `gh` call and every agent run here shares this path, so all
+ * of them were exposed — the query is only where it was certain to bite.
+ *
+ * `--exec` runs the binary directly, with nothing in front of it. `bash` is still what parses
+ * the command, once, which is what the string was written for.
+ * `scripts/check-wsl-command-quoting.mjs` spawns a real one and reads back what arrived.
  */
 export function buildAgentCommand(
   workspace: Workspace,
@@ -271,7 +291,7 @@ export function buildAgentCommand(
       args: [
         '-d', workspace.environment.distro,
         '--cd', directory?.innerPath ?? workspace.innerPath,
-        '--', 'bash', '-lc', agentCommand,
+        '--exec', 'bash', '-lc', agentCommand,
       ],
       // wsl.exe itself runs from wherever; --cd places the agent inside the project.
       cwd: undefined,
