@@ -21,7 +21,7 @@ import type { BoardSectionElement } from '../../src/core/board-sections'
 import { isBoardHotkeyChord, textEntryOwnsKeyboard } from './board-hotkeys'
 import { legibleFitFloor } from './board-fit'
 import { referenceImageName } from '../../src/core/pasted-images'
-import { layoutLabel } from '../../src/core/text-layout'
+import { layoutLabel, BOUND_TEXT_PADDING } from '../../src/core/text-layout'
 import {
   layoutMirror,
   mirrorWidth,
@@ -139,6 +139,22 @@ interface ImplementQueueState {
 
 type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';
 const AUTO_SYNC_DEBOUNCE_MS = 1200;
+
+/**
+ * What this page calls itself, on its socket and on the writes it sends over HTTP.
+ *
+ * The two are separate connections and nothing tied them together, so a write came back to
+ * its own author as an `element_updated` carrying the server's whole copy of the element —
+ * merged over the live scene field by field, a debounce behind whatever was being typed
+ * (#190). Named on both, the server can leave the author out and still tell every other
+ * browser on the board.
+ *
+ * Per page load rather than per board: it identifies the connection, not the reader, and a
+ * board switch reconnects. `randomUUID` needs a secure context, which a board reached over
+ * plain HTTP on a LAN address is not, so the fallback is not decorative.
+ */
+const CLIENT_ID = globalThis.crypto?.randomUUID?.()
+  ?? `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 /**
  * How often the mirror re-reads the project.
@@ -702,6 +718,54 @@ const isShapeContainerType = (type: string | undefined): boolean => {
   return type === 'rectangle' || type === 'ellipse' || type === 'diamond'
 }
 
+/**
+ * Grow a container that its own bound label no longer fits inside.
+ *
+ * Nothing in the browser ever made an issue block fit what is written into it. The library
+ * ships a 400x140 template, `instantiateIssueBlock` takes that height verbatim, and the
+ * height a long observation needs is on loan from Excalidraw's editor-only auto-grow — which
+ * mutates the container in place and is therefore handed back by anything that writes the
+ * scene from a copy taken before it. `applyIssueToBlock` applies `layoutLabel().containerHeight`
+ * on the server (`src/server.ts`) and this is the same rule on this side, which is the side
+ * that has the numbers: `layoutLabel` estimates text it cannot measure, and a label already
+ * on the canvas has been measured by the browser.
+ *
+ * Without it `recenterBoundShapeTextElements` below centres a 220px label in a 140px box, so
+ * half the overflow goes off the *top* of the block — the cut first lines in #190 — and the
+ * canvas clips nothing, so it lands behind whatever is above.
+ *
+ * **Only ever grows.** A block is never made smaller than it was written at, so a short
+ * observation keeps the template height it was placed with and no card in the mirror is
+ * resized by a measurement that happened to come out under its own estimate. And only for a
+ * label that is centred in its container, which is the case that puts text above the top
+ * edge; a label pinned to the top overflows downwards and is left to whoever chose that.
+ */
+const fitContainersToBoundText = (
+  elements: Partial<ExcalidrawElement>[]
+): Partial<ExcalidrawElement>[] => {
+  const needed = new Map<string, number>()
+  for (const element of elements) {
+    const label = element as Partial<ExcalidrawElement> & {
+      containerId?: string | null; autoResize?: boolean
+    }
+    if (label.type !== 'text' || !label.containerId) continue
+    if (label.autoResize === false) continue
+    if (typeof label.height !== 'number') continue
+    needed.set(label.containerId, Math.max(needed.get(label.containerId) ?? 0, label.height))
+  }
+  if (needed.size === 0) return elements
+
+  return elements.map((element) => {
+    const wanted = element.id ? needed.get(element.id) : undefined
+    if (wanted === undefined || !isShapeContainerType(element.type)) return element
+    const fits = wanted + BOUND_TEXT_PADDING * 2
+    if (typeof element.height !== 'number' || element.height >= fits) return element
+    // Excalidraw reconciles by version, so a shape whose height changed and whose version
+    // stood still is one it may keep as it was.
+    return { ...element, height: fits, version: (element.version ?? 1) + 1 }
+  })
+}
+
 const recenterBoundShapeTextElements = (
   elements: Partial<ExcalidrawElement>[]
 ): Partial<ExcalidrawElement>[] => {
@@ -841,7 +905,12 @@ const convertElementsPreservingImageProps = (
   // so we cannot assume a 1:1 mapping — return all converted elements directly.
   const convertedNonImageElements = convertToExcalidrawElements(nonImageElements as any, { regenerateIds: false })
   const restoredNonImageElements = restoreBindings(convertedNonImageElements, nonImageElements)
-  return recenterBoundShapeTextElements([...restoredNonImageElements, ...imageElements, ...freedrawElements])
+  // Fitted before it is centred: `recenterBoundShapeTextElements` divides the slack between
+  // the top and the bottom, and a box too short for its text has slack to spare in both
+  // directions. There has to be none left over before the halving.
+  return recenterBoundShapeTextElements(fitContainersToBoundText(
+    [...restoredNonImageElements, ...imageElements, ...freedrawElements]
+  ))
 }
 
 /** Where the board a browser was last looking at is kept. */
@@ -1375,20 +1444,29 @@ function App(): JSX.Element {
       reader.readAsDataURL(file)
     })
 
-  /** Write a block's attached list, and mirror it into the panel. */
+  /**
+   * Write a block's attached list, and mirror it into the panel and onto the block.
+   *
+   * Pasting a screenshot into the panel is one `PUT`, and it used to come back over the
+   * socket as the server's whole copy of the block — which through a burst of typing is the
+   * block as it was before it grew (#190). It does not any more, so the block's own copy of
+   * the list is written here.
+   */
   const writeIssueImages = async (elementId: string, images: string[]): Promise<void> => {
     const element = excalidrawAPI?.getSceneElements().find((candidate) => candidate.id === elementId)
+    const customData = {
+      ...(customDataOf(element as { customData?: CustomData }) ?? {}), issueImages: images
+    }
     const response = await fetch(apiUrl(`/api/elements/${elementId}`), {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        customData: { ...(customDataOf(element as { customData?: CustomData }) ?? {}), issueImages: images }
-      })
+      headers: { 'Content-Type': 'application/json', 'x-client-id': CLIENT_ID },
+      body: JSON.stringify({ customData })
     })
     if (!response.ok) {
       const body = await response.json().catch(() => ({}))
       throw new Error(body?.error ?? `HTTP ${response.status}`)
     }
+    patchSceneElement(elementId, { customData } as unknown as Partial<ExcalidrawElement>)
     setIssue((current) => (current?.id === elementId ? { ...current, images } : current))
   }
 
@@ -1476,15 +1554,19 @@ function App(): JSX.Element {
       ? { width: fullSize.width, height: fullSize.height }
       : { width: Math.max(1, Math.round(COLLAPSED_IMAGE_HEIGHT * ratio)), height: COLLAPSED_IMAGE_HEIGHT }
 
+    const written = {
+      ...next,
+      customData: { ...(element.customData ?? {}), collapsed: !isCollapsed, fullSize }
+    }
+
     try {
       await fetch(apiUrl(`/api/elements/${elementId}`), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...next,
-          customData: { ...(element.customData ?? {}), collapsed: !isCollapsed, fullSize }
-        })
+        headers: { 'Content-Type': 'application/json', 'x-client-id': CLIENT_ID },
+        body: JSON.stringify(written)
       })
+      // The write no longer comes back over the socket, so the new size is applied here.
+      patchSceneElement(elementId, written as unknown as Partial<ExcalidrawElement>)
       setCollapsible({ id: elementId, collapsed: !isCollapsed })
     } catch (error) {
       console.error('Could not toggle image collapse:', error)
@@ -1674,15 +1756,93 @@ function App(): JSX.Element {
     scheduleAutoSync()
   }
 
+  /**
+   * Put the block under the caret back into a scene about to be written, by object identity.
+   *
+   * #132 asked this question of the two writers that reflow the notes column, and both
+   * answer it themselves. Every other writer went straight through — the socket's
+   * `element_updated`, `element_created` and `elements_batch_created`, the `initial_elements`
+   * of every reconnect, the 250 ms terminal reconcile, the loader — and each of them hands
+   * the whole scene to `convertElementsPreservingImageProps`, which deep-clones the container
+   * and rebuilds its label through `newTextElement`. Excalidraw grows a container by mutating
+   * it in place and never replaces one whose label is being edited, so a container that is a
+   * different object mid-keystroke was replaced by us: the grown height goes with it, and the
+   * open editor re-derives the live textarea from whatever landed (#190).
+   *
+   * So it sits in the funnel every one of them already goes through, rather than at sixteen
+   * call sites. It only ever *substitutes*, never adds: an element the write left out stays
+   * left out, which is what keeps a deleted shape deleted and a board switch a board switch.
+   *
+   * The remote update for the edited block itself is dropped rather than deferred, which is
+   * the call #190 leaves open. Deferring it would mean replaying, when the caret leaves, a
+   * copy of the label captured while somebody was typing into it — overwriting the sentence
+   * they just finished with the one the server last heard about. The reader holds the
+   * authority for as long as the caret is theirs; the autosync carries what they wrote out
+   * the moment it is released. Everything else in the same write still lands immediately, so
+   * an `issueState` transition on another block is not held up by somebody typing.
+   */
+  const keepingTheEditedBlock = (
+    api: ExcalidrawImperativeAPI,
+    scene: Parameters<ExcalidrawImperativeAPI['updateScene']>[0]
+  ): Parameters<ExcalidrawImperativeAPI['updateScene']>[0] => {
+    const incoming = (scene as { elements?: readonly ExcalidrawElement[] }).elements
+    if (!incoming) return scene
+    const frozen = editingDraftId(api)
+    if (!frozen) return scene
+
+    const live = new Map<string, ExcalidrawElement>()
+    for (const element of api.getSceneElements()) {
+      const bound = element as ExcalidrawElement & { containerId?: string | null }
+      if (element.id === frozen || bound.containerId === frozen) live.set(element.id, element)
+    }
+    if (live.size === 0) return scene
+
+    let substituted = false
+    const elements = incoming.map((element) => {
+      const held = live.get(element.id)
+      if (!held || held === element) return element
+      substituted = true
+      return held
+    })
+    return substituted ? { ...scene, elements } : scene
+  }
+
   const applySceneUpdateWithoutAutoSync = (
     api: ExcalidrawImperativeAPI,
     scene: Parameters<ExcalidrawImperativeAPI['updateScene']>[0]
   ): void => {
     suppressAutoSyncCountRef.current += 1
-    api.updateScene(scene)
+    api.updateScene(keepingTheEditedBlock(api, scene))
     setTimeout(() => {
       releaseAutoSyncSuppression()
     }, 0)
+  }
+
+  /**
+   * Write the fields this page just sent to the server onto its own copy of one element.
+   *
+   * What the echo used to do, and the reason the echo could be dropped. Two differences, and
+   * both are the point: it applies *what was written* rather than the server's whole copy of
+   * the element, so nothing arrives a debounce stale; and it does not go through
+   * `convertElementsPreservingImageProps`, so no other element on the board is rebuilt for
+   * the sake of one field on one of them. These come out of the scene and are already
+   * Excalidraw elements — there is nothing for a conversion to do to them.
+   *
+   * Not synced back: the server has the change already, which is where this came from.
+   */
+  const patchSceneElement = (elementId: string, patch: Partial<ExcalidrawElement>): void => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+    const scene = api.getSceneElements()
+    if (!scene.some((element) => element.id === elementId)) return
+    applySceneUpdateWithoutAutoSync(api, {
+      elements: scene.map((element) => (element.id === elementId
+        // Excalidraw reconciles by version, so a change whose version stands still is one
+        // it may keep as it was.
+        ? { ...element, ...patch, version: (element.version ?? 1) + 1 }
+        : element)) as ExcalidrawElement[],
+      captureUpdate: CaptureUpdateAction.NEVER
+    })
   }
 
   /**
@@ -4378,8 +4538,11 @@ function App(): JSX.Element {
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     // The socket declares its board once: the server then filters events to it, so a
-    // tab never redraws with another board's shapes.
-    const wsUrl = `${protocol}//${window.location.host}?workspace=${encodeURIComponent(activeWorkspaceRef.current)}`
+    // tab never redraws with another board's shapes. And who it is, so that a write this
+    // page sends over HTTP is not read back to it over here — see `CLIENT_ID`.
+    const wsUrl = `${protocol}//${window.location.host}`
+      + `?workspace=${encodeURIComponent(activeWorkspaceRef.current)}`
+      + `&client=${encodeURIComponent(CLIENT_ID)}`
 
     connectionGenerationRef.current += 1
     const socket = new WebSocket(wsUrl)
