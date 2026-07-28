@@ -1,6 +1,6 @@
 # REST API
 
-`src/server.ts`. 50 routes, and the only surface that is workspace-aware — everything the
+`src/server.ts`. 52 routes, and the only surface that is workspace-aware — everything the
 browser does, and everything this board was built with, goes through here.
 
 The table below is the whole set, one row per route. It used to be a summary of thirty, under a
@@ -51,6 +51,8 @@ loopback only.
 | `GET /api/issue-block/:id/issue` | The issue behind a block, read live rather than copied onto it |
 | `GET /api/issue` | The issue behind a *mirrored card*, which has no element id, plus what is known about implementing it |
 | `POST /api/issue/comment` | Add a comment — the one way to answer an issue agent's open questions without leaving the board |
+| `POST /api/issue/recreate` | Research the issue again and rewrite it in place, while its card is still in Todo |
+| `GET /api/issue/recreate` | What that run has done so far, with no `gh` behind it |
 
 ## Implementations
 

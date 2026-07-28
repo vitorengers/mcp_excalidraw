@@ -17,7 +17,8 @@ it stops being true.
 strip labels it with the issue, and its output arrives while the run is alive rather than at the
 end. The issue agent has the same gap and none of the work left — `runAgent` takes a `host`
 (`src/core/issue-agent.ts`), the session already carries an owner and a directory, and
-`runIssueAgent` simply does not pass one.
+`runIssueAgent` simply does not pass one. `runReviseAgent`, which researches an existing issue
+again, is the same run and the same omission — one seam, not two.
 
 It was left out because researching an issue is bounded work that finishes in minutes, where an
 implementation is the one that runs for an hour with nothing to look at. That is a reason to do

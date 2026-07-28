@@ -1043,6 +1043,39 @@ function App(): JSX.Element {
   }
 
   /**
+   * Send an agent back at an issue that already exists, to rewrite it in place.
+   *
+   * Nothing on the element changes, and there is nothing to change: the surface this is
+   * offered on is usually a mirrored card, which has no element at all. The run's state lives
+   * on the server against the issue URL and the panel polls it — which is also why this
+   * writes no optimistic state here, unlike implementing: there is no shape for a `running`
+   * to be written onto.
+   */
+  const recreateIssue = async (
+    target: IssueTarget,
+    observations: string
+  ): Promise<string | null> => {
+    if (!target.issueUrl) return 'This block has no issue to research again yet.'
+
+    try {
+      // By issue URL, like implementing and commenting: a mirrored card has no element on the
+      // server, and the issue is what is being rewritten either way.
+      const response = await fetch(apiUrl('/api/issue/recreate'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: target.issueUrl, observations })
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        return body?.error ?? `HTTP ${response.status}`
+      }
+      return null
+    } catch (error) {
+      return (error as Error).message
+    }
+  }
+
+  /**
    * Clear a `running` implementation whose agent is gone.
    *
    * There is no timeout on an implementation, so nothing else ever clears that state.
@@ -3374,7 +3407,11 @@ function App(): JSX.Element {
         implementUrl: (custom.implementUrl as string) ?? null,
         implementError: (custom.implementError as string) ?? null,
         implementStartedAt: (custom.implementStartedAt as string) ?? null,
-        implementEndedAt: (custom.implementEndedAt as string) ?? null
+        implementEndedAt: (custom.implementEndedAt as string) ?? null,
+        // An authored block has no column to read, the way `resolvePanelTarget` says: it is
+        // either on a board with no project or one poll away from being retired by the card
+        // that replaces it, and the route is the authority in both cases.
+        recreatable: true
       })
     }
 
@@ -4336,6 +4373,7 @@ function App(): JSX.Element {
             onResetIssue={resetIssueOnBlock}
             onAdoptIssue={adoptIssueOnBlock}
             onAddComment={addObservationToIssue}
+            onRecreateIssue={recreateIssue}
           />
 
           {/* Also siblings of the canvas, and for the same reason: a transcript is not a
