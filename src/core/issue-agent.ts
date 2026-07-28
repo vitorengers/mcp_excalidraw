@@ -295,6 +295,58 @@ export function commandNotFoundHint(
 }
 
 /**
+ * Whether the configured command asks its agent to print an answer and exit.
+ *
+ * The mirror of `streamsUsage()`, and named the same way: the flag is Claude Code's, and it
+ * is read rather than required because an operator who already asks for a non-interactive
+ * run gets the run they have always had without changing anything. A command that says
+ * neither `-p` nor `--print` is one that would start an interface if it were given a
+ * terminal, and that is the whole of the signal — there is no second variable, and nothing
+ * here assumes the command is Claude Code. It is not: `--print` is what this looks for, and
+ * a command that spells "non-interactive" some other way reads as interactive, which costs
+ * it a terminal it can simply ignore.
+ *
+ * Matched as a whole argument. `--print-mode` is not `--print`, and a path with `-p` inside
+ * it is not a flag.
+ */
+export function runsHeadless(agentCommand: string): boolean {
+  return /(?:^|\s)(?:-p|--print)(?:\s|$)/.test(agentCommand);
+}
+
+/**
+ * The same text with the terminal's own instructions taken out of it.
+ *
+ * A run on pipes prints what it means. A run on a pseudoterminal prints a *screen*: colours,
+ * cursor moves and the sequences that paint them, all of them in the transcript beside the
+ * words. `extractGithubUrl` reads that transcript, and a URL with an SGR reset dropped in the
+ * middle of it is not a URL any more — so the escapes come out before anything is looked for.
+ *
+ * Only the two grammars a program actually uses to paint: CSI (`ESC [ … final`) and the
+ * string escapes (OSC and friends, ending at `BEL` or `ST`), plus the two-byte escapes.
+ * Nothing here is trying to be an emulator; it is trying to leave the letters behind.
+ */
+export function stripAnsi(text: string): string {
+  return text
+    // The string escapes first: what they carry is arbitrary text, and a `[` inside one
+    // would otherwise be read as the start of a control sequence that is not there.
+    .replace(/\u001b[\]P^_X][\s\S]*?(?:\u0007|\u001b\\)/g, '')
+    .replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '')
+    .replace(/\u001b[@-Z\\_]/g, '');
+}
+
+/**
+ * A value a shell inside the distro will hand on exactly as it was given.
+ *
+ * Single quotes, because they are the one quoting in `sh` that means "no expansion at all" —
+ * the `$name` trap `buildAgentCommand` records below is precisely what double quotes would
+ * leave open. A single quote inside the value is the only thing that has to be spelled out,
+ * and `'\''` is how: close the run, an escaped quote, open it again.
+ */
+function singleQuoted(value: string): string {
+  return `'${value.split("'").join(`'\\''`)}'`;
+}
+
+/**
  * A directory named twice: once for this process, once for the agent's own environment.
  *
  * They differ for a WSL-backed project, where this process reads through a UNC share and
@@ -338,11 +390,21 @@ export interface AgentDirectory {
  * `--exec` runs the binary directly, with nothing in front of it. `bash` is still what parses
  * the command, once, which is what the string was written for.
  * `scripts/check-wsl-command-quoting.mjs` spawns a real one and reads back what arrived.
+ *
+ * **`prompt` is the other way to hand an agent its instructions**, and it exists because the
+ * usual way spends stdin. `claude [options] [prompt]` takes one as its last argument and
+ * starts an interface; a prompt written to stdin has to be ended, and a pseudoterminal has no
+ * end of file to end it with. So an interactive run puts it here instead — never tokenized,
+ * because it is several hundred words with quotes and backticks in it and `tokenizeCommand`
+ * would tear it apart. On the host it is one more element of argv, which no shell ever sees.
+ * Inside a distro there *is* a shell, so it is single-quoted into the string `bash -lc`
+ * parses: the one quoting that expands nothing, which is the same `$name` trap as above.
  */
 export function buildAgentCommand(
   workspace: Workspace,
   agentCommand: string,
-  directory?: AgentDirectory | null
+  directory?: AgentDirectory | null,
+  prompt?: string | null
 ): { command: string; args: string[]; cwd: string | undefined } {
   if (workspace.environment.kind === 'wsl') {
     return {
@@ -350,7 +412,8 @@ export function buildAgentCommand(
       args: [
         '-d', workspace.environment.distro,
         '--cd', directory?.innerPath ?? workspace.innerPath,
-        '--exec', 'bash', '-lc', agentCommand,
+        '--exec', 'bash', '-lc',
+        prompt ? `${agentCommand} ${singleQuoted(prompt)}` : agentCommand,
       ],
       // wsl.exe itself runs from wherever; --cd places the agent inside the project.
       cwd: undefined,
@@ -358,6 +421,7 @@ export function buildAgentCommand(
   }
 
   const [command, ...args] = tokenizeCommand(agentCommand);
+  if (prompt) args.push(prompt);
   return {
     command: command ?? agentCommand,
     args,
@@ -456,6 +520,18 @@ export interface AgentHostHandle {
   exited: Promise<number | null>;
   /** Take it down, for a run that ran out of time. */
   close(): void;
+  /**
+   * Whether what is in there is an interface rather than a command that prints and exits.
+   *
+   * It changes what the ending *means*, which is why the host has to say. A headless agent
+   * exits when its work is done and its exit code is that verdict. An interface has no such
+   * moment: it goes back to its own prompt, and it ends when the reader ends it — `/exit`,
+   * or the tab's `×`, which is a kill and reports whatever a kill reports. Reading an exit
+   * code there would fail every run a reader closed after watching it succeed, so the
+   * transcript is the verdict instead, and the prompt already ends by ordering the agent to
+   * print the URL last.
+   */
+  interactive?: boolean;
 }
 
 /**
@@ -726,13 +802,18 @@ async function runHostedAgent(
   if (timeout) clearTimeout(timeout);
   meter?.flush();
 
+  // A screen is not prose. Everything below reads the transcript for a URL, and on a
+  // pseudoterminal that transcript carries the sequences that painted it — so they come out
+  // first, and only for the run that has them. A headless run's output is untouched.
+  const transcript = handle.interactive ? stripAnsi(stdout) : stdout;
+
   if (timedOut) {
     // The same salvage a private child gets, and for the same reason: an agent may well
     // have finished the visible work and kept going, and reporting a failure for work that
     // succeeded invites a second run for it. It is worth more here — a hosted run's
     // transcript is everything the process wrote, streamed, rather than a buffer that a
     // non-streaming `claude -p` leaves empty until it exits.
-    const salvaged = extractGithubUrl(stdout, options.expects);
+    const salvaged = extractGithubUrl(transcript, options.expects);
     return {
       ok: Boolean(salvaged),
       url: salvaged,
@@ -740,6 +821,23 @@ async function runHostedAgent(
       error: salvaged
         ? null
         : `Agent timed out after ${(timeoutMs as number) / 1000}s without returning ${noun}`,
+    };
+  }
+
+  // An interface's exit code is not an answer — see `AgentHostHandle.interactive`. The URL
+  // is, and it is the same URL `agentOutcome` would have looked for; what is dropped is the
+  // `code === 0` half of the verdict, which for a session the reader closed says only that
+  // it was closed.
+  if (handle.interactive) {
+    const url = extractGithubUrl(transcript, options.expects);
+    return {
+      ok: Boolean(url),
+      url,
+      output: stdout,
+      error: url
+        ? null
+        : `The interactive session ended without ${noun}. It said: `
+          + `${transcript.trim().slice(-600) || '(nothing)'}`,
     };
   }
 

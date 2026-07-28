@@ -190,9 +190,10 @@ export function shellCommandFrom(
 export function buildTerminalCommand(
   workspace: Workspace,
   shellCommand: string,
-  directory?: AgentDirectory | null
+  directory?: AgentDirectory | null,
+  prompt?: string | null
 ): { command: string; args: string[]; cwd: string | undefined } {
-  return buildAgentCommand(workspace, shellCommand, directory);
+  return buildAgentCommand(workspace, shellCommand, directory, prompt);
 }
 
 /**
@@ -357,8 +358,25 @@ export interface TerminalSessionOptions {
    * therefore ignores the PTY binding when this is set, rather than leaving the trap for a
    * caller to fall into — and `mode` in the summary says `pipe`, so the block does not
    * claim otherwise. `docs/terminal.md` records the measurement.
+   *
+   * Unless `interactive` says the prompt need not go through stdin at all.
    */
   input?: string | null;
+  /**
+   * Hand `input` to the command as its last argument, and keep the pseudoterminal.
+   *
+   * The measurement above constrains how a prompt is *delivered*, not whether the thing
+   * receiving it can be an interface. `claude [options] [prompt]` takes one as an argument
+   * and starts an interactive session with it, so nothing has to be ended and stdin is never
+   * spent — which is what leaves it free for the reader. `write()` then works, `mode` says
+   * `pty`, and the tab is a terminal rather than a window onto one.
+   *
+   * Ignored without a PTY binding, and that is the fallback rather than an oversight: on
+   * three pipes `stdin.isTTY` is false and a full-screen program takes its non-interactive
+   * path anyway, so a session that could not be a terminal delivers the prompt the way it
+   * always did.
+   */
+  interactive?: boolean;
 }
 
 export interface TerminalSessionSummary {
@@ -384,6 +402,15 @@ export interface TerminalSessionSummary {
   exitCode: number | null;
   /** Whose session this is, or null for one a reader opened. */
   owner: TerminalSessionOwner | null;
+  /**
+   * Whether there is anything for a keystroke to reach.
+   *
+   * False for every session a reader opens and for an agent's interactive one; true only
+   * where stdin was spent on a prompt and closed behind it. It is in the summary because
+   * the board has to be able to *say* so: a tab that quietly swallowed what was typed and
+   * answered with a sequence number was reporting delivery for bytes it dropped.
+   */
+  readOnly: boolean;
 }
 
 export interface TerminalSessionHooks {
@@ -443,16 +470,21 @@ export class TerminalSession {
     options: TerminalSessionOptions = {}
   ) {
     const directory = options.directory ?? null;
-    const { command, args, cwd } = buildTerminalCommand(workspace, shellCommand, directory);
-    // A process that is handed a prompt is handed it on pipes, whichever binding is
-    // available — see `TerminalSessionOptions.input` for the measurement that settles it.
-    const binding = options.input ? null : pty;
+    // A prompt goes to the command's argv or to its stdin, never to both, and which one
+    // decides everything else about the session: on argv the binding is kept and the tab is
+    // a terminal; on stdin the binding has to go, because a pseudoterminal has no end of
+    // file — see `TerminalSessionOptions.input` for the measurement that settles it.
+    const asArgument = Boolean(options.interactive && options.input && pty);
+    const { command, args, cwd } = buildTerminalCommand(
+      workspace, shellCommand, directory, asArgument ? options.input : null
+    );
+    const binding = options.input && !asArgument ? null : pty;
     this.id = id;
     this.workspaceId = workspace.id;
     this.shell = shellCommand;
     this.mode = binding ? 'pty' : 'pipe';
     this.owner = options.owner ?? null;
-    this.promptSent = Boolean(options.input);
+    this.promptSent = Boolean(options.input) && !asArgument;
     // What the shell itself will report from `pwd`, which for a WSL project is not the
     // path this process used to spawn it.
     this.cwd = workspace.environment.kind === 'wsl'
@@ -520,6 +552,11 @@ export class TerminalSession {
     return !this.hasExited;
   }
 
+  /** Whether stdin was spent on a prompt, so there is nothing a keystroke could reach. */
+  get readOnly(): boolean {
+    return this.promptSent;
+  }
+
   get scrollback(): string {
     return this.buffer;
   }
@@ -541,6 +578,7 @@ export class TerminalSession {
       rows: this.rows,
       exitCode: this.exitCode,
       owner: this.owner,
+      readOnly: this.promptSent,
     };
   }
 

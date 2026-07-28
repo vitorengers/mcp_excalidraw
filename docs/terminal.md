@@ -148,30 +148,74 @@ difference — `TerminalSessionOptions` in `src/core/terminal-session.ts`:
 - **an `owner`** — which agent, and which issue — so the strip can label the tab `#128` rather
   than `s4`. A tab that arrives on its own has to say what it is; a shell the reader opened
   keeps its number, and its owner is null;
-- **an `input`**, the prompt, written to stdin and then ended.
+- **an `input`**, the prompt, and **an `interactive`** that says how it is delivered.
 
-**That last one is why an agent's session is on pipes**, and it is a measurement rather than a
-preference. A pseudoterminal has no end of file to send. On ConPTY a child reading stdin sees
-neither `^Z` nor `^D` as one — measured against a Node child, which went on reading and never
-saw `end` — so a `claude -p` handed its prompt through a PTY would wait forever for a prompt
-that never finished arriving. The constructor therefore ignores the binding whenever `input` is
-set, and `mode` says `pipe`, because a block that claimed otherwise would be the worse failure.
-The consequence is that the tab is **read-only in substance**: stdin was spent on the prompt, so
-there is nothing for a keystroke to reach, and `write()` does not echo one rather than letting
-it read as though the agent had heard it.
+### Two kinds of agent tab, decided by the operator's own command line
+
+`EXCALIDRAW_IMPLEMENT_AGENT` is read for its *shape*, exactly the way `streamsUsage()` reads it
+for `--output-format stream-json`. Nothing is appended to it, there is no second variable, and
+nothing here assumes the command is Claude Code — `runsHeadless()` in `src/core/issue-agent.ts`
+looks for one thing, `-p` or `--print` as a whole argument.
+
+**With `-p`, everything is what it was.** The prompt is written to stdin and stdin is ended, and
+that is why such a session is on pipes — a measurement rather than a preference. A
+pseudoterminal has no end of file to send. On ConPTY a child reading stdin sees neither `^Z` nor
+`^D` as one — measured against a Node child, which went on reading and never saw `end` — so a
+`claude -p` handed its prompt through a PTY would wait forever for a prompt that never finished
+arriving. The constructor therefore ignores the binding whenever `input` is set without
+`interactive`, and `mode` says `pipe`, because a block that claimed otherwise would be the worse
+failure. Such a tab is **read-only**, `readOnly` in the summary says so, the block labels it, and
+`POST /api/terminal/input` answers **409** rather than 202 for bytes `write()` would drop.
+
+**Without `-p`, the prompt travels as the command's last argument and the session keeps its
+PTY.** `claude [options] [prompt]` takes one that way and starts an interface with it, so stdin
+is never spent — which is the whole point, because stdin is what a reader types into. The
+measurement above constrains prompt *delivery*, not interactivity. The argument is never
+tokenized: on the host it is one more element of `argv`, which no shell parses; inside a distro
+it is single-quoted into the string `bash -lc` reads, the one quoting that expands nothing.
+Measured at ~5 kB with quotes, backticks and newlines in it, through ConPTY and back out of
+`process.argv`, by `scripts/check-implement-interactive.mjs`.
+
+**How an interactive run settles, and what ends it.** Three candidates were on the table —
+scrape the transcript, `--session-id` plus the session record on disk, or a `Stop` hook posting
+back through `--settings`. **Scraping won**, and the reason is not that it is the most robust: it
+is the only one of the three that does not have the server appending Claude-Code-specific flags
+to a command line it does not own, which is the rewrite `agent-usage.ts` refuses to make. The
+prompt already ends by ordering the agent to print the pull request URL last, and that order is
+unchanged — the prompt must not differ by where a run is hosted.
+
+So an interactive run settles the moment its process ends, like any other, and what ends it is
+the reader: `/exit`, or the tab's `×`, which is a kill. **Its exit code is therefore not read.**
+A session someone closed after watching it succeed reports whatever a kill reports, so the
+transcript is the verdict — `stripAnsi` first, because a screen carries the sequences that
+painted it and a URL with an SGR reset in the middle of it is not a URL. Two consequences worth
+having in front of you:
+
+- **an unattended interactive run does not end by itself.** The queue starts runs with nobody
+  watching, and a TUI returns to its own prompt rather than exiting, so such a run holds its
+  block in `running` and one of the eight tab slots until somebody ends it or
+  `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` fires. An interactive command is for attended work; the
+  queue wants `-p`.
+- **the token figures go silent.** `--output-format` only works with `--print`, so an
+  interactive command cannot ask for the stream `UsageMeter` reads. A real trade, not a bug.
 
 **A tab is offered, never required.** `EXCALIDRAW_TERMINAL` and `EXCALIDRAW_IMPLEMENT_AGENT` are
-separate switches and stay separate: with the terminal off, with no PTY binding, or with all
-eight tabs already taken, the run happens in a private child exactly as it did before any of
-this — `runAgent` falls through, and `GET /api/implement` reports `terminal: null` for it. A 409
-from the cap must never be what stops an implementation from starting.
+separate switches and stay separate: with the terminal off, with no PTY binding, with
+`EXCALIDRAW_TERMINAL_PTY=0`, or with all eight tabs already taken, the run happens in a private
+child exactly as it did before any of this — `runAgent` falls through, and `GET /api/implement`
+reports `terminal: null` for it. A 409 from the cap must never be what stops an implementation
+from starting. The interactive path falls back the same way and for a reason of its own: with no
+PTY there is no interface to draw either, since `stdin.isTTY` is false on pipes and a full-screen
+program takes its non-interactive path there, so a command without `-p` on a machine with no
+binding is run exactly as a headless one is.
 
-**The run settles the way it always did.** The process inside the tab is the process that ran
-before, in the same checkout, reading the same prompt on stdin; the exit code and the transcript
-go through the same `agentOutcome`, so `done` with a pull request URL and `failed` with an error
-are decided by one piece of code for a watched run and an unwatched one alike.
-`scripts/check-implement-terminal.mjs` covers the server and
-`scripts/check-implement-terminal-browser.mjs` covers the board.
+**A headless run settles the way it always did.** The process inside the tab is the process that
+ran before, in the same checkout, reading the same prompt on stdin; the exit code and the
+transcript go through the same `agentOutcome`, so `done` with a pull request URL and `failed`
+with an error are decided by one piece of code for a watched run and an unwatched one alike.
+`scripts/check-implement-terminal.mjs` covers the server, `scripts/check-implement-interactive.mjs`
+covers the two shapes side by side, and `scripts/check-implement-terminal-browser.mjs` covers the
+board.
 
 ## The routes
 
@@ -180,7 +224,7 @@ are decided by one piece of code for a watched run and an unwatched one alike.
 | `POST /api/terminal` | open one more session — **202** with the session, **409** past the cap |
 | | body: optional `command` for what to run, optional `cwd` for where |
 | `GET /api/terminal` | `sessions`, each with its own scrollback, and the `limit` |
-| `POST /api/terminal/input` | `{ sessionId, data }` written to that shell — **202** |
+| `POST /api/terminal/input` | `{ sessionId, data }` written to that shell — **202**, or **409** for a read-only session |
 | `POST /api/terminal/resize` | `{ sessionId, cols, rows }` the block now stands for |
 | `DELETE /api/terminal?sessionId=` | close that one, and take what it was running with it |
 
@@ -966,6 +1010,12 @@ it. A board returned to puts its block back where it was left.
   messages while the process is still alive, and the run settling `done` with its pull request.
   Then the half that matters more: with the terminal off, with `EXCALIDRAW_TERMINAL_PTY=0`, and
   with the cap already full, the run still starts, still settles, and says it had no tab.
+- `scripts/check-implement-interactive.mjs` — the two shapes of command side by side. A command
+  without `-p` gets `mode: pty`, is still labelled with its issue, is handed its whole prompt as
+  an argument with its stdin left a terminal, carries a keystroke through to the process and
+  back into the transcript, and settles `done` with the pull request it printed. A command with
+  `-p` gets `pipe`, its prompt on stdin, `readOnly: true`, a **409** for a keystroke and nothing
+  of it in the transcript — and settles exactly as it always did. Self-contained.
 - `scripts/check-implement-terminal-browser.mjs` — the same run, in Chrome: a tab appearing with
   nobody clicking for it, labelled `#128` rather than `s4`, its screen drawing the agent's output
   while the record still says `running`, and the block still selectable and still resizable by
@@ -1093,10 +1143,17 @@ were not being hidden from a picker; they were never being written.
   reader clicks it. Bringing it forward would mean an unattended run — four of them at the
   default concurrency, and the queue starts runs with nobody watching — taking the view away
   from a shell somebody is typing in, which is worse than one click.
-- **An agent's tab cannot be typed into**, because stdin was spent on the prompt and a
-  pseudoterminal has no end of file to close it with. Watching is what it is for. An
-  interactive `claude` the reader could intervene in is a different design and would have to
-  answer how a repainting screen is scraped for a pull request URL.
+- **A headless agent's tab cannot be typed into**, because stdin was spent on the prompt and a
+  pseudoterminal has no end of file to close it with. Watching is what it is for, and since #174
+  the block says so — `readOnly` in the summary, `read-only` beside the mode, and a 409 rather
+  than a 202 for a keystroke. Leaving `-p` off the command is the other design, and it is the
+  section above: an interface the reader can intervene in, whose repainting screen *is* scraped
+  for the pull request URL, with the exit code left out of the verdict because a reader's `×` is
+  a kill. What it costs is that nothing ends such a run on its own.
+- **An interactive run cannot be ended from the board except by closing its tab.** `×` kills the
+  session, which settles the run from its transcript; there is nothing that says "the agent is
+  finished, keep the tab". A run that printed its URL and went back to its prompt therefore sits
+  there holding a slot until somebody closes it.
 - **A program that turns mouse reporting on takes the pointer with it.** Once the screen has
   the pointer, `vim` or `claude` asking for mouse tracking receives clicks and the wheel as
   escape sequences, which is what those programs expect and also means the reader cannot
@@ -1116,4 +1173,6 @@ were not being hidden from a picker; they were never being written.
 - **Whether a shell inside WSL gets a tty of its own has not been established.**
   `scripts/check-terminal.mjs` runs a real WSL-backed session through `wsl.exe` under the
   ConPTY and it behaves — the prompt is there, `pwd` answers with the inner path — but nothing
-  yet asserts `isTTY` on the far side of the distro boundary.
+  yet asserts `isTTY` on the far side of the distro boundary. An interactive implement run in a
+  WSL-backed project rests on that answer, so it is unverified there; the delivery half is not,
+  since the prompt is single-quoted into the `bash -lc` string either way.

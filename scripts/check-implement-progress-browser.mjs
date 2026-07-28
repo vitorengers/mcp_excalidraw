@@ -160,7 +160,7 @@ const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
     HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
-    EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}" --output-format stream-json`,
+    EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}" -p --output-format stream-json`,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
