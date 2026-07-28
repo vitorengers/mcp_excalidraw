@@ -71,6 +71,51 @@ handlers wins is not a question a type check can be asked. It presses Enter with
 (`\r`) attached rather than as a bare key: a newline in a textarea is the *default action* of
 the keypress, so a key event with no text would pass every case while inserting nothing.
 
+### Nothing rewrites the block under the caret
+
+An observation is typed over seconds or minutes, and the board is not still underneath it: the
+socket delivers other people's shapes, a reconnect re-sends the whole scene, the terminal
+reconciles its blocks every 250 ms, a pasted screenshot writes a field onto this very block.
+Every one of those writes the scene through `convertToExcalidrawElements`, which **deep-clones
+the container and rebuilds its bound label**. Excalidraw grows a container by mutating it in
+place and never replaces one whose label is being edited — so a container that is a different
+object mid-keystroke was replaced by this page, and the open editor re-derives the live
+textarea from whatever landed. #132 taught the two writers that reflow the notes column to
+leave it alone; #190 found the other fourteen.
+
+**So the rule sits in the one funnel they all go through** (`applySceneUpdateWithoutAutoSync`),
+not at each call site: the container being edited and the label bound to it are put back into
+any outgoing scene *by object identity*. It only ever substitutes, never adds — an element the
+write left out stays left out, which is what keeps a deleted shape deleted and a board switch a
+board switch.
+
+**A remote update for the edited block itself is dropped, not deferred.** Deferring it would
+mean replaying, when the caret leaves, a copy of the label captured while somebody was typing
+into it — overwriting the sentence they just finished with the one the server last heard about.
+The reader holds the authority for as long as the caret is theirs, and the autosync carries
+what they wrote out the moment it is released. Everything else in the same write still lands
+immediately, so a state change on another block is not held up by somebody typing.
+
+### The block fits what is written into it
+
+The library ships a 400x140 block and nothing in the browser ever made that height follow the
+text. It was on loan from Excalidraw's editor-only auto-grow, and any rebuild handed it back —
+after which `recenterBoundShapeTextElements` centres a 220px label in a 140px box and puts half
+the overflow **above** the block. That is the second symptom in #190: past a certain length the
+first lines stop being shown.
+
+So a container is grown to the label bound to it — `label.height + 2 x BOUND_TEXT_PADDING`, the
+same arithmetic `layoutLabel().containerHeight` does for `applyIssueToBlock` on the server. It
+is applied from the *measured* height rather than the estimate, because a label already on the
+canvas has been measured by the browser and `layoutLabel` exists for the server, which cannot
+measure. **It only ever grows**: a short observation keeps the template height it was placed
+with, and nothing on the board is made smaller by a measurement.
+
+`scripts/check-issue-block-typing-browser.mjs` covers both, in a real Chrome, against the
+label's `text` — the wrapped copy the canvas paints — and not only `originalText`, which is
+what the editor holds. A rebuild that re-derives one from a stale copy of the other looks
+perfect to a check that reads only the second.
+
 ## Reference images
 
 A block can carry images as well as text. Select it and either press **Ctrl+V** with a
@@ -130,6 +175,26 @@ would silently take it away.
 The bytes go to the file store (`POST /api/files`), not onto the element. An element carrying
 dataURLs would ride in every autosync payload and every export of the board. `GET /api/files/:id`
 reads one back, which is what draws the thumbnails in the panel.
+
+### The attachment is not read back to the page that made it
+
+Attaching writes the list onto the block with one `PUT /api/elements/:id`, and that write used
+to come straight back to its own author as an `element_updated` carrying the server's **whole
+copy** of the block, merged over the live scene field by field. Through a burst of typing the
+autosync is a debounce behind, so that copy is the block as it was before it grew — which is
+how pasting a screenshot became one of the things that could take an observation apart around
+the caret (#190).
+
+A page's socket and a page's HTTP writes are two connections and nothing tied them together, so
+now the socket names itself on connect (`?client=<id>`) and a write names the same id in
+`x-client-id`. Same id, no echo. **An id no socket answers to excludes nobody**, so a client
+that never names itself — the MCP server, a script, any other tool — is told everything, as
+everything was before this existed. The author applies *what it wrote* to its own scene instead,
+which is a field on one element rather than a rebuild of the board; the response carries the
+whole updated element, so it is never left guessing what the server made of the request.
+
+`scripts/check-issue-block-typing.mjs` asserts the sender is not told and a second browser on
+the same board still is.
 
 ### How they reach the agent
 

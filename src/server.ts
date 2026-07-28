@@ -173,12 +173,37 @@ const socketWorkspaces = new WeakMap<WebSocket, string>();
 const socketWatching = new WeakMap<WebSocket, boolean>();
 
 /**
+ * What a socket calls itself, when it calls itself anything.
+ *
+ * A page's socket and a page's HTTP writes are two connections, and nothing tied them
+ * together — so a write over HTTP came back to its own author over the socket, carrying the
+ * server's whole copy of the element rather than the field that was written. Through a burst
+ * of typing the autosync is a debounce behind, so that copy is the block as it was before it
+ * grew: the echo hands a container its template height back while the label bound to it is
+ * twice that (#190). The socket names itself on connect, `?client=<id>`, and a write names
+ * the same id in `x-client-id`; that is the whole of the pairing.
+ */
+const socketClients = new WeakMap<WebSocket, string>();
+
+/** Who a request says it is, for the one purpose of not answering it back to itself. */
+function clientIdFrom(req: Request): string | undefined {
+  const named = req.headers['x-client-id'];
+  const id = Array.isArray(named) ? named[0] : named;
+  return typeof id === 'string' && id.trim() ? id.trim() : undefined;
+}
+
+/**
  * Broadcast to the clients watching one workspace.
  *
  * Omitting `workspaceId` reaches every client — right for server-wide notices, wrong
  * for element events, which would make one board redraw with another board's shapes.
+ *
+ * `exceptClientId` leaves out the sockets of the client that asked for this, and nobody
+ * else. An id no socket answers to excludes nobody, which is what makes it safe to send
+ * from anything: a client that never names itself is told everything, as every client was
+ * before this existed.
  */
-function broadcast(message: WebSocketMessage, workspaceId?: string): void {
+function broadcast(message: WebSocketMessage, workspaceId?: string, exceptClientId?: string): void {
   const data = JSON.stringify(
     workspaceId ? { ...message, workspace: workspaceId } : message
   );
@@ -186,6 +211,7 @@ function broadcast(message: WebSocketMessage, workspaceId?: string): void {
     try {
       if (client.readyState !== WebSocket.OPEN) return;
       if (workspaceId && socketWorkspaces.get(client) !== workspaceId) return;
+      if (exceptClientId && socketClients.get(client) === exceptClientId) return;
       client.send(data);
     } catch (err) {
       logger.warn('Failed to send to client, removing');
@@ -231,6 +257,10 @@ wss.on('connection', (ws: WebSocket, request) => {
   const requestUrl = new URL(request.url ?? '/', 'http://localhost');
   const workspaceId = normalizeWorkspaceId(requestUrl.searchParams.get('workspace'));
   socketWorkspaces.set(ws, workspaceId);
+  // Optional, and unnamed is the state every socket was in before #190: a client that does
+  // not say who it is is simply told everything.
+  const clientId = requestUrl.searchParams.get('client')?.trim();
+  if (clientId) socketClients.set(ws, clientId);
   // A socket is watching until its own client says it is in the background: a browser opens
   // one for the board it is about to show.
   socketWatching.set(ws, true);
@@ -294,6 +324,7 @@ wss.on('connection', (ws: WebSocket, request) => {
     clients.delete(ws);
     socketWorkspaces.delete(ws);
     socketWatching.delete(ws);
+    socketClients.delete(ws);
     logger.info('WebSocket connection closed');
   });
 
@@ -302,6 +333,7 @@ wss.on('connection', (ws: WebSocket, request) => {
     clients.delete(ws);
     socketWorkspaces.delete(ws);
     socketWatching.delete(ws);
+    socketClients.delete(ws);
   });
 });
 
@@ -556,14 +588,18 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
 
     store.set(id, updatedElement);
 
-    // Broadcast to all connected clients
+    // Broadcast to every client on this board except the one that asked for it. The author
+    // already knows what it wrote, and the response below carries the whole element for it
+    // to apply; what it does not need is the server's copy merged back over its live scene
+    // a debounce behind (#190). Every other browser on the board has no other way to hear.
     const message: ElementUpdatedMessage = {
       type: 'element_updated',
       element: updatedElement
     };
-    broadcast(message, workspaceId);
+    broadcast(message, workspaceId, clientIdFrom(req));
 
-    // Moving/resizing a shape must drag its bound arrows along
+    // Moving/resizing a shape must drag its bound arrows along. Sent to the author too:
+    // these are elements it did not write and does not otherwise know have moved.
     const geometryChanged = ['x', 'y', 'width', 'height']
       .some(key => Object.prototype.hasOwnProperty.call(body, key));
     if (geometryChanged && updatedElement.type !== 'arrow' && updatedElement.type !== 'line') {
