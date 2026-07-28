@@ -198,6 +198,16 @@ const TERMINAL_AWAITING_MIRROR = 'awaitingMirror';
 const TERMINAL_RESTORE_DELAY_MS = 250;
 
 /**
+ * How long `flushAutoSync` waits for a sync already on the wire before giving up on it.
+ *
+ * A ceiling rather than a timeout that fails: past it the request is sent anyway, which is
+ * what happened on every click before the flush existed. Generous against a slow store and
+ * still short enough that a wedged sync does not make the button look dead.
+ */
+const FLUSH_WAIT_MS = 4000;
+const FLUSH_POLL_MS = 50;
+
+/**
  * Where the reader's terminal font size is kept.
  *
  * In `localStorage` alongside the theme, and global rather than per board: it is a viewing
@@ -1002,6 +1012,10 @@ function App(): JSX.Element {
   const createIssueFromBlock = async (elementId: string): Promise<void> => {
     setIssue((current) => (current?.id === elementId ? { ...current, state: 'running' } : current))
     try {
+      // The block, and the observation just typed into it, before the id is sent anywhere:
+      // the server resolves that id out of its own store, and the autosync is the only thing
+      // that puts it there.
+      await flushAutoSync()
       const response = await fetch(apiUrl(`/api/issue-block/${elementId}`), { method: 'POST' })
       if (!response.ok) {
         const body = await response.json().catch(() => ({}))
@@ -1035,6 +1049,9 @@ function App(): JSX.Element {
    */
   const adoptIssueOnBlock = async (target: IssueTarget, issueUrl: string): Promise<string | null> => {
     try {
+      // Addressed by element id, so the same rule as the run: the server has to have the
+      // block before it is asked to write anything onto it.
+      await flushAutoSync()
       const response = await fetch(apiUrl(`/api/issue-block/${target.id}/adopt`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1058,6 +1075,9 @@ function App(): JSX.Element {
    */
   const resetIssueOnBlock = async (target: IssueTarget): Promise<string | null> => {
     try {
+      // Reachable as early as the run is — the block a lost run is being cleared from may
+      // never have reached the store at all.
+      await flushAutoSync()
       const response = await fetch(apiUrl(`/api/issue-block/${target.id}`), { method: 'DELETE' })
       if (!response.ok) {
         const body = await response.json().catch(() => ({}))
@@ -4447,6 +4467,42 @@ function App(): JSX.Element {
     } finally {
       syncInFlightRef.current = false
     }
+  }
+
+  /**
+   * Put the scene on the server now, and wait for it to land.
+   *
+   * Everything that addresses a block by element id has to go through this first. The server
+   * resolves that id out of its own store, and the only thing that puts a block there is the
+   * autosync — which runs `AUTO_SYNC_DEBOUNCE_MS` after the last change. Finish an edit,
+   * click, and the request overtakes the sync: `Element pbdraft-… not found`, on a block that
+   * is on screen (#179).
+   *
+   * #100 stopped a refused schedule from being *dropped*; this is the other half, the wait
+   * for it. Neither replaces the other — the owed write is what saves the change when nobody
+   * clicks at all.
+   *
+   * **A sync already on the wire does not count.** It read the scene before this change, so
+   * it is waited out and then followed by one that did see it — the same reasoning
+   * `scheduleAutoSync` applies to its own timer. The wait is bounded: if it never frees, the
+   * request goes anyway, which is exactly what happened before this existed.
+   */
+  const flushAutoSync = async (): Promise<void> => {
+    const deadline = Date.now() + FLUSH_WAIT_MS
+    while (syncInFlightRef.current && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, FLUSH_POLL_MS))
+    }
+
+    // The debounce is spent: what it was waiting to write is being written now.
+    if (autoSyncTimerRef.current) {
+      clearTimeout(autoSyncTimerRef.current)
+      autoSyncTimerRef.current = null
+    }
+    // Nothing is owed once this runs — it writes the scene as it stands, which is every
+    // change that was refused while the timer was out. The same rule the timer applies.
+    autoSyncPendingRef.current = false
+
+    await syncToBackend({ silent: true })
   }
 
   const scheduleAutoSync = (): void => {
