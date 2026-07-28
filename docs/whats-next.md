@@ -11,23 +11,20 @@ landed, which is the failure this page exists to avoid; `scripts/check-docs-coun
 siblings now hold the numbers, but nothing can hold a stale paragraph except rewriting it when
 it stops being true.
 
-## Stream the agents into the terminal
+## Stream the issue agent into the terminal too
 
-The terminal ([terminal.md](terminal.md)) is a surface that carries a byte stream over the
-WebSocket and draws it on the board. What it does not yet carry is the output of the two agents
-this board already spawns — and that was the destination the observation behind #51 actually
-named. The terminal was the step it asked for first.
+#128 put the **implement** agent in a tab: a run opens a session of its own in its worktree, the
+strip labels it with the issue, and its output arrives while the run is alive rather than at the
+end. The issue agent has the same gap and none of the work left — `runAgent` takes a `host`
+(`src/core/issue-agent.ts`), the session already carries an owner and a directory, and
+`runIssueAgent` simply does not pass one.
 
-It is a small change on the server and deliberately not part of building the surface: `runAgent`
-already receives the chunks (`src/core/issue-agent.ts`), and today it accumulates them and reads
-the result once the process exits, which is exactly why a block can say a run is `running` and
-nothing more. Broadcasting them makes the agent a second producer on a surface that exists.
+It was left out because researching an issue is bounded work that finishes in minutes, where an
+implementation is the one that runs for an hour with nothing to look at. That is a reason to do
+it second, not a reason not to do it: an issue agent that wedges is exactly as opaque as an
+implement agent that wedges, and a block offering a reset is all a reader has to go on.
 
-The open question was whose terminal it is, and #94 answered most of it: a board holds up to
-eight sessions, each addressable by id on every route and in every message, so an agent gets a
-**tab of its own** rather than interleaving with the session somebody is typing in. What is left
-is narrower — a session the server opened for an agent is one nothing typed into, so it wants a
-tab that says so rather than an `s4` indistinguishable from a shell the reader started.
+What its tab would not be is interactive, for the same measured reason — see `docs/terminal.md`.
 
 ## Neither the MCP tools nor the CLI are workspace-aware
 

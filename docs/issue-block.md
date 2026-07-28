@@ -382,6 +382,23 @@ The other guards carry over — loopback only, one run at a time per element —
 added: a block with no issue has nothing to implement, and a block that already produced a
 pull request will not produce a second one.
 
+### A run is something you can watch
+
+With `EXCALIDRAW_TERMINAL` also set, starting a run opens a **terminal session of its own** in
+the worktree of that run, and a tab appears on the board without anyone clicking for one. It is
+labelled with the issue — `#128`, not `s4` — because a tab that arrives on its own beside three
+shells the reader opened has to say what it is. The agent's output arrives on it as the agent
+writes it, which is what a block saying `running` and nothing else could never do.
+`GET /api/implement` names the session in `terminal`.
+
+The tab is for **watching**, not for typing into: stdin is where the prompt went, and it was
+closed behind it. `docs/terminal.md` has the measurement that rules the alternative out.
+
+**The two switches stay independent, and the run never depends on the tab.** With no terminal,
+with no PTY binding, or with all eight tabs already taken, the implementation runs in a private
+child exactly as it did before any of this existed and settles the same way; `terminal` is
+`null`, and nothing anywhere answers 404 or 409 on account of the run.
+
 ### A closed issue is not offered
 
 The button used to be decided by the run record alone — `implement.state` neither `done` nor

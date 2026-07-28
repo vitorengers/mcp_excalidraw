@@ -127,21 +127,71 @@ Three things follow from the mode, and they are the whole of the difference:
   is still no `TIOCSWINSZ` to send, and the number is kept for what it was always good for — the
   block a second viewer draws.
 
-**Streaming is unchanged and is still the point.** Every agent this board runs produces a live
-stream and `runAgent` buffers the liveness away — `stdout += chunk`, read once the process exits
-— which is why a block can say a run is `running` and nothing more. Here a command that prints,
-pauses and prints again arrives as two messages while the process is still alive, and
-`scripts/check-terminal.mjs` asserts exactly that.
+**Streaming is unchanged and is still the point.** A command that prints, pauses and prints
+again arrives as two messages while the process is still alive, and `scripts/check-terminal.mjs`
+asserts exactly that. It is what `runAgent` could not do while every run was a private child —
+`stdout += chunk`, read once the process exited — which is why a block could say a run was
+`running` and nothing more, and why an implementation now runs here instead.
+
+## A session the board opened for itself
+
+Starting an implementation opens one of these, in the worktree of the run, and the tab appears
+with nobody clicking for it. That is #128, and it is what the terminal was built towards: #51
+deferred it, and `docs/whats-next.md` carried it until now.
+
+Three things make an agent's session different from a shell's, and they are the whole of the
+difference — `TerminalSessionOptions` in `src/core/terminal-session.ts`:
+
+- **a `directory`**, because a run happens in `<project>-worktrees/issue-<n>` rather than in the
+  project. It is the `AgentDirectory` the agents already resolve, so the WSL case is not
+  implemented a second time;
+- **an `owner`** — which agent, and which issue — so the strip can label the tab `#128` rather
+  than `s4`. A tab that arrives on its own has to say what it is; a shell the reader opened
+  keeps its number, and its owner is null;
+- **an `input`**, the prompt, written to stdin and then ended.
+
+**That last one is why an agent's session is on pipes**, and it is a measurement rather than a
+preference. A pseudoterminal has no end of file to send. On ConPTY a child reading stdin sees
+neither `^Z` nor `^D` as one — measured against a Node child, which went on reading and never
+saw `end` — so a `claude -p` handed its prompt through a PTY would wait forever for a prompt
+that never finished arriving. The constructor therefore ignores the binding whenever `input` is
+set, and `mode` says `pipe`, because a block that claimed otherwise would be the worse failure.
+The consequence is that the tab is **read-only in substance**: stdin was spent on the prompt, so
+there is nothing for a keystroke to reach, and `write()` does not echo one rather than letting
+it read as though the agent had heard it.
+
+**A tab is offered, never required.** `EXCALIDRAW_TERMINAL` and `EXCALIDRAW_IMPLEMENT_AGENT` are
+separate switches and stay separate: with the terminal off, with no PTY binding, or with all
+eight tabs already taken, the run happens in a private child exactly as it did before any of
+this — `runAgent` falls through, and `GET /api/implement` reports `terminal: null` for it. A 409
+from the cap must never be what stops an implementation from starting.
+
+**The run settles the way it always did.** The process inside the tab is the process that ran
+before, in the same checkout, reading the same prompt on stdin; the exit code and the transcript
+go through the same `agentOutcome`, so `done` with a pull request URL and `failed` with an error
+are decided by one piece of code for a watched run and an unwatched one alike.
+`scripts/check-implement-terminal.mjs` covers the server and
+`scripts/check-implement-terminal-browser.mjs` covers the board.
 
 ## The routes
 
 | | |
 |---|---|
 | `POST /api/terminal` | open one more session — **202** with the session, **409** past the cap |
+| | body: optional `command` for what to run, optional `cwd` for where |
 | `GET /api/terminal` | `sessions`, each with its own scrollback, and the `limit` |
 | `POST /api/terminal/input` | `{ sessionId, data }` written to that shell — **202** |
 | `POST /api/terminal/resize` | `{ sessionId, cols, rows }` the block now stands for |
 | `DELETE /api/terminal?sessionId=` | close that one, and take what it was running with it |
+
+**`POST /api/terminal` takes a body now, and both fields are optional.** `command` names what to
+run instead of the configured shell and `cwd` names where; a request with neither is the request
+it always was. Neither grants anything the route did not already grant — a shell is a thing you
+type commands and `cd` into — and all three guards are untouched. They exist because the server
+itself has to ask for a session that is not the default one, and a facility only the server can
+reach is one nothing can check by hand. `cwd` is **one path, spelled the way the workspace's own
+environment spells it**: inside a WSL distro only the inner path is ever used, outside one only
+the Windows path is.
 
 **Every route that addresses a session takes its id**, and that is the whole of what a strip of
 tabs needed from the server: `input`, `resize` and `DELETE` used to resolve *the* session from
@@ -351,16 +401,46 @@ document said why twice: *a terminal that follows the canvas into light mode sto
 one*, and *the dark fill is what reads as a terminal at a zoom where the shape is all there is
 to read*. Both were written about a board that has since changed. Every other region of this one
 is a pale block with a hand-drawn label, and the terminal had become the single rectangle in
-another design language. So it is **paper in both themes** now, in the same design as the
-blocks around it.
+another design language. So it is **paper on a light board** now, in the same design as the
+blocks around it — and, since #147, **its night side on a dark one**, which is the half of that
+decision the section below is about.
 
-**One palette, in `src/core/terminal-palette.ts`.** Three different things draw this block —
-the shape is an Excalidraw rectangle with a fill and a stroke, the emulator is xterm and takes a
-theme object, the frame around it is a stylesheet — and each of them used to carry its own
-hexes. A stylesheet cannot import TypeScript, so the way the three are held together is that
-`TerminalPanel.tsx` writes `TERMINAL_CSS_VARS` onto the card's own root and `TerminalPanel.css`
-reads nothing but `var(--terminal-*)`. On the card rather than on `:root`, so two terminal
-blocks are two independent surfaces and nothing leaks onto the canvas.
+**One palette per theme, in `src/core/terminal-palette.ts`.** Three different things draw this
+block — the shape is an Excalidraw rectangle with a fill and a stroke, the emulator is xterm and
+takes a theme object, the frame around it is a stylesheet — and each of them used to carry its
+own hexes. A stylesheet cannot import TypeScript, so the way the three are held together is that
+`TerminalPanel.tsx` writes `terminalCssVars(theme)` onto the card's own root and
+`TerminalPanel.css` reads nothing but `var(--terminal-*)`. On the card rather than on `:root`,
+so two terminal blocks are two independent surfaces and nothing leaks onto the canvas — and in
+TypeScript rather than in an `[data-theme]` rule, because those custom properties arrive as
+*inline styles* and a stylesheet rule cannot outrank one.
+
+### Dark mode is a filter on the canvas, and the overlay is not on it
+
+This is #147, and it is why the palette takes an argument. Excalidraw draws dark mode as
+`.theme--dark canvas { filter: invert(93%) hue-rotate(180deg) }`. The block is on that canvas,
+so its `#faf6ee` fill is painted near-black for free, like every other block's pastel is. The
+overlay is a `div` and a *sibling* of Excalidraw, so nothing filters it: told nothing, it
+painted a literal `#faf6ee` over a block the filter had already darkened, and the two things
+`terminal-palette.ts` exists to keep identical were drawn eight stops apart. Only one of them
+can be told what theme it is in, so it is told — `App.tsx` passes `theme` to `TerminalPanel`,
+which is the same value it puts on `.app[data-theme]`.
+
+**The shape's fill does not move, and that is what fixes the dark surface.** It is one literal
+in both themes, for two reasons: it is scene data — synced, exported, committed — and the theme
+is a per-reader setting in `localStorage`, so a fill that followed it would turn every toggle
+into a change to the board and two readers with different themes into two boards; and a block
+that opted out of the canvas filter would be the one shape on this board that did. So the dark
+palette's surface is defined the other way round. It is the colour `#faf6ee` **comes out**,
+`#1d1912`, measured off a real render rather than asserted — warm rather than Mocha's cool
+`#1e1e2e`, which is the one place the dark palette departs from Catppuccin, and it departs
+towards the paper it is the night side of.
+
+**The emulator is re-themed, not rebuilt.** `terminal.options.theme` is assigned on the running
+xterm. Disposing it and opening another would replay the transcript into a fresh parser, which
+is the same picture only for a program that never used the alternate screen: a `vim` left open
+in that tab would come back as its own scrollback. The check toggles the theme with a program on
+the alternate screen and the emulator's DOM node marked, and asserts both survive.
 
 **The face is `Comic Shanns`, and it is not shipped.** The blocks are lettered in Excalifont,
 which is what the observation asked for, and an emulator cannot draw in it: xterm puts column N
@@ -374,41 +454,62 @@ and none of them is fetched until something asks to draw with it, which is what
 `terminalFontReady()` in `frontend/src/terminal-metrics.ts` is for. Two things depend on that
 having happened, and both are in *Where a cell comes from* below.
 
-**All twenty-one theme entries are set.** The old theme set five and let the other sixteen fall
-through to xterm's own, which are tuned for a dark background: on paper its yellow came out at
-2.3:1, its bright white at 1.1:1 — not a colour anyone chose, the colour nobody set. The
-sixteen here are Catppuccin **Latte** hues darkened until each one clears **3:1** against the
-paper, which `check-terminal-paper-browser.mjs` asserts of a real render rather than of the
-module.
+**All twenty-one theme entries are set, in both palettes.** The old theme set five and let the
+other sixteen fall through to xterm's own, which are tuned for a dark background: on paper its
+yellow came out at 2.3:1, its bright white at 1.1:1 — not a colour anyone chose, the colour
+nobody set. The sixteen are Catppuccin hues moved until each one clears **3:1** against its own
+theme's surface — **Latte** darkened for paper, **Mocha** lifted for night — which
+`check-terminal-paper-browser.mjs` asserts of a real render, in both themes, rather than of the
+module. Neither palette survives as shipped: on paper Latte's yellow is 2.4:1 and its `surface2`
+2.0:1; on night Mocha's own `black` `#45475a` is 1.8:1.
 
-The greys are the awkward part and no light terminal theme escapes it. On a dark background the
-ramp runs black → bright white from least ink to most; on paper "white" is the colour of the
-page, so a program asking for white text is asking for nothing. The ramp is therefore read as
-**contrast** rather than as lightness: `brightBlack` is the dim one every tool uses for comments,
-`brightWhite` is the strongest ink, and "bright" throughout means *more ink* rather than more
-light. The cost is that `black` and `white` end up two similar greys, so a program that
-distinguishes those two will not be distinguished here.
+The greys are the awkward part and no terminal theme escapes it, in either direction. On a dark
+background the ramp runs black → bright white from least ink to most; on paper "white" is the
+colour of the page, so a program asking for white text is asking for nothing, and on night
+"black" is the colour of the card. The ramp is therefore read as **contrast** rather than as
+lightness in both: `brightBlack` is the dim one every tool uses for comments, `brightWhite` is
+the strongest mark, and "bright" means *further from the surface* rather than lighter. The cost
+is that `black` and `white` end up two similar greys, so a program that distinguishes those two
+will not be distinguished here.
+
+**Only foregrounds are checked.** A slot used as a *background* is not, and the one program this
+surface was built for uses one: Claude Code draws its hint chip as `black` on `brightCyan`,
+which is **1.11:1** on paper and 2.15:1 on night — the illegible strip in #147's screenshot,
+and it is illegible in light mode too. Checking the sixteen as backgrounds, and as pairs from
+within the sixteen, is its own question and its own issue.
 
 **What says "terminal" when the text has gone.** That was the dark fill's other job, and paper
 cannot do it — at a zoom where the overlay's text is four pixels tall there is nothing to read
 but the shape, and a pale rectangle on a board of pale rectangles is one more block. So the
-identity moves from the fill to a **band**: the header and the prompt row are each a solid dark
-strip, and what is left is a paper card with a bar top and bottom. A band is an area rather than
-a glyph, so it survives being shrunk; the check asserts it at zoom 0.15, where the card's text
-is under five pixels and none of it can be read.
+identity moves from the fill to a **band**: the header and the prompt row are each a solid strip
+of the strongest colour on the card, and what is left is a card with a bar top and bottom. A
+band is an area rather than a glyph, so it survives being shrunk; the check asserts it at zoom
+0.15, where the card's text is under five pixels and none of it can be read.
 
-Three things the issue left open, decided here:
+The band **inverts with the theme rather than staying dark**, which is the part #147 could have
+got wrong. It is the ink colour in both palettes, so on night it is a light strip on a dark
+card — and it has to be: the board behind it is dark too, so a dark band on a dark card at zoom
+0.15 is a block with nothing on it, which is exactly the failure the band was invented to
+prevent. The check asserts 3:1 against whichever surface it is on.
 
-- **Paper in both themes**, rather than paper in light and dark in dark. The canvas has a theme
-  the terminal has always ignored, and following it would mean two palettes to keep legible
-  instead of one — for a surface whose whole point is that it matches the blocks beside it,
-  which do not follow it either.
+Four things the issues left open, decided here:
+
+- **Paper on paper, night on night.** #115 decided paper in *both* themes, on the reasoning that
+  following the canvas would mean two palettes to keep legible instead of one. #147 reversed it,
+  and not on taste: the canvas theme is a filter and the overlay is not on the canvas, so
+  "one palette" was never on offer — it was one palette *declared* and two *painted*. Two, kept
+  legible, and checked in both.
+- **The shape stays one literal.** See above: scene data cannot depend on the reader's theme
+  without every toggle becoming a change to the board.
 - **One look, not a choice for the reader.** The font size became a header control in #103
   because a grid the shell is told is a real constraint on a real block. A colour scheme is not
-  that, and a preference nobody asked for is a preference that has to be kept working.
-- **Programs that assume a dark terminal are out of scope.** `COLORFGBG` is not set, so `vim` —
-  and Claude Code, which this surface was built for — pick foregrounds against a background
-  nobody told them about. Left alone until it proves unreadable.
+  that, and a preference nobody asked for is a preference that has to be kept working. The
+  canvas theme is not that preference — it is the board's, and this follows it.
+- **Programs that assume a dark terminal are out of scope.** `COLORFGBG` is still not set, so
+  `vim` — and Claude Code, which this surface was built for — pick foregrounds against a
+  background nobody told them about. On a dark board they now happen to be right; on a light one
+  they are wrong for the same reason as before. Setting it is `agentEnv()` in
+  `src/core/issue-agent.ts` and its own issue.
 
 ## The font size is an input to the grid
 
@@ -620,6 +721,15 @@ taken.
   still arrives — the board strips one key rather than filtering the environment. It starts
   its own servers holding the marker, because whether any given machine's board holds it
   depends on how that board was started.
+- `scripts/check-implement-terminal.mjs` — a run opening a session by itself, the session naming
+  the issue that owns it and starting in the worktree of the run, its output arriving as two
+  messages while the process is still alive, and the run settling `done` with its pull request.
+  Then the half that matters more: with the terminal off, with `EXCALIDRAW_TERMINAL_PTY=0`, and
+  with the cap already full, the run still starts, still settles, and says it had no tab.
+- `scripts/check-implement-terminal-browser.mjs` — the same run, in Chrome: a tab appearing with
+  nobody clicking for it, labelled `#128` rather than `s4`, its screen drawing the agent's output
+  while the record still says `running`, and the block still selectable and still resizable by
+  its own corner afterwards.
 - `scripts/check-terminal-browser.mjs` — the block, in Chrome over the DevTools protocol.
   Placement, Alt+T, a command typed with real keystrokes, a corner dragged with a real pointer,
   and the store still holding none of it.
@@ -650,13 +760,21 @@ taken.
   that divided by the same wrong cell the code did would have agreed with it. The width half was
   seen to fail against the face swapped with the cell left behind: 97 columns claimed of 104 at
   13px, 159 of 170 at 8px, 51 of 55 at 24px.
-- `scripts/check-terminal-paper-browser.mjs` — the look, in Chrome, and every case in it is one
-  the source cannot answer. The overlay's computed background and the rectangle's fill are the
-  same paper; the four Comic Shanns faces are registered on the document *and* loaded; the rows
-  ask for the face first and the glyphs really are 0.55 wide per font pixel, which is how a
-  fallback gives itself away; all sixteen ANSI colours, printed by a real shell and read back
-  off the render, clear 3:1 against the paper they are drawn on; and at zoom 0.15, where the
-  card's text is under five pixels, a band of its own colour still crosses the block.
+- `scripts/check-terminal-paper-browser.mjs` — the look, in Chrome, in **both themes**, and
+  every case in it is one the source cannot answer. The theme is pinned rather than inherited
+  from the machine's `prefers-color-scheme`, and each case is asked once on paper and again on
+  night. The card's surface and the block's are compared as **rendered pixels** — the same two
+  screen coordinates, once with the overlay over them and once with it out of the way, since
+  the filter that darkens one of them applies at paint and every colour the DOM will report is
+  the colour before it. That is the case #147's defect hid behind: the string comparison it
+  replaces compared `#faf6ee` with `#faf6ee` and passed while the screen showed a bright card
+  in a dark ring. Then: the four Comic Shanns faces registered on the document *and* loaded;
+  the rows asking for the face first and the glyphs really 0.55 wide per font pixel, which is
+  how a fallback gives itself away; all sixteen ANSI colours, printed by a real shell and read
+  back off the render, clearing 3:1 against **their own theme's** surface; a band of its own
+  colour still crossing the block at zoom 0.15 in both; and the toggle itself — done with a
+  program on the alternate screen and the emulator's DOM node marked, so an emulator that was
+  rebuilt rather than re-themed would lose the mark and be caught.
 - `scripts/check-terminal-focus-browser.mjs` — who owns the pointer where, in Chrome. A click
   in the middle of the screen focusing the shell and a command typed straight after it running;
   a drag on the header moving the block and a drag on the screen selecting text and *not*
@@ -665,7 +783,7 @@ taken.
   the header still a target at a zoom that shrinks everything else; and the corner still
   resizing the block, with the new size reaching the server.
 
-All thirteen were written first and seen to fail against the code as it stood.
+All fifteen were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.
@@ -681,9 +799,18 @@ were not being hidden from a picker; they were never being written.
 
 ## What it does not do yet
 
-- **Nothing streams the agents into it.** That is the destination the observation behind #51
-  named, and it is a second producer on this surface rather than part of building it: tap
-  `issue-agent.ts` where the chunks arrive and broadcast them. It deserves its own issue.
+- **The issue agent still runs in a private child.** #128 put the *implement* agent in a tab,
+  because that is the one that runs for an hour with nothing to look at; researching an issue
+  has the same gap and the same seam waiting for it — `runAgent` takes a `host`, and
+  `runIssueAgent` does not pass one. It deserves its own issue.
+- **An agent's tab does not come to the front when it opens.** It appears labelled and the
+  reader clicks it. Bringing it forward would mean an unattended run — four of them at the
+  default concurrency, and the queue starts runs with nobody watching — taking the view away
+  from a shell somebody is typing in, which is worse than one click.
+- **An agent's tab cannot be typed into**, because stdin was spent on the prompt and a
+  pseudoterminal has no end of file to close it with. Watching is what it is for. An
+  interactive `claude` the reader could intervene in is a different design and would have to
+  answer how a repainting screen is scraped for a pull request URL.
 - **A program that turns mouse reporting on takes the pointer with it.** Once the screen has
   the pointer, `vim` or `claude` asking for mouse tracking receives clicks and the wheel as
   escape sequences, which is what those programs expect and also means the reader cannot
