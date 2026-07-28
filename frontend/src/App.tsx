@@ -19,6 +19,7 @@ import type { PanelElement } from '../../src/core/panel-target'
 import { describeIgnoredClaims, resolveBoardSectionHotkeys } from '../../src/core/board-sections'
 import type { BoardSectionElement } from '../../src/core/board-sections'
 import { isBoardHotkeyChord, textEntryOwnsKeyboard } from './board-hotkeys'
+import { legibleFitFloor } from './board-fit'
 import { referenceImageName } from '../../src/core/pasted-images'
 import { layoutLabel } from '../../src/core/text-layout'
 import {
@@ -273,6 +274,79 @@ const writeTerminalGeometry = (workspace: string, rect: TerminalRect): void => {
     );
   } catch (error) {
     console.warn('Failed to save the terminal geometry to localStorage:', error);
+  }
+};
+
+/**
+ * Where each board's camera is kept between visits to the page.
+ *
+ * Per board, for the reason the terminal's geometry is: where a project is being read from,
+ * and how far in, is a fact about that project's drawing. It joins the theme, the menu
+ * setting, the terminal's font and the terminal's geometry in `localStorage` — until #185 the
+ * zoom was the one display setting on this page that did *not* survive a reload, which is what
+ * turned "the board opens too small" into "if I dont zoom in": the correction had to be made
+ * again on every refresh.
+ */
+const BOARD_VIEWPORT_STORAGE_KEY = 'excalidraw-board-viewports';
+
+/** How long a camera has to sit still before it is written down. */
+const VIEWPORT_SAVE_MS = 400;
+
+interface BoardViewport { scrollX: number; scrollY: number; zoom: number }
+
+const isViewport = (value: unknown): value is BoardViewport => {
+  if (!value || typeof value !== 'object') return false;
+  const { scrollX, scrollY, zoom } = value as Record<string, unknown>;
+  if (![scrollX, scrollY, zoom].every((n) => typeof n === 'number' && Number.isFinite(n))) return false;
+  return (zoom as number) > 0;
+};
+
+/**
+ * Every board's remembered camera, validated on the way in.
+ *
+ * Read once for the page: this is a key anybody can edit, and a stale one can outlive the
+ * shape of what wrote it. A board restored to `zoom: 0` or to `NaN` is a canvas showing
+ * nothing, with no shape on it to drag back into view.
+ */
+let storedViewports: Map<string, BoardViewport> | null = null;
+
+const rememberedViewports = (): Map<string, BoardViewport> => {
+  if (storedViewports) return storedViewports;
+  storedViewports = new Map();
+  try {
+    const raw = window.localStorage?.getItem(BOARD_VIEWPORT_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (parsed && typeof parsed === 'object') {
+      for (const [workspace, view] of Object.entries(parsed as Record<string, unknown>)) {
+        if (isViewport(view)) {
+          storedViewports.set(workspace, { scrollX: view.scrollX, scrollY: view.scrollY, zoom: view.zoom });
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to read the board viewports from localStorage:', error);
+  }
+  return storedViewports;
+};
+
+/**
+ * Write every board this page knows about, over whatever is stored.
+ *
+ * The map it is given was seeded from the same key, so this loses nothing of another
+ * session's — except a board a *second tab* parked after this one loaded, which is the cost
+ * every viewing preference here already pays.
+ */
+const writeBoardViewports = (views: Map<string, BoardViewport>): void => {
+  try {
+    const raw = window.localStorage?.getItem(BOARD_VIEWPORT_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const stored = parsed && typeof parsed === 'object' ? parsed : {};
+    window.localStorage?.setItem(
+      BOARD_VIEWPORT_STORAGE_KEY,
+      JSON.stringify({ ...stored, ...Object.fromEntries(views) })
+    );
+  } catch (error) {
+    console.warn('Failed to save the board viewports to localStorage:', error);
   }
 };
 
@@ -1638,8 +1712,15 @@ function App(): JSX.Element {
    * together, one view shared. So each board's is written down on the way out and put back
    * on the way in, and a board arrived at for the first time is shown its own content
    * instead of wherever the last board happened to be parked.
+   *
+   * Seeded from `localStorage` and written back to it since #185, so the same is true of a
+   * reload: a zoom chosen by hand is a correction the reader should have to make once.
    */
-  const boardViewportsRef = useRef<Map<string, { scrollX: number; scrollY: number; zoom: number }>>(new Map())
+  const boardViewportsRef = useRef<Map<string, BoardViewport>>(rememberedViewports())
+
+  /** Set once the board's own camera has been put back, so nothing records over it first. */
+  const viewportOpenedRef = useRef(false)
+  const viewportSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const rememberViewport = (workspaceId: string): void => {
     const api = excalidrawAPIRef.current
@@ -1649,6 +1730,64 @@ function App(): JSX.Element {
       scrollX: state.scrollX,
       scrollY: state.scrollY,
       zoom: state.zoom?.value ?? 1
+    })
+    writeBoardViewports(boardViewportsRef.current)
+  }
+
+  /**
+   * Where the board on screen is being looked at, noted on every change and written down when
+   * it stops moving.
+   *
+   * `onChange` fires on every step of a pan, so the store is debounced and the map is not:
+   * the map is what a tab switch reads, and it has to be right the instant the reader clicks.
+   *
+   * Nothing is recorded until the opening camera has been restored. The component mounts at
+   * `scrollX: 0, scrollY: 0, zoom: 1` and reports it, and a page that wrote *that* down before
+   * it had finished reading what was stored would forget the reader's view every reload while
+   * looking exactly like it was saving it.
+   *
+   * `sceneWorkspaceRef`, not `activeWorkspaceRef`: during a switch the shapes on screen still
+   * belong to the board being left, and it is that board's camera this is watching.
+   */
+  const noteViewport = (appState: { scrollX?: number; scrollY?: number; zoom?: { value?: number } }): void => {
+    if (!viewportOpenedRef.current) return
+    const view = {
+      scrollX: appState.scrollX ?? 0,
+      scrollY: appState.scrollY ?? 0,
+      zoom: appState.zoom?.value ?? 1
+    }
+    if (!isViewport(view)) return
+    boardViewportsRef.current.set(sceneWorkspaceRef.current, view)
+    if (viewportSaveTimerRef.current) return
+    viewportSaveTimerRef.current = setTimeout(() => {
+      viewportSaveTimerRef.current = null
+      writeBoardViewports(boardViewportsRef.current)
+    }, VIEWPORT_SAVE_MS)
+  }
+
+  const applyViewport = (api: ExcalidrawImperativeAPI, view: BoardViewport): void => {
+    applySceneUpdateWithoutAutoSync(api, {
+      appState: { scrollX: view.scrollX, scrollY: view.scrollY, zoom: { value: view.zoom } }
+    } as Parameters<ExcalidrawImperativeAPI['updateScene']>[0])
+  }
+
+  /**
+   * Fit these shapes into the canvas, but never smaller than the board was written.
+   *
+   * `fitToViewport` alone fits both axes, so a tall narrow board is decided by its height and
+   * a wide display buys the reader nothing (#185). `minZoom` is Excalidraw's own floor on that
+   * arithmetic; what it is set to is `board-fit.ts`, and the short version is that height may
+   * no longer shrink the board below 100% — a board taller than the canvas is scrolled.
+   */
+  const fitLegibly = (
+    api: ExcalidrawImperativeAPI,
+    elements: readonly ExcalidrawElement[],
+    animate: boolean
+  ): void => {
+    api.scrollToContent(elements as ExcalidrawElement[], {
+      fitToViewport: true,
+      animate,
+      minZoom: legibleFitFloor(elements, api.getAppState().width)
     })
   }
 
@@ -1665,17 +1804,12 @@ function App(): JSX.Element {
     if (!api) return
     const seen = boardViewportsRef.current.get(workspaceId)
     if (seen) {
-      applySceneUpdateWithoutAutoSync(api, {
-        appState: { scrollX: seen.scrollX, scrollY: seen.scrollY, zoom: { value: seen.zoom } }
-      } as Parameters<ExcalidrawImperativeAPI['updateScene']>[0])
+      applyViewport(api, seen)
       return
     }
     const elements = api.getSceneElements()
     if (elements.length === 0) return
-    api.scrollToContent(elements as unknown as ExcalidrawElement[], {
-      fitToViewport: true,
-      animate: false
-    })
+    fitLegibly(api, elements as unknown as ExcalidrawElement[], false)
   }
 
   /** The new board is on screen (or never will be): let autosync go again. */
@@ -3489,10 +3623,7 @@ function App(): JSX.Element {
       if (mirror.length === 0) return
 
       event.preventDefault()
-      api.scrollToContent(mirror as unknown as ExcalidrawElement[], {
-        fitToViewport: true,
-        animate: true
-      })
+      fitLegibly(api, mirror as unknown as ExcalidrawElement[], true)
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -3529,10 +3660,7 @@ function App(): JSX.Element {
       if (!section) return
 
       event.preventDefault()
-      api.scrollToContent([section] as unknown as ExcalidrawElement[], {
-        fitToViewport: true,
-        animate: true
-      })
+      fitLegibly(api, [section] as unknown as ExcalidrawElement[], true)
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -3661,6 +3789,29 @@ function App(): JSX.Element {
       for (const workspaceId of [...warmBoardsRef.current.keys()]) dropWarmBoard(workspaceId)
     }
   }, [])
+
+  /**
+   * The camera this board was last left at, put back on the way in.
+   *
+   * A switch restores through `finishBoardSwitch`, which has a board landing on the canvas to
+   * hang the restore on. An ordinary page load has none — `pendingSceneWorkspaceRef` is null,
+   * because the first scene of the load *is* this board's — so a reload had nothing restoring
+   * it and opened at Excalidraw's own origin. This is that path.
+   *
+   * It does not wait for the scene: a viewport is three numbers, and it says nothing about
+   * which shapes are on the canvas yet. Only a *remembered* camera is applied — a board with
+   * none is left exactly where a load has always put it, at the origin at 100%, rather than
+   * being fitted onto content this is deliberately not waiting for.
+   *
+   * Running it also opens the recording: until this has happened, `noteViewport` stands down
+   * so that the mount's own `0, 0, 1` cannot be written over what is stored.
+   */
+  useEffect(() => {
+    if (!excalidrawAPI || !boardReady || viewportOpenedRef.current) return
+    viewportOpenedRef.current = true
+    const seen = boardViewportsRef.current.get(activeWorkspaceRef.current)
+    if (seen) applyViewport(excalidrawAPI, seen)
+  }, [excalidrawAPI, boardReady])
 
   // The socket's own initial message is what normally fills the canvas; this covers the
   // case where it arrived before Excalidraw was mounted to receive it. It is a no-op once
@@ -5062,6 +5213,8 @@ function App(): JSX.Element {
                   console.warn('Failed to save theme to localStorage:', error)
                 }
               }
+              // Where this board is being looked at, so a reload puts it back.
+              noteViewport(appState as unknown as { scrollX?: number; scrollY?: number; zoom?: { value?: number } })
               syncSelectedDoc(appState)
               reportSectionClaims(_elements)
               // Order matters: syncSelectedDoc settles which shape is anchored, and this

@@ -16,7 +16,35 @@ A section is a shape drawn around one of those halves, carrying the key that rea
 ```
 
 Press `Alt` and that key from anywhere on the page and the viewport scrolls onto the section and
-fits it, the same movement `Alt+B` makes onto the GitHub mirror.
+fits it **as far as it can be fitted without being shrunk**, the same movement `Alt+B` makes onto
+the GitHub mirror. What that qualification means is the next section.
+
+## How far a section is allowed to shrink
+
+Not below 100%. A fit that takes both axes is decided by whichever is tighter, and on a tall,
+narrow board that is always the height: this board is 1130 x 2732, so against a maximised
+2560 x 1440 display the width fit is 2.27, the height fit is 0.48, and the old fit took 0.48 —
+drawing the 13px card body at 6px and throwing away every one of the extra horizontal pixels the
+display had. The wider the display, the more it discarded. That is #185, reported as the writing
+being blurry, which is what canvas glyphs look like below about 10px: no hinting, off the pixel
+grid.
+
+So the height no longer shrinks the board past the size it was written at. **A section taller
+than the viewport is scrolled, not squeezed** — `Alt+P` on this board now lands at 100% rather
+than 0.6, with the section running off the top and bottom of the screen. `Alt+G` is unchanged at
+1.4, because the Development section is short enough that the width was already binding.
+
+The width still shrinks it, and the floor is written as `min(1, canvasWidth / contentWidth)` for
+that reason (`frontend/src/board-fit.ts`): content wider than the canvas held at 100% would have
+to be panned sideways to read one line of text, which is a worse answer than a smaller one.
+
+Two consequences worth knowing before they surprise somebody. A section that overflows is
+**centred** in what overflows, so `Alt+P` lands in the middle of the section rather than at its
+title — Excalidraw's `scrollToContent` centres the bounds it is given, and taking the top instead
+would mean computing the whole camera here and giving up the animated pan. And the zoom a reader
+sets by hand is now kept per board in `localStorage`, beside the theme and the terminal's
+geometry, so a correction survives a reload; a board with a remembered camera is put back at it
+instead of being fitted at all.
 
 ## Why the key is on the shape
 
