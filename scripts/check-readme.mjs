@@ -73,9 +73,15 @@ check('no npm version badge stands in for a package this fork does not publish',
       !/img\.shields\.io\/npm\/v\//.test(readme),
       'the published package is upstream\'s; a version badge here misreports this fork');
 
+// Prose only. A fenced block naming `ghcr.io/yctimlin/mcp_excalidraw` is the coordinate of a
+// real published image, spelled correctly; it is the sentence around it that has to say whose.
+let fenced = false;
 const unattributed = readme.split(/\r?\n/)
   .map((line, index) => ({ line, at: index + 1 }))
-  .filter(({ line }) => line.includes(UPSTREAM) && !/upstream/i.test(line));
+  .filter(({ line }) => {
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; return false; }
+    return !fenced && line.includes(UPSTREAM) && !/upstream/i.test(line);
+  });
 check('every remaining mention of the upstream project says that is what it is',
       unattributed.length === 0,
       unattributed.map(({ line, at }) => `${at}: ${line.trim().slice(0, 80)}`).join('\n        '));

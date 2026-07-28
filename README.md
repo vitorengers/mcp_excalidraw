@@ -1,19 +1,26 @@
-# Excalidraw MCP Server, CLI & Agent Skill
+# Board Tool — Excalidraw MCP Server, CLI & Agent Skill
 
-[![CI](https://github.com/yctimlin/mcp_excalidraw/actions/workflows/ci.yml/badge.svg)](https://github.com/yctimlin/mcp_excalidraw/actions/workflows/ci.yml)
-[![Docker Build & Push](https://github.com/yctimlin/mcp_excalidraw/actions/workflows/docker.yml/badge.svg)](https://github.com/yctimlin/mcp_excalidraw/actions/workflows/docker.yml)
-[![NPM Version](https://img.shields.io/npm/v/mcp-excalidraw-server)](https://www.npmjs.com/package/mcp-excalidraw-server)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**mcp-excalidraw-server** gives AI agents a live [Excalidraw](https://excalidraw.com) canvas they can draw on, look at, refine, and save into your repo. Your agent creates architecture diagrams and flowcharts programmatically, **sees its own work via screenshots**, fixes layout problems, and exports `.excalidraw` files you can commit next to your code.
+**Board Tool** (`vitorengers/mcp_excalidraw`) is a private fork of the upstream project
+`yctimlin/mcp_excalidraw`. It keeps everything upstream does — a live
+[Excalidraw](https://excalidraw.com) canvas agents draw on, drive from a CLI, or reach over MCP —
+and builds a **workbench for running a software project on that canvas** on top of it: registered
+projects, a mirrored GitHub project board, blocks that open issues and implement them, and real
+shells.
+
+There are no CI or package badges here on purpose. This fork publishes no package and runs no
+pipeline of its own; a green badge for somebody else's would say nothing true about this tree.
 
 One canvas, three ways to drive it:
 
 - **Agent Skill + CLI** — recommended for coding agents (Claude Code, Codex CLI, Cursor, OpenCode): `npx -y mcp-excalidraw-server <command>`. Zero config, auto-starts the canvas, composable JSON in/out.
 - **MCP Server** — 26 tools over stdio for any Model Context Protocol client (Claude Desktop, Cursor, Codex CLI, Antigravity, ...).
-- **REST API** — plain HTTP for LangChain and custom frameworks.
+- **REST API** — 50 routes over plain HTTP; the only workspace-aware surface, and what the board itself is built on.
 
 Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Mermaid conversion runs in the local browser canvas; `share` is optional and uploads an encrypted scene to excalidraw.com.
+
+**Start here:** [docs/index.md](docs/index.md) indexes every document; [docs/running.md](docs/running.md) is how to start the board; [CLAUDE.md](CLAUDE.md) is how work is done in this repository.
 
 ## Demo
 
@@ -24,6 +31,7 @@ Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Merma
 ## Table of Contents
 
 - [Demo](#demo)
+- [What This Fork Adds](#what-this-fork-adds)
 - [What It Is](#what-it-is)
 - [How We Differ from the Official Excalidraw MCP](#how-we-differ-from-the-official-excalidraw-mcp)
 - [What's New](#whats-new)
@@ -45,6 +53,60 @@ Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Merma
 - [Known Issues / TODO](#known-issues--todo)
 - [Development](#development)
 - [License](#license)
+
+## What This Fork Adds
+
+Everything from here to [What It Is](#what-it-is) is Board Tool, and exists only in
+`vitorengers/mcp_excalidraw`. Every document referenced below is in
+[docs/index.md](docs/index.md).
+
+### One project per board
+
+`EXCALIDRAW_WORKSPACES` points at a registry JSON listing your projects; each project then
+describes its own board settings in a `board.config.json` at its root — its docs directory, its
+shape library, its GitHub repository and project, and per-agent model and effort. Settings travel
+with the project instead of piling up in one machine's global config. Tabs along the top of the
+canvas switch between them, `+` registers another, and each project's element store is its own.
+See [docs/workspaces.md](docs/workspaces.md).
+
+### The board is two maps, and a key reaches each
+
+This repository's own board is `docs/board.excalidraw`, cut into two marked sections:
+
+- **Project structure** — `Alt+P` — what the tool is: the architecture, the blocks, how to try it.
+- **Development** — `Alt+G` — how it got that way: the traps already paid for, what is next, and the dated log.
+
+The keys are not constants in the frontend. A section is a shape carrying
+`customData.kind = "board-section"` with its own title and `hotkeyCode`, so a board declares its
+own navigation. See [docs/board-sections.md](docs/board-sections.md).
+
+### Four kinds of block
+
+A shape's `customData.kind` decides what it is. A `docKey` instead of a `kind` makes it a
+documentation card, which opens the matching markdown in a panel
+([docs/docs-block.md](docs/docs-block.md)).
+
+| `customData.kind` | What it is |
+|---|---|
+| `issue` | Write an observation into the shape; an agent investigates the repository, opens the issue with `gh`, and the URL lands back on the block — [docs/issue-block.md](docs/issue-block.md) |
+| `project-board` | Your GitHub project, mirrored on the canvas and redrawn from GitHub on every read, with two-way moves and a queue that implements issues — [docs/project-board.md](docs/project-board.md) |
+| `terminal` | Real shells on the canvas, as tabs, up to eight per board — [docs/terminal.md](docs/terminal.md) |
+| `board-section` | The mark a hotkey aims at — [docs/board-sections.md](docs/board-sections.md) |
+
+### Issues become implementations, each in its own checkout
+
+An implementation started from the board is given a git worktree of its own before the agent is
+spawned: `<project>-worktrees/issue-<n>`, on a branch of the same name, cut from the default
+branch. Several run at once (`EXCALIDRAW_IMPLEMENT_CONCURRENCY`, four by default), and each
+opens and merges its own pull request. That is why the convention exists rather than a shared
+checkout: four agents building in one working tree is four agents overwriting each other.
+
+### Starting it
+
+The canvas server is `node dist/server.js` after `npm run build`, and everything else is
+environment. [docs/running.md](docs/running.md) is the procedure: the port (3000 is unusable on
+the development machine — [docs/trap-port-3000.md](docs/trap-port-3000.md)), the kill-the-stale-server
+step that comes before it, and all fifteen `EXCALIDRAW_*` variables with their defaults.
 
 ## What It Is
 
@@ -453,7 +515,7 @@ Docker canvas server:
 docker run -d -p 3000:3000 --name mcp-excalidraw-canvas ghcr.io/yctimlin/mcp_excalidraw-canvas:latest
 ```
 
-MCP server image: `ghcr.io/yctimlin/mcp_excalidraw:latest` (stdio; point `EXPRESS_SERVER_URL` at the canvas container).
+Both images above are the upstream project's published ones; this fork builds and pushes none of its own. The MCP server image is `ghcr.io/yctimlin/mcp_excalidraw:latest` (stdio; point `EXPRESS_SERVER_URL` at the canvas container).
 
 ## Testing
 
@@ -566,10 +628,17 @@ npm run cli -- status      # run the CLI from the local build
 npm run sync:skills        # after editing skills/excalidraw-skill, sync the repo-local agent copy
 ```
 
-Bug reports and pull requests are welcome on [GitHub issues](https://github.com/yctimlin/mcp_excalidraw/issues). If this project helps you, a ⭐ helps others find it.
+Every behaviour change in this fork ships with a `scripts/check-*.mjs` run against the old code
+first, and every change updates both halves of `docs/board.excalidraw`. The workflow — issue,
+branch, pull request, self-merge — is in [CLAUDE.md](CLAUDE.md), and
+[docs/development-log.md](docs/development-log.md) is one dated entry per merged pull request.
+
+Bug reports and pull requests for **this fork** belong on
+[its own issue tracker](https://github.com/vitorengers/mcp_excalidraw/issues) and its
+[project board](https://github.com/users/vitorengers/projects/5).
 
 ## License
 
-[MIT](LICENSE) © [yctimlin](https://github.com/yctimlin) — not affiliated with the Excalidraw team. [Excalidraw](https://github.com/excalidraw/excalidraw) is its own MIT-licensed project; this toolkit builds on it with love.
+[MIT](LICENSE). The upstream project is `yctimlin/mcp_excalidraw` and its copyright is upstream's; this fork carries the same licence and is not affiliated with the Excalidraw team. [Excalidraw](https://github.com/excalidraw/excalidraw) is its own MIT-licensed project; this toolkit builds on it with love.
 
-**Links:** [npm package](https://www.npmjs.com/package/mcp-excalidraw-server) · [GitHub](https://github.com/yctimlin/mcp_excalidraw) · [Issues](https://github.com/yctimlin/mcp_excalidraw/issues) · [Demo video](https://youtu.be/ufW78Amq5qA)
+**Links:** [this fork](https://github.com/vitorengers/mcp_excalidraw) · [its issues](https://github.com/vitorengers/mcp_excalidraw/issues) · [documentation index](docs/index.md) · the upstream project's [npm package](https://www.npmjs.com/package/mcp-excalidraw-server) and [demo video](https://youtu.be/ufW78Amq5qA)

@@ -11,7 +11,7 @@ agent being confused, not as the agent being muzzled.
 ## The configuration
 
 ```
-EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob WebFetch WebSearch"'
+EXCALIDRAW_ISSUE_AGENT='<agent-binary> -p --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob WebFetch WebSearch"'
 ```
 
 The list is deliberately narrow: `gh` and `git`, plus reading. **No `Write`, no `Edit`, no open
