@@ -40,7 +40,7 @@ import {
 } from './core/workspaces.js';
 import { listDirectories } from './core/directory-browse.js';
 import {
-  AgentCommands, AgentHost, agentCommandFor, runIssueAgent, runReviseAgent
+  AgentCommands, AgentHost, agentCommandFor, runIssueAgent, runReviseAgent, runsHeadless
 } from './core/issue-agent.js';
 import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
 import {
@@ -3309,11 +3309,20 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
  * go on implementing exactly as it did. Everything past that point is `runAgent`'s to fall
  * back from, which is why this returns null rather than refusing.
  *
- * The session is opened **on pipes**, and that is not a fallback: the prompt is several
- * hundred words that arrive on stdin and end there, and a pseudoterminal has no end of file
- * to give — see `TerminalSessionOptions.input`. So the process inside the tab is the process
- * that ran before, in the same checkout, reading the same prompt, and the only thing that
- * changed is that its output goes somewhere a reader can see it while it is still happening.
+ * **Which of the two kinds of tab it is, the operator's own command line decides.** A command
+ * that says `-p` prints an answer and exits, so its prompt goes to stdin and ends there, and
+ * the session is opened on pipes — a pseudoterminal has no end of file to give, see
+ * `TerminalSessionOptions.input`. That is the configured command on this board and it is
+ * unchanged in every particular: the process inside the tab is the process that ran before,
+ * in the same checkout, reading the same prompt, and the only thing this ever added is that
+ * its output goes somewhere a reader can see it while it is still happening.
+ *
+ * A command that does not say `-p` would start an interface if it were given a terminal, so
+ * it is given one: the prompt travels as the command's last argument, stdin stays the
+ * reader's, and the tab is something to answer rather than something to watch. Nothing is
+ * appended to the command line and no second variable exists — the shape is read, exactly as
+ * `streamsUsage()` reads it for the token counts. With no PTY binding to be had there is no
+ * interface to draw either, so that run falls back to the paragraph above.
  */
 function implementTerminalHost(workspace: Workspace, issueUrl: string): AgentHost | null {
   if (!terminalAvailable()) return null;
@@ -3322,10 +3331,15 @@ function implementTerminalHost(workspace: Workspace, issueUrl: string): AgentHos
     let announce: (code: number | null) => void = () => { /* replaced below */ };
     const exited = new Promise<number | null>((resolve) => { announce = resolve; });
 
-    const started = await startTerminalSession(workspace, agentCommand, null, {
+    // Loaded only for a command that could use one. A headless run took `null` here from the
+    // day this existed, and asking for a binding it would then have to ignore would be a new
+    // import on the path that must not change.
+    const pty = runsHeadless(agentCommand) ? null : await loadPty();
+    const started = await startTerminalSession(workspace, agentCommand, pty, {
       directory,
       owner: { agent: 'implement', issueUrl, label: issueTabLabel(issueUrl) },
-      input: prompt
+      input: prompt,
+      interactive: Boolean(pty)
     }, { onOutput, onExit: (code) => announce(code) });
 
     if (!started.ok) {
@@ -3341,7 +3355,11 @@ function implementTerminalHost(workspace: Workspace, issueUrl: string): AgentHos
     return {
       id: started.session.id,
       exited,
-      close: () => started.session.close()
+      close: () => started.session.close(),
+      // Asked of the session rather than of the command a second time: what it actually got
+      // is the answer, and a machine with no binary for its platform gets `pipe` from a
+      // command line that reads interactive.
+      interactive: started.session.mode === 'pty' && !started.session.readOnly
     };
   };
 }
@@ -3378,6 +3396,20 @@ app.post('/api/terminal/input', (req: Request, res: Response) => {
   const data = typeof req.body?.data === 'string' ? req.body.data : '';
   if (!data) {
     return res.status(400).json({ success: false, error: 'Nothing to send: "data" must be a non-empty string.' });
+  }
+
+  // A session whose stdin was spent on a prompt has nothing for these bytes to reach, and
+  // `write()` drops them. Answering 202 with a sequence number for a dropped keystroke is
+  // reporting delivery that did not happen — every layer above then agrees the agent was
+  // told something nobody told it. 409, like the cap: a conflict with what this session is,
+  // not a request that failed.
+  if (session.readOnly) {
+    return res.status(409).json({
+      success: false,
+      readOnly: true,
+      error: `Terminal session "${session.id}" is read-only: its stdin was spent on the `
+        + 'prompt of the agent running in it, so there is nothing a keystroke can reach.'
+    });
   }
 
   // 202 rather than 200: the shell has been handed the bytes, and what it does with them

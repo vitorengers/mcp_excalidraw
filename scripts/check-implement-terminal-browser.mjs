@@ -155,7 +155,7 @@ const serverEnv = {
   // does nothing, because nothing here opens one — it is only what the *browser* opens for
   // itself on load, and a PowerShell per run would be a second thing on the board.
   EXCALIDRAW_TERMINAL: `node -e "setInterval(()=>{},1000)"`,
-  EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}"`,
+  EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}" -p`,
 };
 delete serverEnv.EXCALIDRAW_TERMINAL_PTY;
 

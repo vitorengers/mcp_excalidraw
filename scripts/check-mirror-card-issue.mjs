@@ -144,7 +144,7 @@ function startCanvas(port, { withImplementAgent = true } = {}) {
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
   };
-  if (withImplementAgent) env.EXCALIDRAW_IMPLEMENT_AGENT = `node "${agentStub.replace(/\\/g, '/')}"`;
+  if (withImplementAgent) env.EXCALIDRAW_IMPLEMENT_AGENT = `node "${agentStub.replace(/\\/g, '/')}" -p`;
   else delete env.EXCALIDRAW_IMPLEMENT_AGENT;
 
   const child = spawn(process.execPath, [serverPath], {
