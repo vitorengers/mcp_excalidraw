@@ -59,6 +59,14 @@ export const CARD_MIN_HEIGHT = 52;
 export const HEADER_FONT_SIZE = 18;
 export const ADD_SIZE = 28;
 
+/**
+ * What the queue toggle is drawn with: a circular arrow, the thing that goes round again.
+ *
+ * A glyph rather than a word because it sits in a 28-pixel box beside a column header, and
+ * exported here so the checks name it rather than retyping a code point that has to match.
+ */
+export const QUEUE_GLYPH = '↻';
+
 /** Enough hues to tell columns apart; it wraps rather than running out. */
 const COLUMN_STROKES = ['#1971c2', '#e8590c', '#2f9e44', '#6741d9', '#c2255c'];
 
@@ -187,6 +195,21 @@ export interface LayoutOptions {
    * card can be In Progress because a person dragged it there, and that is the normal case.
    */
   implementing?: Record<string, CardImplementState>;
+  /**
+   * The queue toggle: which column carries it, and whether it is on.
+   *
+   * Which column is the caller's answer for the reason `oldestFirstColumn` is: the column a
+   * queue drains is named in the workspace's own config, and a layout that knew the name
+   * "Todo" would be the constant this mirror is built to avoid. Absent means no toggle at
+   * all — which is what a board with implementing disabled gets, since a button that cannot
+   * do anything is worse than no button.
+   *
+   * The state comes from the server on every refresh and is never read back off the shape.
+   * The mirror is rebuilt from GitHub on every poll, so anything written onto a mirrored
+   * element is gone by the next one; this is the same reasoning that keeps implement state
+   * against the issue URL rather than in `customData`.
+   */
+  queue?: { sectionOptionId: string; enabled: boolean };
 }
 
 /**
@@ -489,6 +512,38 @@ export function layoutBoard(
         customData: { kind: MIRROR_KIND, role: 'add', sectionOptionId: section.optionId },
       });
       elements.push(add, label(add, '+', HEADER_FONT_SIZE, stroke));
+    }
+
+    // The queue toggle, on the column the queue drains — geometrically the `+`, and unlocked
+    // for the same reason: a locked shape cannot be clicked, and this one is a button.
+    //
+    // Two appearances, and deliberately not two colours. Hue on this mirror already means the
+    // column, and a failed move already borrows it; a third meaning would collide with both.
+    // On is the column's own stroke filled in solid with a heavier outline, off is white with
+    // a thin one — a difference in weight and in fill, legible in a screenshot and to anyone
+    // who cannot tell the hues apart.
+    if (options.queue && section.optionId === options.queue.sectionOptionId) {
+      const on = options.queue.enabled;
+      const toggle = rectangle({
+        id: 'pb-queue',
+        x: x + COLUMN_WIDTH - ADD_SIZE - 8,
+        y: headerTop + (HEADER_HEIGHT - ADD_SIZE) / 2,
+        width: ADD_SIZE,
+        height: ADD_SIZE,
+        strokeColor: stroke,
+        backgroundColor: on ? stroke : '#ffffff',
+        strokeWidth: on ? 2 : 1,
+        locked: false,
+        customData: {
+          kind: MIRROR_KIND,
+          role: 'queue',
+          sectionOptionId: section.optionId,
+          // Carried so a reader — or a check — can ask the shape what it is showing without
+          // inferring it from a colour. It is drawn from this, never read back into it.
+          queueEnabled: on,
+        },
+      });
+      elements.push(toggle, label(toggle, QUEUE_GLYPH, HEADER_FONT_SIZE, on ? '#ffffff' : stroke));
     }
 
     // The drafts hold the top of the column and the cards start under them. A draft whose
