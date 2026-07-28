@@ -657,7 +657,7 @@ taken.
   the header still a target at a zoom that shrinks everything else; and the corner still
   resizing the block, with the new size reaching the server.
 
-All twelve were written first and seen to fail against the code as it stood.
+All thirteen were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.
