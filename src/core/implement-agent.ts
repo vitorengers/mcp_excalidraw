@@ -200,6 +200,8 @@ export async function runImplementAgent(
   options: {
     agentCommand: string;
     timeoutMs?: number | null;
+    /** Named when the command turns out not to exist where it was run. See RunAgentOptions. */
+    notFoundVariable?: string | null;
     worktree?: ImplementWorktree | null;
     /**
      * What a previous attempt left in that worktree, when this run is resuming one.
@@ -243,6 +245,7 @@ export async function runImplementAgent(
       ? settings?.timeoutMs ?? IMPLEMENT_TIMEOUT_MS
       : options.timeoutMs,
     expects: 'pull',
+    notFoundVariable: options.notFoundVariable ?? null,
     what: 'implement agent',
     directory: worktree,
     ...(options.onUsage ? { onUsage: options.onUsage } : {}),

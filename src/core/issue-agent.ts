@@ -236,6 +236,65 @@ export function extractIssueUrl(output: string): string | null {
 }
 
 /**
+ * One agent's command, once per environment it might have to run in.
+ *
+ * Both halves come from the operator's environment and neither may come from anywhere
+ * else. `workspaces.ts:30-34` argues that at length: a project file that could supply a
+ * command would let anyone with write access to a registered repository start an unattended
+ * agent on a board where nobody allowed one. A workspace says which environment it lives
+ * in; only the environment says what runs there.
+ */
+export interface AgentCommands {
+  /** `EXCALIDRAW_ISSUE_AGENT` / `EXCALIDRAW_IMPLEMENT_AGENT`. */
+  native: string | null;
+  /** The `_WSL` half, or null where the operator granted none. */
+  wsl: string | null;
+}
+
+/**
+ * The command this workspace's agent runs, or null when it has none.
+ *
+ * A command is not portable across environments: `C:/Users/x/.local/bin/claude.exe` cannot
+ * resolve inside a distro, and `/home/x/.local/bin/claude` cannot resolve outside one. One
+ * global command therefore could not serve both, and a WSL workspace answered exit 127 on
+ * every run it was ever asked for.
+ *
+ * **The fallback is deliberate, and it only goes one way.** A global command written without
+ * an absolute path — `claude -p …` — resolves in either environment, and a board set up that
+ * way works today; refusing it to fix the absolute-path case would break a working setup to
+ * repair a broken one. The reverse is not symmetric: a command granted for the distro says
+ * nothing about what may run on the host, so a native workspace never reads the `_WSL` half.
+ */
+export function agentCommandFor(workspace: Workspace, commands: AgentCommands): string | null {
+  const native = commands.native?.trim() || null;
+  if (workspace.environment.kind !== 'wsl') return native;
+  return (commands.wsl?.trim() || null) ?? native;
+}
+
+/**
+ * What a command that was not found means, when it was looked for inside a distro.
+ *
+ * `bash: line 1: C:/Users/x/.local/bin/claude.exe: No such file or directory` names a file
+ * the reader can open in Explorer, so it reads as a broken install on the machine in front
+ * of them. The file is fine. It was looked for on the other side of a boundary that nothing
+ * in the message mentions.
+ *
+ * Null for a native workspace: there is no distro to name, and the shell's own message is
+ * already about the machine the reader is on.
+ */
+export function commandNotFoundHint(
+  workspace: Workspace,
+  agentCommand: string,
+  variable: string
+): string | null {
+  if (workspace.environment.kind !== 'wsl') return null;
+  const binary = tokenizeCommand(agentCommand)[0] ?? agentCommand;
+  return `The command was run inside the WSL distro "${workspace.environment.distro}", `
+    + `where "${binary}" is not on PATH. Set ${variable} to the command as that distro `
+    + `names it — a path from the host cannot resolve there.`;
+}
+
+/**
  * A directory named twice: once for this process, once for the agent's own environment.
  *
  * They differ for a WSL-backed project, where this process reads through a UNC share and
@@ -432,9 +491,14 @@ function agentOutcome(
   stdout: string,
   stderr: string,
   expects: 'issues' | 'pull',
-  noun: string
+  noun: string,
+  notFoundHint: string | null = null
 ): AgentRun {
   const url = extractGithubUrl(stdout, expects);
+  // 127 is the shell's own "command not found", and it is the one exit code whose cause
+  // this process knows better than the message does: the command was looked for somewhere
+  // the reader is not, and nothing in the shell's line says where.
+  const hint = code === COMMAND_NOT_FOUND && notFoundHint ? ` ${notFoundHint}` : '';
   return {
     ok: code === 0 && Boolean(url),
     url,
@@ -443,9 +507,12 @@ function agentOutcome(
       ? (url
           ? null
           : `Agent finished without returning ${noun}. It said: ${stdout.trim().slice(-600) || '(nothing)'}`)
-      : `Agent exited with code ${code}: ${(stderr || stdout).slice(-500)}`,
+      : `Agent exited with code ${code}: ${(stderr || stdout).slice(-500)}${hint}`,
   };
 }
+
+/** What a shell exits with when it could not find the command it was given. */
+const COMMAND_NOT_FOUND = 127;
 
 export interface RunAgentOptions {
   agentCommand: string;
@@ -483,6 +550,14 @@ export interface RunAgentOptions {
    * no tab to be had.
    */
   host?: AgentHost | null;
+  /**
+   * The variable to name when the command turns out not to exist where it was run.
+   *
+   * Passed by the caller rather than derived, because only the caller knows which of the two
+   * agents it is starting, and naming the wrong one would send the reader to set a variable
+   * that changes nothing. Omitted, an exit 127 reports what the shell said and no more.
+   */
+  notFoundVariable?: string | null;
 }
 
 /**
@@ -503,11 +578,17 @@ export async function runAgent(
 
   logger.info(`Running ${options.what} for workspace "${workspace.id}"`, { command, cwd });
 
+  // Worked out once, here, because both paths below end in the same `agentOutcome` and a
+  // second copy of this would be a second answer to the same question.
+  const notFoundHint = options.notFoundVariable
+    ? commandNotFoundHint(workspace, options.agentCommand, options.notFoundVariable)
+    : null;
+
   // `undefined` means "use the default"; `null` and 0 mean "no ceiling at all".
   const timeoutMs = options.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : options.timeoutMs;
 
   if (options.host) {
-    const hosted = await runHostedAgent(options.host, options, prompt, noun, timeoutMs);
+    const hosted = await runHostedAgent(options.host, options, prompt, noun, timeoutMs, notFoundHint);
     if (hosted) return hosted;
     logger.info(`Nothing could host ${options.what}, so it runs in a private child`, { command });
   }
@@ -581,7 +662,7 @@ export async function runAgent(
       settled = true;
       clearIfSet();
       meter?.flush();
-      resolve(agentOutcome(code, stdout, stderr, options.expects, noun));
+      resolve(agentOutcome(code, stdout, stderr, options.expects, noun, notFoundHint));
     });
   });
 }
@@ -607,7 +688,8 @@ async function runHostedAgent(
   options: RunAgentOptions,
   prompt: string,
   noun: string,
-  timeoutMs: number | null
+  timeoutMs: number | null,
+  notFoundHint: string | null
 ): Promise<AgentRun | null> {
   let stdout = '';
 
@@ -661,7 +743,7 @@ async function runHostedAgent(
     };
   }
 
-  return agentOutcome(code, stdout, '', options.expects, noun);
+  return agentOutcome(code, stdout, '', options.expects, noun, notFoundHint);
 }
 
 /**
@@ -694,7 +776,13 @@ you write may point at these paths.`;
 export async function runIssueAgent(
   workspace: Workspace,
   observation: string,
-  options: { agentCommand: string; timeoutMs?: number; imagePaths?: readonly string[] }
+  options: {
+    agentCommand: string;
+    timeoutMs?: number;
+    imagePaths?: readonly string[];
+    /** Named when the command turns out not to exist where it was run. See RunAgentOptions. */
+    notFoundVariable?: string | null;
+  }
 ): Promise<IssueAgentResult> {
   const prompt = `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observation}`
     + imageReferenceSection(options.imagePaths ?? []);
@@ -710,6 +798,7 @@ export async function runIssueAgent(
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     expects: 'issues',
     what: 'issue agent',
+    notFoundVariable: options.notFoundVariable ?? null,
   });
   return { ok: run.ok, issueUrl: run.url, output: run.output, error: run.error };
 }
@@ -734,7 +823,12 @@ export async function runReviseAgent(
   workspace: Workspace,
   issueUrl: string,
   observations: string,
-  options: { agentCommand: string; timeoutMs?: number }
+  options: {
+    agentCommand: string;
+    timeoutMs?: number;
+    /** Named when the command turns out not to exist where it was run. See RunAgentOptions. */
+    notFoundVariable?: string | null;
+  }
 ): Promise<IssueAgentResult> {
   const prompt = `${ISSUE_REVISE_PROMPT}\n\n---\n\nThe issue to rewrite: ${issueUrl}`
     + `\n\n---\n\nNew observations:\n\n${observations}`;
@@ -747,6 +841,7 @@ export async function runReviseAgent(
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     expects: 'issues',
     what: 'issue revise agent',
+    notFoundVariable: options.notFoundVariable ?? null,
   });
   return { ok: run.ok, issueUrl: run.url, output: run.output, error: run.error };
 }

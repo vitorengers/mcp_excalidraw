@@ -47,7 +47,7 @@ unusable there. The throwaway instances the self-contained checks start choose t
 port; the older `--url` family of checks expects one started by hand on **3838**, which is
 deliberately a different, empty server rather than the board you are working on.
 
-Everything else is `EXCALIDRAW_*`, and all fifteen are optional. Unset means the feature is off,
+Everything else is `EXCALIDRAW_*`, and all seventeen are optional. Unset means the feature is off,
 not degraded.
 
 | Variable | Default | What it does |
@@ -57,6 +57,8 @@ not degraded.
 | `EXCALIDRAW_LIBRARY` | unset | An `.excalidrawlib` served to every board, alongside each project's own — [shared-library.md](shared-library.md) |
 | `EXCALIDRAW_ISSUE_AGENT` | unset | The command line that researches an observation and opens the issue. Unset means issue blocks do nothing |
 | `EXCALIDRAW_IMPLEMENT_AGENT` | unset | The command line that implements one. Unset means the button is not offered |
+| `EXCALIDRAW_ISSUE_AGENT_WSL` | unset | The same command, spelled as a **WSL-backed** project's distro spells it. Unset falls back to `EXCALIDRAW_ISSUE_AGENT`, which only resolves inside a distro if it was written without an absolute path |
+| `EXCALIDRAW_IMPLEMENT_AGENT_WSL` | unset | The same, for implementing. A pair rather than one variable for the reason the pair above is a pair: granting a distro research must not thereby grant it repository writes |
 | `EXCALIDRAW_ISSUE_AGENT_TIMEOUT` | none | Seconds. Unset means no ceiling; a wedged run is handled by the block's reset instead |
 | `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` | none | The same, for implementing |
 | `EXCALIDRAW_IMPLEMENT_CONCURRENCY` | `4` | Runs at once. `0` is no cap, `1` serialises. Each one is a whole coding agent building on this machine |
@@ -81,6 +83,19 @@ lines lives.
 A per-project `board.config.json` can override the model, the effort and the time limit for
 either agent. It cannot override the command itself; that boundary and its reasoning are in
 [issue-block.md](issue-block.md).
+
+**A project inside a WSL distro needs the `_WSL` command.** Its agent runs inside the distro, so
+the command is resolved there: a host path like `C:/Users/you/.local/bin/claude.exe` is
+`No such file or directory` inside a distro, and the run exits 127 before it does anything. Set
+`EXCALIDRAW_ISSUE_AGENT_WSL` — and `EXCALIDRAW_IMPLEMENT_AGENT_WSL`, separately — to the command
+as the distro names it:
+
+```
+/home/you/.local/bin/claude -p --model claude-opus-5[1m] --effort high --allowedTools "..."
+```
+
+That the command is granted by the environment rather than by the project is the same rule as
+above, and the reason a WSL project cannot simply declare its own in `board.config.json`.
 
 ## What a running board looks like
 

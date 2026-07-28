@@ -39,7 +39,9 @@ import {
   Workspace
 } from './core/workspaces.js';
 import { listDirectories } from './core/directory-browse.js';
-import { AgentHost, runIssueAgent, runReviseAgent } from './core/issue-agent.js';
+import {
+  AgentCommands, AgentHost, agentCommandFor, runIssueAgent, runReviseAgent
+} from './core/issue-agent.js';
 import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
 import {
   readProjectBoard,
@@ -1174,7 +1176,56 @@ app.get('/api/fs/directories', async (req: Request, res: Response) => {
 // an agent inside the project. This is the most dangerous thing the server does: it
 // spawns a process with full repository access on an API that has no authentication.
 // Hence three guards — opt-in by env var, loopback only, and one run per element.
-const ISSUE_AGENT_COMMAND = process.env.EXCALIDRAW_ISSUE_AGENT || null;
+//
+// Two commands rather than one, because a workspace may live in a WSL distro and a command
+// is a path: the host's `claude.exe` is `No such file or directory` inside a distro, and the
+// distro's `claude` is nowhere on the host. `agentCommandFor` picks per workspace and falls
+// back to the native one, which is what keeps a command written without an absolute path
+// working in both.
+const ISSUE_AGENT_COMMANDS: AgentCommands = {
+  native: process.env.EXCALIDRAW_ISSUE_AGENT || null,
+  wsl: process.env.EXCALIDRAW_ISSUE_AGENT_WSL || null,
+};
+
+/** Whether any board at all may research. A workspace's own answer comes later. */
+const ISSUE_AGENT_CONFIGURED = Boolean(ISSUE_AGENT_COMMANDS.native || ISSUE_AGENT_COMMANDS.wsl);
+
+/**
+ * The command a workspace's agent runs, or a refusal saying which variable would grant one.
+ *
+ * Per workspace rather than per server, because being enabled is now a fact about the pair:
+ * a board with only `_WSL` set can research a distro-backed project and not a native one,
+ * and the reverse. Naming the variable that is missing is the whole value of refusing here
+ * rather than letting a run start and exit 127 somewhere the reader cannot see.
+ */
+function agentCommandRefusal(
+  workspace: Workspace,
+  commands: AgentCommands,
+  what: string,
+  variable: string
+): string | null {
+  if (agentCommandFor(workspace, commands)) return null;
+
+  const where = workspace.environment.kind === 'wsl'
+    ? { wanted: `${variable}_WSL or ${variable}`, names: `the WSL distro "${workspace.environment.distro}" names it` }
+    : { wanted: variable, names: 'this machine names it' };
+  return `${what} is not enabled for workspace "${workspace.id}". `
+    + `Set ${where.wanted} to the agent command as ${where.names}.`;
+}
+
+/** The same answer, for the routes that write their own response. */
+function agentCommandOrRefuse(
+  res: Response,
+  workspace: Workspace,
+  commands: AgentCommands,
+  what: string,
+  variable: string
+): string | null {
+  const refusal = agentCommandRefusal(workspace, commands, what, variable);
+  if (!refusal) return agentCommandFor(workspace, commands);
+  res.status(404).json({ success: false, error: refusal });
+  return null;
+}
 
 /** Elements with a run in flight. A second click must not open a second issue. */
 const issueRunsInFlight = new Set<string>();
@@ -1293,7 +1344,7 @@ async function applyIssueToBlock(
 app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   const elementId = req.params.id ?? '';
 
-  if (!ISSUE_AGENT_COMMAND) {
+  if (!ISSUE_AGENT_CONFIGURED) {
     return res.status(404).json({
       success: false,
       error: 'Issue blocks are disabled. Set EXCALIDRAW_ISSUE_AGENT to the agent command to enable them.'
@@ -1353,6 +1404,11 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: `Workspace is unusable: ${workspace.error}` });
   }
 
+  const agentCommand = agentCommandOrRefuse(
+    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching', 'EXCALIDRAW_ISSUE_AGENT'
+  );
+  if (!agentCommand) return;
+
   issueRunsInFlight.add(elementId);
   const markState = (state: string, extra: Record<string, unknown> = {}) =>
     markIssueState(workspaceId, elementId, state, extra);
@@ -1380,8 +1436,9 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     }
 
     const result = await runIssueAgent(workspace, observation, {
-      agentCommand: ISSUE_AGENT_COMMAND,
-      imagePaths: images.paths
+      agentCommand,
+      imagePaths: images.paths,
+      notFoundVariable: 'EXCALIDRAW_ISSUE_AGENT_WSL'
     });
     if (result.ok && result.issueUrl) {
       markState('created', { issueUrl: result.issueUrl, issueError: null, observation });
@@ -1597,8 +1654,18 @@ const issueMemo = new IssueMemo<IssueDetail>(memoWindow(process.env.EXCALIDRAW_I
 // The issue block's opposite number, and its opposite in permissions. The issue agent is
 // deliberately powerless — gh, git and reading, nothing that writes. An agent that
 // implements has to write code, so it gets its own command and its own opt-in: enabling
-// issue blocks must not quietly enable repository writes.
-const IMPLEMENT_AGENT_COMMAND = process.env.EXCALIDRAW_IMPLEMENT_AGENT || null;
+// issue blocks must not quietly enable repository writes. That separation is why the WSL
+// half is a pair rather than one variable: a board that granted a distro an agent for
+// research must not thereby have granted it one that writes.
+const IMPLEMENT_AGENT_COMMANDS: AgentCommands = {
+  native: process.env.EXCALIDRAW_IMPLEMENT_AGENT || null,
+  wsl: process.env.EXCALIDRAW_IMPLEMENT_AGENT_WSL || null,
+};
+
+/** Whether any board at all may implement. A workspace's own answer comes later. */
+const IMPLEMENT_AGENT_CONFIGURED = Boolean(
+  IMPLEMENT_AGENT_COMMANDS.native || IMPLEMENT_AGENT_COMMANDS.wsl
+);
 
 /**
  * How many implementations one workspace may have in flight at once.
@@ -1878,6 +1945,16 @@ async function beginImplement(
     };
   }
 
+  // After the claim, so it goes through `releaseSlot` like every other late refusal: a
+  // workspace whose environment was never granted a command must not hold a slot for it.
+  const agentRefusal = agentCommandRefusal(
+    workspace, IMPLEMENT_AGENT_COMMANDS, 'Implementing', 'EXCALIDRAW_IMPLEMENT_AGENT'
+  );
+  if (agentRefusal) {
+    releaseSlot();
+    return { status: 404, body: { success: false, error: agentRefusal } };
+  }
+
   // Not awaited: the run outlives the answer, which is the whole reason the answer is 202.
   // Its failures are recorded against the issue rather than thrown at whoever asked.
   void runImplementation(workspace, issueUrl, options);
@@ -1933,7 +2010,10 @@ async function runImplementation(
     const host = implementTerminalHost(workspace, issueUrl);
 
     const result = await runImplementAgent(workspace, issueUrl, {
-      agentCommand: IMPLEMENT_AGENT_COMMAND as string,
+      // Resolved here rather than handed down: `beginImplement` has already refused a
+      // workspace with no command for its environment, so by this line there is one.
+      agentCommand: agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS) as string,
+      notFoundVariable: 'EXCALIDRAW_IMPLEMENT_AGENT_WSL',
       worktree,
       resuming,
       // Reached only when the configured command already streams. Otherwise the agent
@@ -2032,7 +2112,7 @@ function slotFree(workspaceId: string): boolean {
  * what stops a broken build from being retried forever: the queue tries each issue once.
  */
 async function dispatchQueue(workspaceId: string): Promise<void> {
-  if (!IMPLEMENT_AGENT_COMMAND) return;
+  if (!IMPLEMENT_AGENT_CONFIGURED) return;
   if (!queueEnabled(workspaceId)) return;
   if (draining.has(workspaceId)) return;
   draining.add(workspaceId);
@@ -2199,7 +2279,7 @@ async function recoverInterruptedRuns(): Promise<void> {
 
 /** The agent writes to the repository, so every entrance carries the same two guards. */
 function implementingRefused(res: Response): boolean {
-  if (!IMPLEMENT_AGENT_COMMAND) {
+  if (!IMPLEMENT_AGENT_CONFIGURED) {
     res.status(404).json({
       success: false,
       error: 'Implementing is disabled. Set EXCALIDRAW_IMPLEMENT_AGENT to the agent command to enable it.'
@@ -2365,7 +2445,7 @@ app.get('/api/implement', async (req: Request, res: Response) => {
     return res.json({ success: true, implement: readImplement(workspaceId, issueUrl) });
   }
 
-  const offered = Boolean(IMPLEMENT_AGENT_COMMAND)
+  const offered = IMPLEMENT_AGENT_CONFIGURED
     && (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost');
   const workspaces = offered
     ? await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => [])
@@ -2579,7 +2659,7 @@ async function todoColumnRefusal(workspace: Workspace, issueUrl: string): Promis
  * this one opens no issue at all.
  */
 app.post('/api/issue/recreate', async (req: Request, res: Response) => {
-  if (!ISSUE_AGENT_COMMAND) {
+  if (!ISSUE_AGENT_CONFIGURED) {
     return res.status(404).json({
       success: false,
       error: 'Researching an issue again is disabled. Set EXCALIDRAW_ISSUE_AGENT to the agent command to enable it.'
@@ -2622,6 +2702,11 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
       error: workspace?.error ?? `Workspace "${workspaceId}" is not registered.`
     });
   }
+
+  const agentCommand = agentCommandOrRefuse(
+    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching an issue again', 'EXCALIDRAW_ISSUE_AGENT'
+  );
+  if (!agentCommand) return;
 
   // Read rather than taken from the memo: a thirty-second-old "OPEN" is fine for drawing a
   // panel and is not fine for deciding whether to send an agent at somebody's issue.
@@ -2679,7 +2764,8 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
     }
 
     const result = await runReviseAgent(workspace, issueUrl, observations, {
-      agentCommand: ISSUE_AGENT_COMMAND
+      agentCommand,
+      notFoundVariable: 'EXCALIDRAW_ISSUE_AGENT_WSL'
     });
 
     // A run is read as successful from the URL it printed, the way researching is — and here
