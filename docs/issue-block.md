@@ -382,6 +382,23 @@ The other guards carry over — loopback only, one run at a time per element —
 added: a block with no issue has nothing to implement, and a block that already produced a
 pull request will not produce a second one.
 
+### A run is something you can watch
+
+With `EXCALIDRAW_TERMINAL` also set, starting a run opens a **terminal session of its own** in
+the worktree of that run, and a tab appears on the board without anyone clicking for one. It is
+labelled with the issue — `#128`, not `s4` — because a tab that arrives on its own beside three
+shells the reader opened has to say what it is. The agent's output arrives on it as the agent
+writes it, which is what a block saying `running` and nothing else could never do.
+`GET /api/implement` names the session in `terminal`.
+
+The tab is for **watching**, not for typing into: stdin is where the prompt went, and it was
+closed behind it. `docs/terminal.md` has the measurement that rules the alternative out.
+
+**The two switches stay independent, and the run never depends on the tab.** With no terminal,
+with no PTY binding, or with all eight tabs already taken, the implementation runs in a private
+child exactly as it did before any of this existed and settles the same way; `terminal` is
+`null`, and nothing anywhere answers 404 or 409 on account of the run.
+
 ### A closed issue is not offered
 
 The button used to be decided by the run record alone — `implement.state` neither `done` nor
@@ -815,6 +832,63 @@ string. That still works and is asserted rather than assumed.
 
 Not covered: the research agent. It shares `runAgent` and would get both halves cheaply, but
 its block has no surface to show them on.
+
+#### How much of `out` was thinking
+
+`28.4k out` cannot distinguish an agent that wrote a long answer from one that thought for a
+long time and said little, and on a reasoning model the second is the usual case. The
+reasoning tokens were never missing from that figure — they are billed as output and have
+always been inside it — so what the panel gained is the **split**, not a fourth total:
+`28.4k out (12.1k thinking)`, in brackets because a third `·` segment reads as something to
+add to the other two.
+
+Where the figure comes from was the whole question, and the answer is not where the Messages
+API puts it. That reference documents `output_tokens_details.thinking_tokens` as a read-only
+decomposition of `output_tokens` — but `claude -p --output-format stream-json --verbose`
+(checked against 2.1.220) **never sends it**: not on an assistant message, not on `result`.
+Parsing only that field would have produced a feature that is always absent, which is why the
+CLI was run before the parsing was written rather than after.
+
+What the CLI sends instead is an event of its own:
+
+```json
+{"type":"system","subtype":"thinking_tokens","estimated_tokens":150,"estimated_tokens_delta":100}
+```
+
+Two properties of it decide the implementation, and both were observed rather than assumed:
+
+- **`estimated_tokens` restarts at every assistant turn** — 50 → 150 → 173 for one turn, then
+  50 → 129 for the next. It is the turn's total, never the run's, so reading it at face value
+  makes a run's reasoning go *backwards*. The deltas are what accumulate.
+- **`result` says nothing about reasoning.** Unlike input and output, the figure has no
+  settled counterpart, so it is kept *beside* the settled totals rather than inside them. Fold
+  it in and the split shows for the length of the run and then vanishes at the moment the run
+  is finished and worth reading.
+
+Both shapes are read, because `EXCALIDRAW_IMPLEMENT_AGENT` is somebody else's command line and
+need not be Claude Code: a breakdown inside `usage` wins where an agent reports one, and the
+summed estimate fills the silence otherwise. Nothing emits both, so it is a choice rather than
+a merge — which is also what stops anything being counted twice.
+
+**Null, not zero, when neither arrives.** An agent that reports no breakdown has not claimed
+its reasoning was nothing, and `0 thinking` is an answer where silence is the truth — the same
+distinction `reported` is careful about one field over. The panel shows the clause only when
+there is a number, so a run with in and out alone reads exactly as it did before.
+
+The figure is the agent's own estimate and is labelled as one in the panel's tooltip.
+
+**Mid-run it can read larger than the figure it is a share of** — a real run showed
+`87k in · 72 out (93 thinking)` — and that is the streamed `output_tokens` lagging, the second
+bullet above, not the reasoning being wrong. Reasoning arrives as a complete delta the moment
+it is spent while output is still catching up, so the two are briefly inconsistent and the
+`result` event settles it. Deliberately not clamped to `out`: the smaller number is the stale
+one, and capping the honest figure to it would make both wrong instead of one of them late.
+
+It also inherits the limit the two totals beside it already have: under `--output-format stream-json`
+the CLI emits only subagent `tool_use` and `tool_result` blocks by default, so a run that
+spawns subagents under-reports all three until `result` lands — and `result` settles input and
+output while leaving reasoning at whatever the main thread reported. Worth an issue of its
+own; `--forward-subagent-text` is where it would start.
 
 ## Configuration
 

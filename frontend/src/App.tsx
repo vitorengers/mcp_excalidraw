@@ -427,6 +427,65 @@ const instantiateIssueBlock = (
   return [block, label]
 }
 
+/** One line of text, however it happens to have been wrapped. */
+const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * The sentence the library ships inside its issue block, on one line.
+ *
+ * Read from the template rather than written out here for the reason the block itself is:
+ * a second copy of it would drift from the library's the moment either changed, and this
+ * one decides whether a block counts as written into.
+ *
+ * `instantiateIssueBlock` puts it through `layoutLabel`, which only inserts line breaks, so
+ * a wrapped label and the template it came from are the same sentence. Comparing them on
+ * one line is what makes the answer independent of the column's width — a block dropped
+ * into a narrower column wraps differently and would otherwise read as edited.
+ */
+const draftPlaceholder = (template: LibraryElement[]): string | null => {
+  const shape = template.find((element) => element?.customData?.kind === 'issue');
+  if (!shape) return null;
+  const label = template.find((element) => element.containerId === shape.id);
+  return label ? oneLine(String(label.text ?? '')) : null;
+};
+
+/**
+ * A draft nobody has written into and no run has claimed.
+ *
+ * Two questions, because "non-populated" stops being true in two ways. The label still
+ * saying what the library put there is one. The other is a finished run: it writes
+ * `issueUrl` and `issueState` onto the block, and that block is somebody's even though
+ * nobody typed a character into it.
+ *
+ * Answered off the element rather than off a flag, deliberately. A flag is a second copy of
+ * the answer that has to be kept in step with the text the reader is actually looking at,
+ * and every place that could edit the text would have to remember to clear it.
+ */
+const isUnpopulatedDraft = (
+  block: { id: string; customData?: CustomData },
+  scene: readonly LabelledElement[],
+  placeholder: string
+): boolean => {
+  const custom = customDataOf(block);
+  if (custom.issueUrl || custom.issueState) return false;
+  const label = scene.find((element) => element.containerId === block.id && element.type === 'text');
+  if (!label) return false;
+  // `originalText` is the text as typed; `text` is the same thing with Excalidraw's own
+  // wrapping in it. Either answers this, and the first is preferred where it exists.
+  return oneLine(String(label.originalText ?? label.text ?? '')) === placeholder;
+};
+
+/** A scene element read only for the label bound to it. */
+interface LabelledElement {
+  id: string;
+  type?: string;
+  containerId?: string | null;
+  text?: string;
+  originalText?: string;
+  isDeleted?: boolean;
+  customData?: CustomData;
+}
+
 // Helper function to clean elements for Excalidraw
 const cleanElementForExcalidraw = (element: ServerElement): Partial<ExcalidrawElement> => {
   const {
@@ -1953,6 +2012,37 @@ function App(): JSX.Element {
       return
     }
 
+    // At most one block nobody has written into. The `+` is a shape rather than a button,
+    // so the click on it is the selection landing on it, and the handler hands the
+    // selection straight back to the block it made — which re-arms the shape for the very
+    // next press. A double click, or an impatient second press while the first block is
+    // still being drawn behind the redraw, therefore used to make two empty blocks, and
+    // five presses made five. Each one has to be deleted by hand.
+    //
+    // The one already waiting is handed back instead, selected so it is obvious which block
+    // the press was answered with. Only *unpopulated* blocks are capped: an observation
+    // that has been typed into is somebody's, and so is a block a run has turned into an
+    // issue, so the `+` still owes the reader a fresh one in both cases.
+    //
+    // Every draft on the canvas is considered, not only the ones stamped with this column.
+    // The stamp is vestigial (#117) — the layout draws every draft in the notes column
+    // whatever it says — so "one empty block in this column" and "one empty block" are the
+    // same rule, and reading the stamp would let a block stranded by an old ordering hide
+    // from it.
+    const scene = api.getSceneElements() as unknown as LabelledElement[]
+    const placeholder = draftPlaceholder(template)
+    const waiting = placeholder === null ? undefined : scene.find(
+      (element) => !element.isDeleted && isDraftBlock(element)
+        && isUnpopulatedDraft(element, scene, placeholder)
+    )
+    if (waiting) {
+      api.updateScene({
+        appState: { selectedElementIds: { [waiting.id]: true } },
+        captureUpdate: CaptureUpdateAction.EVENTUALLY
+      })
+      return
+    }
+
     // `draftsTop`, not `cardsTop`: the block goes above every draft already in the column,
     // because it is the newest and that is where the newest goes. Dropping it at the card
     // top would land it under them and let it flash there before the redraw corrected it.
@@ -2003,6 +2093,14 @@ function App(): JSX.Element {
     mode: string
     cols: number
     rows: number
+    /**
+     * Whose session this is, when the server opened it for one of its own agents.
+     *
+     * Null for every shell a reader opened, which is what leaves those tabs exactly as they
+     * were. A run's tab arrives without anyone asking, so the strip labels it with the issue
+     * rather than with the next number in the sequence.
+     */
+    owner: { agent: string; issueUrl: string; label: string } | null
   }
 
   interface TerminalSessionState {
@@ -2044,7 +2142,8 @@ function App(): JSX.Element {
         shell: session.shell,
         mode: session.mode ?? 'pipe',
         cols: session.cols,
-        rows: session.rows
+        rows: session.rows,
+        owner: session.owner ?? null
       }
       : null
 

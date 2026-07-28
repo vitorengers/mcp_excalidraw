@@ -16,7 +16,21 @@ import './TerminalPanel.css'
 export interface TerminalTabState {
   id: string
   /** What the session says about itself, or null while it is still being adopted. */
-  status: { cwd: string; shell: string; mode: string; cols: number; rows: number } | null
+  status: {
+    cwd: string
+    shell: string
+    mode: string
+    cols: number
+    rows: number
+    /**
+     * Whose session this is, when the board opened it for one of its own agents.
+     *
+     * Null for every shell a reader started, which is the ordinary case and the one that
+     * keeps its `s1`. A run's tab appears without anyone clicking for it, so it has to say
+     * what it is: `s4` beside three shells the reader opened names nothing they did.
+     */
+    owner: { agent: string; issueUrl: string; label: string } | null
+  } | null
   /** The transcript, newest at the end — escape sequences and all. */
   output: string
   /** Set once the shell has gone, so the tab can say so instead of looking idle. */
@@ -457,10 +471,14 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             ].filter(Boolean).join(' ')}
             title={tab.ended
               ? `${tab.id} — ${tab.ended}`
-              : `${tab.id}${tab.status ? ` — ${tab.status.shell}` : ''}`}
+              : `${tab.id}${tab.status?.owner ? ` — implementing ${tab.status.owner.issueUrl}` : ''}`
+                + `${tab.status ? ` — ${tab.status.shell}` : ''}`}
             onPointerDown={takes(() => { followRef.current = true; onSelect(tab.id) })}
           >
-            <span className="terminal-card__tab-label">{tab.id}</span>
+            {/* An owned tab says what it is running; a reader's shell keeps its `s1`. The
+                id has not gone anywhere — it is the first thing in the tooltip, and it is
+                still what `data-session` and every route are keyed on. */}
+            <span className="terminal-card__tab-label">{tab.status?.owner?.label || tab.id}</span>
             <span
               className="terminal-card__tab-close"
               title={`close ${tab.id} and end its shell`}

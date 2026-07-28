@@ -39,7 +39,7 @@ import {
   Workspace
 } from './core/workspaces.js';
 import { listDirectories } from './core/directory-browse.js';
-import { runIssueAgent } from './core/issue-agent.js';
+import { AgentHost, runIssueAgent } from './core/issue-agent.js';
 import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
 import {
   readProjectBoard,
@@ -62,7 +62,14 @@ import { MIRROR_DOC_KEY } from './core/project-board-layout.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
 import type { IssueDetail } from './core/github-issue.js';
 import { IssueMemo, memoWindow } from './core/issue-memo.js';
-import { TERMINAL_SESSION_LIMIT, TerminalSession, loadPty, shellCommandFrom } from './core/terminal-session.js';
+import {
+  PtyModule,
+  TERMINAL_SESSION_LIMIT,
+  TerminalSession,
+  TerminalSessionOptions,
+  loadPty,
+  shellCommandFrom
+} from './core/terminal-session.js';
 import { issueBlockAppearance } from './core/issue-appearance.js';
 import { preserveServerAuthored } from './core/element-authorship.js';
 import { runImplementAgent } from './core/implement-agent.js';
@@ -1679,9 +1686,16 @@ function recordImplement(
 function carriedImplement(
   workspaceId: string,
   issueUrl: string
-): Pick<ImplementRecord, 'startedAt' | 'usage'> {
+): Pick<ImplementRecord, 'startedAt' | 'usage' | 'terminal'> {
   const existing = readImplement(workspaceId, issueUrl);
-  return { startedAt: existing?.startedAt ?? null, usage: existing?.usage ?? null };
+  return {
+    startedAt: existing?.startedAt ?? null,
+    usage: existing?.usage ?? null,
+    // Carried for the same reason the start time is: the session is opened once, in the
+    // middle of the run, and a record rebuilt from literals at the end would forget which
+    // tab the run happened in exactly when somebody goes looking for its transcript.
+    terminal: existing?.terminal ?? null,
+  };
 }
 
 /**
@@ -1704,6 +1718,27 @@ function recordImplementUsage(
   const existing = readImplement(workspaceId, issueUrl);
   if (!existing || existing.state !== 'running') return;
   writeImplement(workspaceId, issueUrl, { ...existing, usage });
+}
+
+/**
+ * The session a run was given, onto the record and nowhere else.
+ *
+ * The same reasoning as `recordImplementUsage`, and the same door: this arrives in the
+ * middle of a run, and `recordImplement` would write it onto every element carrying the
+ * issue — a version bump and a broadcast each — for a fact a block with nothing selected
+ * cannot show. The panel reads the record, and the tab is on the canvas already.
+ *
+ * Ignored once the run has settled, so a session announced late cannot resurrect a finished
+ * record.
+ */
+function recordImplementTerminal(
+  workspaceId: string,
+  issueUrl: string,
+  terminal: string
+): void {
+  const existing = readImplement(workspaceId, issueUrl);
+  if (!existing || existing.state !== 'running') return;
+  writeImplement(workspaceId, issueUrl, { ...existing, terminal });
 }
 
 /**
@@ -1808,7 +1843,8 @@ async function beginImplement(
     worktree: null,
     startedAt: new Date().toISOString(),
     endedAt: null,
-    usage: null
+    usage: null,
+    terminal: null
   });
 
   /**
@@ -1891,13 +1927,19 @@ async function runImplementation(
       ? (await interruptedRuns(workspace)).find((run) => run.issueUrl === issueUrl)?.worktree ?? null
       : null;
 
+    // Offered, never required. With no terminal on this board — or with its tabs all taken —
+    // this is null and the run happens in a private child, which is the only thing it could
+    // do before the two features knew about each other.
+    const host = implementTerminalHost(workspace, issueUrl);
+
     const result = await runImplementAgent(workspace, issueUrl, {
       agentCommand: IMPLEMENT_AGENT_COMMAND as string,
       worktree,
       resuming,
       // Reached only when the configured command already streams. Otherwise the agent
       // prints prose at exit, there is nothing to read, and this is never called.
-      onUsage: (usage) => recordImplementUsage(workspaceId, issueUrl, usage)
+      onUsage: (usage) => recordImplementUsage(workspaceId, issueUrl, usage),
+      ...(host ? { host } : {})
     });
     const kept = await releaseWorktreeFor(workspace, worktree, issueUrl);
 
@@ -2136,7 +2178,11 @@ async function recoverInterruptedRuns(): Promise<void> {
           // the panel counting time nobody spent.
           startedAt: null,
           endedAt: null,
-          usage: null
+          usage: null,
+          // Nothing survives a restart here either: the sessions were the previous server's
+          // and went down with it, so an id recovered from a worktree would name a tab that
+          // stopped existing.
+          terminal: null
         });
         logger.warn(
           `${run.issueUrl} was being implemented when a previous server stopped; `
@@ -2762,23 +2808,91 @@ function requireTerminal(req: Request, res: Response): TerminalSession | null {
   return sessions.values().next().value ?? null;
 }
 
+/** Whether a session could be opened at all, for a caller with no response to write. */
+function terminalAvailable(): boolean {
+  return Boolean(TERMINAL_SETTING)
+    && (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost');
+}
+
+/** What opening a session came to, for a caller that has to say why it did not. */
+type TerminalStart =
+  | { ok: true; session: TerminalSession }
+  | { ok: false; reason: 'cap' | 'error'; error: string };
+
+/**
+ * Open a session on a board, however it was asked for.
+ *
+ * The route was the only entrance until a run needed one too, and a second copy of this
+ * would be a second place for the cap to be counted, the id to be allocated and the
+ * announcement to be broadcast — three things a board can only survive having once. So both
+ * come through here, and the *only* difference between them is what is in `options`: a
+ * reader's session names no command of its own, no directory and no owner, which is what
+ * keeps it byte for byte the session it was.
+ *
+ * `watch` is what a caller that is not a socket needs: the chunks and the ending, as they
+ * happen. The broadcast happens either way — a run being watched by the server is still a
+ * run every open board should see.
+ */
+async function startTerminalSession(
+  workspace: Workspace,
+  shellCommand: string,
+  pty: PtyModule | null,
+  options: TerminalSessionOptions = {},
+  watch: { onOutput?: (chunk: string) => void; onExit?: (code: number | null) => void } = {}
+): Promise<TerminalStart> {
+  const workspaceId = workspace.id;
+  const sessions = terminalSessionsFor(workspaceId);
+  if (sessions.size >= TERMINAL_SESSION_LIMIT) {
+    return {
+      ok: false,
+      reason: 'cap',
+      error: `This board already has ${sessions.size} terminal sessions open, `
+        + `which is the cap of ${TERMINAL_SESSION_LIMIT}. Close one first.`
+    };
+  }
+
+  const sessionId = nextTerminalId(workspaceId);
+  let session: TerminalSession;
+  try {
+    session = new TerminalSession(sessionId, workspace, shellCommand, {
+      onOutput: (data, sequence) => {
+        watch.onOutput?.(data);
+        broadcast({ type: 'terminal_output', sessionId, data, sequence } as WebSocketMessage, workspaceId);
+      },
+      onExit: (code) => {
+        // Dropped from the map here rather than on the DELETE, because a shell that ended
+        // on its own — `exit`, or a crash — has to free the slot too. Only if it is still
+        // the one under that id: ids are never reused, so this is belt and braces, but a
+        // session evicting a successor is exactly the bug the old single-slot map could have.
+        if (sessions.get(sessionId) === session) sessions.delete(sessionId);
+        broadcast({ type: 'terminal_exit', sessionId, code } as WebSocketMessage, workspaceId);
+        watch.onExit?.(code);
+      }
+    }, pty, options);
+  } catch (error) {
+    logger.error('Could not start a terminal:', error);
+    return { ok: false, reason: 'error', error: (error as Error).message };
+  }
+
+  // A ConPTY reports no process id until its console host has connected, and a session
+  // announced before then would carry a 0 into the block and into `taskkill` on the way out.
+  await session.started;
+
+  sessions.set(sessionId, session);
+  broadcast({
+    type: 'terminal_session',
+    session: session.summary(),
+    scrollback: session.scrollback,
+    sequence: session.sequence
+  } as WebSocketMessage, workspaceId);
+
+  return { ok: true, session };
+}
+
 app.post('/api/terminal', async (req: Request, res: Response) => {
   if (terminalRefused(res)) return;
 
   const workspaceId = workspaceIdFrom(req);
-  const sessions = terminalSessionsFor(workspaceId);
-  if (sessions.size >= TERMINAL_SESSION_LIMIT) {
-    // Still a 409, and still for the same reason it was one when the cap was 1: the number
-    // of shells a board may run is a guard, and a request past it is a conflict with that
-    // guard rather than a request that failed. It names the cap, because a refusal that does
-    // not say what the limit is leaves a caller retrying against a wall it cannot see.
-    return res.status(409).json({
-      success: false,
-      error: `This board already has ${sessions.size} terminal sessions open, which is the cap of ${TERMINAL_SESSION_LIMIT}. Close one first.`,
-      sessions: Array.from(sessions.values()).map((one) => one.summary())
-    });
-  }
-
   const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
@@ -2795,51 +2909,97 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
   // default shell is spelled differently for each. PowerShell's `-Command -` refuses to
   // start at all when stdin is a terminal, so a PTY session asks for the plain REPL.
   const pty = await loadPty();
-  const shellCommand = shellCommandFrom(TERMINAL_SETTING, workspace, pty ? 'pty' : 'pipe');
+  // A command in the body names what to run instead of the configured shell, and a `cwd`
+  // names where. Neither grants anything the route did not already grant — a shell is a
+  // thing you type commands and `cd` into — and both are still behind the same three
+  // guards. They exist because the server itself needs to ask for a session that is not the
+  // default one, and a facility only the server can reach is one nothing can check by hand.
+  const asked = typeof req.body?.command === 'string' ? req.body.command.trim() : '';
+  const shellCommand = asked || shellCommandFrom(TERMINAL_SETTING, workspace, pty ? 'pty' : 'pipe');
   if (!shellCommand) {
     return res.status(404).json({
       success: false,
       error: 'The terminal is disabled. Set EXCALIDRAW_TERMINAL to enable it.'
     });
   }
+  // One path, spelled the way the caller's own environment spells it: inside a WSL distro
+  // only `innerPath` is ever used, and outside one only `path` is, so a caller that gives
+  // the right spelling for its workspace is right in both.
+  const cwd = typeof req.body?.cwd === 'string' && req.body.cwd.trim()
+    ? { path: req.body.cwd.trim(), innerPath: req.body.cwd.trim() }
+    : null;
 
-  const sessionId = nextTerminalId(workspaceId);
-  let session: TerminalSession;
-  try {
-    session = new TerminalSession(sessionId, workspace, shellCommand, {
-      onOutput: (data, sequence) => {
-        broadcast({ type: 'terminal_output', sessionId, data, sequence } as WebSocketMessage, workspaceId);
-      },
-      onExit: (code) => {
-        // Dropped from the map here rather than on the DELETE, because a shell that ended
-        // on its own — `exit`, or a crash — has to free the slot too. Only if it is still
-        // the one under that id: ids are never reused, so this is belt and braces, but a
-        // session evicting a successor is exactly the bug the old single-slot map could have.
-        if (sessions.get(sessionId) === session) sessions.delete(sessionId);
-        broadcast({ type: 'terminal_exit', sessionId, code } as WebSocketMessage, workspaceId);
-      }
-    }, pty);
-  } catch (error) {
-    logger.error('Could not start a terminal:', error);
-    return res.status(500).json({ success: false, error: (error as Error).message });
+  const started = await startTerminalSession(workspace, shellCommand, pty, { directory: cwd });
+  if (!started.ok) {
+    // Still a 409 for the cap, and still for the same reason it was one when the cap was 1:
+    // the number of shells a board may run is a guard, and a request past it is a conflict
+    // with that guard rather than a request that failed. It names the cap, because a refusal
+    // that does not say what the limit is leaves a caller retrying against a wall it cannot see.
+    if (started.reason === 'cap') {
+      return res.status(409).json({
+        success: false,
+        error: started.error,
+        sessions: Array.from(terminalSessionsFor(workspaceId).values()).map((one) => one.summary())
+      });
+    }
+    return res.status(500).json({ success: false, error: started.error });
   }
-
-  // A ConPTY reports no process id until its console host has connected, and a session
-  // announced before then would carry a 0 into the block and into `taskkill` on the way out.
-  await session.started;
-
-  sessions.set(sessionId, session);
-  broadcast({
-    type: 'terminal_session',
-    session: session.summary(),
-    scrollback: session.scrollback,
-    sequence: session.sequence
-  } as WebSocketMessage, workspaceId);
 
   // 202, like starting an agent: the shell is running, and what it produces arrives over
   // the socket rather than in this response.
-  res.status(202).json({ success: true, session: session.summary() });
+  res.status(202).json({ success: true, session: started.session.summary() });
 });
+
+/**
+ * A place for an implementation to run where the board can show it, or nothing at all.
+ *
+ * Nothing at all whenever the terminal is not there to be had — the two opt-ins are separate
+ * switches and always were, so a board that enabled implementing and not the terminal must
+ * go on implementing exactly as it did. Everything past that point is `runAgent`'s to fall
+ * back from, which is why this returns null rather than refusing.
+ *
+ * The session is opened **on pipes**, and that is not a fallback: the prompt is several
+ * hundred words that arrive on stdin and end there, and a pseudoterminal has no end of file
+ * to give — see `TerminalSessionOptions.input`. So the process inside the tab is the process
+ * that ran before, in the same checkout, reading the same prompt, and the only thing that
+ * changed is that its output goes somewhere a reader can see it while it is still happening.
+ */
+function implementTerminalHost(workspace: Workspace, issueUrl: string): AgentHost | null {
+  if (!terminalAvailable()) return null;
+
+  return async ({ agentCommand, directory, prompt, onOutput }) => {
+    let announce: (code: number | null) => void = () => { /* replaced below */ };
+    const exited = new Promise<number | null>((resolve) => { announce = resolve; });
+
+    const started = await startTerminalSession(workspace, agentCommand, null, {
+      directory,
+      owner: { agent: 'implement', issueUrl, label: issueTabLabel(issueUrl) },
+      input: prompt
+    }, { onOutput, onExit: (code) => announce(code) });
+
+    if (!started.ok) {
+      logger.info(`${issueUrl} is being implemented without a tab: ${started.error}`);
+      return null;
+    }
+
+    // On the record alone, like the token counts and for the same reason: it arrives in the
+    // middle of a run, and writing it onto every element carrying the issue would bump a
+    // version and broadcast an update for something no block with nothing selected can use.
+    recordImplementTerminal(workspace.id, issueUrl, started.session.id);
+
+    return {
+      id: started.session.id,
+      exited,
+      close: () => started.session.close()
+    };
+  };
+}
+
+/** What the tab says: the issue, short enough to be a tab. */
+function issueTabLabel(issueUrl: string): string {
+  const number = /\/issues\/(\d+)/.exec(issueUrl)?.[1];
+  return number ? `#${number}` : 'issue';
+}
 
 // A list, in the order the sessions were opened, each with its own transcript. Not "the
 // session and its scrollback" any more: the singular was the shape of the old rule, and a
