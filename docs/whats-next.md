@@ -1,17 +1,15 @@
 # Next
 
-## An automated browser test
+What has not shipped. The record of what has is [development-log.md](development-log.md), and
+the map of what exists is the Project structure half of the board.
 
-The UI layer is verified by hand today. That is not a stylistic complaint: three real defects
-here **compiled cleanly, type-checked, and did not work** —
-
-- a documentation panel that never opened,
-- a race in tab startup,
-- a click landing on the label instead of the box it belongs to.
-
-Nothing short of driving a real browser would have caught any of them. Every server-side
-behaviour has a `scripts/check-*.mjs`; the frontend has none, and it is where the blocks
-actually live.
+Until #151 the top of this page — and the most prominent card in the Development section —
+asked for an automated browser test, describing a frontend with no checks at all. There are 23
+tracked `check-*-browser.mjs` scripts, the oldest of them more than fifty merges old. The most
+forward-looking statement in the documentation was a description of work that had already
+landed, which is the failure this page exists to avoid; `scripts/check-docs-counts.mjs` and its
+siblings now hold the numbers, but nothing can hold a stale paragraph except rewriting it when
+it stops being true.
 
 ## Stream the issue agent into the terminal too
 
@@ -29,14 +27,37 @@ implement agent that wedges, and a block offering a reset is all a reader has to
 
 What its tab would not be is interactive, for the same measured reason — see `docs/terminal.md`.
 
-## Two smaller things the map turned up
+## Neither the MCP tools nor the CLI are workspace-aware
 
-**Neither the MCP tools nor the CLI are workspace-aware.** `src/core/canvas-client.ts` never
-sends `?workspace=`, so both always act on the `default` store. An agent driving the canvas over
-MCP cannot target a registered project board at all — only the REST API can. That is a real gap
-for a tool whose whole point is that agents draw on project boards.
+`src/core/canvas-client.ts` never sends `?workspace=`, so both always act on the `default` store.
+An agent driving the canvas over MCP cannot target a registered project board at all — only the
+REST API can. That is a real gap for a tool whose whole point is that agents draw on project
+boards.
 
-**Nothing loads or saves `boardFile`.** It is resolved from `board.config.json` and returned by
-`GET /api/workspaces`, and then no code reads it. Persistence is a manual export
-(`scripts/export-board.mjs`) and a manual import. A board that is not exported dies with the
-process — including this one.
+## Nothing loads or saves `boardFile`
+
+It is resolved from `board.config.json` and returned by `GET /api/workspaces`, and then no code
+reads it. Persistence is a manual export (`scripts/export-board.mjs`) and a manual import. A
+board that is not exported dies with the process — including this one. `src/core/workspaces.ts`
+is where the field is produced and where it stops.
+
+This is also the loose end behind the mojibake #151 was opened about: a canvas was seen holding a
+scene fifty merges older than the tracked file, with its em dashes and middle dots corrupted, and
+the only way that scene could have got there is an ad-hoc import of a historical revision. A
+board that loaded and saved its own file would not need one.
+
+## The documentation rebuild, past the root cause
+
+#151 landed the checks and the facts they hold: `docs/` scanned for language and for byte
+validity, the counts derived from `src/`, `README.md` about this fork, an index, and the run
+procedure tracked. What it deliberately did not do:
+
+- **Split the three oversized reference documents.** `issue-block.md`, `terminal.md` and
+  `project-board.md` are 145 KB between them and narrate superseded revisions — "it was on the
+  right until #96", "until #115 the block was dark" — instead of describing the present. That
+  narration belongs in [development-log.md](development-log.md), where the dated record already
+  is.
+- **Document the surfaces that have none.** The WebSocket protocol broadcasts far more message
+  types than `docs/` names; `src/core/obsidian-md.ts`, `src/core/share-url.ts` — the only
+  outbound network call in the product — and `src/core/design-guide.ts` appear only as bare
+  tokens in a table cell.

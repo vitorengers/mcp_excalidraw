@@ -67,9 +67,25 @@ const cleaned = elements
     for (const field of VOLATILE) delete copy[field];
     return copy;
   })
-  // Sort by id, not by paint order: `index` already carries the z-order, and a stable key
-  // keeps an unrelated edit from reshuffling the whole file.
-  .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  // Sort by paint order, id breaking the tie.
+  //
+  // This used to sort by id alone, on the reasoning that `index` already carries the z-order
+  // and a stable key keeps an unrelated edit from reshuffling the whole file. The first half
+  // of that is wrong, and the board paid for it: Excalidraw treats fractional indices as
+  // valid only while they *increase along the array*, so an array in id order reads as
+  // broken, gets its indices regenerated from the array order, and paints in that order.
+  // Twenty pieces of text ended up underneath the opaque cards they label — five cards that
+  // drew as empty boxes, in the file the whole time and unreadable on the canvas.
+  //
+  // The diff stays quiet anyway: `index` only changes when something is actually restacked,
+  // and `id` still decides between elements that share one.
+  //
+  // Compared as plain strings rather than with `localeCompare`, because that is exactly how
+  // Excalidraw compares them: a locale-aware collation puts `aa` and `aA` in the other order
+  // and would reintroduce the same inversion under a different name.
+  .sort((a, b) => (String(a.index) < String(b.index) ? -1
+                 : String(a.index) > String(b.index) ? 1
+                 : String(a.id).localeCompare(String(b.id))));
 
 const scene = {
   type: 'excalidraw',

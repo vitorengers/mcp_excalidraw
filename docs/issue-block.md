@@ -463,7 +463,7 @@ anyone would have made on purpose. So it has its own variable and is **off until
 set**:
 
 ```
-EXCALIDRAW_IMPLEMENT_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
+EXCALIDRAW_IMPLEMENT_AGENT='<agent-binary> -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
 ```
 
 `--dangerously-skip-permissions` rather than a list of tools, because an enumerated list is
@@ -988,15 +988,16 @@ own; `--forward-subagent-text` is where it would start.
 ## Configuration
 
 ```
-EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob WebFetch WebSearch"'
+EXCALIDRAW_ISSUE_AGENT='<agent-binary> -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob WebFetch WebSearch"'
 EXCALIDRAW_IMPLEMENT_CONCURRENCY=4
 EXCALIDRAW_ISSUE_MEMO_MS=30000
 ```
 
 `EXCALIDRAW_ISSUE_AGENT_TIMEOUT=1200` used to be here, and pinning it in the environment is
 how the twenty minutes outlived the code default. **Whatever starts the board sets these
-variables and lives outside this repository** — `start-board.ps1`, per `HANDOFF.md` — so a
-board still exporting a ceiling keeps it until that file is edited by hand.
+variables**, and it is the operator's, not this repository's — [running.md](running.md) is the
+procedure and the full table of what it can set — so a board still exporting a ceiling keeps it
+until that environment is edited by hand.
 
 **Pin the model and the effort.** Without `--model` and `--effort` the agent inherits whatever
 `~/.claude/settings.json` happens to say, so changing the model of an interactive session
@@ -1039,7 +1040,7 @@ repository the way `git` and `gh` inside that distro do.
 
 One board runs several projects, and until #82 every setting above applied to all of them: the
 two command lines were module constants read once at startup, so retuning one project meant
-editing `start-board.ps1` and restarting the board for every other project too.
+editing the board's own environment and restarting it for every other project too.
 
 A project's own `board.config.json` can now say three things per agent, under
 `agents.issue` and `agents.implement` — see [workspaces.md](workspaces.md) for the shape:

@@ -40,6 +40,13 @@ workspace, start their own canvas server on a free port and kill it —
 `--url http://127.0.0.1:3838` and run against a server started separately, which must be a
 separate, empty instance rather than the board you are using.
 
+**3737 and 3838 are two different servers, and both numbers are right.** 3737 is the board — the
+port the operator starts it on, because 3000 cannot work on this machine
+([docs/trap-port-3000.md](docs/trap-port-3000.md)). 3838 is the throwaway instance the older
+checks talk to, empty on purpose so a check cannot pass or fail on the contents of somebody's
+board. [docs/running.md](docs/running.md) is the run procedure, and
+[docs/index.md](docs/index.md) indexes everything else.
+
 ## Every change updates both halves of the board
 
 The Board Tool board (`docs/board.excalidraw`) is cut into two marked sections, each with a key
