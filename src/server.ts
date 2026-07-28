@@ -157,6 +157,21 @@ function totalElementCount(): number {
 const socketWorkspaces = new WeakMap<WebSocket, string>();
 
 /**
+ * Whether a socket's board is the one its reader is actually looking at.
+ *
+ * Since #173 a browser keeps the socket of a board it has switched away from, so that the
+ * board stays up to date and coming back is a redraw rather than a reconnect. Such a socket
+ * still *receives* — that is the whole point of it — but it has no scene on screen, so it
+ * cannot render an export or answer a request to move a camera. Without this distinction
+ * `clientsWatching` would say a board has a browser on it and both of those routes would
+ * wait out their timeout instead of being refused at once.
+ *
+ * True by default: a socket that never says otherwise is a browser on the board it named,
+ * which is every socket before this existed and every socket from any other client.
+ */
+const socketWatching = new WeakMap<WebSocket, boolean>();
+
+/**
  * Broadcast to the clients watching one workspace.
  *
  * Omitting `workspaceId` reaches every client — right for server-wide notices, wrong
@@ -194,6 +209,9 @@ function clientsWatching(workspaceId: string): number {
   clients.forEach(client => {
     if (client.readyState !== WebSocket.OPEN) return;
     if (socketWorkspaces.get(client) !== workspaceId) return;
+    // A socket kept open for a board its reader has switched away from is listening, not
+    // watching. It has no scene on screen to render or to scroll.
+    if (socketWatching.get(client) === false) return;
     watching += 1;
   });
   return watching;
@@ -212,6 +230,9 @@ wss.on('connection', (ws: WebSocket, request) => {
   const requestUrl = new URL(request.url ?? '/', 'http://localhost');
   const workspaceId = normalizeWorkspaceId(requestUrl.searchParams.get('workspace'));
   socketWorkspaces.set(ws, workspaceId);
+  // A socket is watching until its own client says it is in the background: a browser opens
+  // one for the board it is about to show.
+  socketWatching.set(ws, true);
   clients.add(ws);
   logger.info(`New WebSocket connection established (workspace: ${workspaceId})`);
 
@@ -260,6 +281,9 @@ wss.on('connection', (ws: WebSocket, request) => {
     try {
       const message = JSON.parse(raw.toString());
       if (message?.type === 'ping') ws.send(JSON.stringify({ type: 'pong' }));
+      // The other thing a client says: whether this board is the one on its screen. It stays
+      // subscribed either way — see `socketWatching`.
+      if (message?.type === 'watching') socketWatching.set(ws, message.active !== false);
     } catch {
       // Clients talk to this server over HTTP; anything else arriving here is not ours.
     }
@@ -268,6 +292,7 @@ wss.on('connection', (ws: WebSocket, request) => {
   ws.on('close', () => {
     clients.delete(ws);
     socketWorkspaces.delete(ws);
+    socketWatching.delete(ws);
     logger.info('WebSocket connection closed');
   });
 
@@ -275,6 +300,7 @@ wss.on('connection', (ws: WebSocket, request) => {
     logger.error('WebSocket error:', error);
     clients.delete(ws);
     socketWorkspaces.delete(ws);
+    socketWatching.delete(ws);
   });
 });
 
