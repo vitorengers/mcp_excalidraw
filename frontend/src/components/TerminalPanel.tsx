@@ -2,10 +2,13 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import {
+  TERMINAL_FALLBACK_FONT_FAMILY,
   TERMINAL_FONT_FAMILY,
   TERMINAL_FONT_RANGE,
   TERMINAL_LINE_HEIGHT
 } from '../../../src/core/terminal-block'
+import { TERMINAL_CSS_VARS, TERMINAL_THEME } from '../../../src/core/terminal-palette'
+import { terminalFontReady } from '../terminal-metrics'
 import type { Rect } from '../../../src/core/anchored-placement'
 import './TerminalPanel.css'
 
@@ -49,14 +52,13 @@ export interface TerminalPanelProps {
   onFontSize: (next: number) => void
 }
 
-/** The block's own palette, so the emulator and the shape underneath read as one object. */
-const THEME = {
-  background: '#1e1e2e',
-  foreground: '#cdd6f4',
-  cursor: '#a6e3a1',
-  cursorAccent: '#1e1e2e',
-  selectionBackground: '#45475a'
-}
+/**
+ * The block's own palette, so the emulator, the frame and the shape underneath read as one
+ * object. All three of them get it from `src/core/terminal-palette.ts`; this file decides no
+ * colour, it only hands one of them to xterm and writes the rest onto the card as custom
+ * properties for `TerminalPanel.css` to read.
+ */
+const THEME = TERMINAL_THEME
 
 /**
  * One session's screen, kept alive for as long as the session is in this block.
@@ -115,6 +117,23 @@ const TerminalScreen: React.FC<{
     writtenRef.current = ''
     registerFocusRef.current(() => terminal.focus())
 
+    // The face the block is drawn in is a web font, and `open()` above is where xterm
+    // measures its cell — so on the first screen of a session it is measuring the *fallback*
+    // and keeping that answer for good. Opening later instead would mean an emulator that
+    // does not exist while the transcript is arriving, so the measurement is redone rather
+    // than delayed.
+    //
+    // Asking for it takes naming the fallback and then naming the real stack again: xterm's
+    // options service fires only on a value that changed, so setting `fontFamily` to what it
+    // already is does nothing at all. The pair is one turn of `clear` and `handleResize`,
+    // which is what re-measures. Two writes rather than one comment saying "does not work".
+    let settled = false
+    void terminalFontReady().then(() => {
+      if (settled || terminalRef.current !== terminal) return
+      terminal.options.fontFamily = TERMINAL_FALLBACK_FONT_FAMILY
+      terminal.options.fontFamily = TERMINAL_FONT_FAMILY
+    })
+
     const textarea = terminal.textarea
     const onFocus = (): void => onFocusChangeRef.current(true)
     const onBlur = (): void => onFocusChangeRef.current(false)
@@ -122,6 +141,7 @@ const TerminalScreen: React.FC<{
     textarea?.addEventListener('blur', onBlur)
 
     return () => {
+      settled = true
       textarea?.removeEventListener('focus', onFocus)
       textarea?.removeEventListener('blur', onBlur)
       registerFocusRef.current(null)
@@ -297,6 +317,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     <div
       className="terminal-card"
       style={{
+        // The palette, on this card rather than on `:root`: a board with two terminal blocks
+        // is two independent surfaces, and nothing about them should reach the canvas around
+        // them. `TerminalPanel.css` reads these and holds no colour of its own.
+        ...(TERMINAL_CSS_VARS as React.CSSProperties),
         left: `${rect.x}px`,
         top: `${rect.y}px`,
         width: `${rect.width}px`,

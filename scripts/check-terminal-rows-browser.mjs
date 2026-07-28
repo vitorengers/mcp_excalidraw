@@ -377,26 +377,50 @@ async function settled(size) {
  * screen xterm drew is `rows × cell`, and it has to be inside the frame. The arithmetic is
  * the one that says *by how much* — the real cell, read back from the render, against the
  * frame the block actually has.
+ *
+ * Asked of **both** axes since #115. It was rows only, because the width was linear at
+ * 0.586px per font pixel against the 0.585 the cell was drawn with, and that agreement was a
+ * fact about one typeface: the block now draws in Comic Shanns, whose glyphs are 0.55 wide,
+ * and a column constant carried across a typeface change is the same defect as the row one
+ * this file was written for, five per cent the other way. So the columns are measured off
+ * the render here rather than trusted, at all three sizes, and the width has stopped being
+ * an assumption named in a comment.
  */
 async function assertFits(label, size) {
   const { shell, scene } = await settled(size);
   const { body, screen } = scene.card;
-  const cell = screen.height / shell.rows;
-  const holds = Math.floor(body.height / cell);
-  console.log(`     ${shell.cols}×${shell.rows} claimed, cell ${cell.toFixed(2)}px, `
-    + `screen ${screen.height.toFixed(1)}px in a ${body.height.toFixed(1)}px frame `
-    + `(the frame holds ${holds})`);
+  const cell = { width: screen.width / shell.cols, height: screen.height / shell.rows };
+  const holds = {
+    cols: Math.floor(body.width / cell.width),
+    rows: Math.floor(body.height / cell.height),
+  };
+  console.log(`     ${shell.cols}×${shell.rows} claimed, cell `
+    + `${cell.width.toFixed(2)}×${cell.height.toFixed(2)}px, screen `
+    + `${screen.width.toFixed(1)}×${screen.height.toFixed(1)}px in a `
+    + `${body.width.toFixed(1)}×${body.height.toFixed(1)}px frame `
+    + `(the frame holds ${holds.cols}×${holds.rows})`);
 
   check(`${label}: the screen the shell was told fits inside the frame`,
         screen.bottom <= body.bottom + 1,
         `screen ends at ${screen.bottom.toFixed(1)}, frame at ${body.bottom.toFixed(1)} `
         + `— ${(screen.bottom - body.bottom).toFixed(1)}px clipped`);
   check(`${label}: and the rows it claims are rows the frame can hold`,
-        shell.rows <= holds,
-        `${shell.rows} claimed, ${holds} can be drawn`);
+        shell.rows <= holds.rows,
+        `${shell.rows} claimed, ${holds.rows} can be drawn`);
   check(`${label}: without giving up so many that the block is wasted`,
-        shell.rows >= holds - 2 && shell.rows > 4,
-        `${shell.rows} claimed of the ${holds} that fit`);
+        shell.rows >= holds.rows - 2 && shell.rows > 4,
+        `${shell.rows} claimed of the ${holds.rows} that fit`);
+
+  check(`${label}: the screen is inside the frame across, too`,
+        screen.right <= body.right + 1,
+        `screen ends at ${screen.right.toFixed(1)}, frame at ${body.right.toFixed(1)} `
+        + `— ${(screen.right - body.right).toFixed(1)}px clipped`);
+  check(`${label}: and the columns it claims are columns the frame can hold`,
+        shell.cols <= holds.cols,
+        `${shell.cols} claimed, ${holds.cols} can be drawn`);
+  check(`${label}: without giving up so many that the block is wasted across`,
+        shell.cols >= holds.cols - 2 && shell.cols > 20,
+        `${shell.cols} claimed of the ${holds.cols} that fit`);
   return { shell, scene };
 }
 

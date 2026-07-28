@@ -12,7 +12,18 @@ type DocState =
   | { status: 'loading'; key: string }
   | { status: 'loaded'; key: string; html: string }
   | { status: 'missing'; key: string }
+  /** The board has no docs directory at all, so no key on it could ever resolve. */
+  | { status: 'no-docs-dir'; key: string; message: string }
   | { status: 'error'; key: string; message: string }
+
+/**
+ * The code the docs route sends with the 404 it means as "this board has none".
+ *
+ * The route answers both "no directory" and "no such file" with a 404, and the panel used
+ * to map both to `missing` and throw the body away — so a project one setting away from
+ * working reported a per-document problem, and nothing on screen pointed at the setting.
+ */
+const NO_DOCS_DIR = 'no-docs-dir'
 
 export interface IssueTarget {
   id: string
@@ -472,6 +483,10 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
         if (cancelled) return
 
         if (response.status === 404) {
+          if (body?.code === NO_DOCS_DIR) {
+            setDoc({ status: 'no-docs-dir', key: docKey, message: body?.error ?? '' })
+            return
+          }
           setDoc({ status: 'missing', key: docKey })
           return
         }
@@ -1094,6 +1109,25 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
           <p className="element-docs__hint">
             No document yet for <code>{doc.key}</code>.
           </p>
+        </>
+      )}
+
+      {/* Not a missing document — a board that could not have found one. The repair is a
+          setting, and it is already in the UI, so the card names where it is rather than
+          leaving the reader to guess which of the two problems they have. */}
+      {doc.status === 'no-docs-dir' && (
+        <>
+          <h2 className="element-docs__title">{title || doc.key}</h2>
+          <p className="element-docs__hint">
+            This board has no docs directory, so <code>{doc.key}</code> — and every other
+            document on it — cannot be found.
+          </p>
+          <p className="element-docs__hint">
+            Set <strong>Docs folder</strong> in the project settings, reachable from the
+            gear on this project&rsquo;s tab, to the folder inside the project where its
+            markdown lives.
+          </p>
+          {doc.message && <p className="element-docs__hint">{doc.message}</p>}
         </>
       )}
 

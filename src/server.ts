@@ -50,6 +50,7 @@ import {
   NoProjectConfigured,
   NotOnThisBoard
 } from './core/project-board.js';
+import { MIRROR_DOC_KEY } from './core/project-board-layout.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
 import type { IssueDetail } from './core/github-issue.js';
 import { IssueMemo, memoWindow } from './core/issue-memo.js';
@@ -2693,9 +2694,37 @@ const DOCS_DIR = process.env.EXCALIDRAW_DOCS_DIR
   ? path.resolve(process.env.EXCALIDRAW_DOCS_DIR)
   : null;
 
+/**
+ * The documentation shipped with the tool, rather than with the project on screen.
+ *
+ * `__dirname` is `dist/` once compiled, so this is the repository's own `docs/`.
+ */
+const TOOL_DOCS_DIR = path.resolve(__dirname, '../docs');
+
+/**
+ * Doc keys that belong to a block this server draws, not to the board it is drawn on.
+ *
+ * The mirror is generated onto every project that names a `githubProject`, always carrying
+ * `docKey: "project-board"` — a key that resolved inside the mirrored project, where the
+ * document has no reason to exist. A tool block's documentation is a property of the tool,
+ * so these resolve against the tool's own directory whatever board is asking.
+ */
+const TOOL_DOC_KEYS = new Set<string>([MIRROR_DOC_KEY]);
+
 // Keys become filenames, so anything that could climb out of DOCS_DIR is rejected
 // outright rather than normalised — a rejected key is obvious, a rewritten one is not.
 const DOC_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/**
+ * Why a doc could not be served, in a form a caller can branch on.
+ *
+ * The two 404s are different problems with different repairs — a board one setting away
+ * from working, and a document nobody has written — and the panel used to map both to
+ * "no document yet", which pointed the reader at the wrong one. The prose stays for
+ * anything reading the API by hand; the code is what the panel switches on.
+ */
+const NO_DOCS_DIR = 'no-docs-dir';
+const NO_DOC = 'no-doc';
 
 app.get('/api/docs/:key', async (req: Request, res: Response) => {
   const key = req.params.key ?? '';
@@ -2707,7 +2736,9 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
   // single-board setups, which have no registry to resolve a directory from.
   const workspaceId = workspaceIdFrom(req);
   let docsDir = DOCS_DIR;
-  if (workspaceId !== DEFAULT_WORKSPACE_ID) {
+  if (TOOL_DOC_KEYS.has(key)) {
+    docsDir = TOOL_DOCS_DIR;
+  } else if (workspaceId !== DEFAULT_WORKSPACE_ID) {
     const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace?.docsDir) docsDir = path.resolve(workspace.docsDir);
@@ -2716,6 +2747,7 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
   if (!docsDir) {
     return res.status(404).json({
       success: false,
+      code: NO_DOCS_DIR,
       error: 'No docs directory for this board. Set docsDir in board.config.json, or EXCALIDRAW_DOCS_DIR.'
     });
   }
@@ -2731,7 +2763,7 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
     res.json({ success: true, key, workspace: workspaceId, markdown });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return res.status(404).json({ success: false, error: `No doc for key "${key}"` });
+      return res.status(404).json({ success: false, code: NO_DOC, error: `No doc for key "${key}"` });
     }
     logger.error(`Failed to read doc "${key}":`, error);
     res.status(500).json({ success: false, error: (error as Error).message });

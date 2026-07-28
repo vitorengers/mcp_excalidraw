@@ -409,12 +409,42 @@ function idOfEntry(entry: RegistryEntry): string | null {
 }
 
 /**
+ * The folder a project is looked at for, and only that one.
+ *
+ * One convention, checked on disk. Guessing a second name, or writing the field for a
+ * folder that is not there, would put a path into somebody else's config that nothing
+ * ever resolves — which is worse than the blank the settings dialog offers to fill.
+ */
+const CONVENTIONAL_DOCS_DIR = 'docs';
+
+/** Whether the project keeps its documents where projects usually keep them. */
+async function hasConventionalDocsDir(resolved: ResolvedPath): Promise<boolean> {
+  const docsPath = resolveInWorkspace(resolved, CONVENTIONAL_DOCS_DIR);
+  if (!docsPath) return false;
+  try {
+    return (await fs.stat(docsPath)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * A minimal config for a project that has none.
  *
  * Without it a brand new tab arrives already marked broken — `No board.config.json at …`
  * is exactly what `loadWorkspace` says about a project it cannot read — which is a poor
  * greeting for a project the user has just chosen. Best-effort: a project directory that
  * refuses the write is still worth registering, and it will simply show that error.
+ *
+ * `docsDir` is written when — and only when — the folder is actually there. Documentation
+ * reaches a board through `docsDir` alone, so a config without it is a board on which every
+ * `docKey` answers 404, and that was the state every project added through the `+` arrived
+ * in. Read from disk rather than assumed: a project that keeps its documents somewhere else
+ * still gets the blank, and sets it in the project settings dialog.
+ *
+ * This runs when the config is created and at no other time. A project already registered
+ * keeps whatever its config says, including the absence — repairing files this repository
+ * does not own, behind the user's back, is not something a registration should do.
  */
 async function ensureWorkspaceConfig(resolved: ResolvedPath): Promise<void> {
   const configPath = resolveInWorkspace(resolved, WORKSPACE_CONFIG_FILENAME);
@@ -427,8 +457,11 @@ async function ensureWorkspaceConfig(resolved: ResolvedPath): Promise<void> {
 
   const segments = resolved.innerPath.split('/').filter(Boolean);
   const name = segments[segments.length - 1] ?? 'Project';
+  const config: WorkspaceConfig = { name };
+  if (await hasConventionalDocsDir(resolved)) config.docsDir = CONVENTIONAL_DOCS_DIR;
+
   try {
-    await writeJsonFile(configPath, { name });
+    await writeJsonFile(configPath, config);
   } catch (error) {
     logger.warn(`Could not write ${WORKSPACE_CONFIG_FILENAME} into ${resolved.hostPath}: ${(error as Error).message}`);
   }
