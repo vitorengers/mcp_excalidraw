@@ -91,6 +91,15 @@
   color: var(--color-gray-60);
 }
 
+/**
+ * A step further back again, because it is a footnote to the figure before it rather than
+ * another figure: reasoning is already counted inside `out`, and reading at the same weight
+ * invites adding the two together.
+ */
+.element-docs__thinking {
+  color: var(--color-gray-50);
+}
+
 .element-docs__title {
   font-size: 1rem;
   font-weight: 700;

@@ -125,6 +125,14 @@ process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', async () => {
   line({ type: 'system', subtype: 'init', session_id: 'stub' });
   line({ type: 'assistant', message: { id: 'msg_a', usage: usage(120, 900, 6800, 240) } });
+  // Reasoning, where Claude Code actually puts it — an event of its own, with a running
+  // total that restarts at every turn. 90 + 22 for the first, then 18 for the second: the
+  // run is at 130, which is what the panel has to show rather than 18.
+  const thinking = (estimated_tokens, estimated_tokens_delta) =>
+    line({ type: 'system', subtype: 'thinking_tokens', estimated_tokens, estimated_tokens_delta });
+  thinking(90, 90);
+  thinking(112, 22);
+  thinking(18, 18);
   for (let attempt = 0; attempt < 1800; attempt++) {
     if (existsSync(join(workDir, 'release'))) break;
     await sleep(100);
@@ -334,6 +342,16 @@ try {
   // 120 + 900 + 6800 is what the model was given; 240 is what it wrote back.
   check('the input total is shown', /7\.8k\s*in/.test(spending.tokens ?? ''), `tokens=${spending.tokens}`);
   check('and the output total', /240\s*out/.test(spending.tokens ?? ''), `tokens=${spending.tokens}`);
+  // In brackets and after `out`, because it is a part of that figure rather than a third
+  // total: 130 of the 240 output tokens went on thinking.
+  const thinkingShown = await waitFor(async () => {
+    const panel = await evaluate(PANEL);
+    return /thinking/.test(panel.tokens ?? '') ? panel : null;
+  }, 'the reasoning split in the panel');
+  await shot('03b-thinking');
+  check('the reasoning split reads as part of out, in brackets',
+        /240\s*out\s*\(\s*130\s*thinking\s*\)/.test(thinkingShown.tokens ?? ''),
+        `tokens=${thinkingShown.tokens}`);
 
   console.log('\n5. a finished run shows a total rather than a live clock');
   writeFileSync(join(workDir, 'release'), '', 'utf8');
@@ -353,6 +371,12 @@ try {
         JSON.stringify(stillFrozen.links));
   check('the final token totals are the ones the agent settled on',
         /310\s*out/.test(stillFrozen.tokens ?? ''), `tokens=${stillFrozen.tokens}`);
+  // The `result` event settles input and output and says nothing about reasoning. If the
+  // settled totals replace the whole figure, the split is on screen for the length of the
+  // run and gone the moment it is finished and worth reading.
+  check('and the reasoning split is still there beside them',
+        /310\s*out\s*\(\s*130\s*thinking\s*\)/.test(stillFrozen.tokens ?? ''),
+        `tokens=${stillFrozen.tokens}`);
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);
