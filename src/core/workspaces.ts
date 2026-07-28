@@ -25,6 +25,33 @@ export const AGENT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type AgentEffort = (typeof AGENT_EFFORTS)[number];
 
 /**
+ * Where a project keeps the workflows its agents may be told to follow.
+ *
+ * At the project root and committed, which rules out the three more obvious homes. `CLAUDE.md`
+ * is loaded by interactive runs too, so a pipeline meant for board runs would leak into every
+ * session somebody opens by hand. Under `docsDir` it is configurable, and its markdown turns
+ * into documentation cards on the board. And a dot-directory — `.agent`, `.agents`, `.claude` —
+ * is the one shape a project has most likely gitignored already, which would resolve on the
+ * maintainer's checkout and be absent in every board run: an implementation runs in a worktree
+ * cut from the default branch, so a file that is not committed is not there.
+ */
+export const AGENT_WORKFLOW_DIR = 'agent-workflows';
+
+/**
+ * What a workflow may be called.
+ *
+ * A slug rather than a path, so that a name which does not resolve can be reported as one
+ * file rather than as "somewhere under the project". It is also the first of the two guards
+ * against a config reaching outside its own project — `resolveInWorkspace` is the second.
+ */
+export const AGENT_WORKFLOW_SLUG = /^[a-z0-9][a-z0-9-]*$/;
+
+/** The project-relative file a workflow slug names. */
+export function agentWorkflowFile(slug: string): string {
+  return `${AGENT_WORKFLOW_DIR}/${slug}.md`;
+}
+
+/**
  * What a project may say about how its agents run.
  *
  * Deliberately *not* a command. Agents are off unless the operator set
@@ -40,6 +67,15 @@ export interface WorkspaceAgentConfig {
   effort?: string;
   /** Ceiling on a run, in seconds. Unset means the environment's, which may be none. */
   timeoutSeconds?: number;
+  /**
+   * Slug naming `agent-workflows/<slug>.md`, whose text is injected into the run's prompt.
+   *
+   * The one field here that is about *how the agent works* rather than how well it runs, and
+   * still not a capability: the text reaches the prompt and nothing else. It does not touch
+   * argv, the environment, `--allowedTools` or `--dangerously-skip-permissions`, so it can
+   * only tell an agent how to use what the operator already granted.
+   */
+  workflow?: string;
 }
 
 export interface WorkspaceAgentsConfig {
@@ -52,6 +88,13 @@ export interface AgentSettings {
   model: string | null;
   effort: string | null;
   timeoutMs: number | null;
+  /**
+   * The workflow slug exactly as configured, or null.
+   *
+   * Unresolved on purpose: whether the name is usable is settled per run, by
+   * `loadAgentWorkflow`, so that an unusable one refuses the run instead of vanishing.
+   */
+  workflow: string | null;
 }
 
 export interface WorkspaceAgents {
@@ -94,7 +137,7 @@ export interface WorkspaceConfig {
    * such column gets no move rather than a guess.
    */
   projectTodoColumn?: string;
-  /** Per-project model, effort and ceiling for each agent. See WorkspaceAgentConfig. */
+  /** Per-project model, effort, ceiling and workflow for each agent. See WorkspaceAgentConfig. */
   agents?: WorkspaceAgentsConfig;
 }
 
@@ -148,7 +191,9 @@ async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await fs.rename(temporary, filePath);
 }
 
-const NO_AGENT_SETTINGS: AgentSettings = { model: null, effort: null, timeoutMs: null };
+const NO_AGENT_SETTINGS: AgentSettings = {
+  model: null, effort: null, timeoutMs: null, workflow: null,
+};
 
 /**
  * Read one agent's settings out of a config that a human, or another program, wrote.
@@ -176,7 +221,22 @@ function readAgentSettings(kind: string, id: string, raw: unknown): AgentSetting
     ? seconds * 1000
     : null;
 
-  return { model, effort, timeoutMs };
+  // Carried through exactly as written, and *not* checked here. The leniency above is right
+  // for a model and an effort — a dropped one costs a run its tuning and nothing else — but a
+  // workflow that is quietly dropped is a run that looks completely normal and does something
+  // other than what the project asked for. So a name that turns out to be unusable refuses the
+  // run instead; `loadAgentWorkflow` is where that happens, per run, with the file named.
+  // A value that is not text at all is a different mistake, refused on the way in by
+  // `validateWorkspaceConfigPatch`, and warned about here rather than carried into a refusal
+  // that could not explain itself.
+  let workflow: string | null = null;
+  if (typeof config.workflow === 'string') {
+    workflow = config.workflow.trim() || null;
+  } else if (config.workflow !== undefined && config.workflow !== null) {
+    logger.warn(`Workspace "${id}": ignoring agents.${kind}.workflow — it must be a workflow name, not ${typeof config.workflow}`);
+  }
+
+  return { model, effort, timeoutMs, workflow };
 }
 
 function readAgents(id: string, config: WorkspaceConfig): WorkspaceAgents {
@@ -285,6 +345,76 @@ function resolveOf(workspace: Workspace): ResolvedPath {
     workspace.innerPath,
     workspace.environment.kind === 'wsl' ? workspace.environment.distro : undefined
   );
+}
+
+/** What a project wrote down about how this run should work, or why it will not run. */
+export type AgentWorkflowLoad =
+  | { ok: true; text: string | null }
+  | { ok: false; error: string };
+
+/**
+ * Read the workflow a project selected for one of its agents, or refuse the run.
+ *
+ * **Unresolved is a refusal, not a shrug**, and that is deliberately unlike everything else in
+ * a project's config. A `docsDir` pointing outside its project is ignored and the workspace
+ * still loads, because the cost of that is a panel that shows nothing and says why. The cost of
+ * a workflow quietly not applied is a run that looks entirely normal — the agent works, opens
+ * its pull request, reports success — and did the wrong thing, in a process nobody was
+ * watching. There is nothing to notice afterwards except the absence of what was asked for, so
+ * it is refused before it starts, naming the file it looked for.
+ *
+ * Read from the **project**, not from the run's worktree, so every run of a project gets the
+ * same text: a worktree is cut from the default branch, which is also why the file has to be
+ * committed rather than left in a gitignored corner.
+ *
+ * Two guards against a config reaching outside its own project, and both are needed: the slug
+ * shape refuses `..`, a separator and a drive letter by name, and `resolveInWorkspace` refuses
+ * the same shapes again on the join. A null out of it counts as unresolved rather than as
+ * unset, so a hand-edited config cannot become a silently workflow-less run.
+ */
+export async function loadAgentWorkflow(
+  workspace: Workspace,
+  kind: 'issue' | 'implement',
+  settings: AgentSettings | null | undefined
+): Promise<AgentWorkflowLoad> {
+  const slug = settings?.workflow?.trim();
+  if (!slug) return { ok: true, text: null };
+
+  const setting = `agents.${kind}.workflow`;
+  const refuse = (reason: string): AgentWorkflowLoad => ({
+    ok: false,
+    error: `${setting} in "${workspace.name}" selects the workflow "${slug}", and ${reason} `
+      + 'This run was refused rather than run without the workflow it was configured with.',
+  });
+
+  if (!AGENT_WORKFLOW_SLUG.test(slug)) {
+    return refuse(
+      `that is not a workflow name — it must match ${AGENT_WORKFLOW_SLUG.source} and name `
+      + `${agentWorkflowFile('<slug>')} inside the project. It is not a path.`
+    );
+  }
+
+  const relative = agentWorkflowFile(slug);
+  const filePath = resolveInWorkspace(resolveOf(workspace), relative);
+  if (!filePath) {
+    return refuse(`${workspace.innerPath}/${relative} does not resolve inside the project.`);
+  }
+  // Forward slashes so the path reads the same in a log, an error on a block and the config
+  // that named it, on a board that mixes Windows and WSL projects.
+  const named = filePath.replace(/\\/g, '/');
+
+  let text: string;
+  try {
+    text = await fs.readFile(filePath, 'utf-8');
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    return refuse(err.code === 'ENOENT'
+      ? `there is no file at ${named}.`
+      : `${named} could not be read: ${(error as Error).message}.`);
+  }
+  if (!text.trim()) return refuse(`${named} is empty.`);
+
+  return { ok: true, text };
 }
 
 /**
@@ -561,7 +691,7 @@ const STRING_FIELDS = [
 ] as const;
 
 const AGENT_KINDS = ['issue', 'implement'] as const;
-const AGENT_FIELDS = ['model', 'effort', 'timeoutSeconds'] as const;
+const AGENT_FIELDS = ['model', 'effort', 'timeoutSeconds', 'workflow'] as const;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -640,6 +770,17 @@ export function validateWorkspaceConfigPatch(
         if (field === 'effort' && setting.trim()
             && !(AGENT_EFFORTS as readonly string[]).includes(setting.trim())) {
           return { ok: false, error: `"agents.${kind}.effort" must be one of ${AGENT_EFFORTS.join(', ')}.` };
+        }
+        // A name, not a path. Refused here as well as per run because this is the surface a
+        // person types into, and "agent-workflows/x.md" is exactly what somebody would write.
+        if (field === 'workflow' && setting.trim()
+            && !AGENT_WORKFLOW_SLUG.test(setting.trim())) {
+          return {
+            ok: false,
+            error: `"agents.${kind}.workflow" must be a name matching ${AGENT_WORKFLOW_SLUG.source}, `
+              + `naming ${agentWorkflowFile('<slug>')} in the project — not a path. The text in that `
+              + 'file is given to the agent; it grants the project nothing it did not already have.',
+          };
         }
       }
     }

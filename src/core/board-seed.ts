@@ -65,7 +65,10 @@ export function seedableElement(element: ServerElement): ServerElement {
   let appearance: Partial<ServerElement> = {};
 
   if (next.issueState === 'running') {
-    const { issueState, issueError, ...rest } = next;
+    // The instants go with the state they describe. A seeded block whose run was dropped
+    // would otherwise carry the moment that run started, and a clock is only ever read
+    // against a `running` block — so keeping them is keeping a claim nothing can settle.
+    const { issueState, issueError, issueStartedAt, issueEndedAt, ...rest } = next;
     // A block that already produced an issue is `created`, whatever the stuck state said —
     // dropping the state outright would send it back to offering a run the POST route then
     // refuses. The look goes back with the state, or a created block would keep wearing the

@@ -2031,20 +2031,28 @@ function App(): JSX.Element {
   const draftGeometryRef = useRef<string>('')
 
   /**
-   * Where this board's mirror was put, once something measured it.
+   * Where each board's mirror was put, once something measured it, by workspace id.
    *
    * The region used to be re-measured on every poll, which is what let it drift away from
    * the board's own content with nobody touching either (#99). It is decided once now and
    * kept — the terminal's model, and for the terminal's reason: a redraw that re-anchored a
-   * region every twenty seconds is a redraw that moves it. Reset on a board switch, because
-   * the next board's content is not this one's.
+   * region every twenty seconds is a redraw that moves it.
+   *
+   * **By board, and kept across a switch** — one value, dropped on every switch, was the same
+   * bug on a slower cadence (#188): the board came back, the origin was gone, and the region
+   * was decided again from whatever the canvas looked like at that moment, which on a board
+   * holding only a mirror and a terminal is nothing at all. Keyed by workspace so the next
+   * board's content still cannot decide this one's placement, which is what the reset was
+   * actually for. A reload is still what re-measures, the way it is for the terminal.
    */
-  const mirrorOriginRef = useRef<{ x: number; y: number } | null>(null)
+  const mirrorOriginsRef = useRef<Map<string, { x: number; y: number }>>(new Map())
 
   const clearMirror = (): void => {
     projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, signature: '' }
     draftGeometryRef.current = ''
-    mirrorOriginRef.current = null
+    // This board's, and only this board's: the region is gone from the canvas, so where it
+    // was is no longer an answer to keep. Every other board's placement stands.
+    mirrorOriginsRef.current.delete(activeWorkspaceRef.current)
     const api = excalidrawAPIRef.current
     if (!api) return
     const scene = api.getSceneElementsIncludingDeleted()
@@ -2076,6 +2084,23 @@ function App(): JSX.Element {
     const tombstones = scene.filter((element) => element.isDeleted && !isMirrorElement(element))
     const own = scene.filter((element) => !element.isDeleted && !isMirrorElement(element))
     const drafts = own.filter(isDraftBlock)
+
+    // A block placed before this board landed is standing in the slot the mirror is about to
+    // take — read here rather than beside the rescue below, because where the region goes
+    // depends on which blocks are already where they belong and which are not.
+    const marked = own.filter((element) => isTerminalElement(element)
+      && customDataOf(element)[TERMINAL_AWAITING_MIRROR] === true)
+    const strandedIds = new Set(marked.map((element) => element.id))
+    // The blocks that are already anchored, which is the only kind this region may be placed
+    // from: a stranded one is standing at a guess it is about to be moved off.
+    const anchoredTerminal = boundsOf(
+      own.filter((element) => isTerminalElement(element) && !strandedIds.has(element.id))
+    )
+    // The region as it is currently drawn, so a shape standing inside it is not mistaken for
+    // something the region can be measured against (#188). None on the pass that draws it
+    // first, which is right — there is no inside yet to be in.
+    const drawn = boundsOf(scene.filter((element) => !element.isDeleted && isMirrorElement(element)))
+
     // The terminal is left out of the measurement for the reason the drafts are: it is
     // placed *from* this region's own left edge, so measuring against it would walk the
     // mirror left onto the block, and the block left again, on every pass. Since #96 the
@@ -2083,7 +2108,7 @@ function App(): JSX.Element {
     // rather than merely tidy. A title bound to the block goes with the block — that is
     // the rule the other two doors already state, and `mirrorAnchors` is where all of it
     // is now said once, so a check can ask it without a browser.
-    const anchors = mirrorAnchors(own)
+    const anchors = mirrorAnchors(own, drawn)
 
     // The notes column is drawn too, and it is as wide as the rest, so the width the first
     // measurement places the region by has to include it — `mirrorWidth`, not `boardWidth`,
@@ -2095,10 +2120,17 @@ function App(): JSX.Element {
         return { minX, minY }
       })()
       : null
-    const { origin, settled } = resolveMirrorOrigin(mirrorOriginRef.current, bounds, width)
+    // The block is what a board with nothing else on it is measured from — its right edge
+    // plus the gap is where `terminalOrigin` put the block from, read back the other way. See
+    // `resolveMirrorOrigin`; it is the inverse of the placement, so it is a fixed point rather
+    // than the second derivation that would walk the two apart.
+    const workspaceId = activeWorkspaceRef.current
+    const { origin, settled } = resolveMirrorOrigin(
+      mirrorOriginsRef.current.get(workspaceId), bounds, width, anchoredTerminal
+    )
     // Only a measured origin is remembered. A poll that ran before the scene arrived would
     // otherwise pin the region where an empty canvas put it for the rest of the session.
-    if (settled) mirrorOriginRef.current = origin
+    if (settled) mirrorOriginsRef.current.set(workspaceId, origin)
 
     // The blocks the `+` dropped hold the top of their column, newest first, and the
     // mirrored cards start below them. Both halves of that arithmetic come from
@@ -2143,8 +2175,6 @@ function App(): JSX.Element {
     // before the first poll has said where it goes, and that outranks the arithmetic — as has
     // a block detached beside another, or restored at a geometry it remembers, neither of
     // which is ever at this origin.
-    const marked = own.filter((element) => isTerminalElement(element)
-      && customDataOf(element)[TERMINAL_AWAITING_MIRROR] === true)
     const placedAt = marked.length > 0
       ? terminalOrigin(boundsOf(own.filter((element) => !isTerminalElement(element))), null)
       : null
@@ -2153,7 +2183,6 @@ function App(): JSX.Element {
                                maxX: origin.x + layout.bounds.width,
                                maxY: origin.y + layout.bounds.height })
       : null
-    const strandedIds = new Set(marked.map((element) => element.id))
 
     const nextOwn = own.map((element) => {
       if (isTerminalElement(element)) {
@@ -4272,10 +4301,15 @@ function App(): JSX.Element {
     setDismissedAnchorId(null)
     lastSelectedIdRef.current = null
     // The mirror belongs to one project. Keeping the last board would let a stale set of
-    // columns decide where a card dragged on the new board was dropped, and keeping where
-    // that project's region was placed would anchor this one to the other board's content.
+    // columns decide where a card dragged on the new board was dropped.
+    //
+    // Where each region was placed is kept, though, filed under the board it belongs to
+    // (`mirrorOriginsRef`). Dropping it here was the same defect #99 fixed, arriving on a
+    // slower cadence: coming back re-decided the origin from whatever the canvas looked like
+    // at that moment, which on a board holding only a mirror and a terminal is nothing at
+    // all — so the region went to a constant and landed on the block (#188). Keying it by
+    // board is what the reset was really for, and a map does that without forgetting.
     projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, signature: '' }
-    mirrorOriginRef.current = null
 
     pendingSceneWorkspaceRef.current = workspaceId
     holdAutoSyncForSwitch()
@@ -4355,6 +4389,8 @@ function App(): JSX.Element {
         issueError: (custom.issueError as string) ?? null,
         issueTitle: (custom.issueTitle as string) ?? null,
         observation: (custom.observation as string) ?? null,
+        issueStartedAt: (custom.issueStartedAt as string) ?? null,
+        issueEndedAt: (custom.issueEndedAt as string) ?? null,
         images: Array.isArray(custom.issueImages) ? (custom.issueImages as string[]) : [],
         implementState: (custom.implementState as IssueTarget['implementState']) ?? null,
         implementUrl: (custom.implementUrl as string) ?? null,

@@ -26,7 +26,7 @@ import {
   NOTES_OPTION_ID,
   NOTES_NAME,
 } from './project-board-types.js';
-import { TERMINAL_KIND } from './terminal-block.js';
+import { TERMINAL_GAP, TERMINAL_KIND } from './terminal-block.js';
 
 // Re-exported so the canvas can name the notes column without importing two modules.
 export { NOTES_OPTION_ID, NOTES_NAME } from './project-board-types.js';
@@ -244,6 +244,16 @@ export interface AnchorCandidate {
   isDeleted?: boolean;
   containerId?: string | null;
   customData?: Record<string, unknown> | null;
+  /**
+   * Where the shape is, when the caller knows. Marks are what say a shape is derived, and
+   * `mirrorAnchors` used to have nothing else to go on; since #188 it also refuses one
+   * standing inside the region, which is a question only geometry answers. Optional because
+   * an offline caller asking which *kinds* are anchorable has no coordinates to hand.
+   */
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
 }
 
 /** The left and top of a bounding box — the two numbers a placement needs. */
@@ -251,6 +261,21 @@ export interface AnchorBounds {
   minX: number;
   minY: number;
 }
+
+/** A whole box, for the two questions that need more than a corner. */
+export interface Region extends AnchorBounds {
+  maxX: number;
+  maxY: number;
+}
+
+const overlaps = (element: AnchorCandidate, region: Region): boolean => {
+  const { x, y, width, height } = element;
+  if (![x, y, width, height].every((value) => typeof value === 'number' && Number.isFinite(value))) {
+    return false;
+  }
+  return (x as number) < region.maxX && region.minX < (x as number) + (width as number)
+    && (y as number) < region.maxY && region.minY < (y as number) + (height as number);
+};
 
 /** An origin, and whether it is one worth keeping. */
 export interface MirrorOrigin {
@@ -284,15 +309,31 @@ const isDraft = (element: AnchorCandidate): boolean =>
  * - the terminal blocks, which are placed *from* the board's bounds on the other side, so
  *   measuring against them would walk the two regions apart;
  * - the draft blocks, which live inside the mirror;
- * - anything whose container is one of those, which is the rule this adds to the terminal.
+ * - anything whose container is one of those, which is the rule this adds to the terminal;
+ * - anything standing **inside the region already drawn**, whatever it is marked with.
+ *
+ * That last one is geometry rather than a mark, and #188 is why. Every exclusion above is by
+ * mark, and a draft's mark is `projectBoardDraft` — so a block written in the notes column
+ * that lost the mark, or never carried one, is on those terms an ordinary authored shape
+ * that happens to sit inside the mirror. Measured against it the region lands one mirror
+ * width further left, on top of the terminal, and that origin is a measured one, so it is
+ * remembered and stays. A shape inside the region cannot say where the region goes: it is
+ * there *because* of where the region already is.
+ *
+ * `region` is the mirror as it is currently drawn, and there is none on the pass that draws
+ * it first. Nothing is excluded then, which is right — there is no inside yet to be in.
  */
-export function mirrorAnchors<T extends AnchorCandidate>(elements: readonly T[]): T[] {
+export function mirrorAnchors<T extends AnchorCandidate>(
+  elements: readonly T[],
+  region?: Region | null
+): T[] {
   const alive = elements.filter((element) => !element.isDeleted && kindOf(element) !== MIRROR_KIND);
   const derived = new Set(alive
     .filter((element) => isDraft(element) || kindOf(element) === TERMINAL_KIND)
     .map((element) => element.id));
   return alive.filter((element) => !derived.has(element.id)
-    && !(element.containerId && derived.has(element.containerId)));
+    && !(element.containerId && derived.has(element.containerId))
+    && !(region && overlaps(element, region)));
 }
 
 /**
@@ -316,19 +357,40 @@ export function mirrorAnchors<T extends AnchorCandidate>(elements: readonly T[])
  * The price is the terminal's own: a board whose content is moved wholesale leaves the
  * region behind. A reload re-measures, which is what puts it back.
  *
- * An empty canvas has no left edge to anchor to, so the region starts one gap left of the
- * origin — the only case where a constant is honest, and the one origin not worth keeping.
+ * A canvas with nothing to measure against still has the **terminal block**, when the board
+ * has one, and that block is not an arbitrary shape: `terminalOrigin` puts it exactly
+ * `TERMINAL_GAP` left of this region's left edge, so its right edge plus that gap is where
+ * this region's left edge was. Reading it back is the inverse of the placement rather than a
+ * second guess at it, which makes it a fixed point — the block does not move because the
+ * region was placed here, because the region was already placed from the block.
+ *
+ * #188 is what asked for it. Before, an empty anchor set answered with
+ * `{ x: -(width + MIRROR_GAP), y: 0 }`, which is an absolute coordinate that knows nothing
+ * about the block, is not remembered, and is therefore re-decided every twenty seconds — and
+ * `width` is GitHub's, so a column added to the project moved the region a column-width
+ * further left, onto a block anchored to where it used to be. A board holding only a mirror
+ * and a terminal has an empty anchor set on *every* poll, so that board got the constant every
+ * time. Measured against the block instead, the answer is the same number on every pass, and
+ * it is a measurement, so it settles and is never taken again.
+ *
+ * A board with neither content nor a block has nothing at all to anchor to, so the region
+ * starts one gap left of the origin — the only case where a constant is honest, and the one
+ * origin not worth keeping.
  */
 export function resolveMirrorOrigin(
   remembered: { x: number; y: number } | null | undefined,
   bounds: AnchorBounds | null | undefined,
-  width: number
+  width: number,
+  terminal?: Region | null
 ): MirrorOrigin {
   if (remembered) return { origin: { x: remembered.x, y: remembered.y }, settled: true };
-  if (!bounds || !Number.isFinite(bounds.minX) || !Number.isFinite(bounds.minY)) {
-    return { origin: { x: -(width + MIRROR_GAP), y: 0 }, settled: false };
+  if (bounds && Number.isFinite(bounds.minX) && Number.isFinite(bounds.minY)) {
+    return { origin: { x: bounds.minX - MIRROR_GAP - width, y: bounds.minY }, settled: true };
   }
-  return { origin: { x: bounds.minX - MIRROR_GAP - width, y: bounds.minY }, settled: true };
+  if (terminal && Number.isFinite(terminal.maxX) && Number.isFinite(terminal.minY)) {
+    return { origin: { x: terminal.maxX + TERMINAL_GAP, y: terminal.minY }, settled: true };
+  }
+  return { origin: { x: -(width + MIRROR_GAP), y: 0 }, settled: false };
 }
 
 function rectangle(partial: Partial<MirrorElement> & { id: string; x: number; y: number; width: number; height: number; customData: Record<string, unknown> }): MirrorElement {

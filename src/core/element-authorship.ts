@@ -39,6 +39,8 @@ export const SERVER_AUTHORED_CUSTOM_DATA = [
   'issueUrl',
   'issueError',
   'issueTitle',
+  'issueStartedAt',
+  'issueEndedAt',
   'observation',
   'implementState',
   'implementUrl',
