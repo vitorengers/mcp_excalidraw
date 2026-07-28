@@ -237,7 +237,7 @@ function startCanvas() {
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
       EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
-      EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}"`,
+      EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}" -p`,
       EXCALIDRAW_IMPLEMENT_CONCURRENCY: String(CAP),
       EXCALIDRAW_IMPLEMENT_QUEUE_MS: String(QUEUE_MS),
     },

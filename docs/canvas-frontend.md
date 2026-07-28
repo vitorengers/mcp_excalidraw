@@ -85,6 +85,36 @@ on the way in; a board arrived at for the *first* time is fitted to its own cont
 Restoring is a restore, not a re-fit — a board left looking at nothing comes back looking at
 nothing. `scripts/check-workspace-viewport-browser.mjs` holds it down.
 
+**A board switched away from stays live.** Its socket is kept and goes on applying what
+arrives to a copy of that board's scene; coming back paints the copy and adopts the socket back,
+in the same turn as the click. No reconnect, no `GET /api/elements`, and the pill never leaves
+*Connected*. Nothing was ever *lost* before this — a shell outlives the socket watching it and
+replays its scrollback on connect — but every return paid for a redraw, which is the whole of
+#173: "I dont want to change to a tab and start loading."
+
+Two decisions the issue left open, both answerable only one way once written down:
+
+- **Visited boards only, four of them.** Every *registered* board would be a socket and a poll
+  per project whether or not anyone had opened it. Opening a board is the reader saying they are
+  working on it; `WARM_BOARD_LIMIT` bounds what the page keeps a second copy of, and the board
+  waited on longest goes cold past it — which costs that board nothing but the reconnect it used
+  to pay every time.
+- **A background board does not autosync, and does not poll.** It has no scene on screen to
+  push and nobody is reading its mirror. The board in front stays the only one writing anything.
+
+What is copied is the **scene**, not the store: the mirror's cards and the terminal's blocks are
+derived and are in no store at all, so a copy of the store would come back missing exactly the
+things that take a `gh` call and a shell to put back. A board mid-switch is *not* kept — the
+socket already names the board being entered while the canvas still draws the one before it, and
+a copy taken then would file one project's shapes under another.
+
+**A warm socket is listening, not watching**, and the server is told which. `clientsWatching`
+is what lets an export or a viewport request for a board with no browser on it be refused at
+once instead of waiting out its timeout, and a socket held open for a board nobody is looking at
+would otherwise answer for it. The client sends `{ type: "watching", active }` on the way out and
+on the way back; a socket that never says is watching, which is every other client.
+`scripts/check-warm-board-browser.mjs` counts the sockets and the requests from inside the page.
+
 **Three connection states, not two.** A socket that has never been up is *Connecting*, not
 Disconnected; the pill only says Disconnected after four failed retries. Retries are immediate,
 then 250 ms doubling to a 5 s ceiling, rather than a flat three seconds. A `ping`/`pong`
