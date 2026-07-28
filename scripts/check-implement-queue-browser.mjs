@@ -15,10 +15,13 @@
  *    after the first click can never be switched back, and every state on the server would
  *    still be right while the board was stuck.
  *  - does the appearance survive the twenty-second redraw, which rebuilds every mirrored
- *    shape from GitHub and would take an on-looking button with it.
+ *    shape from GitHub and would take an on-looking button with it;
+ *  - and does the board actually drain on screen: queue on, a run going, that run finishes,
+ *    and the next one starts by itself with the outlines on the cards following it.
  *
- * The fixture's Todo column holds one **closed** issue, so the queue can be switched on
- * without an agent being started against anything: what is asserted here is the button.
+ * The fixture's Todo column holds one closed issue and two open ones, against a cap of one,
+ * so the drain is a sequence a browser can watch rather than a burst. The agent parks until
+ * the check releases it, which is what makes "one finishes" a moment this can choose.
  *
  * Chrome is driven over the DevTools protocol through `ws`, which the server already depends
  * on. Self-contained otherwise: it writes a stub `gh` and a stub agent, starts its own canvas
@@ -133,10 +136,13 @@ writeFileSync(fixturePath, JSON.stringify({
     url: 'https://github.com/users/vitorengers/projects/5',
     field: { id: 'PVTSSF_status', name: 'Status', options: [TODO, DOING, DONE] },
     items: { pageInfo: { hasNextPage: false }, nodes: [
-      // Closed, so switching the queue on starts nothing: this check is about the button.
+      // The oldest card in Todo is closed, so a queue that took the head of the column
+      // without looking would start the one thing there is no work in.
       item('PVTI_a', 31, '2026-07-01T10:00:00Z', TODO, 'CLOSED'),
-      item('PVTI_b', 32, '2026-07-05T10:00:00Z', DOING),
-      item('PVTI_c', 33, '2026-07-09T10:00:00Z', DONE),
+      item('PVTI_b', 32, '2026-07-02T10:00:00Z', TODO),
+      item('PVTI_c', 33, '2026-07-03T10:00:00Z', TODO),
+      item('PVTI_d', 34, '2026-07-05T10:00:00Z', DOING),
+      item('PVTI_e', 35, '2026-07-09T10:00:00Z', DONE),
     ] },
   } } },
 }), 'utf8');
@@ -148,11 +154,24 @@ if (args.includes('graphql')) process.stdout.write(readFileSync(process.env.STUB
 else process.stdout.write('{}\\n');
 `, 'utf8');
 
-/** Never reached if the queue behaves; here so its absence cannot be why nothing starts. */
+/**
+ * An agent that parks until this check releases it, so "one run finishes" is a moment the
+ * check chooses rather than one it waits out.
+ */
 writeFileSync(agentPath, `#!/usr/bin/env node
-process.stdin.resume();
-process.stdin.on('data', () => {});
-process.stdin.on('end', () => { process.stdout.write('done\\nhttps://github.com/${REPO}/pull/1\\n'); });
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+const workDir = ${JSON.stringify(workDir)};
+let input = '';
+process.stdin.on('data', (chunk) => { input += chunk.toString(); });
+process.stdin.on('end', async () => {
+  const number = (input.match(/\\/issues\\/(\\d+)/) ?? [])[1] ?? '0';
+  for (let attempt = 0; attempt < 900; attempt++) {
+    if (existsSync(join(workDir, 'release-' + number))) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  process.stdout.write('done\\nhttps://github.com/${REPO}/pull/' + number + '\\n');
+});
 `, 'utf8');
 
 writeFileSync(registryPath, JSON.stringify({
@@ -181,6 +200,9 @@ const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_GH_COMMAND: `node "${stubPath.replace(/\\/g, '/')}"`,
     EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentPath.replace(/\\/g, '/')}"`,
+    // One at a time, so the drain is a sequence to watch rather than a burst, and so the
+    // second issue starting is provably the first one finishing rather than both at once.
+    EXCALIDRAW_IMPLEMENT_CONCURRENCY: '1',
     STUB_GH_FIXTURE: fixturePath,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -275,11 +297,15 @@ const GRAB_API = `(() => {
 const PROBE = `(() => {
   const api = window.__boardCheckApi;
   if (!api) return { error: 'no api handle' };
-  const out = { queue: null, add: null, headers: [], cards: 0, labels: [] };
+  const out = { queue: null, add: null, headers: [], cards: [], labels: [] };
   for (const element of api.getSceneElements()) {
     const custom = element.customData || {};
     if (custom.kind !== 'project-board') continue;
-    if (custom.role === 'card') out.cards++;
+    if (custom.role === 'card') {
+      out.cards.push({ url: custom.issueUrl || null, col: custom.sectionOptionId,
+                       run: custom.implementState || null, y: element.y,
+                       strokeStyle: element.strokeStyle, strokeWidth: element.strokeWidth });
+    }
     if (custom.role === 'section') {
       out.headers.push({ id: element.id, col: custom.sectionOptionId,
                          x: element.x, y: element.y, w: element.width, h: element.height });
@@ -325,6 +351,12 @@ const serverRuns = async () => {
   const response = await fetch(`${BASE}/api/implement?workspace=queue-check`);
   return (await response.json()).runs ?? [];
 };
+const issueUrl = (number) => `https://github.com/${REPO}/issues/${number}`;
+const stateOf = async (number) =>
+  (await serverRuns()).find((run) => run.issueUrl === issueUrl(number))?.state ?? null;
+const release = (number) => writeFileSync(join(workDir, `release-${number}`), '', 'utf8');
+/** The card the mirror draws for one issue, as the browser currently has it. */
+const cardFor = (scene, number) => (scene.cards ?? []).find((card) => card.url === issueUrl(number));
 
 /** Click the toggle where it currently is, and wait for the redraw the click causes. */
 async function clickToggle(scene) {
@@ -353,7 +385,7 @@ try {
   await send('Page.enable');
   await send('Runtime.enable');
   await waitFor(() => evaluate(GRAB_API), 'the Excalidraw API handle');
-  await waitFor(async () => (await evaluate(PROBE)).cards >= 3, 'the mirror to render');
+  await waitFor(async () => (await evaluate(PROBE)).cards.length >= 5, 'the mirror to render');
 
   // Alt+B fits the mirror to the viewport, the way a reader brings it into view.
   await pressKey('KeyB', 'b', 1, 66);
@@ -408,30 +440,59 @@ try {
   check('and its glyph is legible against that fill', on.textColor !== on.fill,
         `${on.textColor} on ${on.fill}`);
 
-  console.log('\n5. nothing was started, the only Todo card being closed');
-  await sleep(1500);
-  check('no run against a closed issue', (await serverRuns()).length === 0,
+  console.log('\n5. the board starts draining, oldest open issue first');
+  await waitFor(async () => (await stateOf(32)) === 'running', 'the oldest open issue to start');
+  check('the oldest *open* issue is the one running', (await stateOf(32)) === 'running',
+        JSON.stringify(await serverRuns()));
+  check('the closed card above it was passed over', (await stateOf(31)) === null,
+        JSON.stringify(await serverRuns()));
+  check('and the cap of one is holding: nothing else started', (await stateOf(33)) === null,
         JSON.stringify(await serverRuns()));
 
-  console.log('\n6. the appearance survives the redraw that rebuilds every mirrored shape');
-  // The mirror repaints from GitHub on a twenty-second poll, and every shape in it is thrown
-  // away and drawn again. A toggle whose state lived on the shape would come back off.
-  const repainted = await waitFor(async () => {
+  // The cards carry the run marks on the next poll, which is the half a reader sees.
+  const drawing = await waitFor(async () => {
     const now = await evaluate(PROBE);
-    return now.queue && now.queue.on === true ? now : null;
-  }, 'a poll to redraw the mirror', 120);
-  await sleep(21_000);
-  const afterPoll = await evaluate(PROBE);
-  await shot('03-after-poll');
-  check('still on after a full poll', afterPoll.queue?.on === true, JSON.stringify(afterPoll.queue));
-  check('and still drawn the on way', afterPoll.queue?.fill === on.fill
-        && afterPoll.queue?.strokeWidth === on.strokeWidth, JSON.stringify(afterPoll.queue));
-  check('with the server unchanged underneath it', (await serverQueue())?.enabled === true,
-        JSON.stringify(repainted?.queue));
+    return cardFor(now, 32)?.run === 'running' ? now : null;
+  }, 'the running card to be drawn as running', 240);
+  await shot('03-draining');
+  check('the card for it is drawn with the outline a run in flight has',
+        cardFor(drawing, 32)?.strokeStyle === 'dashed' && cardFor(drawing, 32)?.strokeWidth === 2,
+        JSON.stringify(cardFor(drawing, 32)));
+  check('while the one that has not started carries no mark',
+        cardFor(drawing, 33)?.run == null && cardFor(drawing, 33)?.strokeStyle === 'solid',
+        JSON.stringify(cardFor(drawing, 33)));
 
-  console.log('\n7. clicking it again turns it off — the click a stale selection would swallow');
+  console.log('\n6. the toggle survives the poll that redrew all of that');
+  // Every mirrored shape is thrown away and drawn again from GitHub on each poll. A toggle
+  // whose state lived on the shape would have come back off during the wait above.
+  check('still on', drawing.queue?.on === true, JSON.stringify(drawing.queue));
+  check('and still drawn the on way', drawing.queue?.fill === on.fill
+        && drawing.queue?.strokeWidth === on.strokeWidth, JSON.stringify(drawing.queue));
+  check('with the server unchanged underneath it', (await serverQueue())?.enabled === true,
+        JSON.stringify(await serverQueue()));
+
+  console.log('\n7. one run finishes and the next starts by itself');
+  release(32);
+  await waitFor(async () => (await stateOf(32)) === 'done', 'the released run to finish');
+  const next = await waitFor(async () => (await stateOf(33)) === 'running' ? true : null,
+                             'the next issue to start on its own', 240);
+  check('the slot that freed was filled without anybody clicking', next === true,
+        JSON.stringify(await serverRuns()));
+  const drained = await waitFor(async () => {
+    const now = await evaluate(PROBE);
+    return cardFor(now, 33)?.run === 'running' ? now : null;
+  }, 'the board to draw the second run', 240);
+  await shot('04-next-started');
+  check('and the board says so: the second card is now the one in flight',
+        cardFor(drained, 33)?.strokeStyle === 'dashed', JSON.stringify(cardFor(drained, 33)));
+  check('while the finished one is drawn as landed rather than running',
+        cardFor(drained, 32)?.run === 'done' && cardFor(drained, 32)?.strokeStyle === 'solid'
+        && cardFor(drained, 32)?.strokeWidth === 2, JSON.stringify(cardFor(drained, 32)));
+  const afterPoll = drained;
+
+  console.log('\n8. clicking it again turns it off — the click a stale selection would swallow');
   scene = await clickToggle(afterPoll);
-  await shot('04-off-again');
+  await shot('05-off-again');
   check('the server state flipped back', (await serverQueue())?.enabled === false,
         JSON.stringify(await serverQueue()));
   check('and the shape is drawn the off way again',
@@ -440,10 +501,16 @@ try {
         JSON.stringify(scene.queue));
   check('the button is not left selected, which is what makes a third click possible',
         !scene.selected.includes(scene.queue?.id), JSON.stringify(scene.selected));
+  check('and the run that was in flight is left alone by the switch',
+        (await stateOf(33)) === 'running', JSON.stringify(await serverRuns()));
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);
 } finally {
+  for (const number of [31, 32, 33, 34, 35]) {
+    try { release(number); } catch { /* the world may already be gone */ }
+  }
+  await sleep(400);
   try { socket?.close(); } catch { /* already gone */ }
   for (const child of children) {
     if (child.exitCode === null) { try { child.kill('SIGKILL'); } catch { /* already gone */ } }
