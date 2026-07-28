@@ -127,21 +127,71 @@ Three things follow from the mode, and they are the whole of the difference:
   is still no `TIOCSWINSZ` to send, and the number is kept for what it was always good for — the
   block a second viewer draws.
 
-**Streaming is unchanged and is still the point.** Every agent this board runs produces a live
-stream and `runAgent` buffers the liveness away — `stdout += chunk`, read once the process exits
-— which is why a block can say a run is `running` and nothing more. Here a command that prints,
-pauses and prints again arrives as two messages while the process is still alive, and
-`scripts/check-terminal.mjs` asserts exactly that.
+**Streaming is unchanged and is still the point.** A command that prints, pauses and prints
+again arrives as two messages while the process is still alive, and `scripts/check-terminal.mjs`
+asserts exactly that. It is what `runAgent` could not do while every run was a private child —
+`stdout += chunk`, read once the process exited — which is why a block could say a run was
+`running` and nothing more, and why an implementation now runs here instead.
+
+## A session the board opened for itself
+
+Starting an implementation opens one of these, in the worktree of the run, and the tab appears
+with nobody clicking for it. That is #128, and it is what the terminal was built towards: #51
+deferred it, and `docs/whats-next.md` carried it until now.
+
+Three things make an agent's session different from a shell's, and they are the whole of the
+difference — `TerminalSessionOptions` in `src/core/terminal-session.ts`:
+
+- **a `directory`**, because a run happens in `<project>-worktrees/issue-<n>` rather than in the
+  project. It is the `AgentDirectory` the agents already resolve, so the WSL case is not
+  implemented a second time;
+- **an `owner`** — which agent, and which issue — so the strip can label the tab `#128` rather
+  than `s4`. A tab that arrives on its own has to say what it is; a shell the reader opened
+  keeps its number, and its owner is null;
+- **an `input`**, the prompt, written to stdin and then ended.
+
+**That last one is why an agent's session is on pipes**, and it is a measurement rather than a
+preference. A pseudoterminal has no end of file to send. On ConPTY a child reading stdin sees
+neither `^Z` nor `^D` as one — measured against a Node child, which went on reading and never
+saw `end` — so a `claude -p` handed its prompt through a PTY would wait forever for a prompt
+that never finished arriving. The constructor therefore ignores the binding whenever `input` is
+set, and `mode` says `pipe`, because a block that claimed otherwise would be the worse failure.
+The consequence is that the tab is **read-only in substance**: stdin was spent on the prompt, so
+there is nothing for a keystroke to reach, and `write()` does not echo one rather than letting
+it read as though the agent had heard it.
+
+**A tab is offered, never required.** `EXCALIDRAW_TERMINAL` and `EXCALIDRAW_IMPLEMENT_AGENT` are
+separate switches and stay separate: with the terminal off, with no PTY binding, or with all
+eight tabs already taken, the run happens in a private child exactly as it did before any of
+this — `runAgent` falls through, and `GET /api/implement` reports `terminal: null` for it. A 409
+from the cap must never be what stops an implementation from starting.
+
+**The run settles the way it always did.** The process inside the tab is the process that ran
+before, in the same checkout, reading the same prompt on stdin; the exit code and the transcript
+go through the same `agentOutcome`, so `done` with a pull request URL and `failed` with an error
+are decided by one piece of code for a watched run and an unwatched one alike.
+`scripts/check-implement-terminal.mjs` covers the server and
+`scripts/check-implement-terminal-browser.mjs` covers the board.
 
 ## The routes
 
 | | |
 |---|---|
 | `POST /api/terminal` | open one more session — **202** with the session, **409** past the cap |
+| | body: optional `command` for what to run, optional `cwd` for where |
 | `GET /api/terminal` | `sessions`, each with its own scrollback, and the `limit` |
 | `POST /api/terminal/input` | `{ sessionId, data }` written to that shell — **202** |
 | `POST /api/terminal/resize` | `{ sessionId, cols, rows }` the block now stands for |
 | `DELETE /api/terminal?sessionId=` | close that one, and take what it was running with it |
+
+**`POST /api/terminal` takes a body now, and both fields are optional.** `command` names what to
+run instead of the configured shell and `cwd` names where; a request with neither is the request
+it always was. Neither grants anything the route did not already grant — a shell is a thing you
+type commands and `cd` into — and all three guards are untouched. They exist because the server
+itself has to ask for a session that is not the default one, and a facility only the server can
+reach is one nothing can check by hand. `cwd` is **one path, spelled the way the workspace's own
+environment spells it**: inside a WSL distro only the inner path is ever used, outside one only
+the Windows path is.
 
 **Every route that addresses a session takes its id**, and that is the whole of what a strip of
 tabs needed from the server: `input`, `resize` and `DELETE` used to resolve *the* session from
@@ -671,6 +721,15 @@ taken.
   still arrives — the board strips one key rather than filtering the environment. It starts
   its own servers holding the marker, because whether any given machine's board holds it
   depends on how that board was started.
+- `scripts/check-implement-terminal.mjs` — a run opening a session by itself, the session naming
+  the issue that owns it and starting in the worktree of the run, its output arriving as two
+  messages while the process is still alive, and the run settling `done` with its pull request.
+  Then the half that matters more: with the terminal off, with `EXCALIDRAW_TERMINAL_PTY=0`, and
+  with the cap already full, the run still starts, still settles, and says it had no tab.
+- `scripts/check-implement-terminal-browser.mjs` — the same run, in Chrome: a tab appearing with
+  nobody clicking for it, labelled `#128` rather than `s4`, its screen drawing the agent's output
+  while the record still says `running`, and the block still selectable and still resizable by
+  its own corner afterwards.
 - `scripts/check-terminal-browser.mjs` — the block, in Chrome over the DevTools protocol.
   Placement, Alt+T, a command typed with real keystrokes, a corner dragged with a real pointer,
   and the store still holding none of it.
@@ -732,9 +791,18 @@ were not being hidden from a picker; they were never being written.
 
 ## What it does not do yet
 
-- **Nothing streams the agents into it.** That is the destination the observation behind #51
-  named, and it is a second producer on this surface rather than part of building it: tap
-  `issue-agent.ts` where the chunks arrive and broadcast them. It deserves its own issue.
+- **The issue agent still runs in a private child.** #128 put the *implement* agent in a tab,
+  because that is the one that runs for an hour with nothing to look at; researching an issue
+  has the same gap and the same seam waiting for it — `runAgent` takes a `host`, and
+  `runIssueAgent` does not pass one. It deserves its own issue.
+- **An agent's tab does not come to the front when it opens.** It appears labelled and the
+  reader clicks it. Bringing it forward would mean an unattended run — four of them at the
+  default concurrency, and the queue starts runs with nobody watching — taking the view away
+  from a shell somebody is typing in, which is worse than one click.
+- **An agent's tab cannot be typed into**, because stdin was spent on the prompt and a
+  pseudoterminal has no end of file to close it with. Watching is what it is for. An
+  interactive `claude` the reader could intervene in is a different design and would have to
+  answer how a repainting screen is scraped for a pull request URL.
 - **A program that turns mouse reporting on takes the pointer with it.** Once the screen has
   the pointer, `vim` or `claude` asking for mouse tracking receives clicks and the wheel as
   escape sequences, which is what those programs expect and also means the reader cannot
