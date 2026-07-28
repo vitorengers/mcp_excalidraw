@@ -24,20 +24,39 @@ export interface BlockAppearance {
 /**
  * Written on the board, no issue behind it yet.
  *
- * These are the values `docs/blocks.excalidrawlib` ships, and `check-block-appearance.mjs`
+ * **The hue is the notes column's, not a hue of this module's own.** A block is only ever
+ * written in one place — the column the canvas draws for itself, which `layoutMirror` rehomes
+ * every draft into whatever its `sectionOptionId` says — and on that board hue means *the
+ * column* (`docs/project-board.md`). Under a blue header a yellow block read as a mistake,
+ * because visually the header and the blocks under it are one population (#195). So
+ * `#1971c2` is `COLUMN_STROKES[0]` and `#e7f5ff` is `COLUMN_FILLS[0]`, the tint that column
+ * already computed for cards it can never hold.
+ *
+ * A constant rather than a lookup, deliberately. A block dragged in from the library has no
+ * column at all, and giving one kind of shape two looks depending on how it was made would
+ * be worse than the disagreement this fixed. `check-notes-block-hue.mjs` is what holds the
+ * two together, reading the header's stroke out of the layout rather than retyping it here.
+ *
+ * These are also the values `docs/blocks.excalidrawlib` ships, and `check-block-appearance.mjs`
  * holds the two together: a mapping that disagreed with the library would repaint every
  * block the first time anything touched it.
  */
 const FIRST_STAGE: BlockAppearance = {
-  strokeColor: '#f08c00',
-  backgroundColor: '#fff9db',
+  strokeColor: '#1971c2',
+  backgroundColor: '#e7f5ff',
   strokeStyle: 'dashed',
 };
 
-/** An issue exists. Same hue, one step down the ramp, and the outline closes. */
+/**
+ * An issue exists. Same hue, one step down the ramp, and the outline closes.
+ *
+ * The blue rungs matching the yellow ones this used to be: one step down Open Color's own
+ * ramp, so "similar, but settled" still reads at a glance and the second stage is still
+ * strictly darker per channel than the first.
+ */
 const SECOND_STAGE: BlockAppearance = {
-  strokeColor: '#e67700',
-  backgroundColor: '#fff3bf',
+  strokeColor: '#1864ab',
+  backgroundColor: '#d0ebff',
   strokeStyle: 'solid',
 };
 

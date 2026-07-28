@@ -93,10 +93,16 @@ function shape(id, extra = {}) {
   };
 }
 
+/**
+ * The two stages, written out rather than imported: what a seed does to a look is exactly
+ * what is under test here, so reading the values from the module that decides them would
+ * leave nothing to disagree with. They are the notes column's hue since #195, and
+ * `check-notes-block-hue.mjs` is what holds them to it.
+ */
 /** The first stage: written on the board, no issue behind it yet. */
-const DRAFT_LOOK = { strokeColor: '#f08c00', backgroundColor: '#fff9db', strokeStyle: 'dashed' };
+const DRAFT_LOOK = { strokeColor: '#1971c2', backgroundColor: '#e7f5ff', strokeStyle: 'dashed' };
 /** The second stage: an issue exists. */
-const CREATED_LOOK = { strokeColor: '#e67700', backgroundColor: '#fff3bf', strokeStyle: 'solid' };
+const CREATED_LOOK = { strokeColor: '#1864ab', backgroundColor: '#d0ebff', strokeStyle: 'solid' };
 
 const interesting = [
   shape('plain', { customData: undefined }),

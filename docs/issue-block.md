@@ -238,12 +238,28 @@ four states with one appearance, because appearance was authored once in
 
 | Stage | Outline | Stroke | Fill |
 | --- | --- | --- | --- |
-| `draft`, `running`, `failed` | dashed | `#f08c00` | `#fff9db` |
-| `created` | solid | `#e67700` | `#fff3bf` |
+| `draft`, `running`, `failed` | dashed | `#1971c2` | `#e7f5ff` |
+| `created` | solid | `#1864ab` | `#d0ebff` |
 
 **Dashed means there is no issue behind it yet; solid means there is.** The second stage is the
 first one step down the same ramp rather than a new colour, so a board reads as one thing at a
 glance and the change still survives being squinted at.
+
+**The ramp is the notes column's, and that is the point.** A block is only ever written in one
+place — the column the canvas draws for itself — and on the mirror hue means *the column*
+(`docs/project-board.md`). Under a blue header a yellow block read as a mistake (#195), because
+the header and the blocks under it are one population to look at. `#1971c2` is the header's own
+stroke and `#e7f5ff` the tint that column computes for cards it can never hold; the second stage
+is the blue rung matching the yellow one this used to be. A block dragged in from the library
+gets the same look, having no column of its own: one kind of shape with two appearances
+depending on how it was made would be worse than the disagreement this replaced.
+`check-notes-block-hue.mjs` reads the header's stroke out of the layout rather than retyping it,
+so the block and the bar above it cannot drift apart.
+
+A block on a board saved before that change comes back in the new hue rather than the one it was
+exported in: `seedableElement` repaints every block it reads, the look being the server's. It is
+the one place a look arrives from outside this process, and nothing else on the way in writes a
+block's colours.
 
 `running` and `failed` deliberately keep the first-stage look. Both are blocks with no issue
 behind them, which is exactly what the dashed outline already says, and the panel reports which
