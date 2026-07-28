@@ -42,6 +42,32 @@ function check(name, condition, detail = '') {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The action row's own source, from `<div className="element-docs__actions">` to the
+ * `</div>` that closes it.
+ *
+ * Case 10 is about which button comes first on screen, and the panel's own prose names
+ * both — the hint an interrupted run shows says "Implement / Fix starts the issue again"
+ * hundreds of lines above the row. A position compared over the whole file therefore
+ * compares a button against a sentence about a button, which is how this case went red
+ * with the row in exactly the order it means to assert. Reading the row itself is the
+ * only substring where a label is a label.
+ */
+function actionRow(source) {
+  const start = source.indexOf('<div className="element-docs__actions">');
+  if (start < 0) return '';
+  // Depth over `<div`/`</div>`; JSX here never self-closes a div, and a nested one would
+  // otherwise end the row early.
+  const tag = /<div\b|<\/div>/g;
+  tag.lastIndex = start;
+  let depth = 0;
+  for (let match = tag.exec(source); match; match = tag.exec(source)) {
+    depth += match[0] === '</div>' ? -1 : 1;
+    if (depth === 0) return source.slice(start, match.index + match[0].length);
+  }
+  return '';
+}
+
 function git(cwd, args) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
   return { code: result.status, out: (result.stdout ?? '').trim() };
@@ -349,13 +375,13 @@ try {
   const panel = readFileSync(join(repoRoot, 'frontend', 'src', 'components', 'DocsPanel.tsx'), 'utf8')
     .replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
   const css = readFileSync(join(repoRoot, 'frontend', 'src', 'components', 'DocsPanel.css'), 'utf8');
-  const row = panel.match(/element-docs__actions[\s\S]*?Implement \/ Fix/);
+  const row = actionRow(panel);
   check('Add observations and Implement / Fix share one container',
-        Boolean(row) && row[0].includes('Add observations'),
+        row.includes('Add observations') && row.includes('Implement / Fix'),
         'the two buttons are not inside the same action row');
   check('Add observations comes first',
-        panel.includes('Add observations')
-          && panel.indexOf('Add observations') < panel.indexOf('Implement / Fix'),
+        row.includes('Add observations') && row.includes('Implement / Fix')
+          && row.indexOf('Add observations') < row.indexOf('Implement / Fix'),
         'the observation says Add observations is the first of the two');
   const rowRule = css.match(/\.element-docs__actions\s*\{[^}]*\}/)?.[0] ?? '';
   const itemRule = css.match(/\.element-docs__action\s*\{[^}]*\}/)?.[0] ?? '';
