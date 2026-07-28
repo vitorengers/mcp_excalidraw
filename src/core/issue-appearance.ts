@@ -119,6 +119,35 @@ export function offersResume(input: {
   return input.implementState === 'interrupted';
 }
 
+/**
+ * Whether the panel offers **Recreate with observations**.
+ *
+ * Three facts, and every one of them has to be true. `recreatable` is the shape's own answer
+ * to "is this issue still waiting" — the Todo column for a mirrored card. The issue has to be
+ * open, because past that it is either shipped or abandoned and there is nothing left to
+ * re-research. And nothing may have been started against it: rewriting a body under a live
+ * implement agent changes the specification behind its back, with no way to tell the agent
+ * that read the issue when it started.
+ *
+ * `interrupted` and `failed` count as runs here, unlike in `offersImplement`. Both mean an
+ * agent has already been sent at this issue, and both leave the card in the column a run
+ * moved it to rather than in Todo — so refusing them is what the gate already says, said
+ * once more where the button is drawn.
+ *
+ * A `null` `githubState` is an issue not read yet rather than an open one, and it keeps the
+ * control for the reason `offersImplement` does: a button that appeared a second after every
+ * selection would read as a glitch. The route refuses a closed issue regardless.
+ */
+export function offersRecreate(input: {
+  githubState: string | null;
+  implementState: PanelRunState;
+  recreatable: boolean;
+}): boolean {
+  if (!input.recreatable) return false;
+  if (isClosed(input.githubState)) return false;
+  return input.implementState === null;
+}
+
 export interface ClosureView {
   /** What GitHub reports as having closed it. Usually one, occasionally none. */
   pullRequests: ClosingPullRequest[];

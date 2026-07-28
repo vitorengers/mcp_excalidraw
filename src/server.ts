@@ -39,7 +39,7 @@ import {
   Workspace
 } from './core/workspaces.js';
 import { listDirectories } from './core/directory-browse.js';
-import { runIssueAgent } from './core/issue-agent.js';
+import { runIssueAgent, runReviseAgent } from './core/issue-agent.js';
 import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
 import {
   readProjectBoard,
@@ -2452,6 +2452,224 @@ app.post('/api/issue/comment', async (req: Request, res: Response) => {
     logger.warn(`Commented on ${issueUrl} but could not read it back: ${(error as Error).message}`);
     res.json({ success: true, issue: null });
   }
+});
+
+// ─── Researching an issue again ───────────────────────────────
+//
+// **Add observations** above can only append. A comment cannot correct a body, and the next
+// reader of an issue this board opened is an unattended coding agent — which is then asked to
+// reconcile two texts that contradict each other, when what the reader wanted was one text
+// that is right. So a first investigation that went the wrong way is rewritten rather than
+// annotated: the same issue number, the same project card, the same comments.
+//
+// That is only defensible while nothing has been built against the issue, which is what the
+// Todo gate below is. Rewriting a body under a live implement agent would change the
+// specification behind its back, with no way to tell the agent that read the issue when it
+// started.
+
+/** What a recreate run has done so far, kept against the issue rather than a shape. */
+interface RecreateRecord {
+  state: 'running' | 'done' | 'failed';
+  error: string | null;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+/**
+ * The runs, per workspace and issue URL.
+ *
+ * In memory and against the URL, because there is nothing else to hang it on: a mirrored card
+ * has no element, has no `issueState` to hold `running`, and is redrawn from GitHub on every
+ * poll. The panel polls this while its run is in flight, the way it polls the implement
+ * record, and that is the whole lifetime — a recreate that was interrupted by a restart is
+ * simply forgotten, which is honest: nothing on GitHub is left half-written by one, because
+ * the edit an agent makes is a single call that either happened or did not.
+ */
+const recreateRuns = new Map<string, RecreateRecord>();
+const recreateKey = (workspaceId: string, issueUrl: string): string => `${workspaceId}\n${issueUrl}`;
+
+/**
+ * Why this issue may not be researched again, or null when it may.
+ *
+ * Strict Todo, and strict about what "Todo" is: the workspace's own `projectTodoColumn`,
+ * matched the way every other column lookup here is. A card in *No Status*, or in a column
+ * somebody invented, has nothing started against it either — but "in Todo" is what the
+ * observation this came from asked for, it is where a research run already puts a created
+ * issue, and it is the rule a reader can predict without knowing this function.
+ *
+ * A board with no project has no column at all, so there is nothing to gate on and nothing is
+ * read: a dormant board stays exactly as dormant as it was.
+ */
+async function todoColumnRefusal(workspace: Workspace, issueUrl: string): Promise<string | null> {
+  if (!workspace.githubProject) return null;
+
+  // Uncapped: the cap decides what is *drawn*, and a card hidden behind it would read here as
+  // an issue that is not on the project at all.
+  const board = await readProjectBoard(workspace, { cardLimit: 0 });
+  const target = todoColumn(workspace);
+  const found = board.sections
+    .flatMap((section) => section.cards.map((card) => ({ section, card })))
+    .find((entry) => entry.card.url === issueUrl);
+
+  if (!found) {
+    return `${issueUrl} is not on this project, so there is no "${target.name}" column it could be waiting in.`;
+  }
+  if (found.section.name.trim().toLowerCase() !== target.name.trim().toLowerCase()) {
+    return `Its card is in "${found.section.name}", not "${target.name}". An issue is only researched again `
+      + 'while nothing has been started against it.';
+  }
+  return null;
+}
+
+/**
+ * Rewrite an issue this board opened, from new observations.
+ *
+ * Guarded like the run route rather than like the comment route, because it spawns an agent:
+ * `EXCALIDRAW_ISSUE_AGENT` set, loopback only, and one run in flight per issue URL.
+ *
+ * **It is not a second entrance to `POST /api/issue-block/:id`.** That route still answers 409
+ * for any block carrying an `issueUrl`, and `DELETE` still refuses to make such a block
+ * runnable — the guard that stops one observation becoming two issues is untouched, because
+ * this one opens no issue at all.
+ */
+app.post('/api/issue/recreate', async (req: Request, res: Response) => {
+  if (!ISSUE_AGENT_COMMAND) {
+    return res.status(404).json({
+      success: false,
+      error: 'Researching an issue again is disabled. Set EXCALIDRAW_ISSUE_AGENT to the agent command to enable it.'
+    });
+  }
+  if (offLoopback(res, 'Issues are researched again')) return;
+
+  const issueUrl = typeof req.body?.url === 'string' ? req.body.url : '';
+  if (!isIssueUrl(issueUrl)) {
+    return res.status(400).json({ success: false, error: `Not a GitHub issue URL: ${issueUrl}` });
+  }
+
+  // Kept as typed, trailing newlines and all: the observations are what the run is *about*,
+  // and they are posted to the issue verbatim. Only "is there anything here at all" is judged.
+  const observations = typeof req.body?.observations === 'string' ? req.body.observations : '';
+  if (!observations.trim()) {
+    return res.status(400).json({ success: false, error: 'There is nothing to research again.' });
+  }
+
+  const workspaceId = workspaceIdFrom(req);
+  const key = recreateKey(workspaceId, issueUrl);
+  if (recreateRuns.get(key)?.state === 'running') {
+    return res.status(409).json({ success: false, error: 'A recreate is already in flight for this issue.' });
+  }
+
+  const implementing = readImplement(workspaceId, issueUrl);
+  if (implementing) {
+    return res.status(409).json({
+      success: false,
+      error: `This workspace holds an implementation against this issue (${implementing.state}). `
+        + 'Rewriting it now would change the specification an agent has already read.'
+    });
+  }
+
+  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace || workspace.error) {
+    return res.status(400).json({
+      success: false,
+      error: workspace?.error ?? `Workspace "${workspaceId}" is not registered.`
+    });
+  }
+
+  // Read rather than taken from the memo: a thirty-second-old "OPEN" is fine for drawing a
+  // panel and is not fine for deciding whether to send an agent at somebody's issue.
+  try {
+    const issue = await fetchIssue(workspace, issueUrl);
+    if (issue.state.toUpperCase() === 'CLOSED') {
+      return res.status(409).json({
+        success: false,
+        error: 'This issue is closed, so there is nothing left to research again.'
+      });
+    }
+  } catch (error) {
+    // 502: the failure is GitHub's or gh's, not the caller's request.
+    return res.status(502).json({ success: false, error: (error as Error).message });
+  }
+
+  try {
+    const refusal = await todoColumnRefusal(workspace, issueUrl);
+    if (refusal) return res.status(409).json({ success: false, error: refusal });
+  } catch (error) {
+    return res.status(502).json({ success: false, error: (error as Error).message });
+  }
+
+  recreateRuns.set(key, {
+    state: 'running', error: null, startedAt: new Date().toISOString(), endedAt: null
+  });
+  // Answer immediately: an investigation takes minutes, and a request held open that long
+  // looks indistinguishable from a hang. The panel polls the record.
+  res.status(202).json({ success: true, state: 'running', issueUrl });
+
+  const settle = (state: 'done' | 'failed', error: string | null): void => {
+    recreateRuns.set(key, {
+      state,
+      error,
+      startedAt: recreateRuns.get(key)?.startedAt ?? new Date().toISOString(),
+      endedAt: new Date().toISOString()
+    });
+    // Whatever was remembered about the issue is now wrong twice over — the comment below and,
+    // on the success path, the body itself. Dropped rather than waited out, so selecting the
+    // card straight afterwards shows what the run produced instead of what it replaced.
+    issueMemo.forget(workspaceId, issueUrl);
+  };
+
+  try {
+    // The observations reach the issue before the agent does, and they reach it as a comment.
+    // Two reasons, and both are about what is left behind: a body that changed with nothing on
+    // the issue explaining why is a body nobody can review, and a run that dies having posted
+    // this has left the reader exactly where **Add observations** would have — which is a far
+    // better failure than one that loses what they typed. Never fatal, for the same reason a
+    // board write is not: the rewrite is the point, and `gh` drops a socket here often enough.
+    try {
+      await commentOnIssue(workspace, issueUrl, observations);
+    } catch (error) {
+      logger.warn(`Recreate ${issueUrl}: could not record the observations on the issue — ${(error as Error).message}`);
+    }
+
+    const result = await runReviseAgent(workspace, issueUrl, observations, {
+      agentCommand: ISSUE_AGENT_COMMAND
+    });
+
+    // A run is read as successful from the URL it printed, the way researching is — and here
+    // there is one right answer. An agent that named a different issue opened one rather than
+    // rewriting this one, and recording that as a rewrite would be the board believing that
+    // the issue in front of the reader is now correct when it is untouched.
+    if (result.ok && result.issueUrl === issueUrl) {
+      settle('done', null);
+      logger.info(`Recreate: ${issueUrl} was researched again and rewritten`);
+    } else if (result.ok && result.issueUrl) {
+      settle('failed', `The agent answered with ${result.issueUrl} rather than rewriting ${issueUrl}.`);
+      logger.warn(`Recreate ${issueUrl}: the agent answered with ${result.issueUrl}`);
+    } else {
+      settle('failed', result.error ?? 'The agent finished without rewriting the issue.');
+      logger.warn(`Recreate ${issueUrl} failed: ${result.error}`);
+    }
+  } catch (error) {
+    settle('failed', (error as Error).message);
+  }
+});
+
+/**
+ * What a recreate has done so far, with no `gh` behind it.
+ *
+ * The panel cannot be told: a mirrored card has no element for the socket to update, and a
+ * recreate leaves nothing on a shape while it runs. So it asks, and asking has to be free.
+ */
+app.get('/api/issue/recreate', (req: Request, res: Response) => {
+  const issueUrl = typeof req.query.url === 'string' ? req.query.url : '';
+  if (!issueUrl) {
+    return res.status(400).json({ success: false, error: 'No issue URL was given.' });
+  }
+  res.json({
+    success: true,
+    recreate: recreateRuns.get(recreateKey(workspaceIdFrom(req), issueUrl)) ?? null
+  });
 });
 
 /**
