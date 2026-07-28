@@ -14,10 +14,10 @@
  *   and the literal `[33m` must appear nowhere in the block's DOM.
  * - **can a key that is not a line be pressed?** Ctrl+C is the one that matters — with a
  *   PTY and no way to send it, a reader who starts something long has no way out of it.
- * - **is the block still a block?** The overlay's body is `pointer-events: none` on purpose,
- *   because an overlay that swallowed clicks would take Excalidraw's own resize handles with
- *   it. A terminal emulator brings its own DOM and its own pointer handling, and this is the
- *   regression that change most plausibly causes.
+ * - **is the block still a block?** A terminal emulator brings its own DOM and its own
+ *   pointer handling, and losing the shape underneath is the regression that most plausibly
+ *   causes. Since #112 the emulator has the pointer over its screen and the header is the
+ *   band that selects and drags the block, so that is where this asks.
  *
  * Chrome is driven over the DevTools protocol through `ws`, which the server already
  * depends on. Self-contained otherwise: it builds a throwaway workspace, starts its own
@@ -286,9 +286,17 @@ const PROBE = `(() => {
   const body = card.querySelector('.terminal-card__body');
   const prompt = card.querySelector('.terminal-card__prompt');
   const promptBox = prompt ? prompt.getBoundingClientRect() : null;
+  const header = card.querySelector('.terminal-card__header');
+  const headerBox = header ? header.getBoundingClientRect() : null;
   out.card = {
     left: box.left, top: box.top, width: box.width, height: box.height,
     pointerEvents: body ? getComputedStyle(body).pointerEvents : null,
+    headerPointerEvents: header ? getComputedStyle(header).pointerEvents : null,
+    // Low in the header and in from the left: the middle of the row is where the font
+    // buttons and the mode chip are, and those do take the pointer.
+    header: headerBox
+      ? { x: headerBox.left + 6, y: headerBox.top + headerBox.height - 2 }
+      : null,
     promptPointerEvents: prompt ? getComputedStyle(prompt).pointerEvents : null,
     prompt: promptBox
       ? { x: promptBox.left + promptBox.width / 2, y: promptBox.top + promptBox.height / 2 }
@@ -370,11 +378,11 @@ try {
   await shot('01-placed');
   check('there is an emulator in the block', scene.card.emulator === true,
         `no .xterm inside the card: ${String(scene.card.dom).slice(0, 120)}`);
-  check('and its body is still transparent to the pointer, so the shape underneath is a shape',
-        scene.card.pointerEvents === 'none', String(scene.card.pointerEvents));
-  check('while one strip takes the pointer, which is what can be clicked into',
-        scene.card.promptPointerEvents === 'auto' && Boolean(scene.card.prompt),
-        String(scene.card.promptPointerEvents));
+  check('and its screen takes the pointer, so a click in it is the shell\'s',
+        scene.card.pointerEvents === 'auto', String(scene.card.pointerEvents));
+  check('while the header does not, so the shape underneath is still a shape',
+        scene.card.headerPointerEvents === 'none' && Boolean(scene.card.header),
+        String(scene.card.headerPointerEvents));
 
   console.log('\n2. clicking that strip puts the keyboard in the terminal');
   await click(scene.card.prompt.x, scene.card.prompt.y);
@@ -436,10 +444,9 @@ try {
     scene = await evaluate(PROBE);
   }
 
-  const centre = toViewport(scene, scene.block.x + scene.block.w / 2, scene.block.y + scene.block.h / 2);
-  await click(centre.x, centre.y);
+  await click(scene.card.header.x, scene.card.header.y);
   scene = await evaluate(PROBE);
-  check('clicking the block selects it through the overlay',
+  check('clicking the header selects the block through the overlay',
         scene.selected.includes(scene.block.id), JSON.stringify(scene.selected));
 
   const before = { w: scene.block.w, h: scene.block.h };
