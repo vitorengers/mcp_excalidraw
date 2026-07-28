@@ -1126,7 +1126,7 @@ One board runs several projects, and until #82 every setting above applied to al
 two command lines were module constants read once at startup, so retuning one project meant
 editing the board's own environment and restarting it for every other project too.
 
-A project's own `board.config.json` can now say three things per agent, under
+A project's own `board.config.json` can now say four things per agent, under
 `agents.issue` and `agents.implement` — see [workspaces.md](workspaces.md) for the shape:
 
 | Setting | Per-project | Global |
@@ -1134,6 +1134,7 @@ A project's own `board.config.json` can now say three things per agent, under
 | `model` | `agents.<kind>.model` → appended as `--model` | `--model` in the command line |
 | `effort` | `agents.<kind>.effort` → appended as `--effort` | `--effort` in the command line |
 | time limit | `agents.<kind>.timeoutSeconds` | `EXCALIDRAW_ISSUE_AGENT_TIMEOUT`, `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` |
+| how the agent works | `agents.<kind>.workflow` → the text of `agent-workflows/<slug>.md`, last section of the prompt | the base prompt, which holds no project's conventions |
 | the command itself | **never** | `EXCALIDRAW_ISSUE_AGENT`, `EXCALIDRAW_IMPLEMENT_AGENT` |
 | `--allowedTools`, `--output-format` | **never** | the command line |
 | concurrency, memo window | **never** | `EXCALIDRAW_IMPLEMENT_CONCURRENCY`, `EXCALIDRAW_ISSUE_MEMO_MS` |
@@ -1152,14 +1153,66 @@ second one. Nothing else in that command line is rewritten, which is the line `a
 already draws about `--output-format`.
 
 **A project that configures nothing spawns the command line it spawned before any of this
-existed, byte for byte.** That is the same rule `worktreeSection` and `imageReferenceSection`
-keep about the prompt, and `scripts/check-workspace-settings.mjs` asserts it against a stub agent
-that reports its own argv.
+existed, byte for byte — and sends the same prompt, byte for byte.**  That is the same rule
+`worktreeSection`, `imageReferenceSection` and `workflowSection` each keep, and
+`scripts/check-workspace-settings.mjs` asserts both against a stub agent that reports its own
+argv and the prompt it was handed.
 
-Not done here, and deliberately: the multi-stage workflow the observation behind #82 sketched —
-plan with one model, implement with another, review with a third. That is a new execution model
-rather than a setting (the board spawns **once** per implementation, and `ImplementRecord` holds
-one start, one end, one pull request), so it needs its own issue. Per-run resolution of model and
-effort is its precondition, which is what landed here. The `ultracode` keyword belongs to that
-issue too: it is not a CLI flag but a prompt-level opt-in, and the implement prompt is kept free
-of per-project content on purpose.
+### Saying how the agent works, without granting it anything
+
+`agents.<kind>.workflow` names a slug; the text at `<project>/agent-workflows/<slug>.md` is read
+and appended to the prompt as its **last** section. That is the one thing in this table which is
+about how the agent *works* rather than how well it runs, and it exists because the base prompt
+withholds a workflow on purpose — writing this repository's conventions into it would make the
+feature wrong for every other board. What it says instead is "read your own project memory […]
+and follow the workflow it records", which is a pointer: an agent may or may not follow it, a
+fresh worktree may hold no memory behind it, and a typo in it fails as silence. A project that
+runs a pipeline — plan on one model, review the plan, implement, review the implementation — had
+no way to say so.
+
+- **The text, not a pointer to it.** Authorization comes from the turn, and the prompt the board
+  writes *is* that turn. There is no size cap: how big the file is, is a property of what the
+  project wrote, and a cap that truncated silently would reinstate exactly the failure this
+  exists to remove.
+- **A slug, not a path**, matching `[a-z0-9][a-z0-9-]*`, so a name that does not resolve can be
+  reported as one file. `/`, `..`, a drive letter and anything else are refused twice: by the
+  slug shape, and again by `resolveInWorkspace` on the join.
+- **At the project root and committed.** Not `CLAUDE.md`, which interactive runs load too, so a
+  board-only pipeline would leak into every session opened by hand; not under `docsDir`, which is
+  configurable and whose markdown becomes documentation cards; and not a dot-directory, which is
+  the one shape a project has most likely gitignored already — it would resolve on the
+  maintainer's checkout and be absent in every board run, since an implementation runs in a
+  worktree cut from the default branch.
+- **A name that does not resolve refuses the run before the spawn**, naming the file it looked
+  for. Deliberately unlike the rest of a project's config, where a field pointing outside its
+  project is [ignored and the workspace still loads](workspaces.md): a workflow silently not
+  applied is a run that looks entirely normal and did the wrong thing, in a process nobody was
+  watching.
+- **It is not a capability.** Nothing from the file reaches argv, the environment,
+  `--allowedTools` or `--dangerously-skip-permissions`, and the section says so to the agent in
+  as many words. `scripts/check-agent-workflow.mjs` asserts the mechanical form of it: selecting
+  a workflow changes the prompt and leaves the command line byte-identical to the one a project
+  selecting nothing spawns. Nothing new has to be granted for a pipeline, either — the implement
+  agent already runs with `--dangerously-skip-permissions` rather than an allowlist, and its
+  prompt has always said "You may put helpers to work — sub-agents".
+
+**On the issue side the field is shipped but inert**, and that is the operator's call rather than
+this one's. The documented `EXCALIDRAW_ISSUE_AGENT` allowlist above — `Bash(gh:*) Bash(git:*)
+Read Grep Glob WebFetch WebSearch` — has no sub-agent tool in it, and in `-p` mode a tool outside
+the list is refused silently with exit 0 and no result. A workflow asking the issue agent to
+orchestrate therefore does nothing until that variable is widened. The field is there for
+symmetry, and because the same setting already covers both of that agent's runs, researching and
+rewriting.
+
+Orchestrated runs also **under-report their token totals while they run**, which was already
+true and stops being theoretical now that a project can ask for orchestration: under
+`--output-format stream-json` the CLI emits only sub-agent `tool_use`/`tool_result` blocks by
+default, so all three figures settle only when `result` lands, and reasoning stays main-thread
+only even then. `--forward-subagent-text` is where fixing that would start; it is its own issue.
+
+Still not done here, and still deliberately: **the board spawns once per implementation.**
+`ImplementRecord` holds one start, one end and one pull request, so a pipeline runs as
+sub-agents inside that single run rather than as several runs the board sequences — the agent
+orchestrates itself. A per-*card* workflow, chosen for one run rather than for the project, is a
+separate issue too: the block would need somewhere to hold the choice and the run would need to
+report which workflow it used.

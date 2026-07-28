@@ -8,15 +8,17 @@
  * therefore ran every project's agents at the identical model and effort, changeable only
  * by editing a file outside this repository and restarting it.
  *
- * The stub agent here reports its own argv, so the cases can be about the command line
- * rather than about the agent. Three of them are the feature; the other two are the
- * boundaries it must not cross.
+ * The stub agent here reports its own argv and the prompt it was handed, so the cases can be
+ * about the command line and the turn rather than about the agent. Three of them are the
+ * feature; the other two are the boundaries it must not cross.
  *
  *  - A project that configures a model and an effort spawns with them.
  *  - A project that configures **nothing** spawns a command line identical, byte for
- *    byte, to the one it spawned before any of this existed. That is the same rule
- *    `worktreeSection` and `imageReferenceSection` already keep: a feature nobody used
- *    must not change what every board already does.
+ *    byte, to the one it spawned before any of this existed — and sends the same prompt,
+ *    byte for byte, which is the half that used to be taken on trust: the stub buffered
+ *    stdin and then threw it away. That is the same rule `worktreeSection`,
+ *    `imageReferenceSection` and `workflowSection` each keep: a feature nobody used must
+ *    not change what every board already does.
  *  - A project may retune what the operator granted; it may never grant it. Agents are
  *    off unless the environment says otherwise, so a `board.config.json` inside any
  *    registered project must not be able to start one from nothing — otherwise editing a
@@ -36,9 +38,15 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/** The two base prompts, so "unchanged" can be an equality rather than a description. */
+const { IMPLEMENT_AGENT_PROMPT } =
+  await import(pathToFileURL(join(repoRoot, 'dist', 'core', 'implement-agent.js')).href);
+const { ISSUE_AGENT_PROMPT } =
+  await import(pathToFileURL(join(repoRoot, 'dist', 'core', 'issue-agent.js')).href);
 
 let failures = 0;
 
@@ -101,8 +109,8 @@ writeFileSync(registryPath, JSON.stringify({
 }, null, 2), 'utf8');
 
 /**
- * Stands in for both agents, and reports the one fact these cases turn on: the argv it
- * was handed. `hold-<id>` makes it wait to be released, which is how a ceiling gets
+ * Stands in for both agents, and reports the two facts these cases turn on: the argv and the
+ * prompt it was handed. `hold-<id>` makes it wait to be released, which is how a ceiling gets
  * something to fire on.
  */
 const agentStub = join(workDir, 'agent.mjs');
@@ -116,6 +124,9 @@ let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', async () => {
   const workspace = (input.match(/WORKSPACE:([a-z]+)/) ?? input.match(/\\/ws-([a-z]+)\\//) ?? [])[1] ?? 'unknown';
+  writeFileSync(join(workDir, 'prompt-' + kind + '-' + workspace + '.txt'), input, 'utf8');
+  // Written last, because every waiter here polls for the argv file: with the prompt written
+  // first, a case that reads both cannot find one of them half-written.
   writeFileSync(join(workDir, 'argv-' + kind + '-' + workspace + '.json'),
     JSON.stringify({ argv: process.argv.slice(2) }), 'utf8');
 
@@ -216,6 +227,21 @@ const hold = (workspace) => writeFileSync(join(workDir, `hold-${workspace}`), ''
 const release = (workspace) => rmSync(join(workDir, `hold-${workspace}`), { force: true });
 const argvFile = (kind, workspace) => join(workDir, `argv-${kind}-${workspace}.json`);
 const argvOf = (kind, workspace) => JSON.parse(readFileSync(argvFile(kind, workspace), 'utf8')).argv;
+const promptOf = (kind, workspace) =>
+  readFileSync(join(workDir, `prompt-${kind}-${workspace}.txt`), 'utf8');
+
+/**
+ * The prompt each agent sends for a project that has configured nothing.
+ *
+ * None of the throwaway projects is a git repository, so no worktree section is added; none
+ * attaches an image, resumes, or selects a workflow. What is left is the base prompt and the
+ * thing the run was asked about, which is what every run sent before any of this existed.
+ */
+const observationFor = (workspace) => `WORKSPACE:${workspace} please look at this`;
+const plainImplementPrompt = (workspace) =>
+  `${IMPLEMENT_AGENT_PROMPT}\n\n---\n\nThe issue to implement:\n\n${issueUrl(workspace)}`;
+const plainIssuePrompt = (workspace) =>
+  `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observationFor(workspace)}`;
 
 async function waitFor(predicate, what, attempts = 200) {
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -251,7 +277,7 @@ async function spawnIssue(base, workspace) {
   const id = created.body?.element?.id;
   if (!id) throw new Error(`could not create an issue block: ${JSON.stringify(created.body)}`);
   await api(base, workspace, `/api/issue-block/${id}`, {
-    method: 'POST', body: JSON.stringify({ observation: `WORKSPACE:${workspace} please look at this` }),
+    method: 'POST', body: JSON.stringify({ observation: observationFor(workspace) }),
   });
   await waitFor(() => existsSync(argvFile('issue', workspace)),
                 `the issue agent for "${workspace}" to report its argv`);
@@ -302,6 +328,18 @@ try {
   const plainIssue = argvOf('issue', 'plain');
   check('and so is the issue one', same(plainIssue, PLAIN_ISSUE_ARGV),
         `${JSON.stringify(plainIssue)} — expected ${JSON.stringify(PLAIN_ISSUE_ARGV)}`);
+
+  // Asserted rather than assumed. Every section a project can add to a prompt is written to
+  // return the empty string when it was not selected, and until this compared the whole turn
+  // against the composed baseline, nothing here would have failed if one of them stopped.
+  const plainImplementPromptSeen = promptOf('implement', 'plain');
+  check('the implement prompt is unchanged, byte for byte',
+        plainImplementPromptSeen === plainImplementPrompt('plain'),
+        `${plainImplementPromptSeen.length} bytes against ${plainImplementPrompt('plain').length}`);
+  const plainIssuePromptSeen = promptOf('issue', 'plain');
+  check('and so is the issue one',
+        plainIssuePromptSeen === plainIssuePrompt('plain'),
+        `${plainIssuePromptSeen.length} bytes against ${plainIssuePrompt('plain').length}`);
   release('plain');
 
   console.log('\n2. a project that configures a model and an effort spawns with them');
@@ -323,6 +361,12 @@ try {
         tunedIssue[tunedIssue.indexOf('--model') + 1] === 'claude-fable-5'
           && tunedIssue[tunedIssue.indexOf('--effort') + 1] === 'high',
         JSON.stringify(tunedIssue));
+  // The other direction of the same boundary: a model and an effort are how *well* the agent
+  // runs, so they belong on the command line and nowhere near what it is told.
+  check('and neither prompt learned about any of it',
+        promptOf('implement', 'tuned') === plainImplementPrompt('tuned')
+          && promptOf('issue', 'tuned') === plainIssuePrompt('tuned'),
+        'a run that reads its own tuning would send two different prompts on two boards');
   release('tuned');
 
   console.log('\n3. a project may retune what the operator granted; it may never grant it');
