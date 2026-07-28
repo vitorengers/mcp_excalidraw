@@ -123,6 +123,18 @@ interface ApiResponse {
   message?: string;
 }
 
+/**
+ * What the server says about this board's implementation queue.
+ *
+ * `column` is a name rather than an option id: the server resolves it from the workspace's
+ * own `projectTodoColumn`, and it has no board in hand to turn into an id without spending a
+ * `gh` process on every poll. The canvas already has the sections, so it does the matching.
+ */
+interface ImplementQueueState {
+  enabled: boolean;
+  column: string;
+}
+
 type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';
 const AUTO_SYNC_DEBOUNCE_MS = 1200;
 
@@ -1175,6 +1187,11 @@ function App(): JSX.Element {
         addIssueBlockToColumn(String(custom.sectionOptionId ?? ''))
         return
       }
+      // The queue toggle is the same kind of button, and the same kind of click.
+      if (custom.kind === MIRROR_KIND && custom.role === 'queue') {
+        void toggleImplementQueue()
+        return
+      }
     }
 
     // One answer for the whole panel, including "nothing at all". What this replaced was
@@ -1342,8 +1359,17 @@ function App(): JSX.Element {
     errors: Record<string, string>
     /** What is known about implementing each issue, by URL, as of the last refresh. */
     implementing: Record<string, CardImplementState>
+    /**
+     * Whether this board's queue is on, and which column it drains.
+     *
+     * Null while the server has not said — and while it says nothing at all, which is what a
+     * board with implementing disabled gets. The toggle is drawn from this and never from the
+     * shape: the mirror is rebuilt from GitHub on every poll, so a state kept on the button
+     * would last exactly one refresh.
+     */
+    queue: ImplementQueueState | null
     signature: string
-  }>({ board: null, columns: [], errors: {}, implementing: {}, signature: '' })
+  }>({ board: null, columns: [], errors: {}, implementing: {}, queue: null, signature: '' })
 
   /** Whether a drag was in flight on the previous change, so its end can be noticed. */
   const mirrorDraggingRef = useRef<boolean>(false)
@@ -1363,7 +1389,7 @@ function App(): JSX.Element {
   const mirrorOriginRef = useRef<{ x: number; y: number } | null>(null)
 
   const clearMirror = (): void => {
-    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, signature: '' }
+    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, signature: '' }
     draftGeometryRef.current = ''
     mirrorOriginRef.current = null
     const api = excalidrawAPIRef.current
@@ -1426,10 +1452,24 @@ function App(): JSX.Element {
     // `layoutMirror`, so the room reserved and the slot a block is put in cannot disagree
     // — and it is what draws the notes column those blocks live in, which the project
     // itself declares nothing for.
+    // Which column carries the queue toggle is resolved here, from the name the server sends
+    // back with the state: the server knows the workspace's `projectTodoColumn`, and the
+    // section ids are GitHub's and change with the project. Matched the way every other
+    // column lookup in this project is — trimmed and case-insensitively.
+    const queue = projectBoardRef.current.queue
+    const queueColumn = queue
+      ? board.sections.find(
+        (section) => section.name.trim().toLowerCase() === queue.column.trim().toLowerCase()
+      )
+      : undefined
+
     const layout = layoutMirror(board, origin, {
       errors: projectBoardRef.current.errors,
       implementing: projectBoardRef.current.implementing,
-      drafts: drafts.map(draftBlockOf)
+      drafts: drafts.map(draftBlockOf),
+      ...(queue && queueColumn
+        ? { queue: { sectionOptionId: queueColumn.optionId, enabled: queue.enabled } }
+        : {})
     })
     const placed = new Map(layout.drafts.map((placement) => [placement.id, placement]))
 
@@ -1568,21 +1608,78 @@ function App(): JSX.Element {
    * against the issue. It costs no `gh` — `GET /api/implement` reads the map and nothing
    * else — which is why it can ride the same twenty-second poll the board does.
    */
-  const readImplementRecords = async (): Promise<Record<string, CardImplementState>> => {
+  const readImplementRecords = async (): Promise<{
+    implementing: Record<string, CardImplementState>
+    queue: ImplementQueueState | null
+  }> => {
     try {
       const response = await fetch(apiUrl('/api/implement'))
-      if (!response.ok) return {}
+      if (!response.ok) return { implementing: {}, queue: null }
       const body = await response.json().catch(() => ({}))
       const runs = Array.isArray(body?.runs) ? body.runs : []
-      return Object.fromEntries(
-        runs
-          .filter((run: { issueUrl?: string; state?: string }) => Boolean(run?.issueUrl && run.state))
-          .map((run: { issueUrl: string; state: CardImplementState }) => [run.issueUrl, run.state])
-      )
+      // Absent rather than off is the server saying implementing is not available here at
+      // all, and the toggle is then not drawn — the same answer a board gets before the first
+      // read comes back.
+      const queue = body?.queue && typeof body.queue.enabled === 'boolean'
+        ? { enabled: body.queue.enabled === true, column: String(body.queue.column ?? '') }
+        : null
+      return {
+        implementing: Object.fromEntries(
+          runs
+            .filter((run: { issueUrl?: string; state?: string }) => Boolean(run?.issueUrl && run.state))
+            .map((run: { issueUrl: string; state: CardImplementState }) => [run.issueUrl, run.state])
+        ),
+        queue
+      }
     } catch {
       // A board that draws no run marks is worse than one that draws them; a board that
       // stops redrawing because this request failed is worse than both.
-      return {}
+      return { implementing: {}, queue: null }
+    }
+  }
+
+  /**
+   * Flip this board's queue, and redraw the button from what the server answers.
+   *
+   * From the answer and not from what was clicked: the state lives on the server, one per
+   * workspace, and a button drawn from an optimistic guess would show a queue that is on
+   * while the request that was meant to turn it on was refused. `signature` is cleared so
+   * the redraw is not skipped as "nothing moved" — the mirror is otherwise identical, and
+   * the toggle's fill is the only thing that changed.
+   *
+   * The selection is dropped afterwards, which is load bearing rather than tidy: this button
+   * is *selected* rather than clicked, and `syncSelectedDoc` bails out when the selection has
+   * not changed. Leaving it selected would make the second click — the one that turns the
+   * queue off again — do nothing at all.
+   */
+  const toggleImplementQueue = async (): Promise<void> => {
+    const api = excalidrawAPIRef.current
+    const current = projectBoardRef.current.queue
+    if (!api || !current) return
+
+    api.updateScene({ appState: { selectedElementIds: {} }, captureUpdate: CaptureUpdateAction.NEVER })
+    lastSelectedIdRef.current = null
+
+    try {
+      const response = await fetch(apiUrl('/api/implement/queue'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !current.enabled })
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok || !body?.success || typeof body?.queue?.enabled !== 'boolean') {
+        console.warn('Could not switch the implementation queue:', body?.error ?? response.status)
+        return
+      }
+      projectBoardRef.current = {
+        ...projectBoardRef.current,
+        queue: { enabled: body.queue.enabled === true, column: String(body.queue.column ?? '') },
+        signature: ''
+      }
+      const board = projectBoardRef.current.board
+      if (board) renderMirror(board)
+    } catch (error) {
+      console.warn('Could not switch the implementation queue:', error)
     }
   }
 
@@ -1613,9 +1710,9 @@ function App(): JSX.Element {
       if (!body?.success || !body.board) return
       await reconcileDrafts(body.board as ProjectBoard)
       if (activeWorkspaceRef.current !== workspace) return
-      const implementing = await readImplementRecords()
+      const { implementing, queue } = await readImplementRecords()
       if (activeWorkspaceRef.current !== workspace) return
-      projectBoardRef.current = { ...projectBoardRef.current, implementing }
+      projectBoardRef.current = { ...projectBoardRef.current, implementing, queue }
       renderMirror(body.board as ProjectBoard)
     } catch (error) {
       console.warn('Could not read the project board:', error)
@@ -3008,7 +3105,7 @@ function App(): JSX.Element {
     // The mirror belongs to one project. Keeping the last board would let a stale set of
     // columns decide where a card dragged on the new board was dropped, and keeping where
     // that project's region was placed would anchor this one to the other board's content.
-    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, signature: '' }
+    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, signature: '' }
     mirrorOriginRef.current = null
 
     pendingSceneWorkspaceRef.current = workspaceId

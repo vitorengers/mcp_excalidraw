@@ -1,9 +1,10 @@
 # Project board mirror
 
 A region to the left of the board's own content, showing the workspace's GitHub project: one
-section per column, newest issue on top, cards you can drag between columns with the move
-travelling back to GitHub. Dormant unless a project names a `githubProject`, so a board that has
-none never grows one.
+section per column, newest issue on top — except **Todo**, which reads oldest first because it is
+the column the queue drains — and cards you can drag between columns with the move travelling back
+to GitHub. Dormant unless a project names a `githubProject`, so a board that has none never grows
+one.
 
 Not the leftmost region since #96: the terminal sits one gap further left again, anchored to
 this one (`docs/terminal.md`). It has to be, because the mirror repaints every twenty seconds
@@ -464,6 +465,48 @@ run ended.
 `scripts/check-issue-todo-column.mjs` and `scripts/check-implement-in-progress.mjs` cover the two
 moves, each with a stubbed `gh` and a stubbed agent.
 
+## The queue toggle
+
+The **Todo** header carries a circular arrow at its right, where the notes column carries the
+`+`. On, and the server starts the oldest issue in Todo every time an implementation slot frees;
+off, and nothing starts unless somebody clicks it. What it does is `docs/issue-block.md`'s to
+describe — the cap it defers instead of refusing, what it skips, and why it lives on the server.
+Three things about the button belong here.
+
+**It is a shape, and it is unlocked**, exactly like the `+`: a locked shape cannot be clicked, and
+this one is a button. The header rectangles around it stay locked. It is handled as a *selection*
+rather than as a click, and the selection is dropped as soon as it is read — a toggle left
+selected could never be switched back, because a selection that has not changed is ignored.
+
+**The two states differ in fill and in weight, not in hue.** On is the column's own stroke filled
+in solid with a heavier outline and the glyph reversed out of it; off is white with a thin one.
+Hue on this mirror already means the column and, on a failed move, an error — a third meaning
+would collide with both, and a difference only a colour carries is one some readers do not get.
+
+**The state is the server's and arrives with the poll.** It rides on the same `GET /api/implement`
+that brings the run marks, and is never read back off the shape: every mirrored element is thrown
+away and redrawn from GitHub on each poll, so a switch that kept its state on the button would
+last exactly one refresh. That is the same reasoning that keeps implement state against the issue
+URL. When implementing is disabled, or the server is not on loopback, the answer carries no queue
+at all and no toggle is drawn — a button that cannot do anything is worse than no button.
+
+### Todo is drawn oldest first
+
+Every other column keeps newest-on-top. Todo does not, because it is the column the queue drains
+and the queue takes the oldest first: drawn newest-first, the card at the top would be the one
+starting *last*, and the one starting next would be at the bottom — with the card limit, often
+off the board entirely. A column that reads backwards from what the board is about to do is worse
+than a column that disagrees with its neighbours.
+
+Only that column, and only the one the workspace names (`projectTodoColumn`, `Todo` by default,
+matched case-insensitively). Flipping every column would move the truncation to the other end of
+each of them: a long `Done` would start hiding its **newest** cards, which is the opposite of
+what the limit is for. The sort runs before the cap, so which cards the cap leaves out follows
+from the order rather than the other way round.
+
+The queue itself never reads the drawn board. It reads the column uncapped, so what is *drawn*
+and what is *started* cannot disagree about anything but how much fits on screen.
+
 ## The hotkey
 
 **Alt+B** scrolls the viewport onto the mirror. `Alt` because Excalidraw owns the bare letters —
@@ -484,4 +527,5 @@ card's title.
 - **Cards from other repositories, and pull requests, are read-only.** They render; they do not
   move.
 - **Order will not match GitHub's.** Items come back in `POSITION` order — whatever arrangement
-  someone dragged them into — and newest-first is sorted here.
+  someone dragged them into — and the order is sorted here: newest-first everywhere except Todo,
+  which is oldest-first because that is the order the queue starts them in.

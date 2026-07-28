@@ -487,6 +487,45 @@ create is "what is running right now", and until this existed the state was reac
 issue URL at a time, by a caller who already knew which URL to ask about. Finished runs are listed
 too, because one of the things worth knowing is which run left a worktree behind.
 
+### The queue, which defers instead of refusing
+
+The cap refuses: the fourth click works, the fifth is told to come back later, and coming back
+later is a person watching the board. `POST /api/implement/queue` with `{ "enabled": true }`
+turns that into a deferral — the server then starts the **oldest** issue in **Todo** every time a
+slot frees, until the column runs out. The circular arrow on the Todo header is the same switch;
+`docs/project-board.md` has the button.
+
+What it starts and what it passes over:
+
+- the column is read **uncapped**, so the queue works from the whole of Todo rather than from the
+  twelve cards `projectCardLimit` happens to draw;
+- **oldest first**, by `createdAt`, with the issue number only as a tiebreak — cards can come
+  from other repositories and draft items have no number;
+- a card is skipped when it is not an issue, when the issue is closed, when it belongs to another
+  repository, or when this workspace already has **any** record against it. `done` and `failed`
+  are records: the queue tries each issue once and never retries, so a backlog cannot be burnt
+  against a build that is broken. Restarting one is a click, which is where the decision belongs.
+
+Every start goes through the same `POST /api/implement` a click does, so the cap is enforced in
+the same place — the claim made before the first `await` — and a `409` is read as *not yet*.
+The queue and a click racing for the last slot is therefore a race one of them simply loses.
+
+**On the server, not in the browser.** The mirror's twenty-second poll is gated on tab
+visibility on purpose, and a queue that stopped advancing whenever the tab was hidden would stop
+during exactly the hours it is worth having. A run settling dispatches directly; a timer
+(`EXCALIDRAW_IMPLEMENT_QUEUE_MS`, default 30s) covers the changes this process cannot see, such
+as a card dragged into Todo on GitHub. The timer does not exist until some workspace turns its
+queue on, because a board nobody switched on must cost no `gh` at all.
+
+**Per workspace, in memory, off after a restart** — the same place the cap and the run registry
+live. This switch spawns coding agents against a repository, so a server that came back up and
+resumed starting runs would be acting on a decision made before whatever brought it down.
+Resuming the runs a restart *lost* is a different question, and is answered under "A run that
+lost its server".
+
+`scripts/check-implement-queue.mjs` covers the draining and
+`scripts/check-implement-queue-browser.mjs` the button.
+
 ### A run that lost its server
 
 State lives in a `Map`, so a restart empties it — and until this, a run killed with its server

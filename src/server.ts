@@ -45,11 +45,19 @@ import {
   readProjectBoard,
   moveCard,
   moveIssueToColumn,
+  findColumn,
   inProgressColumn,
   todoColumn,
+  DEFAULT_TODO_COLUMN,
   NoProjectConfigured,
   NotOnThisBoard
 } from './core/project-board.js';
+import {
+  queueEnabled,
+  queuedWorkspaces,
+  setQueueEnabled,
+  startableCards
+} from './core/implement-queue.js';
 import { MIRROR_DOC_KEY } from './core/project-board-layout.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
 import type { IssueDetail } from './core/github-issue.js';
@@ -1556,12 +1564,26 @@ function recordImplementUsage(
 }
 
 /**
+ * What a request to start a run is answered with.
+ *
+ * The answer is a value rather than a response written in place, because the routes are no
+ * longer the only caller: the queue starts runs through this same function and has no
+ * request to answer — what it needs is the *status*, since `409` is precisely how it is told
+ * the cap is full and to come back later. A second entrance that skipped these guards would
+ * be a second way for one issue to become two pull requests.
+ */
+interface ImplementAnswer {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+/**
  * Start an implementation for one issue, however it was asked for.
  *
  * Both routes land here — the element one for an authored block, the URL one for a mirrored
- * card that has no element at all — so the guards are stated once and cannot drift apart.
- * Answers immediately and reports over the socket: implementing has no time limit, so a
- * held-open request would only look like a hang.
+ * card that has no element at all — and so does the queue, so the guards are stated once and
+ * cannot drift apart. It returns as soon as the run is under way rather than when the run
+ * ends: implementing has no time limit, so a held-open request would only look like a hang.
  *
  * `resume` is the same run with one thing added to the prompt, and one guard added in front of
  * it. Not a route of its own: everything below — the per-issue guard, the cap, the worktree,
@@ -1569,42 +1591,46 @@ function recordImplementUsage(
  * that stops one issue becoming two pull requests to be got wrong.
  */
 async function beginImplement(
-  res: Response,
   workspaceId: string,
   issueUrl: string,
   options: { resume?: boolean } = {}
-): Promise<void> {
+): Promise<ImplementAnswer> {
   if (!isIssueUrl(issueUrl)) {
-    res.status(400).json({ success: false, error: `Not a GitHub issue URL: ${issueUrl}` });
-    return;
+    return { status: 400, body: { success: false, error: `Not a GitHub issue URL: ${issueUrl}` } };
   }
 
   const existing = readImplement(workspaceId, issueUrl);
   if (existing?.state === 'running') {
-    res.status(409).json({ success: false, error: 'An implementation is already in flight for this issue.' });
-    return;
+    return {
+      status: 409,
+      body: { success: false, error: 'An implementation is already in flight for this issue.' }
+    };
   }
   // Resuming is a claim about the past — that there is an attempt to continue — so it is
   // refused when the server does not agree there was one. A resume that quietly became a
   // fresh run would be the exact failure this feature exists to stop, arriving through the
   // button that was meant to prevent it.
   if (options.resume && existing?.state !== 'interrupted') {
-    res.status(409).json({
-      success: false,
-      error: existing
-        ? `There is no interrupted run to resume for this issue; it is ${existing.state}.`
-        : 'There is no interrupted run to resume for this issue.'
-    });
-    return;
+    return {
+      status: 409,
+      body: {
+        success: false,
+        error: existing
+          ? `There is no interrupted run to resume for this issue; it is ${existing.state}.`
+          : 'There is no interrupted run to resume for this issue.'
+      }
+    };
   }
   if (existing?.state === 'done' && existing.url) {
     // The same reasoning that stops one observation becoming two issues.
-    res.status(409).json({
-      success: false,
-      error: 'This issue already has an implementation.',
-      implementUrl: existing.url
-    });
-    return;
+    return {
+      status: 409,
+      body: {
+        success: false,
+        error: 'This issue already has an implementation.',
+        implementUrl: existing.url
+      }
+    };
   }
 
   // A board that can start runs faster than a machine can finish them needs a budget, and a
@@ -1613,13 +1639,15 @@ async function beginImplement(
   // collide on the shared `.git/config`.
   const inFlight = runningImplements(workspaceId);
   if (IMPLEMENT_CONCURRENCY > 0 && inFlight.length >= IMPLEMENT_CONCURRENCY) {
-    res.status(409).json({
-      success: false,
-      error: `This workspace already has ${inFlight.length} implementation(s) running, which is the limit `
-        + `set by EXCALIDRAW_IMPLEMENT_CONCURRENCY. In flight: ${inFlight.map((run) => run.issueUrl).join(', ')}`,
-      running: inFlight.map((run) => run.issueUrl)
-    });
-    return;
+    return {
+      status: 409,
+      body: {
+        success: false,
+        error: `This workspace already has ${inFlight.length} implementation(s) running, which is the limit `
+          + `set by EXCALIDRAW_IMPLEMENT_CONCURRENCY. In flight: ${inFlight.map((run) => run.issueUrl).join(', ')}`,
+        running: inFlight.map((run) => run.issueUrl)
+      }
+    };
   }
 
   // The slot is claimed here, before the first `await`, and that placement is the whole
@@ -1655,19 +1683,41 @@ async function beginImplement(
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     releaseSlot();
-    res.status(400).json({
-      success: false,
-      error: `Workspace "${workspaceId}" is not registered, so there is no project to work in.`
-    });
-    return;
+    return {
+      status: 400,
+      body: {
+        success: false,
+        error: `Workspace "${workspaceId}" is not registered, so there is no project to work in.`
+      }
+    };
   }
   if (workspace.error) {
     releaseSlot();
-    res.status(400).json({ success: false, error: `Workspace is unusable: ${workspace.error}` });
-    return;
+    return {
+      status: 400,
+      body: { success: false, error: `Workspace is unusable: ${workspace.error}` }
+    };
   }
 
-  res.status(202).json({ success: true, state: 'running', issueUrl });
+  // Not awaited: the run outlives the answer, which is the whole reason the answer is 202.
+  // Its failures are recorded against the issue rather than thrown at whoever asked.
+  void runImplementation(workspace, issueUrl, options);
+  return { status: 202, body: { success: true, state: 'running', issueUrl } };
+}
+
+/**
+ * The run itself, once the slot is claimed and the workspace is known to be usable.
+ *
+ * Split from the guards above so that starting a run and *answering* a request are two
+ * things: the queue does the first without the second. Everything here is written to the
+ * record against the issue, which is where a click, a card and a queue pass all read it.
+ */
+async function runImplementation(
+  workspace: Workspace,
+  issueUrl: string,
+  options: { resume?: boolean } = {}
+): Promise<void> {
+  const workspaceId = workspace.id;
 
   // The board says Todo until something says otherwise, and starting the run is the
   // something. Deliberately not awaited: the project and the agent are independent, and a
@@ -1731,6 +1781,150 @@ async function beginImplement(
       endedAt: new Date().toISOString()
     });
   }
+
+  // A run settling is the moment a slot frees, and the only one this process can be sure of.
+  // The timer exists for the other kind of change — a card dragged into Todo on GitHub — and
+  // would find this one too, twenty or thirty seconds later; here it costs nothing to be
+  // prompt about the thing the queue is actually for.
+  void dispatchQueue(workspaceId);
+}
+
+// ─── The queue ────────────────────────────────────────────────
+//
+// On, and the server starts the oldest Todo issue whenever a slot frees. The switch itself is
+// `implement-queue.ts`; this is what turns it into runs, and it is here rather than in the
+// browser because the browser's poll is gated on tab visibility on purpose. A queue that
+// stopped advancing when the tab was hidden would stop during exactly the hours it exists for.
+
+/**
+ * How often a draining workspace looks at its board.
+ *
+ * The event that matters — a run settling — is dispatched on directly, so this is only for
+ * the changes this process cannot see: a card dragged into Todo on GitHub, an issue closed,
+ * a slot freed by a reset. Every pass while the queue is on and a slot is free costs one `gh`
+ * process, which is why the pass gives up before reading anything when the queue is off or
+ * the cap is full, and why the timer does not exist at all until something turns a queue on.
+ */
+const IMPLEMENT_QUEUE_MS = (() => {
+  const configured = process.env.EXCALIDRAW_IMPLEMENT_QUEUE_MS;
+  if (configured === undefined || configured.trim() === '') return 30_000;
+  const parsed = Number(configured);
+  return Number.isFinite(parsed) && parsed >= 250 ? parsed : 30_000;
+})();
+
+/**
+ * The workspaces with a pass in flight.
+ *
+ * A pass reads the board and then starts runs one at a time, so two passes overlapping —
+ * the timer and a run settling in the same instant — would each be working from a board read
+ * before the other started. The claim guard would still hold the cap, but the second pass
+ * would spend a `gh` read to be told no, every time.
+ */
+const draining = new Set<string>();
+
+/** Whether this workspace has room for one more run right now. */
+function slotFree(workspaceId: string): boolean {
+  return IMPLEMENT_CONCURRENCY <= 0
+    || runningImplements(workspaceId).length < IMPLEMENT_CONCURRENCY;
+}
+
+/**
+ * Start as many queued issues as there are free slots, oldest first.
+ *
+ * The board is read **uncapped**. `projectCardLimit` decides what is *drawn*, and reading the
+ * drawn mirror would mean working from a truncated column — the queue would drain what fits
+ * on screen and silently never reach the rest. `moveIssueToColumn` reads uncapped for the
+ * same reason.
+ *
+ * Each start goes through `beginImplement`, so the cap is enforced where it always was: at
+ * the claim made before the first `await`. A `409` here is read as "not yet" and ends the
+ * pass rather than being retried — a click that raced this pass has taken the slot, and the
+ * next pass will find whatever it left.
+ *
+ * A card with any record against it is passed over, whatever the record says. `running` is
+ * obvious; `done` and `failed` are the same rule as the block's — a run happened, and asking
+ * for it again is a decision for whoever is reading the failure, not for a loop. That is also
+ * what stops a broken build from being retried forever: the queue tries each issue once.
+ */
+async function dispatchQueue(workspaceId: string): Promise<void> {
+  if (!IMPLEMENT_AGENT_COMMAND) return;
+  if (!queueEnabled(workspaceId)) return;
+  if (draining.has(workspaceId)) return;
+  draining.add(workspaceId);
+
+  try {
+    if (!slotFree(workspaceId)) return;
+
+    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+    if (!workspace || workspace.error || !workspace.githubProject) return;
+
+    const board = await readProjectBoard(workspace, { cardLimit: 0 });
+    const target = todoColumn(workspace);
+    const column = findColumn(board, target.name);
+    if (!column) {
+      logger.warn(
+        `Queue: no "${target.name}" column on this project, so there is nothing to drain. `
+        + `Name the column as "${target.setting}" in board.config.json.`
+      );
+      return;
+    }
+
+    for (const card of startableCards(column.cards)) {
+      // Re-read on every iteration rather than counted once: the queue is not the only thing
+      // that can take a slot, and turning it off has to stop the pass it is in the middle of.
+      if (!queueEnabled(workspaceId) || !slotFree(workspaceId)) return;
+      const issueUrl = card.url as string;
+      if (readImplement(workspaceId, issueUrl)) continue;
+
+      const answer = await beginImplement(workspaceId, issueUrl);
+      if (answer.status === 202) {
+        logger.info(`Queue: started ${issueUrl} on "${workspaceId}"`);
+        continue;
+      }
+      if (answer.status === 409) return;
+      logger.warn(`Queue: ${issueUrl} was refused (${answer.status}): ${answer.body.error}`);
+    }
+  } catch (error) {
+    // A board that cannot be read is a `gh` blip or a project that has gone; either way the
+    // queue is a background convenience and must not take the server down with it.
+    logger.warn(`Queue: could not drain "${workspaceId}": ${(error as Error).message}`);
+  } finally {
+    draining.delete(workspaceId);
+  }
+}
+
+/**
+ * The timer, which exists only while some workspace is draining.
+ *
+ * Started when the first queue goes on and stopped when the last goes off, rather than
+ * running from startup: a board nobody has switched on must cost no `gh` at all. `unref` so
+ * it is never the reason a process stays alive.
+ */
+let queueTimer: NodeJS.Timeout | null = null;
+
+function syncQueueTimer(): void {
+  const active = queuedWorkspaces();
+  if (active.length > 0 && !queueTimer) {
+    queueTimer = setInterval(() => {
+      for (const workspaceId of queuedWorkspaces()) void dispatchQueue(workspaceId);
+    }, IMPLEMENT_QUEUE_MS);
+    queueTimer.unref?.();
+  } else if (active.length === 0 && queueTimer) {
+    clearInterval(queueTimer);
+    queueTimer = null;
+  }
+}
+
+/** What a queue looks like from outside: on or off, and the column it would drain. */
+function queueStateFor(workspace: Workspace | undefined, workspaceId: string): {
+  enabled: boolean;
+  column: string;
+} {
+  return {
+    enabled: queueEnabled(workspaceId),
+    column: workspace ? todoColumn(workspace).name : DEFAULT_TODO_COLUMN
+  };
 }
 
 /**
@@ -1851,7 +2045,8 @@ app.post('/api/issue-block/:id/implement', async (req: Request, res: Response) =
     return res.status(400).json({ success: false, error: 'This block has no issue to implement.' });
   }
 
-  await beginImplement(res, workspaceId, issueUrl, { resume: req.body?.resume === true });
+  const answer = await beginImplement(workspaceId, issueUrl, { resume: req.body?.resume === true });
+  res.status(answer.status).json(answer.body);
 });
 
 /**
@@ -1872,7 +2067,42 @@ app.post('/api/implement', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: 'No issue URL was given.' });
   }
 
-  await beginImplement(res, workspaceIdFrom(req), issueUrl, { resume: req.body?.resume === true });
+  const answer = await beginImplement(workspaceIdFrom(req), issueUrl, {
+    resume: req.body?.resume === true
+  });
+  res.status(answer.status).json(answer.body);
+});
+
+/**
+ * Turn this workspace's queue on or off.
+ *
+ * Behind the same two guards as starting a run, and for the same reason: this is a switch
+ * that spawns coding agents against a repository, one per free slot, with nobody clicking.
+ * A canvas reachable from the network must not be able to flip it.
+ *
+ * Turning it on dispatches immediately rather than waiting out an interval — the click is
+ * the moment somebody said "start draining", and a button that appeared to do nothing for
+ * half a minute would be clicked again.
+ */
+app.post('/api/implement/queue', async (req: Request, res: Response) => {
+  if (implementingRefused(res)) return;
+
+  if (typeof req.body?.enabled !== 'boolean') {
+    return res.status(400).json({ success: false, error: 'The queue is set with { "enabled": true | false }.' });
+  }
+
+  const workspaceId = workspaceIdFrom(req);
+  const enabled = req.body.enabled === true;
+  setQueueEnabled(workspaceId, enabled);
+  syncQueueTimer();
+  logger.info(`Queue: "${workspaceId}" is ${enabled ? 'on' : 'off'}`);
+  if (enabled) void dispatchQueue(workspaceId);
+
+  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => []);
+  res.json({
+    success: true,
+    queue: queueStateFor(workspaces.find((candidate) => candidate.id === workspaceId), workspaceId)
+  });
 });
 
 /**
@@ -1931,18 +2161,35 @@ app.delete('/api/issue-block/:id/implement', (req: Request, res: Response) => {
  * answer: the state was reachable only one issue at a time, by a caller who already knew
  * which issue to ask about. Finished runs come back too — one of the things worth knowing
  * is which run left a worktree behind.
+ *
+ * The queue rides on that same answer rather than on a route of its own: the mirror already
+ * asks this once per poll, for the marks on the cards, and the toggle's two appearances have
+ * to survive every redraw — so the state that decides them has to arrive with the redraw's
+ * own data or it will be one poll behind. `queue` is **absent** rather than off when
+ * implementing is disabled or the server is not on loopback, because a button that cannot do
+ * anything should not be drawn at all.
  */
-app.get('/api/implement', (req: Request, res: Response) => {
+app.get('/api/implement', async (req: Request, res: Response) => {
   const workspaceId = workspaceIdFrom(req);
   const issueUrl = typeof req.query.url === 'string' ? req.query.url : '';
-  if (!issueUrl) {
-    return res.json({
-      success: true,
-      runs: listImplement(workspaceId),
-      concurrency: IMPLEMENT_CONCURRENCY
-    });
+  if (issueUrl) {
+    return res.json({ success: true, implement: readImplement(workspaceId, issueUrl) });
   }
-  res.json({ success: true, implement: readImplement(workspaceId, issueUrl) });
+
+  const offered = Boolean(IMPLEMENT_AGENT_COMMAND)
+    && (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost');
+  const workspaces = offered
+    ? await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => [])
+    : [];
+
+  res.json({
+    success: true,
+    runs: listImplement(workspaceId),
+    concurrency: IMPLEMENT_CONCURRENCY,
+    ...(offered
+      ? { queue: queueStateFor(workspaces.find((candidate) => candidate.id === workspaceId), workspaceId) }
+      : {})
+  });
 });
 
 /** The same reset, for a mirrored card with no element behind it. */

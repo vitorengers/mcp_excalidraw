@@ -112,6 +112,19 @@ export interface ToBoardOptions {
   cardLimit?: number;
   /** The project's own repository, in `owner/name` form. Cards from elsewhere lock. */
   repo?: string | null;
+  /**
+   * The one column drawn oldest-first, by name, matched the way `findColumn` matches.
+   *
+   * Named by the caller rather than known here, because knowing it would be the constant
+   * this file is built to avoid. What the caller passes is the workspace's Todo column, and
+   * the reason is the queue: it starts the oldest issue first, so a column drawn
+   * newest-first would put the card that starts *last* at the top and the one starting next
+   * out of sight at the bottom — the board reading backwards from what it is about to do.
+   *
+   * Only that column. `newestFirst` is what every other section keeps, and flipping them all
+   * would hide the newest cards on a long Done behind the card limit rather than the oldest.
+   */
+  oldestFirstColumn?: string | null;
 }
 
 function asString(value: unknown): string | null {
@@ -130,6 +143,26 @@ function newestFirst(a: BoardCard, b: BoardCard): number {
   }
   if (Boolean(a.createdAt) !== Boolean(b.createdAt)) return a.createdAt ? -1 : 1;
   return (b.number ?? 0) - (a.number ?? 0);
+}
+
+/**
+ * Oldest first, for the column a queue drains.
+ *
+ * `newestFirst` read backwards in its first and last clauses and *not* in its middle one: a
+ * card with no creation date still sorts last rather than first. Undated is a draft item or
+ * something GitHub would not date, and neither belongs at the head of a queue — "oldest" is
+ * a claim about a date, and there is none to make it with.
+ *
+ * Exported because two things have to agree about it: the column the mirror draws, and the
+ * order `implement-queue.ts` starts issues in. A second comparator would be a second place
+ * for the two to drift apart, and the drift would read as the board lying about what is next.
+ */
+export function oldestFirst(a: BoardCard, b: BoardCard): number {
+  if (a.createdAt && b.createdAt && a.createdAt !== b.createdAt) {
+    return a.createdAt < b.createdAt ? -1 : 1;
+  }
+  if (Boolean(a.createdAt) !== Boolean(b.createdAt)) return a.createdAt ? -1 : 1;
+  return (a.number ?? 0) - (b.number ?? 0);
 }
 
 /**
@@ -154,6 +187,7 @@ export function toBoard(raw: unknown, options: ToBoardOptions = {}): ProjectBoar
 
   const cardLimit = options.cardLimit ?? DEFAULT_CARD_LIMIT;
   const repo = options.repo ?? null;
+  const oldestFirstColumn = (options.oldestFirstColumn ?? '').trim().toLowerCase();
 
   // Every declared option becomes a section, in the order the project declares them,
   // whether or not anything is in it. An empty column is information: it is where a card
@@ -202,7 +236,13 @@ export function toBoard(raw: unknown, options: ToBoardOptions = {}): ProjectBoar
 
   const ordered = [...sections.values()];
   for (const section of ordered) {
-    section.cards.sort(newestFirst);
+    // Sorted before the cap is applied, so which cards the cap leaves out follows from the
+    // order rather than the other way round.
+    section.cards.sort(
+      oldestFirstColumn && section.name.trim().toLowerCase() === oldestFirstColumn
+        ? oldestFirst
+        : newestFirst
+    );
     if (cardLimit > 0 && section.cards.length > cardLimit) {
       section.hidden = section.cards.length - cardLimit;
       section.cards = section.cards.slice(0, cardLimit);
@@ -276,6 +316,9 @@ export async function readProjectBoard(
   const board = toBoard(parsed, {
     ...(cardLimit !== null && cardLimit !== undefined ? { cardLimit } : {}),
     repo: workspace.repo,
+    // The queue starts the oldest first, so the column it drains is drawn that way too.
+    // Which column that is comes from the workspace, exactly as the queue reads it.
+    oldestFirstColumn: todoColumn(workspace).name,
   });
   if (board.morePages) {
     logger.warn(`Project board: more than ${ITEM_PAGE_SIZE} items; only the first page is mirrored`);
