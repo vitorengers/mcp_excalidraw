@@ -7,7 +7,8 @@ import {
   TERMINAL_FONT_RANGE,
   TERMINAL_LINE_HEIGHT
 } from '../../../src/core/terminal-block'
-import { TERMINAL_CSS_VARS, TERMINAL_THEME } from '../../../src/core/terminal-palette'
+import { terminalCssVars, terminalXtermTheme } from '../../../src/core/terminal-palette'
+import type { TerminalTheme } from '../../../src/core/terminal-palette'
 import { terminalFontReady } from '../terminal-metrics'
 import type { Rect } from '../../../src/core/anchored-placement'
 import './TerminalPanel.css'
@@ -50,6 +51,14 @@ export interface TerminalPanelProps {
   fontSize: number
   /** A new one, from the buttons on the header. Clamped by whoever holds the state. */
   onFontSize: (next: number) => void
+  /**
+   * Which theme the canvas is in, which this overlay has to be told.
+   *
+   * Excalidraw draws dark mode as a filter on its own canvas, and this card is a sibling of
+   * it rather than a child, so nothing filters it: told nothing, it paints a light card on a
+   * dark board over a block the filter has already darkened. See `terminal-palette.ts`.
+   */
+  theme: TerminalTheme
 }
 
 /**
@@ -94,14 +103,6 @@ function forwardWheelToCanvas(event: React.WheelEvent): void {
 }
 
 /**
- * The block's own palette, so the emulator, the frame and the shape underneath read as one
- * object. All three of them get it from `src/core/terminal-palette.ts`; this file decides no
- * colour, it only hands one of them to xterm and writes the rest onto the card as custom
- * properties for `TerminalPanel.css` to read.
- */
-const THEME = TERMINAL_THEME
-
-/**
  * One session's screen, kept alive for as long as the session is in this block.
  *
  * Its own component, and mounted for every tab rather than only the one on top, because an
@@ -121,10 +122,11 @@ const TerminalScreen: React.FC<{
   rows: number
   output: string
   ended: string | null
+  theme: TerminalTheme
   onData: (data: string) => void
   onFocusChange: (focused: boolean) => void
   registerFocus: (focus: (() => void) | null) => void
-}> = ({ active, fontSize, cols, rows, output, ended, onData, onFocusChange, registerFocus }) => {
+}> = ({ active, fontSize, cols, rows, output, ended, theme, onData, onFocusChange, registerFocus }) => {
   const hostRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   /** How much of `output` has been handed to the emulator, so a redraw is a delta. */
@@ -150,7 +152,9 @@ const TerminalScreen: React.FC<{
       cols,
       rows,
       cursorBlink: true,
-      theme: THEME
+      // The theme this block is *opened* in. It is pushed again below whenever the board's
+      // changes — this effect must not depend on it, or a toggle would rebuild the emulator.
+      theme: terminalXtermTheme(theme)
     })
     terminal.open(host)
     terminal.onData((data) => onDataRef.current(data))
@@ -254,6 +258,17 @@ const TerminalScreen: React.FC<{
     terminal.options.fontSize = fontSize
   }, [fontSize])
 
+  // The board's theme, re-themed into the emulator that is already running rather than into
+  // a new one. Rebuilding it on a toggle would replay the transcript into a fresh parser,
+  // which is the same picture only for a program that never used the alternate screen — the
+  // `vim` left open in this tab would come back as its own scrollback. xterm repaints from
+  // the object it is handed, so a whole palette goes in at once and none of it is half a set.
+  useEffect(() => {
+    const terminal = terminalRef.current
+    if (!terminal) return
+    terminal.options.theme = terminalXtermTheme(theme)
+  }, [theme])
+
   useEffect(() => {
     const terminal = terminalRef.current
     if (!terminal || !ended) return
@@ -331,7 +346,7 @@ const TerminalScreen: React.FC<{
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   rect, zoom, suppressed, tabs, activeId, canAdd, canMerge,
   onSelect, onAdd, onClose, onDetach, onMerge, onInput,
-  fontSize: readerFontSize, onFontSize
+  fontSize: readerFontSize, onFontSize, theme
 }) => {
   /** Focus handles, one per live screen, so a click anywhere can reach the active one. */
   const focusRef = useRef<Map<string, () => void>>(new Map())
@@ -397,7 +412,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         // The palette, on this card rather than on `:root`: a board with two terminal blocks
         // is two independent surfaces, and nothing about them should reach the canvas around
         // them. `TerminalPanel.css` reads these and holds no colour of its own.
-        ...(TERMINAL_CSS_VARS as React.CSSProperties),
+        //
+        // The whole set is swapped here rather than by a `[data-theme]` rule, and #121's trap
+        // is both reasons: these are inline styles, which a rule cannot outrank, and a theme
+        // that landed on part of a palette would be worse than one that landed on none of it.
+        ...(terminalCssVars(theme) as React.CSSProperties),
         left: `${rect.x}px`,
         top: `${rect.y}px`,
         width: `${rect.width}px`,
@@ -523,6 +542,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             rows={Math.max(1, tab.status?.rows ?? 24)}
             output={tab.output}
             ended={tab.ended}
+            theme={theme}
             onData={(data) => onInput(tab.id, data)}
             onFocusChange={(focused) => { if (tab.id === active?.id || !focused) setAttached(focused) }}
             registerFocus={(focus) => {
