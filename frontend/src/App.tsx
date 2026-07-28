@@ -269,6 +269,21 @@ const editingDraftId = (api: ExcalidrawImperativeAPI): string => {
   return String(editing.containerId ?? editing.id ?? '');
 };
 
+/**
+ * Whether something is being worked on that a redraw would take out from under it.
+ *
+ * A card mid-drag, a shape mid-resize, one still being drawn, or a caret in a label. Asked
+ * more than once per pass on purpose: a redraw that reads the board over `gh` first is
+ * seconds away from the answer, and a reader can start typing inside those seconds — so the
+ * question has to be put again immediately before the scene is written, not only before the
+ * read that leads to it (#132).
+ */
+const busyOnCanvas = (api: ExcalidrawImperativeAPI): boolean => {
+  const appState = api.getAppState() as unknown as Record<string, unknown>;
+  return Boolean(appState.selectedElementsAreBeingDragged || appState.editingTextElement
+    || appState.newElement || appState.resizingElement);
+};
+
 /** Whether the label editor that is open belongs to an issue block. */
 const editingIssueBlock = (api: ExcalidrawImperativeAPI): boolean => {
   const editing = editingDraftId(api);
@@ -1559,12 +1574,23 @@ function App(): JSX.Element {
       }
     })
 
+    // The block under the caret is never moved by this pass — `frozen` above sees to that —
+    // so its own height is not a reason to write the scene again. Left in, it was: a
+    // container grows to fit its label, so every keystroke changed the number and every
+    // keystroke rewrote a scene in which nothing had actually moved. Each of those updates
+    // restyles and refocuses the open label editor, which is the flicker #132 reports. What
+    // the blocks *below* it are placed at is still in the signature, and still moves them.
+    const written = frozen
+      ? layout.drafts.map((placement) =>
+        (placement.id === frozen ? { ...placement, height: 0 } : placement))
+      : layout.drafts
+
     // `frozen` is part of the signature because it changes what gets written: the pass that
     // left a block alone must not let the one after the editor closed, which puts it back
     // in its slot, be skipped as "nothing moved". A pending rescue is in it for the same
     // reason — the mirror itself may be identical to the last pass, and the terminal still
     // has to be moved out from under it.
-    const signature = JSON.stringify([layout.elements, layout.drafts, frozen, [...strandedIds], rescue])
+    const signature = JSON.stringify([layout.elements, written, frozen, [...strandedIds], rescue])
     if (signature === projectBoardRef.current.signature
         && scene.some((element) => isMirrorElement(element))) {
       // Nothing moved. Redrawing anyway would fight the reader's selection every poll.
@@ -1579,12 +1605,31 @@ function App(): JSX.Element {
       signature
     }
 
+    // The block under the caret comes through verbatim, and that is the other half of the
+    // guard `frozen` starts. Leaving it in its slot is not enough on its own, because it is
+    // still in the array handed to `convertElementsPreservingImageProps`, and that runs
+    // everything through `convertToExcalidrawElements`: the container is deep-cloned and the
+    // label bound to it is rebuilt through `newTextElement`, re-measured and shifted by the
+    // alignment offsets. Excalidraw grows a container by mutating it in place and never
+    // hands back a new object for one whose label is being edited — so a replacement here is
+    // ours, arriving per keystroke, and the open editor re-derives the live textarea from
+    // whatever it lands on (#132). These come out of the scene and are already Excalidraw
+    // elements, so there is nothing for the conversion to do to them anyway.
+    const untouched = new Map(
+      frozen
+        ? own
+          .filter((element) => element.id === frozen || element.containerId === frozen)
+          .map((element) => [element.id, element] as const)
+        : []
+    )
+    const converted = convertElementsPreservingImageProps([
+      ...(nextOwn as unknown as Partial<ExcalidrawElement>[]),
+      ...(layout.elements as unknown as Partial<ExcalidrawElement>[])
+    ]).map((element) => (untouched.get(String(element.id)) as unknown as Partial<ExcalidrawElement>) ?? element)
+
     applySceneUpdateWithoutAutoSync(api, {
       elements: [
-        ...convertElementsPreservingImageProps([
-          ...(nextOwn as unknown as Partial<ExcalidrawElement>[]),
-          ...(layout.elements as unknown as Partial<ExcalidrawElement>[])
-        ]),
+        ...converted,
         ...tombstones
       ] as ExcalidrawElement[],
       captureUpdate: CaptureUpdateAction.NEVER
@@ -1622,6 +1667,13 @@ function App(): JSX.Element {
     // removed only from this scene would come straight back on the next connection.
     await Promise.all([...doomed].map((id) =>
       fetch(apiUrl(`/api/elements/${id}`), { method: 'DELETE' }).catch(() => undefined)))
+
+    // This is the one whole-scene write on the board that had no editor guard at all, and it
+    // is issued after its own awaits, so the caller's guard is by then several requests old
+    // (#132). The blocks are already gone from the server, so nothing is lost by leaving the
+    // scene alone: the next poll finds the same blocks still matching the same cards and
+    // reaches this line again, with the caret gone.
+    if (busyOnCanvas(api)) return
 
     applySceneUpdateWithoutAutoSync(api, {
       elements: api.getSceneElementsIncludingDeleted().filter((element) => !doomed.has(element.id)),
@@ -1719,11 +1771,7 @@ function App(): JSX.Element {
 
     // Never redraw under a pointer or a caret: rebuilding while a card is being dragged
     // or a label typed into would take the thing being worked on out from under it.
-    const appState = api.getAppState() as unknown as Record<string, unknown>
-    if (appState.selectedElementsAreBeingDragged || appState.editingTextElement
-        || appState.newElement || appState.resizingElement) {
-      return
-    }
+    if (busyOnCanvas(api)) return
 
     const workspace = activeWorkspaceRef.current
     try {
@@ -1742,6 +1790,12 @@ function App(): JSX.Element {
       const { implementing, queue } = await readImplementRecords()
       if (activeWorkspaceRef.current !== workspace) return
       projectBoardRef.current = { ...projectBoardRef.current, implementing, queue }
+      // Asked again, because the guard at the top of this function was read before a `gh`
+      // call and two more requests. The reader who started typing inside those seconds is
+      // the reader this poll would otherwise redraw over — the twenty-second version of the
+      // disturbance #132 reports. The board and the run records are kept either way; only
+      // the scene is left alone, and the next poll draws it.
+      if (busyOnCanvas(api)) return
       renderMirror(body.board as ProjectBoard)
     } catch (error) {
       console.warn('Could not read the project board:', error)
