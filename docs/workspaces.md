@@ -43,7 +43,11 @@ than to this repository:
   not exist yet is simply the empty registry, and gets created.
 - **A project with no `board.config.json` is given a minimal one**, so its tab does not arrive
   already marked broken by `No board.config.json at …`. A project that has one keeps it,
-  untouched.
+  untouched. Minimal is `{ name }`, plus `docsDir` when the project actually has a `docs/`
+  folder — stat-ed, not assumed, because `docsDir` is the only route documentation has and a
+  config without it is a board where every `docKey` answers 404. A project whose documents live
+  elsewhere gets the blank and fills it in the settings dialog; a project already registered is
+  never rewritten to repair it.
 
 `GET /api/fs/directories?path=` (loopback only) is the picker's other half. It has to run on the
 server: the browser cannot learn a folder path at all — `showDirectoryPicker()` returns a handle

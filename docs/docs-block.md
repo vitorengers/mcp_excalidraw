@@ -11,6 +11,22 @@ The key resolves to `<docsDir>/<key>.md` inside the project, where `docsDir` com
 project's own `board.config.json`. `EXCALIDRAW_DOCS_DIR` remains the fallback for single-board
 setups, which have no registry to resolve a directory from.
 
+A project registered through the `+` is given `docsDir` when it actually has a `docs/` folder —
+read from disk, never guessed — because `docsDir` is the only route documentation has, and a
+config without it is a board on which every key answers 404. A project that keeps its documents
+somewhere else gets the blank and fills it in **Docs folder** in the project settings. The
+seeding happens when the config is created and at no other time: a project already registered
+keeps its config exactly as it is, absence included.
+
+## Documentation the tool owns
+
+Some keys belong to a block this server draws rather than to the board it is drawn on. The
+project mirror is generated onto every project that names a `githubProject`, always carrying
+`docKey: "project-board"` — and that key used to resolve inside the *mirrored* project, where
+the document has no reason to exist, so the mirror on every board but this one read as
+undocumented. Those keys are listed in `TOOL_DOC_KEYS` in `src/server.ts` and resolve against
+the tool's own `docs/`, whichever board is asking.
+
 ## Finding the key from a click
 
 You rarely click the shape itself — you click its label. `syncSelectedDoc` in
@@ -22,10 +38,18 @@ A multiple selection, or a shape with no `docKey`, opens nothing.
 
 ## Rendering
 
-`marked` for markdown, `DOMPurify` for sanitisation, with four states the panel makes visible:
-`loading`, `missing`, `error`, `loaded`. A key that does not resolve returns a clean 404 —
-`scripts/check-docs-endpoint.mjs` pins that down, along with the traversal guard that rejects
-`..` and anything outside the key pattern.
+`marked` for markdown, `DOMPurify` for sanitisation, with five states the panel makes visible:
+`loading`, `missing`, `no-docs-dir`, `error`, `loaded`. A key that does not resolve returns a
+clean 404 — `scripts/check-docs-endpoint.mjs` pins that down, along with the traversal guard
+that rejects `..` and anything outside the key pattern.
+
+**Two of those 404s are different problems**, and the body says which: `code` is `no-doc` for a
+key nobody has written a document for, and `no-docs-dir` for a board that has no docs directory
+at all, where no key could have resolved. The panel used to map both to `missing` and throw the
+body away, so a board one setting away from working reported `No document yet for <key>` and
+nothing pointed at the setting. It now names **Docs folder** in the project settings, behind the
+gear on the project's own tab. `scripts/check-docs-directory.mjs` covers the route and
+`scripts/check-docs-directory-browser.mjs` the sentence on screen.
 
 ## Where the card sits
 
