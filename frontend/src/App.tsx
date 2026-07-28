@@ -923,9 +923,20 @@ function App(): JSX.Element {
   const sceneWorkspaceRef = useRef<string>('default')
 
   /** Append the active workspace to an API path, so no request is ever board-agnostic. */
-  const apiUrl = (path: string): string => {
+  const apiUrl = (path: string): string => apiUrlOn(path, activeWorkspaceRef.current)
+
+  /**
+   * The same, for a board named rather than read off the ref at the moment of the call.
+   *
+   * `apiUrl` resolves late by design — a handler that never re-renders must not send a board
+   * it closed over — but a request scheduled on a *timer* wants the opposite: the board it
+   * was scheduled for. The terminal's resize report is debounced and retried, so read late
+   * it could arrive at whichever board the reader had switched to in the meantime, naming a
+   * session id that board has one of its own (#156).
+   */
+  const apiUrlOn = (path: string, workspaceId: string): string => {
     const separator = path.includes('?') ? '&' : '?'
-    return `${path}${separator}workspace=${encodeURIComponent(activeWorkspaceRef.current)}`
+    return `${path}${separator}workspace=${encodeURIComponent(workspaceId)}`
   }
 
   // Documentation panel: which shape's doc is on screen
@@ -3138,8 +3149,12 @@ function App(): JSX.Element {
     const font = terminalFontRef.current
     const grid = terminalGrid(size, font, terminalLineBox(font), terminalAdvance(font))
     const signature = `${grid.cols}x${grid.rows}`
-    // Resolved once, here, rather than on each use: the retry below runs on a timer, and by
-    // then the reader may be on another board — whose `s1` is a different shell entirely.
+    // Resolved once, here, rather than on each use: the debounce and the retry below both run
+    // on a timer, and by then the reader may be on another board — whose `s1` is a different
+    // shell entirely. The board is pinned for the same reason the keys are: a report that read
+    // `apiUrl` when it finally fired would resize whichever board was in front by then, which
+    // is a live shell repainting into a frame that is not its own.
+    const board = sceneWorkspaceRef.current
     const keyed = new Map(sessions.map((id) => [id, terminalKeyOf(id)]))
     const stale = sessions.filter((id) => terminalGridRef.current.get(keyed.get(id)!) !== signature)
     if (stale.length === 0) return
@@ -3155,7 +3170,7 @@ function App(): JSX.Element {
     // longer has.
     const report = (attempt: number): void => {
       terminalResizeTimersRef.current.delete(elementId)
-      Promise.all(stale.map((sessionId) => fetch(apiUrl('/api/terminal/resize'), {
+      Promise.all(stale.map((sessionId) => fetch(apiUrlOn('/api/terminal/resize', board), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, ...grid })

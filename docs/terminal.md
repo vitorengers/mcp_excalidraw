@@ -876,6 +876,15 @@ reconnect the blocks being measured belong to the board being left. For the same
 report is skipped entirely while a switch is in flight: the request would carry the new board's
 id and name a session that board has never heard of.
 
+**A resize report names the board it was scheduled for**, through `apiUrlOn` rather than
+`apiUrl`. Everything else here resolves the board late on purpose — a handler that never
+re-renders must not send the board it closed over — but this one is debounced and retried, so
+read late it arrives at whichever board the reader switched to while it was waiting, naming a
+session id that board has one of its own. What that costs is not a stale label: it is a live
+full-screen program on the other project repainting into a frame that is not its own. It was
+invisible until the caches stopped being wiped on a switch, because the wipe made the board
+being returned to re-report its true size and heal it a moment later.
+
 Nothing is wiped on a switch any more, either. It used to be, and that was both insufficient —
 the old scene stays up, so the geometry was written straight back in — and lossy: where a reader
 put a project's terminal is that project's, and visiting another tab is not a reason to forget
