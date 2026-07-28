@@ -815,7 +815,19 @@ interrupt again; Ctrl+V pastes, because the browser's own paste event is left al
 than being sent to the shell as the `\x16` Ctrl+V means on a terminal; the wheel scrolls the
 scrollback; and Alt+click moves the shell's cursor along the line it is editing. A wheel the
 scrollback cannot use — the screen is at the bottom, or there is none — is handed to the
-canvas instead of dropped, so panning and zooming still work over a block. Every keystroke
+canvas instead of dropped, so panning and zooming still work over a block.
+
+**The wheel is answered one axis at a time**, which is #162 and what a touchpad made
+visible. A pan carries both deltas in the same event, and the emulator has a use for exactly
+one of them: xterm has no horizontal scrolling and emits no escape sequence for a sideways
+wheel, so `preventDefault` on the four pixels of scrollback it did want was taking the
+hundred and twenty pixels of pan it had no use for with it. **The horizontal delta is the
+board's, always** — while the scrollback still has room, and while a program is holding the
+pointer — and only the vertical one is offered to the emulator first. Ctrl, Meta and Shift
+stay whole: those are the zoom gesture and Excalidraw's own sideways wheel, and each reads
+the two axes together, so splitting one would be two gestures where the reader made one.
+
+Every keystroke
 otherwise goes to the shell, Ctrl+C and arrows and Escape included, and none reach Excalidraw,
 which binds every bare letter to a tool. The four exceptions are the board's own keys — Alt+B,
 Alt+T, Alt+P and Alt+G, which navigate the canvas from inside a focused terminal and are not
@@ -848,7 +860,8 @@ border, since a browser snaps a border to whole device pixels and a chip that gr
 
 `scripts/check-terminal-focus-browser.mjs` is the check for who owns the pointer — it clicks
 the middle of the screen and types, drags the header and the body and compares what moved,
-turns the wheel both ways, and drags a corner afterwards to say the shape is still a shape.
+turns the wheel both ways and sideways, and drags a corner afterwards to say the shape is
+still a shape.
 `scripts/check-terminal-size-browser.mjs` is the check for the sizes, and it measures the
 render rather than the file: it reads the block the board placed off the scene, measures each
 control against itself with `--terminal-tab-scale` forced back to 1, and asks for the bottom
@@ -1086,8 +1099,11 @@ it. A board returned to puts its block back where it was left.
   a drag on the header moving the block and a drag on the screen selecting text and *not*
   moving it; Ctrl+C copying that selection and, with nothing selected, still interrupting; the
   wheel scrolling the scrollback and, when there is none left to scroll, reaching the canvas;
-  the header still a target at a zoom that shrinks everything else; and the corner still
-  resizing the block, with the new size reaching the server.
+  the sideways half of a wheel reaching the canvas *while* the vertical half is being used —
+  by the scrollback, and by a program holding the pointer, which the check puts into that
+  state by writing `1006` and `1000` into the emulator's own parser; the header still a target
+  at a zoom that shrinks everything else; and the corner still resizing the block, with the
+  new size reaching the server.
 - `scripts/check-terminal-hotkey-browser.mjs` — who owns the *keyboard*, in Chrome, and the
   sibling of the file above. Each of Alt+B, Alt+T, Alt+P and Alt+G moving the viewport with
   real keystrokes into a focused emulator, read off `scrollX`/`scrollY` rather than off a
@@ -1155,10 +1171,18 @@ were not being hidden from a picker; they were never being written.
   finished, keep the tab". A run that printed its URL and went back to its prompt therefore sits
   there holding a slot until somebody closes it.
 - **A program that turns mouse reporting on takes the pointer with it.** Once the screen has
-  the pointer, `vim` or `claude` asking for mouse tracking receives clicks and the wheel as
-  escape sequences, which is what those programs expect and also means the reader cannot
-  select text inside one. Nobody has asked for a way round it — a modifier that forces
-  selection is what other terminals do — so it is here rather than in the design above.
+  the pointer, `vim` or `claude` asking for mouse tracking receives clicks and the *vertical*
+  wheel as escape sequences, which is what those programs expect and also means the reader
+  cannot select text inside one. Nobody has asked for a way round it — a modifier that forces
+  selection is what other terminals do — so it is here rather than in the design above. The
+  sideways wheel is the exception #162 carved out, and it costs the program nothing: xterm
+  takes a report's button from the sign of `deltaY`, so it was already sending nothing for a
+  wheel that only went sideways while cancelling the event all the same.
+- **A mouse report in xterm's default encoding never reaches the shell.** It leaves the
+  emulator through `onBinary`, and this frontend only listens at `onData`, so a program that
+  asks for `1000` without also asking for `1006` gets the pointer and then hears nothing from
+  it. Every mouse-reporting program of the last decade asks for SGR, so nothing has run into
+  it; noticed while writing the check for #162 and left for an issue of its own.
 - **Alt+T fits the block to the viewport, which puts its top edge under Excalidraw's toolbar.**
   The path in the header reads through it awkwardly. Alt+B has the same shape of problem.
 - **A tab is moved between blocks by a button, not by dragging it.** `⧉` detaches the tab on

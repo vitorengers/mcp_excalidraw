@@ -87,6 +87,56 @@ export interface TerminalPanelProps {
 }
 
 /**
+ * The board's own canvas, told a wheel it was never on the path of.
+ *
+ * Re-dispatched rather than left to bubble: this overlay is a *sibling* of the canvas, not
+ * a child, so Excalidraw's listener is nowhere on this event's path. And it goes to the
+ * **canvas** rather than to the container that listens, because that listener drops any
+ * wheel whose target is not a canvas, a textarea or an iframe — a board that scrolled while
+ * the pointer was over a menu is the bug it is guarding against.
+ */
+function dispatchWheelToCanvas(event: React.WheelEvent, deltaX: number, deltaY: number): void {
+  const canvas = document.querySelector('.excalidraw__canvas.interactive')
+    ?? document.querySelector('.excalidraw__canvas')
+  if (!canvas) return
+  canvas.dispatchEvent(new WheelEvent('wheel', {
+    deltaX,
+    deltaY,
+    deltaMode: event.deltaMode,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
+    altKey: event.altKey,
+    bubbles: true,
+    cancelable: true
+  }))
+}
+
+/**
+ * The sideways half of a wheel, which is the board's whatever the emulator is doing.
+ *
+ * Nothing under this overlay has a use for it. xterm has no horizontal scrolling —
+ * `_getPixelsScrolled` reads `deltaY` and never `deltaX` — and it emits no escape sequence
+ * for one either: a mouse report takes its button from the sign of `deltaY`, so a wheel
+ * that only went sideways is cancelled and reported as nothing at all. So this axis is
+ * answered without asking either of the questions below.
+ *
+ * **In the capture phase, and that is the whole reason it is a second handler.** A program
+ * holding the pointer has xterm cancelling the wheel with `stopPropagation` as well as
+ * `preventDefault`, and React listens at the root: an event stopped at the `.xterm` element
+ * never reaches the bubbling handler at all, so a guard there is a guard that never runs.
+ * The capture pass goes root-first and has already happened by then.
+ */
+function forwardHorizontalWheelToCanvas(event: React.WheelEvent): void {
+  // The three the board reads as one gesture rather than as a pan; see below.
+  if (event.ctrlKey || event.metaKey || event.shiftKey) return
+  if (event.deltaX === 0) return
+  dispatchWheelToCanvas(event, event.deltaX, 0)
+}
+
+/**
  * A wheel the emulator did not want, given to the board instead of dropped.
  *
  * The block is a shape on a board, and over any other shape that wheel pans or zooms. Now
@@ -100,31 +150,28 @@ export interface TerminalPanelProps {
  * mouse reporting on is being sent the wheel as an escape sequence, which xterm marks with a
  * class on its own root rather than with the event.
  *
- * What is left has to be re-dispatched rather than left to bubble: this overlay is a
- * *sibling* of the canvas, not a child, so Excalidraw's listener is nowhere on this event's
- * path. And it goes to the **canvas** rather than to the container that listens, because
- * that listener drops any wheel whose target is not a canvas, a textarea or an iframe — a
- * board that scrolled while the pointer was over a menu is the bug it is guarding against.
+ * What is left is handed to `dispatchWheelToCanvas` above rather than left to bubble.
+ *
+ * **Both of those ways of saying it are answers about the event, and a touchpad pan is two
+ * axes at once.** That is #162: the reader pans diagonally over a block, the scrollback has
+ * room, xterm scrolls four pixels of it and calls `preventDefault` — and the hundred and
+ * twenty pixels of sideways pan in the same event go with it. So the question is put per
+ * axis, by `forwardHorizontalWheelToCanvas` above and by this one below it. What is left
+ * here is the vertical half, asked exactly what the whole event used to be asked, and it
+ * carries no `deltaX` because the other half has already been answered.
+ *
+ * Ctrl, Meta and Shift are left whole, and this is where whole still means whole. Those
+ * three are not a pan: the first two are the zoom gesture and Shift is Excalidraw's own
+ * sideways wheel, and all three read the axes together — `deltaY || deltaX` for Shift, the
+ * sign of `deltaY` for the zoom — so splitting one would be two gestures where the reader
+ * made one.
  */
 function forwardWheelToCanvas(event: React.WheelEvent): void {
   if (event.nativeEvent.defaultPrevented) return
   if ((event.target as Element | null)?.closest?.('.xterm.enable-mouse-events')) return
-  const canvas = document.querySelector('.excalidraw__canvas.interactive')
-    ?? document.querySelector('.excalidraw__canvas')
-  if (!canvas) return
-  canvas.dispatchEvent(new WheelEvent('wheel', {
-    deltaX: event.deltaX,
-    deltaY: event.deltaY,
-    deltaMode: event.deltaMode,
-    clientX: event.clientX,
-    clientY: event.clientY,
-    ctrlKey: event.ctrlKey,
-    metaKey: event.metaKey,
-    shiftKey: event.shiftKey,
-    altKey: event.altKey,
-    bubbles: true,
-    cancelable: true
-  }))
+  const whole = event.ctrlKey || event.metaKey || event.shiftKey
+  if (!whole && event.deltaY === 0) return
+  dispatchWheelToCanvas(event, whole ? event.deltaX : 0, event.deltaY)
 }
 
 /**
@@ -586,6 +633,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           event.stopPropagation()
           if (active) focusRef.current.get(active.id)?.()
         }}
+        onWheelCapture={forwardHorizontalWheelToCanvas}
         onWheel={forwardWheelToCanvas}
       >
         {/* `onData` is dropped rather than posted for a read-only session: the route refuses
