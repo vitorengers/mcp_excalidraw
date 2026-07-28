@@ -600,7 +600,16 @@ export function layoutBoard(
         // A card that cannot be moved is locked, so the canvas refuses the drag rather
         // than accepting one this server would have to undo.
         locked: !card.draggable,
-        link: card.url,
+        // Deliberately no `element.link`, though the URL is right there in `card.url`.
+        // Nothing in `src/` or `frontend/` reads a card's `link`; the board opens the issue
+        // from `customData.issueUrl` below, and the panel renders it as a real anchor. What
+        // the second copy did buy was Excalidraw's own hyperlink UI, which keys off
+        // `element.link` alone: a badge in the card's corner, and — because the popup is
+        // drawn above the element's own box — a white bar over whichever cards are stacked
+        // on top of this one in the column. Selecting a card should not cover its
+        // neighbours to repeat something the panel already says. The title strip keeps its
+        // link, at the top of this function: it is full width, so its popup lands over the
+        // mirror rather than over a card, and it is the only route from here to the project.
         customData: {
           kind: MIRROR_KIND,
           role: 'card',
