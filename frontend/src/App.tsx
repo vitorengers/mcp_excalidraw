@@ -2126,6 +2126,14 @@ function App(): JSX.Element {
     mode: string
     cols: number
     rows: number
+    /**
+     * Whose session this is, when the server opened it for one of its own agents.
+     *
+     * Null for every shell a reader opened, which is what leaves those tabs exactly as they
+     * were. A run's tab arrives without anyone asking, so the strip labels it with the issue
+     * rather than with the next number in the sequence.
+     */
+    owner: { agent: string; issueUrl: string; label: string } | null
   }
 
   interface TerminalSessionState {
@@ -2167,7 +2175,8 @@ function App(): JSX.Element {
         shell: session.shell,
         mode: session.mode ?? 'pipe',
         cols: session.cols,
-        rows: session.rows
+        rows: session.rows,
+        owner: session.owner ?? null
       }
       : null
 
@@ -4390,6 +4399,11 @@ function App(): JSX.Element {
               onInput={sendTerminalInput}
               fontSize={terminalFont}
               onFontSize={changeTerminalFont}
+              // The one thing about the board this overlay cannot work out for itself. Dark
+              // mode is a filter Excalidraw puts on its own canvas, and the card is a sibling
+              // of that canvas rather than a child of it, so nothing filters it — told
+              // nothing, it paints a bright card over a block the filter has darkened.
+              theme={theme}
             />
           ))}
         </div>
