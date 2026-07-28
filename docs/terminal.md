@@ -310,6 +310,31 @@ existing when the server did. A reload therefore puts every live session back in
 The shells, their transcripts and their sizes are the server's and come back exactly as they
 were.
 
+**The rect that one block comes back at is saved, per board** (#154). The size and the position
+of the block are not the arrangement: they are what the reader dragged, and losing them was not
+only a shape moving. A block put back at `TERMINAL_SIZE` reports the default grid, the server
+puts it at the live shell, and a full-screen program — `claude` included — repaints into a
+smaller screen than it was left at, so *the sizes come back exactly as they were* was true of
+the server and undone a moment later by the viewer that reconnected.
+
+It lives in `localStorage`, under `excalidraw-terminal-geometry`, keyed by workspace id, and it
+is written by `syncTerminalBlocks` — the one place that sees a finished resize — and read in the
+last branch of `newTerminalBlock`. **Per board**, unlike the font size below: how big the
+terminal is and where it sits is a fact about a project, while the size of the text is a fact
+about the reader's eyes. **Not `customData`**, for the reason that section gives. The two doors
+it covers are a reload and a switch of project and back, the second because the page clears its
+per-session memory on the way into a board.
+
+The rect is the reader's from then on, and nothing re-anchors it: a remembered block carries no
+`awaitingMirror` mark, so a mirror that has grown wider since may end up under it. That is the
+same trade a restore after an erase already makes — re-anchoring is how a reload comes to undo a
+drag — and the block is an ordinary shape the reader can move. A board that has never had one
+placed still gets `TERMINAL_SIZE` at the anchored origin.
+
+`scripts/check-terminal-geometry-browser.mjs` is the check: it drags a corner and a header with
+a real pointer, reloads, and asks the *scene* for the rect and `GET /api/terminal` for the grid
+the shell is holding — including that it never went down to the default and back up.
+
 ## The block is derived
 
 The shape carries `customData.kind = "terminal"` — beside `sessions` and `active`, which are the
@@ -919,7 +944,8 @@ were not being hidden from a picker; they were never being written.
   drag. Dragging a chip onto another block's strip would read better and would cost the band
   that still grabs the shape; if it is ever worth it, it is worth its own issue.
 - **The tab layout does not survive a reload.** The blocks are derived, so which session was in
-  which block is not saved, and a reload puts every live session back into one block.
+  which block is not saved, and a reload puts every live session back into one block. The rect
+  that block comes back at *is* saved since #154; which tabs are in it is not.
 - **A tab that has ended keeps its transcript but cannot be restarted in place.** `×` then `+`
   is a new session with an empty screen, in the same block.
 - **Whether a shell inside WSL gets a tty of its own has not been established.**
