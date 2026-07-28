@@ -178,6 +178,27 @@ function broadcast(message: WebSocketMessage, workspaceId?: string): void {
   });
 }
 
+/**
+ * How many browsers are on one board.
+ *
+ * Two routes ask the browser to do something rather than telling it something — move its
+ * camera, render its scene — and both used to ask *everyone*, then check that somebody
+ * anywhere was connected. On a single-board setup those are the same question. With a tab
+ * strip they are not: a request naming one project scrolled every project open in every
+ * window, and an export of one board had every other board answer with its own scene
+ * (#156). Both now ask one board, so both have to know whether that board has a browser
+ * on it — `clients.size` would say yes on the strength of a tab watching something else.
+ */
+function clientsWatching(workspaceId: string): number {
+  let watching = 0;
+  clients.forEach(client => {
+    if (client.readyState !== WebSocket.OPEN) return;
+    if (socketWorkspaces.get(client) !== workspaceId) return;
+    watching += 1;
+  });
+  return watching;
+}
+
 function normalizeLineBreakMarkup(text: string): string {
   return text
     .replace(/<\s*b\s*r\s*\/?\s*>/gi, '\n')
@@ -3574,10 +3595,15 @@ app.post('/api/export/image', (req: Request, res: Response) => {
       });
     }
 
-    if (clients.size === 0) {
+    // The board being exported, resolved before the guard: what has to be open in a browser
+    // is *this* board, not any board at all. A tab on another project cannot render it, and
+    // letting it try is how an export of one board came back with another board's scene.
+    const exportWorkspaceId = workspaceIdFrom(req);
+
+    if (clientsWatching(exportWorkspaceId) === 0) {
       return res.status(503).json({
         success: false,
-        error: 'No frontend client connected. Open the canvas in a browser first.'
+        error: `No frontend client is on the board "${exportWorkspaceId}". Open it in a browser first.`
       });
     }
 
@@ -3600,7 +3626,6 @@ app.post('/api/export/image', (req: Request, res: Response) => {
 
     // Re-broadcast current elements so all connected clients (including stale ones)
     // sync to the canonical server state before exporting
-    const exportWorkspaceId = workspaceIdFrom(req);
     const filesObj = filesForWorkspace(exportWorkspaceId);
     broadcast({
       type: 'initial_elements',
@@ -3615,7 +3640,7 @@ app.post('/api/export/image', (req: Request, res: Response) => {
         requestId,
         format,
         background: background ?? true
-      });
+      }, exportWorkspaceId);
     }, 800);
 
     exportPromise
@@ -3745,10 +3770,15 @@ app.post('/api/viewport', (req: Request, res: Response) => {
       offsetY
     } = viewportRequestSchema.parse(req.body);
 
-    if (clients.size === 0) {
+    // The board whose camera is being moved. Sent to everyone, this was the one path that
+    // reached across browser windows: an agent scrolling its own project board scrolled
+    // every board anybody had open (#156).
+    const viewportWorkspaceId = workspaceIdFrom(req);
+
+    if (clientsWatching(viewportWorkspaceId) === 0) {
       return res.status(503).json({
         success: false,
-        error: 'No frontend client connected. Open the canvas in a browser first.'
+        error: `No frontend client is on the board "${viewportWorkspaceId}". Open it in a browser first.`
       });
     }
 
@@ -3773,7 +3803,7 @@ app.post('/api/viewport', (req: Request, res: Response) => {
       zoom,
       offsetX,
       offsetY
-    });
+    }, viewportWorkspaceId);
 
     viewportPromise
       .then(result => {

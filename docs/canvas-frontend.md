@@ -38,6 +38,24 @@ from it falls back rather than stranding the canvas on a store nothing writes to
 `initial_elements` lands, and autosync is held off for that window — which is what the blanking
 was really protecting against.
 
+**So the active board and the board on screen disagree for the length of a reconnect**, and
+`sceneWorkspaceRef` is the second one. `activeWorkspaceRef` names the board being entered from
+the moment the tab is clicked, because that is what every request has to carry;
+`sceneWorkspaceRef` moves on when the new scene actually lands. Anything derived from what is
+*drawn* reads the second one. Reading the first is #156: the terminal cached where each block
+sat, was told the new board's name while the old board's blocks were still on the canvas, and
+put one project's terminal on another project's board.
+
+**Each board keeps its own camera.** There is one viewport for the page and there always was —
+the Excalidraw element carries no React key, so it is never remounted and a switch swaps the
+scene underneath it. `scrollX`, `scrollY` and `zoom` therefore carried straight over from the
+board you left, which reads as the tabs being wired together, and on boards whose content sits
+at different coordinates it reads worse: the second board opens on empty canvas, as if its
+drawing were gone. `boardViewportsRef` writes each board's down on the way out and puts it back
+on the way in; a board arrived at for the *first* time is fitted to its own content instead.
+Restoring is a restore, not a re-fit — a board left looking at nothing comes back looking at
+nothing. `scripts/check-workspace-viewport-browser.mjs` holds it down.
+
 **Three connection states, not two.** A socket that has never been up is *Connecting*, not
 Disconnected; the pill only says Disconnected after four failed retries. Retries are immediate,
 then 250 ms doubling to a 5 s ceiling, rather than a flat three seconds. A `ping`/`pong`
