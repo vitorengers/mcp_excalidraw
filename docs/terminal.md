@@ -310,6 +310,31 @@ existing when the server did. A reload therefore puts every live session back in
 The shells, their transcripts and their sizes are the server's and come back exactly as they
 were.
 
+**The rect that one block comes back at is saved, per board** (#154). The size and the position
+of the block are not the arrangement: they are what the reader dragged, and losing them was not
+only a shape moving. A block put back at `TERMINAL_SIZE` reports the default grid, the server
+puts it at the live shell, and a full-screen program — `claude` included — repaints into a
+smaller screen than it was left at, so *the sizes come back exactly as they were* was true of
+the server and undone a moment later by the viewer that reconnected.
+
+It lives in `localStorage`, under `excalidraw-terminal-geometry`, keyed by workspace id, and it
+is written by `syncTerminalBlocks` — the one place that sees a finished resize — and read in the
+last branch of `newTerminalBlock`. **Per board**, unlike the font size below: how big the
+terminal is and where it sits is a fact about a project, while the size of the text is a fact
+about the reader's eyes. **Not `customData`**, for the reason that section gives. The two doors
+it covers are a reload and a switch of project and back, the second because the page clears its
+per-session memory on the way into a board.
+
+The rect is the reader's from then on, and nothing re-anchors it: a remembered block carries no
+`awaitingMirror` mark, so a mirror that has grown wider since may end up under it. That is the
+same trade a restore after an erase already makes — re-anchoring is how a reload comes to undo a
+drag — and the block is an ordinary shape the reader can move. A board that has never had one
+placed still gets `TERMINAL_SIZE` at the anchored origin.
+
+`scripts/check-terminal-geometry-browser.mjs` is the check: it drags a corner and a header with
+a real pointer, reloads, and asks the *scene* for the rect and `GET /api/terminal` for the grid
+the shell is holding — including that it never went down to the default and back up.
+
 ## The block is derived
 
 The shape carries `customData.kind = "terminal"` — beside `sessions` and `active`, which are the
@@ -403,6 +428,41 @@ rather than as the area, the way #110 read its own 2.5: the area reading gives 9
 request about how big a window looks is a request about its edges. Only a *fresh* block reads
 the constant — a detach copies the block the tab came out of, and a restore reuses the geometry
 the reader had — so nothing already on a board moves when it changes.
+
+### It stops where the canvas stops, and what it is allowed to cover
+
+The overlay is drawn at the block's bounds converted to viewport coordinates, and there is no
+clamp on that arithmetic on purpose: this card **is** the shape, so it pans and zooms with the
+board and goes off the edge with it. The documentation card, which is a reading column pinned
+*beside* a shape rather than the shape itself, is placed the other way round — `placeCard`
+clamps it into the canvas area before it is drawn, so it can never leave. That asymmetry is
+right, and it is also what left this card as the one overlay that could escape.
+
+Until #153 nothing stopped it. Pan a block above the top of the canvas and `top` went negative;
+the canvas wrapper declared no `overflow`, so the card was not clipped, and the project tab
+strip and the `Excalidraw Canvas` header row are `static` and unpositioned, so a card carrying
+any `z-index` at all painted over them. The screenshot behind #153 is a terminal's title band
+and tab strip drawn across the chrome with the connection pill, `Sync to Backend` and
+`Clear Canvas` underneath — and the card's body takes the pointer, so they were unclickable as
+well as hidden. **The wrapper is `overflow: hidden` now**, so the card stops exactly where
+Excalidraw already clips the rectangle under it, which is the half-visible block the reader
+expects. Clipping rather than sliding it back on screen: sliding is what the documentation card
+does, and doing it here would be the card coming loose from its block.
+
+The layers are named once, on `.app` in `frontend/index.html`, rather than as a bare `5`
+repeated in two stylesheets — `--board-z-overlay: 5` for the cards, `--board-z-chrome: 10` for
+the tabs and the header, `--board-z-dialog: 50` for the dialogs over both. The chrome is given
+a layer as well as the clip, because a single `overflow` declaration is a thin thing for
+`Clear Canvas` to depend on.
+
+**The overlays stay above Excalidraw's own layer UI** (`--zIndex-layerUI: 4`), which #153 asked
+to have settled and which nothing in this repository had decided. Both readings are defensible:
+the card stands for a shape, and a shape goes under the tool islands. It was settled the other
+way because the documentation card shares the layer and is opened by *selecting* a shape —
+which is exactly when Excalidraw's properties island is on screen beside it. Under the islands,
+that panel's own buttons become the thing nobody can click, on every shape near the left edge,
+and there is no gesture that gets them back. A terminal drawn over an island can be panned off
+it; a panel drawn under one cannot be recovered at all.
 
 ## Paper, and the hand-drawn code face
 
@@ -895,6 +955,17 @@ taken.
   asks; the header beside them is unchanged; `.terminal-card__prompt` is absent live *and* with
   the shell gone; and the notice that replaced it still names `+` and Alt+T without changing
   the height of the frame the emulator was given.
+- `scripts/check-terminal-overlay-layer-browser.mjs` — where the block stops, in Chrome. It pans
+  a block until its *body* is spread over the whole of the page chrome — the body, because the
+  title band and the tab strip above it are transparent to the pointer by design and a hit test
+  through them would find the chrome either way — and then asks
+  `document.elementFromPoint` what a click on the project tab, the `+`, the title, the
+  connection pill and `Clear Canvas` would hit. A hit test rather than a bounding rect on
+  purpose: a clipped card reports the same box it always did, so a check that measured rects
+  would have been green before the fix and after it. Then `Clear Canvas` is really clicked and
+  the board really emptied, with the card still over the button; and last, #112 again, because a
+  fix that stopped the overlay covering the chrome by making it transparent or by moving it
+  would pass everything above.
 
 All seventeen were written first and seen to fail against the code as it stood.
 
@@ -936,7 +1007,8 @@ were not being hidden from a picker; they were never being written.
   drag. Dragging a chip onto another block's strip would read better and would cost the band
   that still grabs the shape; if it is ever worth it, it is worth its own issue.
 - **The tab layout does not survive a reload.** The blocks are derived, so which session was in
-  which block is not saved, and a reload puts every live session back into one block.
+  which block is not saved, and a reload puts every live session back into one block. The rect
+  that block comes back at *is* saved since #154; which tabs are in it is not.
 - **A tab that has ended keeps its transcript but cannot be restarted in place.** `×` then `+`
   is a new session with an empty screen, in the same block.
 - **Whether a shell inside WSL gets a tty of its own has not been established.**

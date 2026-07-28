@@ -31,6 +31,11 @@
   background: var(--island-bg-color, #fff);
   border-bottom: 1px solid var(--color-gray-30, #ced4da);
   flex: 0 0 auto;
+  /* Positioned only so that the strip is on a layer at all: it was `static`, so a card drawn
+     over the canvas outranked it whatever number that card carried. The ladder is named on
+     `.app` in `frontend/index.html`. #153. */
+  position: relative;
+  z-index: var(--board-z-chrome, 10);
 }
 
 .workspace-tab {

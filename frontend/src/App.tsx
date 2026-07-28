@@ -208,6 +208,63 @@ const TERMINAL_RESTORE_DELAY_MS = 250;
  */
 const TERMINAL_FONT_STORAGE_KEY = 'excalidraw-terminal-font-size';
 
+/**
+ * Where the rect a board's terminal block was last left at is kept.
+ *
+ * Per board, and that is the whole distinction from the font above: how big the terminal is
+ * and where it sits is a fact about a *project* — one wants a wide screen for an agent
+ * transcript, another wants it out of the way of a diagram — while the size of the text is a
+ * fact about the reader's eyes, and the same eyes read every board.
+ *
+ * `localStorage` rather than `customData` for the same reason the font gives: the block is
+ * derived and stripped at both doors, so a rect stored on the shape is dropped on the way to
+ * the store and read as the block forgetting it. The cost is that a second browser, or a
+ * second machine, viewing the same board gets its own arrangement — which is what every
+ * other viewing preference here already does.
+ */
+const TERMINAL_GEOMETRY_STORAGE_KEY = 'excalidraw-terminal-geometry';
+
+interface TerminalRect { x: number; y: number; width: number; height: number }
+
+/**
+ * One board's remembered rect, or `null` if it has none — or if what is stored is not one.
+ *
+ * Validated rather than trusted. This is a key anybody can edit and a stale one can outlive
+ * the shape of what wrote it, and a block placed at `NaN` or at zero width is a shape
+ * Excalidraw draws nowhere and no reader can find to drag back.
+ */
+const readTerminalGeometry = (workspace: string): TerminalRect | null => {
+  try {
+    const raw = window.localStorage?.getItem(TERMINAL_GEOMETRY_STORAGE_KEY);
+    const stored = raw ? (JSON.parse(raw) ?? {})[workspace] : null;
+    if (!stored || typeof stored !== 'object') return null;
+    const { x, y, width, height } = stored as Record<string, unknown>;
+    if (![x, y, width, height].every((value) => typeof value === 'number' && Number.isFinite(value))) {
+      return null;
+    }
+    if ((width as number) <= 0 || (height as number) <= 0) return null;
+    return { x: x as number, y: y as number, width: width as number, height: height as number };
+  } catch (error) {
+    console.warn('Failed to read the terminal geometry from localStorage:', error);
+    return null;
+  }
+};
+
+/** Remember one board's rect, leaving every other board's alone. */
+const writeTerminalGeometry = (workspace: string, rect: TerminalRect): void => {
+  try {
+    const raw = window.localStorage?.getItem(TERMINAL_GEOMETRY_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const stored = parsed && typeof parsed === 'object' ? parsed : {};
+    window.localStorage?.setItem(
+      TERMINAL_GEOMETRY_STORAGE_KEY,
+      JSON.stringify({ ...stored, [workspace]: rect })
+    );
+  } catch (error) {
+    console.warn('Failed to save the terminal geometry to localStorage:', error);
+  }
+};
+
 type CustomData = Record<string, unknown> | null | undefined;
 
 const customDataOf = (element: { customData?: CustomData } | undefined): Record<string, unknown> =>
@@ -2220,6 +2277,18 @@ function App(): JSX.Element {
    */
   const terminalHomesRef = useRef<Map<string, { x: number; y: number; width: number; height: number }>>(new Map())
 
+  /** The rect last written to `localStorage`, so a pan does not rewrite the same one. */
+  const terminalStoredGeometryRef = useRef<string>('')
+
+  /** Remember this board's block rect across the doors the refs above do not survive. */
+  const rememberTerminalGeometry = (rect: TerminalRect): void => {
+    const workspace = activeWorkspaceRef.current
+    const signature = `${workspace}|${rect.x},${rect.y},${rect.width},${rect.height}`
+    if (terminalStoredGeometryRef.current === signature) return
+    terminalStoredGeometryRef.current = signature
+    writeTerminalGeometry(workspace, rect)
+  }
+
   /** A restore already scheduled, so a burst of scene changes queues one and not thirty. */
   const terminalRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -2417,6 +2486,33 @@ function App(): JSX.Element {
         // It costs nothing when it was not: the move is refused for any block that is not at
         // that origin, and the mark comes off either way.
         { sessions, active: sessions[0] ?? '', ...blind }
+      )
+    }
+
+    // Where this board's block was last left, if it has ever been left anywhere (#154).
+    //
+    // A floor under the two refs above rather than a replacement for them: they are page
+    // state and both doors out of a page drop them — a reload, and a switch of board and
+    // back, which clears them by hand because the next board's blocks are not this one's. A
+    // session that came back at the default was not only a shape moving. The block reports
+    // its own grid, the server puts it at the live shell, and a full-screen program repaints
+    // into a smaller screen than the reader left it at.
+    //
+    // The size and the position together, because they are one rect and one gesture:
+    // restoring the size into the anchor's slot would put a block the reader had dragged
+    // aside back in front of the content, at its own size.
+    //
+    // No `blind` mark, unlike the restore above. The mark exists to move a block that landed
+    // in the mirror's slot because there was no mirror yet to measure against, and a
+    // remembered rect did not land by that arithmetic. If the mirror has since grown wider
+    // the block may now overlap it — accepted, for the reason `at` gives about a restore:
+    // re-anchoring is how a reload comes to undo a drag, and the reader can move it.
+    const remembered = readTerminalGeometry(activeWorkspaceRef.current)
+    if (remembered) {
+      return terminalBlockElement(
+        { x: remembered.x, y: remembered.y },
+        { width: remembered.width, height: remembered.height },
+        { sessions, active: sessions[0] ?? '' }
       )
     }
 
@@ -2822,7 +2918,25 @@ function App(): JSX.Element {
     )
     const zoom = appState.zoom?.value ?? 1
 
+    /**
+     * A board switch is in flight, so these shapes are not this board's.
+     *
+     * The board being left stays on screen until the new one lands — deliberately, because a
+     * canvas that goes blank for the length of a reconnect reads as data loss — so there is a
+     * window where `activeWorkspaceRef` already names one board and the scene still draws
+     * another. `holdAutoSyncForSwitch` defends the store from exactly this window; what has
+     * to be defended here is anything keyed by something that repeats across boards.
+     *
+     * Session ids are numbered per board, so *both* boards' first shell is `s1`, and a home
+     * recorded from the board you left is read straight back out for the board you went to —
+     * which is a fresh terminal opening at another project's rect. The rect below is worse
+     * still, being the memory that outlives the page.
+     */
+    const switching = pendingSceneWorkspaceRef.current !== null
+
     const views: TerminalView[] = []
+    /** The first block's rect, which is the one a board comes back to. See below. */
+    let leading: TerminalRect | null = null
     for (const element of elements) {
       if (element.isDeleted || !isTerminalElement(element)) continue
       const data = terminalBlockData(element.customData)
@@ -2851,10 +2965,28 @@ function App(): JSX.Element {
       // is about to report about it: a font change, and a block that has been erased.
       const geometry = { x: element.x, y: element.y, width: element.width, height: element.height }
       terminalGeometryRef.current.set(element.id, { ...geometry, sessions: data.sessions })
-      for (const sessionId of data.sessions) terminalHomesRef.current.set(sessionId, geometry)
+      if (!switching) {
+        for (const sessionId of data.sessions) terminalHomesRef.current.set(sessionId, geometry)
+        if (!leading) leading = geometry
+      }
 
       reportTerminalGrid(element.id, geometry, data.sessions)
     }
+
+    // And the same rect once more, where it outlives the page (#154). This is the one place
+    // that sees a finished resize, so it is the one place that can remember one.
+    //
+    // The first block only, because that is the one a board comes back to: both doors put
+    // every live session back into a single block, so there is one rect to restore and it is
+    // the leading block's. Splitting a tab into a second block is an arrangement, and the
+    // arrangement is derived and unsaved by decision — see `docs/terminal.md`.
+    //
+    // Never mid-gesture. `suppressed` is the reader's hand still on the shape, and what is
+    // worth remembering is where it was let go; the un-suppressing call that follows every
+    // gesture — the one that brings the overlay back — carries the settled rect.
+    //
+    // `leading` is left unset while a board switch is in flight, for the reason above.
+    if (leading && !suppressed) rememberTerminalGeometry(leading)
 
     // Blocks that were on the board a moment ago and are not now. An eraser dragged across
     // one is the case this exists for; a delete and a select-all-and-clear are the same
@@ -4313,7 +4445,21 @@ function App(): JSX.Element {
           }}
           // Relative so the card's absolute position is measured from the canvas area,
           // which is the box its placement was computed against.
-          style={{ width: '100%', height: '100%', position: 'relative' }}
+          //
+          // And clipped to it, which is #153. A terminal card is drawn at its block's bounds
+          // in viewport coordinates with no clamp, so a block panned above the top of the
+          // canvas gets a negative `top` — and with nothing clipping this box, the card was
+          // painted across the project tabs and the header row, taking their clicks with it.
+          // The documentation card never showed it because its placement is clamped into the
+          // viewport before it is drawn; this one is pinned to its shape on purpose, so
+          // clipping is the answer rather than moving it back on screen. The card should
+          // stop where the board stops, the way the rectangle underneath it already does.
+          //
+          // Safe for Excalidraw: everything it draws — its islands, its popups, its
+          // `.excalidraw-modal-container` — is inside `.excalidraw`, which is itself
+          // `overflow: hidden` and fills this box exactly. Nothing of its own was reaching
+          // past this edge to begin with, so this clips only what we put here.
+          style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}
         >
           <Excalidraw
             excalidrawAPI={(api: ExcalidrawAPIRefValue) => setExcalidrawAPI(api)}
