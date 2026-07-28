@@ -185,13 +185,23 @@ const PORT = 34900 + (process.pid % 300);
 const CDP_PORT = PORT + 400;
 const BASE = `http://127.0.0.1:${PORT}`;
 /**
- * Deliberately short.
+ * Off, so that one selection is one `gh` and the count below means something.
  *
  * The server memo is what stops a burst of clicks becoming a burst of `gh` processes, and
- * `check-issue-cache.mjs` counts that. Here it is turned down so the *other* half — that a
- * remembered issue is still revalidated — can be watched happen inside one run.
+ * `check-issue-cache.mjs` counts that, against a clock it controls because no browser is in
+ * the way. Here it was merely turned *down*, to four seconds, which left it half in: what a
+ * `gh` count measured was not the panel's behaviour but whether two consecutive clicks
+ * happened to fall inside four seconds of each other — and clicking away between them costs
+ * about five, since three of the six points `deselect` can reach sit under Excalidraw's own
+ * left-hand properties island, which is on screen precisely because something is selected.
+ * So the two counts in section 7 were assertions about how fast this script runs.
+ *
+ * Turned off entirely instead. Every selection then reaches the stub, which is what makes
+ * *one read per selection, and never two* checkable here at all: with the memo on, a panel
+ * that read twice for one click would have had the second read swallowed and counted the
+ * same as a correct one.
  */
-const MEMO_MS = 4000;
+const MEMO_MS = 0;
 const GH_SLEEP_MS = 2000;
 
 const children = [];
@@ -403,8 +413,18 @@ const toViewport = (view, x, y) => ({
 const ghReads = (url) => readFileSync(counterPath, 'utf8')
   .split('\n').filter((line) => line.trim() && (!url || line.trim() === url)).length;
 
+/**
+ * Every card this script has clicked, in order.
+ *
+ * Section 7 counts reads against this rather than against numbers written by hand: what a
+ * read has to be is *one per selection*, so the expectation is the selections themselves,
+ * and adding a case above cannot leave a stale total below.
+ */
+const selections = [];
+
 /** Click the card for an issue and watch what the panel paints while the read is in flight. */
 async function selectIssue(number, ms = 600) {
+  selections.push(number);
   const scene = await evaluate(PROBE);
   const card = scene.cards.find((candidate) => candidate.url === urlOf(number));
   if (!card) throw new Error(`no mirrored card for issue ${number}: ${JSON.stringify(scene.cards)}`);
@@ -532,7 +552,9 @@ try {
   check('and an open issue with no run offers Implement / Fix', offersImplement(loadedPlain),
         JSON.stringify(loadedPlain.buttons));
 
-  console.log('\n2. selecting it again paints it at once, with no second read');
+  // "At once" is the claim, not "without reading again": the panel revalidates on every
+  // selection by design, and section 7 counts that. What the cache buys is this frame.
+  console.log('\n2. selecting it again paints it at once, without waiting for the read behind it');
   await deselect();
   const again = await selectIssue(PLAIN);
   await shot('03-second-selection');
@@ -589,8 +611,6 @@ try {
 
   console.log('\n5. what is remembered is still revalidated — an edit on GitHub arrives');
   writeFileSync(versionPath, 'two', 'utf8');
-  // Past the server's memo, so the next read really does reach the stub.
-  await sleep(MEMO_MS + 500);
   await deselect();
   const stale = await selectIssue(PLAIN);
   check('the remembered copy is what paints first, not a spinner',
@@ -616,11 +636,21 @@ try {
         finalScene.cards.every((card) => card.url && typeof card.url === 'string'),
         JSON.stringify(finalScene.cards));
 
+  // A selection is a read, and a read is a selection. Stale-while-revalidate means the panel
+  // asks again every time a card is chosen — that is what the cache above buys the frame for,
+  // not freshness — so what is checkable is the *rate*: never twice for one click, and never
+  // once for a card nobody clicked. A mirror that read every card it drew, or an effect that
+  // re-fired on a render, would both land here and nowhere else in this file.
   console.log('\n7. and the reads were the ones a read had to be');
-  check(`issue ${PLAIN} was read twice over three selections`, ghReads(urlOf(PLAIN)) === 2,
-        `${ghReads(urlOf(PLAIN))} gh invocations`);
-  check(`issue ${CLOSED} was read once over two selections`, ghReads(urlOf(CLOSED)) === 1,
-        `${ghReads(urlOf(CLOSED))} gh invocations`);
+  const selectedTimes = (number) => selections.filter((candidate) => candidate === number).length;
+  for (const number of [PLAIN, WORKED, CLOSED]) {
+    check(`issue ${number} was read once per selection, over ${selectedTimes(number)} of them`,
+          ghReads(urlOf(number)) === selectedTimes(number),
+          `${ghReads(urlOf(number))} gh invocations`);
+  }
+  check('and nothing was read that no click had asked for',
+        ghReads(null) === selections.length,
+        `${ghReads(null)} gh invocations for ${selections.length} selections`);
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);
