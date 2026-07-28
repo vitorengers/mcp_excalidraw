@@ -103,14 +103,55 @@ What may be measured against is one predicate, `mirrorAnchors`, stated the way t
 the export state theirs: not the mirror's own shapes, or it would re-anchor to itself; not the
 terminal blocks, which are placed *from* this region's own left edge, so measuring against one
 would walk the mirror onto it and it leftward again on every pass; not the draft blocks,
-which live inside the region; and **not a label bound to any of those**. Excalidraw binds text to
-whatever is selected and that text carries no `kind` of its own, so a title bound to the terminal
-— the one block the reader is expected to drag — looked authored, and dragging it up and to the
-left moved the mirror while the block itself was ignored.
+which live inside the region; **not a label bound to any of those**; and — since #188 — **not
+anything standing inside the region as it is currently drawn**, whatever it is marked with.
+Excalidraw binds text to whatever is selected and that text carries no `kind` of its own, so a
+title bound to the terminal — the one block the reader is expected to drag — looked authored, and
+dragging it up and to the left moved the mirror while the block itself was ignored.
+
+That last exclusion is the only one that is geometry rather than a mark, and it is there because
+every other one can be lost. A draft is excluded by `projectBoardDraft`; a block written in the
+notes column that never carried the mark, or lost it, is on those terms an ordinary authored
+shape that happens to sit inside the mirror. Measured against it, the region lands one mirror
+width further left — on top of the terminal — and that origin is a *measured* one, so it is
+remembered and stays. A shape inside the region cannot say where the region goes: it is there
+because of where the region already is.
 
 `scripts/check-mirror-anchor.mjs` has the arithmetic and
 `scripts/check-mirror-anchor-browser.mjs` drives a real Chrome across a poll that adds a column,
 because the whole question here is what a poll does to a placement.
+
+### The board that has nothing to measure against
+
+A board holding only a mirror and a terminal has an **empty anchor set on every poll** — both
+regions are excluded by the predicate above, and there is nothing else. That used to be answered
+with `{ x: -(mirrorWidth + 120), y: 0 }`, an absolute coordinate that knows nothing about the
+board, is not worth remembering, and is therefore decided again every twenty seconds. Since the
+width in it is GitHub's, a column added to the project moved the region a column-width further
+left on the next poll — onto a block anchored to where the region used to be. That is #188, and
+it is the same shape of defect as #99 on a board that never had any content to drift relative to.
+
+**The block is what such a board is measured from.** `terminalOrigin` puts it exactly one
+`TERMINAL_GAP` left of this region's left edge, so its right edge plus that gap *is* where this
+region's left edge was. Reading it back is the inverse of the placement rather than a second
+guess at it, which makes it a fixed point: the block does not move because the region was placed
+here, because the region was already placed from the block. It is a measurement, so it settles,
+and the poll after it never takes it again. A block still carrying `awaitingMirror` is not used —
+it is standing at a guess made before there was a mirror, and this same pass is about to move it.
+
+Only a board with **neither** content nor a block falls back to the constant, and that one is
+still not remembered.
+
+**And where each region went is kept per board, across a switch away and back.** It used to be
+one value dropped on every switch, which made coming back a fresh decision taken against whatever
+the canvas looked like at that moment — on a board of this kind, nothing at all. Keyed by
+workspace instead, so the next board's content still cannot decide this one's placement, which is
+what the reset was actually for. A reload is what re-measures, the way it is for the terminal.
+
+`scripts/check-mirror-terminal-drift-browser.mjs` is the one that asks this in a browser: a board
+holding only those two, across ten refreshes and a real twenty-second poll, a column appearing, a
+shape dropped inside the region, and a switch away and back. The region has to be where it was
+first drawn each time, and the two bounding boxes must never intersect.
 
 ## Two guards
 
