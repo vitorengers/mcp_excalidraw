@@ -902,6 +902,38 @@ back only the block: the live scene is what goes into `updateScene`, since
 rebuild from, and handed the tombstones it would return everything else the eraser had just
 taken.
 
+### `s1` on one board is not `s1` on another
+
+`nextTerminalId` counts from 1 **per board**, so the first shell of every project is called `s1`.
+Everything the browser remembers per session is therefore keyed by board *and* session
+(`terminalKeyOf`): where each block sits, and what grid each shell has been told.
+
+Unqualified, the restore above turned into a leak between projects, which is #156. Switching
+tabs takes the old board's blocks off the scene, and to the restore that is indistinguishable
+from an erase; the board being switched *to* has an `s1` of its own; so the restore looked `s1`
+up, found where the reader had dragged the other project's terminal, and put this project's
+block there — at that position and that size, with the shell inside it resized to match.
+
+The key is `sceneWorkspaceRef`, not the active board. A switch names the new board immediately
+and leaves the old board's shapes on screen until the new scene lands, so for the length of a
+reconnect the blocks being measured belong to the board being left. For the same reason a grid
+report is skipped entirely while a switch is in flight: the request would carry the new board's
+id and name a session that board has never heard of.
+
+**A resize report names the board it was scheduled for**, through `apiUrlOn` rather than
+`apiUrl`. Everything else here resolves the board late on purpose — a handler that never
+re-renders must not send the board it closed over — but this one is debounced and retried, so
+read late it arrives at whichever board the reader switched to while it was waiting, naming a
+session id that board has one of its own. What that costs is not a stale label: it is a live
+full-screen program on the other project repainting into a frame that is not its own. It was
+invisible until the caches stopped being wiped on a switch, because the wipe made the board
+being returned to re-report its true size and heal it a moment later.
+
+Nothing is wiped on a switch any more, either. It used to be, and that was both insufficient —
+the old scene stays up, so the geometry was written straight back in — and lossy: where a reader
+put a project's terminal is that project's, and visiting another tab is not a reason to forget
+it. A board returned to puts its block back where it was left.
+
 ## Checked
 
 - `scripts/check-terminal.mjs` — the guards, the workspace root, incremental output, input,
@@ -949,6 +981,12 @@ taken.
   in the same drag that has to stay erased, so a restore that resurrected the whole scene could
   not pass; the block still absent from the store afterwards; and the key opening a session
   after `exit`, and on a page that never opened one, both without a reload.
+- `scripts/check-terminal-workspace-isolation-browser.mjs` — also in Chrome, and two projects:
+  the reader drags and shrinks the block on one board, switches to the other, and the second
+  board's `s1` gets a block of its own at a fresh size rather than the first board's — asserted
+  on the canvas, and through `GET /api/terminal` per board, where a shell placed in the wrong
+  frame shows up as a shell running at the wrong grid. Then back to the first board, whose block
+  is still where it was put.
 - `scripts/check-terminal-font.mjs` — the arithmetic behind the size buttons: the cell, the
   frame and therefore the grid all move with the font, the grid never grows on the way up the
   range, and no size in it asks for a screen the block cannot hold.

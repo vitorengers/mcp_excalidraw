@@ -275,6 +275,61 @@
             color: #9a9aa5;
         }
 
+        /*
+         * Hide Menus: the three pieces of Excalidraw's own chrome that were named.
+         *
+         * This is CSS over somebody else's class names, which is normally the wrong answer,
+         * and here it is the only one. `UIOptions.canvasActions` edits the entries *inside*
+         * the hamburger and never the button that opens it — `DefaultMainMenu` is a
+         * `__fallback` child of the layer UI, drawn whatever a host passes. `zenModeEnabled`
+         * translates the properties island and the top-right corner off screen and leaves
+         * the hamburger and the toolbar where they were: one of the three. `viewModeEnabled`
+         * does hide two of them, and turns a main-button press into a pan — on a board whose
+         * documentation panel and whose queue button are both *selections*, that is an off
+         * switch for the product rather than a display setting.
+         *
+         * The three, by the class names Excalidraw 0.18 gives them:
+         *
+         *   `App-menu_top__left`  the hamburger and, under it, the properties island —
+         *                         `renderCanvasActions()` and `renderSelectedShapeActions()`
+         *                         are its only two children, which is why one selector
+         *                         covers two of the three named menus.
+         *   `shapes-section`      the toolbar across the top.
+         *
+         * Nothing else goes: the library trigger and the stats corner
+         * (`layer-ui__wrapper__top-right`) and the footer were not named, and the library
+         * trigger is how blocks reach a board.
+         *
+         * `display: none` rather than `visibility: hidden` or an offset, because a menu that
+         * is merely invisible still takes the presses aimed at the canvas under it. Both
+         * targets are styled by a single class upstream — `.shapes-section` and `.Stack` —
+         * so `.app[data-chrome="hidden"] …` outweighs them without `!important`, and an
+         * upstream rename fails `scripts/check-chrome-toggle-browser.mjs` rather than
+         * silently doing nothing.
+         */
+        .app[data-chrome="hidden"] .App-menu_top__left,
+        .app[data-chrome="hidden"] .shapes-section {
+            display: none;
+        }
+
+        /*
+         * And the library trigger stays on the right, where it was.
+         *
+         * `App-menu_top` is a three-column grid — left, toolbar, top-right — and the two
+         * rules above take the first two columns' contents out of the flow entirely, so grid
+         * auto-placement slides the third child into column 1. That is how hiding the menus
+         * moved the Library button under the project tabs on the far left: a control the
+         * scope says to leave alone, moved by the rule that hides the ones beside it.
+         *
+         * `visibility: hidden` would have kept the columns filled without this, and was
+         * dropped: Excalidraw declares `visibility: visible` on four of its own descendants
+         * — `ToolIcon_type_button--show` and `zen-mode-visibility` among them — so a hidden
+         * ancestor is not a promise that everything under it goes, while `display: none` is.
+         */
+        .app[data-chrome="hidden"] .App-menu_top > .layer-ui__wrapper__top-right {
+            grid-column: 3;
+        }
+
     </style>
 </head>
 <body>
