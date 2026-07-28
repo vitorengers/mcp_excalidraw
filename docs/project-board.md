@@ -552,6 +552,11 @@ It stands down while text is being edited. Excalidraw edits labels in a real `<t
 has focus is the honest test — and it is what keeps this from swallowing a keystroke meant for a
 card's title.
 
+The one focused `<textarea>` it does **not** stand down for is the terminal, which reads the
+keyboard through a hidden one of its own. Since #177 this key reaches the board from inside a
+focused shell, and the shell is not sent it either; `frontend/src/board-hotkeys.ts` is the rule
+and [terminal.md](terminal.md) is why.
+
 ## What it does not do yet
 
 - **Only the first page of items**, 100 of them, is mirrored. Beyond that the server logs a

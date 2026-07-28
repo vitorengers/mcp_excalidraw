@@ -61,6 +61,15 @@ export interface TerminalPanelProps {
   onMerge: () => void
   /** Keystrokes, as bytes: `\r` for Enter, `\x03` for Ctrl+C, `ESC [ A` for an arrow. */
   onInput: (sessionId: string, data: string) => void
+  /**
+   * The four keys the board navigates by, answered on the press by whoever owns the scene.
+   *
+   * This block sees a keystroke before anything on `window` does — xterm reads the keyboard
+   * through its own hidden textarea inside this card — so the board cannot take these back
+   * after the fact. It has to be asked here, before the emulator writes the meta escape and
+   * before the card stops the event propagating. See `board-hotkeys.ts` for all three layers.
+   */
+  isBoardHotkey: (event: KeyboardEvent) => boolean
   /** The reader's text size, before the board's zoom multiplies it. */
   fontSize: number
   /** A new one, from the buttons on the header. Clamped by whoever holds the state. */
@@ -139,15 +148,20 @@ const TerminalScreen: React.FC<{
   theme: TerminalTheme
   onData: (data: string) => void
   registerFocus: (focus: (() => void) | null) => void
-}> = ({ active, fontSize, cols, rows, output, ended, theme, onData, registerFocus }) => {
+  isBoardHotkey: (event: KeyboardEvent) => boolean
+}> = ({ active, fontSize, cols, rows, output, ended, theme, onData, registerFocus, isBoardHotkey }) => {
   const hostRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   /** How much of `output` has been handed to the emulator, so a redraw is a delta. */
   const writtenRef = useRef<string>('')
   const onDataRef = useRef(onData)
   const registerFocusRef = useRef(registerFocus)
+  // Through a ref for the reason the other two are: the emulator is built once, in an effect
+  // that must not depend on a prop React hands over fresh on every render.
+  const isBoardHotkeyRef = useRef(isBoardHotkey)
   onDataRef.current = onData
   registerFocusRef.current = registerFocus
+  isBoardHotkeyRef.current = isBoardHotkey
 
   useEffect(() => {
     const host = hostRef.current
@@ -170,11 +184,21 @@ const TerminalScreen: React.FC<{
     terminal.open(host)
     terminal.onData((data) => onDataRef.current(data))
 
-    // The two keystrokes a browser and a shell both claim, settled the way this machine's own
-    // terminal settles them. Everything else is the shell's, which is the whole point of the
-    // block taking the keyboard.
+    // The keystrokes a browser, a board and a shell all claim, settled the way this machine's
+    // own terminal settles them. Everything else is the shell's, which is the whole point of
+    // the block taking the keyboard.
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true
+
+      // The board's four keys are the board's, even in here. #177: the reader asked to be
+      // able to navigate the canvas without clicking out of the terminal first, and the
+      // comment on it was "it should not send it to the terminal" — so this is not only a
+      // matter of letting the key through. Returning false is what does both: xterm stops
+      // before it writes the meta escape, and it stops *without* calling `preventDefault`,
+      // so the event goes on bubbling to the listeners on `window`. Four Readline word
+      // motions are what the shell gives up for it, named in `docs/terminal.md`.
+      if (isBoardHotkeyRef.current(event)) return false
+
       // AltGr arrives as Ctrl+Alt on several layouts, and it is somebody typing a `@`.
       if (event.altKey || !(event.ctrlKey || event.metaKey)) return true
       const key = event.key.toLowerCase()
@@ -356,7 +380,7 @@ const TerminalScreen: React.FC<{
  */
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   rect, zoom, suppressed, tabs, activeId, canAdd, canMerge,
-  onSelect, onAdd, onClose, onDetach, onMerge, onInput,
+  onSelect, onAdd, onClose, onDetach, onMerge, onInput, isBoardHotkey,
   fontSize: readerFontSize, onFontSize, theme
 }) => {
   /** Focus handles, one per live screen, so a click anywhere can reach the active one. */
@@ -432,8 +456,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       // Every key the emulator has taken stops here. Excalidraw binds bare letters to tools
       // and listens below this container, so a keystroke that got past would change the
       // active tool instead of reaching the shell.
-      onKeyDown={(event) => event.stopPropagation()}
-      onKeyUp={(event) => event.stopPropagation()}
+      //
+      // Except the four the board navigates by. React's `stopPropagation` calls the native
+      // one, and React listens at its own root — *below* `window` — so a chord stopped here
+      // never reaches the four listeners at all. That is the layer #177 did not name, and the
+      // reason letting the key past xterm alone changed nothing a reader could see. What goes
+      // on past this point is an `Alt` chord, which is not one of the bare letters Excalidraw
+      // binds, and the handler that catches it calls `preventDefault` itself.
+      onKeyDown={(event) => { if (!isBoardHotkey(event.nativeEvent)) event.stopPropagation() }}
+      onKeyUp={(event) => { if (!isBoardHotkey(event.nativeEvent)) event.stopPropagation() }}
     >
       <div className="terminal-card__header">
         <span className="terminal-card__where" title={status?.cwd ?? ''}>{status?.cwd ?? ''}</span>
@@ -441,8 +472,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
         {/* The reader's own size, and one of the three things on this overlay that take a
             click.
-            Buttons rather than a shortcut because while the terminal has the keyboard every
-            keystroke belongs to the shell — Ctrl+- would reach the shell, not the block.
+            Buttons rather than a shortcut because while the terminal has the keyboard a
+            keystroke belongs to the shell unless something claimed it by name — Ctrl+- would
+            reach the shell, not the block. #177 claimed the four board keys and no more.
             They are as small as a target can be and still be one: every pixel that takes
             the pointer is a pixel that no longer selects or drags the shape underneath.
             The grid beside them is the confirmation, since it is what the shell was told. */}
@@ -553,6 +585,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             ended={tab.ended}
             theme={theme}
             onData={(data) => onInput(tab.id, data)}
+            isBoardHotkey={isBoardHotkey}
             registerFocus={(focus) => {
               if (focus) focusRef.current.set(tab.id, focus)
               else focusRef.current.delete(tab.id)
