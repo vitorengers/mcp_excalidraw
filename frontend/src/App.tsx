@@ -1949,6 +1949,14 @@ function App(): JSX.Element {
     mode: string
     cols: number
     rows: number
+    /**
+     * Whose session this is, when the server opened it for one of its own agents.
+     *
+     * Null for every shell a reader opened, which is what leaves those tabs exactly as they
+     * were. A run's tab arrives without anyone asking, so the strip labels it with the issue
+     * rather than with the next number in the sequence.
+     */
+    owner: { agent: string; issueUrl: string; label: string } | null
   }
 
   interface TerminalSessionState {
@@ -1990,7 +1998,8 @@ function App(): JSX.Element {
         shell: session.shell,
         mode: session.mode ?? 'pipe',
         cols: session.cols,
-        rows: session.rows
+        rows: session.rows,
+        owner: session.owner ?? null
       }
       : null
 
