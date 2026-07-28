@@ -40,7 +40,11 @@
      up taller than the header, which is the trade #144 asked for by name. */
   --terminal-tab-scale: 1.5;
   position: absolute;
-  z-index: 5;
+  /* Where a card drawn over the canvas sits, named once on `.app` in `frontend/index.html`
+     rather than spelled `5` here and again in `DocsPanel.css`. The card is clipped into the
+     canvas area by the wrapper, so this settles it against Excalidraw's own layers and
+     nothing else. #153. */
+  z-index: var(--board-z-overlay, 5);
   display: flex;
   flex-direction: column;
   overflow: hidden;

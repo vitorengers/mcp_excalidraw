@@ -12,7 +12,11 @@
    Position comes from the component; everything the reader sees is here. */
 .docs-card {
   position: absolute;
-  z-index: 5;
+  /* The same layer the terminal card is on, from the same ladder — see `.app` in
+     `frontend/index.html`. This card never escaped the canvas area to begin with, because its
+     placement is clamped into the viewport first; it shares the token because it is the same
+     kind of thing, not because it had the same defect. #153. */
+  z-index: var(--board-z-overlay, 5);
   display: flex;
   flex-direction: column;
   overflow: hidden;
