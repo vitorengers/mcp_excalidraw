@@ -47,6 +47,42 @@ resolution both agents use. That matters for one case in particular: a WSL-backe
 through `wsl.exe -d <distro> --cd <inner path>`, because a Windows UNC path is not a working
 directory `git` inside the distro can act on. `pwd` in such a session reports the inner path.
 
+## The environment it is given
+
+The shell inherits the server's environment, and `agentEnv()` in `src/core/issue-agent.ts`
+adjusts exactly two keys of it on the way in. The agents are given the same function's result,
+because a rule kept for the shell and not for them is how the two drift apart.
+
+- **`PATH` gains the GitHub CLI**, where it is installed and missing. A server started before
+  `gh` was installed hands out a PATH without it for the rest of its life, and `gh` is most of
+  what anyone types in here.
+- **`CLAUDE_CODE_CHILD_SESSION` is removed.** It is Claude Code's marker for "you are nested
+  inside a session", set in every subprocess spawned from its Bash, PowerShell and Monitor
+  tools, from hooks and from status line commands. An interactive `claude` that sees it is
+  excluded from `--resume`, `--continue`, up-arrow history and the `claude agents` list —
+  which for a block whose reason to exist is running `claude` (below) means the session is
+  gone the moment the block is closed. The marker is deliberately *not* set for stdio MCP
+  server subprocesses, on the grounds that they are long-lived and outlive the session that
+  spawned them; this server is that class of process and gets no such exemption, so a board
+  started once from a Claude Code tool call would stamp the marker onto every shell it opened
+  hours later. Stripping it is the correction the exemption would have made. Non-interactive
+  `claude -p` persists either way, so the agents were never at risk — they are covered because
+  one rule is easier to keep than two.
+
+**Claude Code says so itself, in its status line**, if you ever see this again from somewhere
+else: `Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker`. That is what the
+block used to show, and a session started under it writes no transcript at all — not a
+transcript that is merely hidden from the picker.
+
+`CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1` reaches the same place and is not what is done here:
+it overrides the exclusion unconditionally, including for a session that really is nested. The
+two compose, if stripping ever turns out not to be enough.
+
+Nothing else is filtered. There is no allowlist and no per-project environment facility — the
+board removes one key it has a reason to remove, and everything else the machine's environment
+carries arrives untouched. `scripts/check-child-session-env.mjs` asserts both halves of that,
+on the PTY path, the pipe path and the agent path.
+
 ## A PTY, where there is one
 
 The shell is given a **pseudoterminal**. That is what makes `stdin.isTTY` true inside it, and
@@ -551,6 +587,11 @@ taken.
 - `scripts/check-terminal-pty.mjs` — that the shell sees a tty, that the echo moved with it,
   that a resize reaches the child, that the scrollback is cut between sequences, and that with
   no binding the server still starts and says `pipe`.
+- `scripts/check-child-session-env.mjs` — that `CLAUDE_CODE_CHILD_SESSION` is not passed on,
+  on the PTY path, the pipe path and the agent path, and that a sentinel variable beside it
+  still arrives — the board strips one key rather than filtering the environment. It starts
+  its own servers holding the marker, because whether any given machine's board holds it
+  depends on how that board was started.
 - `scripts/check-terminal-browser.mjs` — the block, in Chrome over the DevTools protocol.
   Placement, Alt+T, a command typed with real keystrokes, a corner dragged with a real pointer,
   and the store still holding none of it.
@@ -589,12 +630,19 @@ taken.
   off the render, clear 3:1 against the paper they are drawn on; and at zoom 0.15, where the
   card's text is under five pixels, a band of its own colour still crosses the block.
 
-All eleven were written first and seen to fail against the code as it stood.
+All twelve were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.
 `CLAUDE.md` is explicit that compiling is not working, and this change is mostly about what the
 browser does.
+
+That last one was run by hand for #122, on a board deliberately started holding the marker, and
+it is worth writing down what it showed. Through the block, `claude` started, answered, and left
+a session behind that `claude --resume <id>` then reopened with its own answer still in it. The
+same shell spawned with the marker still set answered the same question and wrote **no session
+file at all**, under Claude Code's own warning that transcript saving was off. So the sessions
+were not being hidden from a picker; they were never being written.
 
 ## What it does not do yet
 

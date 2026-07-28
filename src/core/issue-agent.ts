@@ -85,6 +85,46 @@ export function agentPath(): string {
 }
 
 /**
+ * Variables removed on the way into a child, rather than passed on.
+ *
+ * `CLAUDE_CODE_CHILD_SESSION` is Claude Code's marker for "you are nested inside a
+ * session": it is set in every subprocess spawned from the Bash, PowerShell and Monitor
+ * tools, from hooks and from status line commands, and an interactive `claude` that sees it
+ * is excluded from `--resume`, `--continue`, up-arrow history and `claude agents`.
+ *
+ * The marker is deliberately *not* set for stdio MCP server subprocesses, because those are
+ * long-lived and outlive the session that spawned them. This server is that same class of
+ * process and gets no such exemption: started once from a Claude Code tool call it inherits
+ * the marker and then stamps it onto every shell and every agent it spawns, hours after the
+ * session that set it has ended. A `claude` typed into a terminal block is told it is nested
+ * when it is not, and its session is thrown away.
+ *
+ * So it is stripped rather than overridden. `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1` is the
+ * other way to reach the same place and it is worse: it would also override the exclusion
+ * for a session that really is nested.
+ */
+const STRIPPED_FROM_CHILDREN = ['CLAUDE_CODE_CHILD_SESSION'];
+
+/**
+ * The environment every child of the board is given: this process's, corrected twice.
+ *
+ * Shared by the agents and by the terminal, because a rule kept in one of the two places
+ * and not the other is how they drift apart. Both corrections are one key each and neither
+ * rewrites a command line, so what `agent-usage.ts` and `workspaces.ts` rule out — a
+ * configurable command — is untouched.
+ */
+export function agentEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, PATH: agentPath() };
+  // By comparison rather than by `delete env.X`: a Windows environment block is
+  // case-insensitive, and once spread into a plain object a `Claude_Code_Child_Session`
+  // would survive a delete spelled in capitals and reach the child anyway.
+  for (const key of Object.keys(env)) {
+    if (STRIPPED_FROM_CHILDREN.includes(key.toUpperCase())) delete env[key];
+  }
+  return env;
+}
+
+/**
  * How long a run may take before it is killed: by default, as long as it takes.
  *
  * It was twenty minutes, on the premise that researching an issue is bounded work. That
@@ -301,7 +341,7 @@ export async function runAgent(
   return new Promise<AgentRun>((resolve) => {
     const child = spawn(command, args, {
       cwd,
-      env: { ...process.env, PATH: agentPath() },
+      env: agentEnv(),
       // No shell: the prompt arrives over stdin, so nothing has to survive quoting.
       // Passing multi-line text as an argument breaks on cmd.exe long before the
       // agent ever sees it.
