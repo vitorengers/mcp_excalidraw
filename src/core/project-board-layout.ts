@@ -466,6 +466,21 @@ export function layoutBoard(
 
   let bottom = cardsTop;
 
+  /**
+   * The column an issue waits in before anything starts on it, if the board named one.
+   *
+   * Matched the way every other column lookup in this project is — trimmed and without
+   * regard to case — and never against the two columns that are not the project's: `No
+   * Status` is where an item with no status lands, and the notes column is the canvas's own.
+   * Neither is a column a card can be *put* in, so neither is one an issue can wait in.
+   */
+  const todo = (board.todoColumn ?? '').trim().toLowerCase();
+  const isTodo = (section: BoardSection): boolean =>
+    Boolean(todo)
+    && section.optionId !== NO_STATUS_OPTION_ID
+    && section.optionId !== NOTES_OPTION_ID
+    && section.name.trim().toLowerCase() === todo;
+
   board.sections.forEach((section, index) => {
     const x = origin.x + PADDING + index * (COLUMN_WIDTH + COLUMN_GAP);
     // Read once, for the header above the column and for the slots inside it. A draft
@@ -617,6 +632,12 @@ export function layoutBoard(
           itemId: card.itemId,
           issueUrl: card.url,
           draggable: card.draggable,
+          // Whether the issue is still waiting rather than being worked on, which is what
+          // decides whether the panel offers to research it again. Written onto the card
+          // rather than derived in the browser from a header's label text: the column's name
+          // is drawn into a label that wraps and carries a count, and reading a gate out of
+          // that would be reading the wrong thing.
+          ...(isTodo(section) ? { inTodo: true } : {}),
           ...(run ? { implementState: run } : {}),
           ...(error ? { moveError: error } : {}),
         },

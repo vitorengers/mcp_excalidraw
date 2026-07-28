@@ -43,6 +43,16 @@ export interface ProjectBoard {
   sections: BoardSection[];
   /** True when the project holds more items than one page returns. */
   morePages: boolean;
+  /**
+   * What this workspace calls the column an issue waits in before anything starts on it.
+   *
+   * Carried on the board rather than resolved wherever it is wanted, because it is the
+   * workspace's answer and the browser has no workspace: the reader writes it here, the
+   * layout marks the cards that are in it, and the panel gates **Recreate with observations**
+   * on that mark. Absent for a board built by `toBoard` alone, which knows no workspace and
+   * deliberately names no column.
+   */
+  todoColumn?: string | null;
 }
 
 /** The section for items the project holds but never gave a status. */

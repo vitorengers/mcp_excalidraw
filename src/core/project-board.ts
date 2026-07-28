@@ -323,7 +323,10 @@ export async function readProjectBoard(
   if (board.morePages) {
     logger.warn(`Project board: more than ${ITEM_PAGE_SIZE} items; only the first page is mirrored`);
   }
-  return board;
+  // Written here rather than in `toBoard`, which knows no workspace: this is the one fact on
+  // the board that comes from `board.config.json` rather than from GitHub, and the browser
+  // needs it to know which cards may be researched again.
+  return { ...board, todoColumn: todoColumn(workspace).name };
 }
 
 export interface MoveRequest {
