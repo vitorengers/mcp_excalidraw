@@ -23,7 +23,7 @@ import { existsSync, statSync } from 'fs';
 import { delimiter, isAbsolute, join } from 'path';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
-import { agentPath, buildAgentCommand } from './issue-agent.js';
+import { agentEnv, buildAgentCommand } from './issue-agent.js';
 
 /**
  * How much transcript is kept for a socket that connects late.
@@ -400,10 +400,10 @@ export class TerminalSession {
 
     logger.info(`Starting terminal "${id}" for workspace "${workspace.id}"`, { command, cwd: this.cwd, mode: this.mode });
 
-    // The same PATH the agents get: a server started before the GitHub CLI was installed
-    // would otherwise hand this shell a PATH without it, and `gh` is most of what anyone
-    // types in here.
-    const env = { ...process.env, PATH: agentPath() };
+    // The same environment the agents get: a PATH the GitHub CLI is on, because `gh` is
+    // most of what anyone types in here, and no nested-session marker, because a shell
+    // opened on a board that has been up for hours is not nested inside anything.
+    const env = agentEnv();
 
     if (pty) {
       this.pty = pty.spawn(resolveExecutable(command, env.PATH ?? ''), args, {
