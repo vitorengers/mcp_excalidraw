@@ -760,13 +760,21 @@ taken.
   that divided by the same wrong cell the code did would have agreed with it. The width half was
   seen to fail against the face swapped with the cell left behind: 97 columns claimed of 104 at
   13px, 159 of 170 at 8px, 51 of 55 at 24px.
-- `scripts/check-terminal-paper-browser.mjs` — the look, in Chrome, and every case in it is one
-  the source cannot answer. The overlay's computed background and the rectangle's fill are the
-  same paper; the four Comic Shanns faces are registered on the document *and* loaded; the rows
-  ask for the face first and the glyphs really are 0.55 wide per font pixel, which is how a
-  fallback gives itself away; all sixteen ANSI colours, printed by a real shell and read back
-  off the render, clear 3:1 against the paper they are drawn on; and at zoom 0.15, where the
-  card's text is under five pixels, a band of its own colour still crosses the block.
+- `scripts/check-terminal-paper-browser.mjs` — the look, in Chrome, in **both themes**, and
+  every case in it is one the source cannot answer. The theme is pinned rather than inherited
+  from the machine's `prefers-color-scheme`, and each case is asked once on paper and again on
+  night. The card's surface and the block's are compared as **rendered pixels** — the same two
+  screen coordinates, once with the overlay over them and once with it out of the way, since
+  the filter that darkens one of them applies at paint and every colour the DOM will report is
+  the colour before it. That is the case #147's defect hid behind: the string comparison it
+  replaces compared `#faf6ee` with `#faf6ee` and passed while the screen showed a bright card
+  in a dark ring. Then: the four Comic Shanns faces registered on the document *and* loaded;
+  the rows asking for the face first and the glyphs really 0.55 wide per font pixel, which is
+  how a fallback gives itself away; all sixteen ANSI colours, printed by a real shell and read
+  back off the render, clearing 3:1 against **their own theme's** surface; a band of its own
+  colour still crossing the block at zoom 0.15 in both; and the toggle itself — done with a
+  program on the alternate screen and the emulator's DOM node marked, so an emulator that was
+  rebuilt rather than re-themed would lose the mark and be caught.
 - `scripts/check-terminal-focus-browser.mjs` — who owns the pointer where, in Chrome. A click
   in the middle of the screen focusing the shell and a command typed straight after it running;
   a drag on the header moving the block and a drag on the screen selecting text and *not*
@@ -775,7 +783,7 @@ taken.
   the header still a target at a zoom that shrinks everything else; and the corner still
   resizing the block, with the new size reaching the server.
 
-All thirteen were written first and seen to fail against the code as it stood.
+All fifteen were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.
