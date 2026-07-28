@@ -2177,7 +2177,8 @@ function App(): JSX.Element {
    * A block for sessions that have nowhere to be.
    *
    * Three placements, and they answer different questions. `beside` is a detach — the new
-   * block goes next to the one the tab came out of. `at` is a **restore**: the block was
+   * block goes to the **left** of the one the tab came out of, the way the region grows.
+   * `at` is a **restore**: the block was
    * erased and putting it back means putting it *back*, at the size and position the reader
    * had it, because a restore that re-anchored it past the mirror would answer an accidental
    * erase by also undoing a drag. Neither is where a terminal *goes*, which is the last case:
@@ -2208,9 +2209,15 @@ function App(): JSX.Element {
     const beside = where.beside
     if (beside) {
       return terminalBlockElement(
-        // Beside the block it came out of, not on top of it. Where it goes from there is the
-        // reader's business — it is an ordinary shape and the canvas moves it.
-        { x: beside.x + beside.width + 40, y: beside.y },
+        // Left of the block it came out of, and always left: the region grows that way. The
+        // block was moved to the far left in #96 precisely because the board grows down and
+        // right, so a detach that went right would author a block back into the direction
+        // that move emptied — and from the anchored origin, one gap left of the mirror, the
+        // very first one would land on top of the mirror. Unconditional rather than
+        // whichever side happens to be free, so the reader can predict where it appears.
+        // Where it goes from there is their business — it is an ordinary shape and the
+        // canvas moves it. See `terminalOrigin` in `src/core/terminal-block.ts`.
+        { x: beside.x - beside.width - 40, y: beside.y },
         { width: beside.width, height: beside.height },
         { sessions, active: sessions[0] ?? '' }
       )
