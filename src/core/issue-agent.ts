@@ -56,6 +56,76 @@ needs. Two things stay yours and do not transfer with the work:
   the board waiting forever on an issue that already exists.`;
 
 /**
+ * The instruction for researching an issue that already exists, and rewriting it.
+ *
+ * The other half of `ISSUE_AGENT_PROMPT`, and deliberately the same investigation: what
+ * differs is that there is already an issue, so the run ends in an edit rather than in a
+ * creation. A first investigation can go the wrong way — wrong root cause, wrong file cited,
+ * a scope that misses the point — and until this existed the board could only *append* to
+ * that: **Add observations** posts a comment, and a comment cannot correct a body. The next
+ * reader of the issue is an unattended coding agent, which is then asked to reconcile two
+ * texts that contradict each other.
+ *
+ * So the body is rewritten and the issue is not replaced. The number, the project card, the
+ * column, the comments and anything the server keys on the URL all stay valid — nothing
+ * downstream has to learn a new fact. That is only defensible while nothing has been built
+ * against the issue, which is the Todo gate the route enforces, not this text.
+ *
+ * The current body is what the run starts from, and it has to be: the observation that
+ * produced it is deleted with the block once the card appears (`reconcileDrafts`), so there
+ * is nothing else left of the first investigation.
+ */
+export const ISSUE_REVISE_PROMPT = `You will receive new observations about a GitHub issue this project already opened, and rewrite that issue so that it is right.
+
+Nothing has been built against it yet. The issue is still the deliverable, so what is wanted
+is one issue that is correct — not a correction bolted onto one that is not.
+
+Do not rewrite it immediately. Work out what it should say first:
+
+1. Read the issue as it stands, and its comments: \`gh issue view <url>\` and
+   \`gh issue view <url> --comments\`. Piped, that flag prints the comments instead of the
+   body, so both calls are needed. The new observations are the later word — where they
+   disagree with the body, they win.
+2. Investigate this repository again, from the observations rather than from the existing
+   body. The issue may have found the wrong root cause, cited the wrong file, or scoped
+   something nobody needs; do not inherit any of it because it is already written down.
+   Cite evidence as file:line.
+3. Read the project's documentation before proposing a solution. If the answer depends on
+   something the repository does not settle, research it — do not invent it.
+4. The issue can turn out to have been right, or to describe something already fixed. Say
+   so in the rewritten body rather than inventing a change to make.
+
+Then rewrite the issue **in place**, with the same structure a new one would have: context
+and the evidence you found, root cause (or the competing hypotheses, when the investigation
+is not conclusive), proposed scope, a verifiable definition of done, and the assumptions you
+had to make. Never fill a gap with a guess presented as fact.
+
+Write it in English — title and body. That is fixed: not the language of the observations,
+and not the language of the repository you just read. Quote an observation verbatim when its
+exact wording is the evidence; translate everything else.
+
+Edit the issue with \`gh issue edit <url> --body-file -\`, and pass the body on **stdin**. Not
+as a command-line argument: a body is free text, and a shell will execute what it finds in
+one. Rewrite the title too, with \`--title\`, when the re-investigation changed what the issue
+is about — a card and a block are labelled with it. Then:
+
+- **Do not run \`gh issue create\`.** The issue number does not change. A second issue for one
+  observation is exactly what this exists to avoid, and everything the board keys on this
+  issue — its project card, its column, its comments — is keyed on the number it already has.
+- **Do not close it, and do not delete its comments.** They are the record of how it got here.
+
+Return only the issue URL on a line of its own — the same URL you were given.
+
+You may put helpers to work — sub-agents, background tasks, whatever the investigation
+needs. Two things stay yours and do not transfer with the work:
+
+- **Editing the issue.** A helper investigates and reports its findings back to you; it never
+  runs \`gh issue edit\` itself. Two helpers that each rewrite the body leave whichever one
+  finished last, and no error anywhere.
+- **Finishing.** Only what *you* print is read. You print the issue URL yourself, last, on a
+  line of its own — and you wait for every helper to come back before you do.`;
+
+/**
  * PATH for the agent, with the GitHub CLI added when it is missing.
  *
  * The agent is told to use `gh`, but a server started before the CLI was installed
@@ -640,6 +710,43 @@ export async function runIssueAgent(
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     expects: 'issues',
     what: 'issue agent',
+  });
+  return { ok: run.ok, issueUrl: run.url, output: run.output, error: run.error };
+}
+
+/**
+ * Re-research an issue that exists and rewrite it, rather than opening a second one.
+ *
+ * The same agent command and the same per-project settings as researching — it is the same
+ * work with an issue already in front of it — and the same `expects: 'issues'`, because the
+ * answer is still one issue URL. The difference is that the caller already knows which URL
+ * that has to be: an answer naming a *different* issue is a run that opened one, and the
+ * route refuses to record it as a rewrite.
+ *
+ * The observations go into the prompt and nowhere near a command line. Nothing here
+ * interpolates them into a shell — `runAgent` writes the whole prompt to the child's stdin.
+ *
+ * No `host`, exactly as `runIssueAgent` passes none: researching an issue does not yet run in a
+ * terminal the board can show, and this is the same run rather than a second decision about it.
+ * `docs/whats-next.md` is where that seam is recorded, and it stays one seam.
+ */
+export async function runReviseAgent(
+  workspace: Workspace,
+  issueUrl: string,
+  observations: string,
+  options: { agentCommand: string; timeoutMs?: number }
+): Promise<IssueAgentResult> {
+  const prompt = `${ISSUE_REVISE_PROMPT}\n\n---\n\nThe issue to rewrite: ${issueUrl}`
+    + `\n\n---\n\nNew observations:\n\n${observations}`;
+  const settings = workspace.agents?.issue ?? null;
+  const timeoutMs = options.timeoutMs !== undefined
+    ? options.timeoutMs
+    : settings?.timeoutMs ?? undefined;
+  const run = await runAgent(workspace, prompt, {
+    agentCommand: applyAgentSettings(options.agentCommand, settings),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    expects: 'issues',
+    what: 'issue revise agent',
   });
   return { ok: run.ok, issueUrl: run.url, output: run.output, error: run.error };
 }

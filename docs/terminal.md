@@ -394,6 +394,16 @@ screen at any zoom, because it is a reading column pinned beside a shape. This o
 shape: the zoom scales the font and leaves the grid alone, so a terminal zoomed out is the same
 screen drawn smaller rather than a different number of columns.
 
+**How big it is when it is first drawn** is `TERMINAL_SIZE`, 1140 × 720 since #144, and it is
+the one number in `terminal-block.ts` that had never been argued for. It was 760 × 480, which
+is about a hundred columns by twenty rows at the default font — enough for a prompt, and not
+enough for the agent transcript this block exists to hold. Half again in each direction is
+around 150 × 33, which a `git diff` fits in. "Fifty per cent bigger" was read as each dimension
+rather than as the area, the way #110 read its own 2.5: the area reading gives 931 × 588, and a
+request about how big a window looks is a request about its edges. Only a *fresh* block reads
+the constant — a detach copies the block the tab came out of, and a restore reuses the geometry
+the reader had — so nothing already on a board moves when it changes.
+
 ## Paper, and the hand-drawn code face
 
 Until #115 the block was dark — a Catppuccin Mocha surface on a `#1e1e2e` rectangle — and this
@@ -401,16 +411,46 @@ document said why twice: *a terminal that follows the canvas into light mode sto
 one*, and *the dark fill is what reads as a terminal at a zoom where the shape is all there is
 to read*. Both were written about a board that has since changed. Every other region of this one
 is a pale block with a hand-drawn label, and the terminal had become the single rectangle in
-another design language. So it is **paper in both themes** now, in the same design as the
-blocks around it.
+another design language. So it is **paper on a light board** now, in the same design as the
+blocks around it — and, since #147, **its night side on a dark one**, which is the half of that
+decision the section below is about.
 
-**One palette, in `src/core/terminal-palette.ts`.** Three different things draw this block —
-the shape is an Excalidraw rectangle with a fill and a stroke, the emulator is xterm and takes a
-theme object, the frame around it is a stylesheet — and each of them used to carry its own
-hexes. A stylesheet cannot import TypeScript, so the way the three are held together is that
-`TerminalPanel.tsx` writes `TERMINAL_CSS_VARS` onto the card's own root and `TerminalPanel.css`
-reads nothing but `var(--terminal-*)`. On the card rather than on `:root`, so two terminal
-blocks are two independent surfaces and nothing leaks onto the canvas.
+**One palette per theme, in `src/core/terminal-palette.ts`.** Three different things draw this
+block — the shape is an Excalidraw rectangle with a fill and a stroke, the emulator is xterm and
+takes a theme object, the frame around it is a stylesheet — and each of them used to carry its
+own hexes. A stylesheet cannot import TypeScript, so the way the three are held together is that
+`TerminalPanel.tsx` writes `terminalCssVars(theme)` onto the card's own root and
+`TerminalPanel.css` reads nothing but `var(--terminal-*)`. On the card rather than on `:root`,
+so two terminal blocks are two independent surfaces and nothing leaks onto the canvas — and in
+TypeScript rather than in an `[data-theme]` rule, because those custom properties arrive as
+*inline styles* and a stylesheet rule cannot outrank one.
+
+### Dark mode is a filter on the canvas, and the overlay is not on it
+
+This is #147, and it is why the palette takes an argument. Excalidraw draws dark mode as
+`.theme--dark canvas { filter: invert(93%) hue-rotate(180deg) }`. The block is on that canvas,
+so its `#faf6ee` fill is painted near-black for free, like every other block's pastel is. The
+overlay is a `div` and a *sibling* of Excalidraw, so nothing filters it: told nothing, it
+painted a literal `#faf6ee` over a block the filter had already darkened, and the two things
+`terminal-palette.ts` exists to keep identical were drawn eight stops apart. Only one of them
+can be told what theme it is in, so it is told — `App.tsx` passes `theme` to `TerminalPanel`,
+which is the same value it puts on `.app[data-theme]`.
+
+**The shape's fill does not move, and that is what fixes the dark surface.** It is one literal
+in both themes, for two reasons: it is scene data — synced, exported, committed — and the theme
+is a per-reader setting in `localStorage`, so a fill that followed it would turn every toggle
+into a change to the board and two readers with different themes into two boards; and a block
+that opted out of the canvas filter would be the one shape on this board that did. So the dark
+palette's surface is defined the other way round. It is the colour `#faf6ee` **comes out**,
+`#1d1912`, measured off a real render rather than asserted — warm rather than Mocha's cool
+`#1e1e2e`, which is the one place the dark palette departs from Catppuccin, and it departs
+towards the paper it is the night side of.
+
+**The emulator is re-themed, not rebuilt.** `terminal.options.theme` is assigned on the running
+xterm. Disposing it and opening another would replay the transcript into a fresh parser, which
+is the same picture only for a program that never used the alternate screen: a `vim` left open
+in that tab would come back as its own scrollback. The check toggles the theme with a program on
+the alternate screen and the emulator's DOM node marked, and asserts both survive.
 
 **The face is `Comic Shanns`, and it is not shipped.** The blocks are lettered in Excalifont,
 which is what the observation asked for, and an emulator cannot draw in it: xterm puts column N
@@ -424,41 +464,68 @@ and none of them is fetched until something asks to draw with it, which is what
 `terminalFontReady()` in `frontend/src/terminal-metrics.ts` is for. Two things depend on that
 having happened, and both are in *Where a cell comes from* below.
 
-**All twenty-one theme entries are set.** The old theme set five and let the other sixteen fall
-through to xterm's own, which are tuned for a dark background: on paper its yellow came out at
-2.3:1, its bright white at 1.1:1 — not a colour anyone chose, the colour nobody set. The
-sixteen here are Catppuccin **Latte** hues darkened until each one clears **3:1** against the
-paper, which `check-terminal-paper-browser.mjs` asserts of a real render rather than of the
-module.
+**All twenty-one theme entries are set, in both palettes.** The old theme set five and let the
+other sixteen fall through to xterm's own, which are tuned for a dark background: on paper its
+yellow came out at 2.3:1, its bright white at 1.1:1 — not a colour anyone chose, the colour
+nobody set. The sixteen are Catppuccin hues moved until each one clears **3:1** against its own
+theme's surface — **Latte** darkened for paper, **Mocha** lifted for night — which
+`check-terminal-paper-browser.mjs` asserts of a real render, in both themes, rather than of the
+module. Neither palette survives as shipped: on paper Latte's yellow is 2.4:1 and its `surface2`
+2.0:1; on night Mocha's own `black` `#45475a` is 1.8:1.
 
-The greys are the awkward part and no light terminal theme escapes it. On a dark background the
-ramp runs black → bright white from least ink to most; on paper "white" is the colour of the
-page, so a program asking for white text is asking for nothing. The ramp is therefore read as
-**contrast** rather than as lightness: `brightBlack` is the dim one every tool uses for comments,
-`brightWhite` is the strongest ink, and "bright" throughout means *more ink* rather than more
-light. The cost is that `black` and `white` end up two similar greys, so a program that
-distinguishes those two will not be distinguished here.
+The greys are the awkward part and no terminal theme escapes it, in either direction. On a dark
+background the ramp runs black → bright white from least ink to most; on paper "white" is the
+colour of the page, so a program asking for white text is asking for nothing, and on night
+"black" is the colour of the card. The ramp is therefore read as **contrast** rather than as
+lightness in both: `brightBlack` is the dim one every tool uses for comments, `brightWhite` is
+the strongest mark, and "bright" means *further from the surface* rather than lighter. The cost
+is that `black` and `white` end up two similar greys, so a program that distinguishes those two
+will not be distinguished here.
+
+**Only foregrounds are checked.** A slot used as a *background* is not, and the one program this
+surface was built for uses one: Claude Code draws its hint chip as `black` on `brightCyan`,
+which is **1.11:1** on paper and 2.15:1 on night — the illegible strip in #147's screenshot,
+and it is illegible in light mode too. Checking the sixteen as backgrounds, and as pairs from
+within the sixteen, is its own question and its own issue.
 
 **What says "terminal" when the text has gone.** That was the dark fill's other job, and paper
 cannot do it — at a zoom where the overlay's text is four pixels tall there is nothing to read
 but the shape, and a pale rectangle on a board of pale rectangles is one more block. So the
-identity moves from the fill to a **band**: the header and the prompt row are each a solid dark
-strip, and what is left is a paper card with a bar top and bottom. A band is an area rather than
-a glyph, so it survives being shrunk; the check asserts it at zoom 0.15, where the card's text
-is under five pixels and none of it can be read.
+identity moves from the fill to a **band**: the header is a solid strip of the strongest colour
+on the card, across the top of it. A band is an area rather than a glyph, so it survives being
+shrunk; the check asserts it at zoom 0.15, where the card's text is under five pixels and none
+of it can be read.
 
-Three things the issue left open, decided here:
+There were two, top and bottom, until #144 removed the strip along the bottom. The claim that
+survives is the one that was ever load bearing — that *a* band crosses the block at a zoom
+where nothing can be read — and the header is the band that also has a second job, since #112
+made it the whole of what selects and drags the shape. A second one, kept only to be looked at,
+was paying for symmetry with a row of the reader's screen.
 
-- **Paper in both themes**, rather than paper in light and dark in dark. The canvas has a theme
-  the terminal has always ignored, and following it would mean two palettes to keep legible
-  instead of one — for a surface whose whole point is that it matches the blocks beside it,
-  which do not follow it either.
+The band **inverts with the theme rather than staying dark**, which is the part #147 could have
+got wrong. It is the ink colour in both palettes, so on night it is a light strip on a dark
+card — and it has to be: the board behind it is dark too, so a dark band on a dark card at zoom
+0.15 is a block with nothing on it, which is exactly the failure the band was invented to
+prevent. The check asserts 3:1 against whichever surface it is on.
+
+Four things the issues left open, decided here:
+
+- **Paper on paper, night on night.** #115 decided paper in *both* themes, on the reasoning that
+  following the canvas would mean two palettes to keep legible instead of one. #147 reversed it,
+  and not on taste: the canvas theme is a filter and the overlay is not on the canvas, so
+  "one palette" was never on offer — it was one palette *declared* and two *painted*. Two, kept
+  legible, and checked in both.
+- **The shape stays one literal.** See above: scene data cannot depend on the reader's theme
+  without every toggle becoming a change to the board.
 - **One look, not a choice for the reader.** The font size became a header control in #103
   because a grid the shell is told is a real constraint on a real block. A colour scheme is not
-  that, and a preference nobody asked for is a preference that has to be kept working.
-- **Programs that assume a dark terminal are out of scope.** `COLORFGBG` is not set, so `vim` —
-  and Claude Code, which this surface was built for — pick foregrounds against a background
-  nobody told them about. Left alone until it proves unreadable.
+  that, and a preference nobody asked for is a preference that has to be kept working. The
+  canvas theme is not that preference — it is the board's, and this follows it.
+- **Programs that assume a dark terminal are out of scope.** `COLORFGBG` is still not set, so
+  `vim` — and Claude Code, which this surface was built for — pick foregrounds against a
+  background nobody told them about. On a dark board they now happen to be right; on a light one
+  they are wrong for the same reason as before. Setting it is `agentEnv()` in
+  `src/core/issue-agent.ts` and its own issue.
 
 ## The font size is an input to the grid
 
@@ -473,7 +540,7 @@ the frame is clipped rather than scrolled (below). Bigger text, silently fewer v
 and no scrollbar to reach them.
 
 So `terminalGrid()` takes the font size as its second argument, and one size feeds three things:
-the cell, the frame — the header, the prompt strip and the padding are all `em`, so the chrome
+the cell, the frame — the header, the tab strip and the padding are all `em`, so the chrome
 grows with the text it holds — and therefore the grid. **A larger font in the same block is
 fewer columns and fewer rows**, reported down the same debounced route a corner drag uses. The
 `cols`×`rows` in the header is the confirmation, because it is what came back from the shell.
@@ -592,16 +659,39 @@ scrollback cannot use — the screen is at the bottom, or there is none — is h
 canvas instead of dropped, so panning and zooming still work over a block. Every keystroke
 otherwise goes to the shell, Ctrl+C and arrows and Escape included, and none reach Excalidraw,
 which binds every bare letter to a tool. Clicking the canvas blurs the terminal and gives the
-keyboard back. The strip along the bottom is now a status line and says which of the two
-states the block is in.
+keyboard back.
 
-The tab chips and the font buttons stay small for the reason that survived, inverted: the top
-of the card is the whole of what selects and drags the block, so what takes the pointer is
-**the chips rather than the row they sit in**, and the buttons are as small as a target can be
-and still be one. `scripts/check-terminal-focus-browser.mjs` is the check for all of this —
-it clicks the middle of the screen and types, drags the header and the body and compares what
-moved, turns the wheel both ways, and drags a corner afterwards to say the shape is still a
-shape.
+**The strip along the bottom is gone**, which is #144 and the other side of the argument #112
+settled. #112 kept it as a status line, on the grounds that a band which reads like a prompt
+and does nothing is worse than either answer. What it then said was `click the screen to type`
+and `typing goes to the shell` — two sentences narrating where the pointer already was, to a
+reader who has to have clicked the block to be reading them. Its third state is not narration:
+a shell that has gone leaves a block with no way back written down anywhere on screen. So that
+one is kept, and re-homed **over the screen** rather than in a row of its own. A row is chrome,
+and chrome is what `terminalGrid()` subtracts, so a band that appeared when a shell exited
+would re-grid the block at the moment its shell died; drawn over the transcript it is free, and
+it takes no pointer events, so the click underneath it still belongs to the screen.
+
+The tab chips take the pointer rather than the row they sit in, and the font buttons stay as
+small as a target can be, for the reason that survived, inverted: the top of the card is the
+whole of what selects and drags the block. What #144 changed is the **size** of a chip rather
+than which part of the row takes the pointer — the strip is drawn at `--terminal-tab-scale`,
+half again as big, so the chips, their close marks and `+`, `⧉` and `⇥` are all easier to hit,
+while the row around them stays transparent and the header above them stays exactly the size it
+was. The budget #112 was defending is that header band, and the strip is not it; the trade is
+that the tab row is now taller than the header over it, which is what the observation asked
+for. One variable does the whole row, because every length in it is `em` off the row's own
+font-size — the one exception, the chip's 1px outline, is drawn as an inset shadow instead of a
+border, since a browser snaps a border to whole device pixels and a chip that grew by
+`1.5 × em + 2px` measures 1.446× rather than 1.5×.
+
+`scripts/check-terminal-focus-browser.mjs` is the check for who owns the pointer — it clicks
+the middle of the screen and types, drags the header and the body and compares what moved,
+turns the wheel both ways, and drags a corner afterwards to say the shape is still a shape.
+`scripts/check-terminal-size-browser.mjs` is the check for the sizes, and it measures the
+render rather than the file: it reads the block the board placed off the scene, measures each
+control against itself with `--terminal-tab-scale` forced back to 1, and asks for the bottom
+bar's absence twice, live and with the shell gone.
 
 ## The hotkey
 
@@ -619,10 +709,12 @@ open one failed, and the last tab having been closed with its block. That last p
 makes it a way back rather than a jump: the key used to stand down whenever no session was open,
 which is to say in exactly the cases a reader reaches for it.
 
-The key is on the block as well as in here. When a shell has gone the strip along the bottom
-says so and says how to get another — `+` for a tab beside it, or this key — because a key
-written down only in markdown is a key nobody finds, which is the half of #93 that was never
-about the eraser.
+The key is on the block as well as in here. When a shell has gone, a notice across the bottom
+of its screen says so and says how to get another — `+` for a tab beside it, or this key —
+because a key written down only in markdown is a key nobody finds, which is the half of #93
+that was never about the eraser. It was a permanent strip below the screen until #144; what it
+is now is a band drawn *over* the transcript, only while a shell has gone, so it costs the grid
+nothing and appears where the reader is already looking.
 
 ## Erasing it does not get rid of it
 
@@ -709,13 +801,21 @@ taken.
   that divided by the same wrong cell the code did would have agreed with it. The width half was
   seen to fail against the face swapped with the cell left behind: 97 columns claimed of 104 at
   13px, 159 of 170 at 8px, 51 of 55 at 24px.
-- `scripts/check-terminal-paper-browser.mjs` — the look, in Chrome, and every case in it is one
-  the source cannot answer. The overlay's computed background and the rectangle's fill are the
-  same paper; the four Comic Shanns faces are registered on the document *and* loaded; the rows
-  ask for the face first and the glyphs really are 0.55 wide per font pixel, which is how a
-  fallback gives itself away; all sixteen ANSI colours, printed by a real shell and read back
-  off the render, clear 3:1 against the paper they are drawn on; and at zoom 0.15, where the
-  card's text is under five pixels, a band of its own colour still crosses the block.
+- `scripts/check-terminal-paper-browser.mjs` — the look, in Chrome, in **both themes**, and
+  every case in it is one the source cannot answer. The theme is pinned rather than inherited
+  from the machine's `prefers-color-scheme`, and each case is asked once on paper and again on
+  night. The card's surface and the block's are compared as **rendered pixels** — the same two
+  screen coordinates, once with the overlay over them and once with it out of the way, since
+  the filter that darkens one of them applies at paint and every colour the DOM will report is
+  the colour before it. That is the case #147's defect hid behind: the string comparison it
+  replaces compared `#faf6ee` with `#faf6ee` and passed while the screen showed a bright card
+  in a dark ring. Then: the four Comic Shanns faces registered on the document *and* loaded;
+  the rows asking for the face first and the glyphs really 0.55 wide per font pixel, which is
+  how a fallback gives itself away; all sixteen ANSI colours, printed by a real shell and read
+  back off the render, clearing 3:1 against **their own theme's** surface; a band of its own
+  colour still crossing the block at zoom 0.15 in both; and the toggle itself — done with a
+  program on the alternate screen and the emulator's DOM node marked, so an emulator that was
+  rebuilt rather than re-themed would lose the mark and be caught.
 - `scripts/check-terminal-focus-browser.mjs` — who owns the pointer where, in Chrome. A click
   in the middle of the screen focusing the shell and a command typed straight after it running;
   a drag on the header moving the block and a drag on the screen selecting text and *not*
@@ -723,8 +823,17 @@ taken.
   wheel scrolling the scrollback and, when there is none left to scroll, reaching the canvas;
   the header still a target at a zoom that shrinks everything else; and the corner still
   resizing the block, with the new size reaching the server.
+- `scripts/check-terminal-size-browser.mjs` — how big the block and its strip are drawn, in
+  Chrome, measured off the render rather than read out of the stylesheet: #110's lesson is that
+  a size which never reaches the element leaves the file reading exactly right. The block the
+  board placed is 1140 × 720 scene units; each of `.terminal-card__tab`, `__add`, `__detach`
+  and `__merge` is 1.45–1.55× the height it has with `--terminal-tab-scale` forced back to 1,
+  which is the strip as it was and the same one-lever question `check-workspace-tabs-scale.mjs`
+  asks; the header beside them is unchanged; `.terminal-card__prompt` is absent live *and* with
+  the shell gone; and the notice that replaced it still names `+` and Alt+T without changing
+  the height of the frame the emulator was given.
 
-All thirteen were written first and seen to fail against the code as it stood.
+All sixteen were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.

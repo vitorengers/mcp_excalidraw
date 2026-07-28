@@ -1,18 +1,32 @@
 #!/usr/bin/env node
 /**
- * Checks that the terminal is drawn in the board's design: paper, and the hand-drawn code face.
+ * Checks that the terminal is drawn in the board's design, in **both** of the board's themes.
  *
  * Every other region of this board is a pale block with a hand-drawn label. The terminal was
  * the one thing in another design language — a Catppuccin Mocha surface on a `#1e1e2e` shape,
  * in whatever monospace stack the machine happened to resolve. That was a deliberate decision
  * once (`TerminalPanel.css` said so: a terminal that follows the canvas into light mode stops
- * looking like one), and #115 reverses it, so this is the case that pins the new one down.
+ * looking like one), and #115 reversed it, so this is the case that pins the design down.
  *
- * Four questions, and every one of them is a question only a browser answers:
+ * #147 is the half of that #115 got wrong, and it is why every case below runs twice. Dark
+ * mode on this board is not a stylesheet, it is a **filter on the canvas** —
+ * `.theme--dark canvas { filter: invert(93%) hue-rotate(180deg) }`, which Excalidraw ships.
+ * The block is on that canvas, so its paper fill is painted near-black for free; the overlay
+ * is a `div` and a *sibling* of Excalidraw, so nothing filters it and it painted a literal
+ * `#faf6ee` on a dark board. Two things the source asserts are one colour, drawn as two.
  *
- * - **is it paper?** The overlay paints the surface and the shape underneath is filled to
- *   match, so the two have to be the *same* colour as well as the right one — a card that
- *   drifted from its own block would be a rectangle with a border of the old fill around it.
+ * That is why the first case of each theme is a **rendered pixel** rather than a string.
+ * `getComputedStyle` and `element.backgroundColor` both answer about what was *declared*, and
+ * the filter applies at paint — so the old version of this case compared `#faf6ee` with
+ * `#faf6ee` and passed while the screen showed a bright card in a dark ring. The comparison
+ * here is a screenshot of the canvas where the block is against a screenshot of the card, and
+ * it can only be answered by looking.
+ *
+ * The questions, and every one of them is a question only a browser answers:
+ *
+ * - **is the block and its overlay one surface, as painted?** The overlay paints the surface
+ *   and the shape underneath is filled to match, so the two have to come out the same colour
+ *   *after* the canvas filter has had its way with one of them and not the other.
  * - **is the face the one the blocks use?** Excalifont is proportional and cannot drive an
  *   emulator, so the board's code face is the monospaced sibling Excalidraw ships beside it,
  *   Comic Shanns. A web font that never loaded is invisible in the source: the stack still
@@ -21,14 +35,18 @@
  *   question is asked of the glyphs, whose advance width is 0.55 per font pixel in Comic
  *   Shanns against 0.586 in the stack behind it.
  * - **is the colour legible on it?** A theme sets five entries and the other sixteen fall
- *   through to xterm's dark-tuned defaults, where the yellow, the bright white and the bright
- *   cyan are near invisible on a light background. So all sixteen are printed by a real shell
- *   and read back from the render, and each one has to clear 3:1 against the paper it is
- *   drawn on.
+ *   through to xterm's dark-tuned defaults. So all sixteen are printed by a real shell and
+ *   read back from the render, and each one has to clear 3:1 against **its own theme's**
+ *   surface — the light palette's sixteen would be near-invisible on the dark one and the
+ *   other way about.
  * - **does it still say terminal when the text has gone?** The dark fill used to be the thing
- *   that said so at a zoom too far out for the overlay to be legible, and paper cannot do
- *   that job. Whatever replaces it has to be an *area* rather than a glyph, so this asks at a
- *   zoom where the text is under five pixels and nothing can be read.
+ *   that said so at a zoom too far out for the overlay to be legible. Whatever replaces it has
+ *   to be an *area* rather than a glyph, and it has to be one in both themes: a dark band on a
+ *   dark card is not a band.
+ * - **does toggling the theme cost the session?** The emulator is re-themed in place. Rebuilt
+ *   instead, it would take the screen with it — a program on the alternate screen replayed
+ *   into a fresh parser is that program's scrollback, not that program. So the toggle happens
+ *   with `vim`'s trick on screen and the emulator's own DOM node marked, and both survive.
  *
  * The colours are literals here on purpose. `src/core/terminal-palette.ts` is where they are
  * decided, and a check that imported it would agree with whatever that file happened to say.
@@ -46,19 +64,37 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { inflateSync } from 'node:zlib';
 import WebSocket from 'ws';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** The contract, spelled out rather than imported. See the note on the file. */
-const PAPER = '#faf6ee';
+/**
+ * The two surfaces, spelled out rather than imported. See the note on the file.
+ *
+ * The dark one is **what the light one renders as**. The shape is an ordinary block fill and
+ * behaves like every other block fill on this board: it is a literal pastel that Excalidraw's
+ * dark filter darkens, and it is scene data, so it cannot depend on which theme the reader
+ * happens to have on without every toggle becoming a board change. So the fill stays put in
+ * both themes and the dark palette's surface is defined as the colour it comes out — measured
+ * off a real render, `invert(93%) hue-rotate(180deg)` of `#faf6ee`.
+ */
+const SURFACE = { light: '#faf6ee', dark: '#1d1912' };
 const FACE = 'Comic Shanns';
 /** Comic Shanns' advance width per font pixel, measured off a real render of the face. */
 const ADVANCE = 0.55;
 /** The stack behind it resolves to about this, which is how a fallback gives itself away. */
 const FALLBACK_ADVANCE = 0.586;
-/** What a colour has to clear against the paper to count as ink rather than a watermark. */
+/** What a colour has to clear against its own surface to count as ink rather than a watermark. */
 const LEGIBLE = 3;
+/**
+ * How far two renderings of one surface may be apart and still be one surface.
+ *
+ * Not zero: the filter is arithmetic on eight-bit channels and rounds, and a screenshot of a
+ * rounded corner is antialiased. Small enough that the defect this case exists for — a card
+ * eight stops brighter than the block under it — cannot hide inside it.
+ */
+const SAME_SURFACE = 6;
 
 const argOf = (name) => {
   const index = process.argv.indexOf(name);
@@ -107,6 +143,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** `rgb(250, 246, 238)` or `#faf6ee` → `[250, 246, 238]`, and anything else to null. */
 function channels(value) {
+  if (Array.isArray(value)) return value.slice(0, 3);
   const text = String(value ?? '').trim();
   const hex = text.match(/^#([0-9a-f]{6})$/i);
   if (hex) {
@@ -128,6 +165,18 @@ const same = (a, b) => {
   return Boolean(left && right && left.every((value, at) => value === right[at]));
 };
 
+/** The same question of two *renderings*, where the filter's rounding is allowed for. */
+const nearly = (a, b, tolerance = SAME_SURFACE) => {
+  const left = channels(a);
+  const right = channels(b);
+  return Boolean(left && right && left.every((value, at) => Math.abs(value - right[at]) <= tolerance));
+};
+
+const hex = (value) => {
+  const parts = channels(value);
+  return parts ? `#${parts.map((part) => Math.round(part).toString(16).padStart(2, '0')).join('')}` : String(value);
+};
+
 /** WCAG relative luminance, so "legible" is a number rather than an opinion. */
 function luminance(colour) {
   const parts = channels(colour);
@@ -144,6 +193,64 @@ function contrast(a, b) {
   const second = luminance(b);
   if (first === null || second === null) return null;
   return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+// ─── Pixels, as the screen really has them ────────────────────
+
+/**
+ * Enough of a PNG decoder to read a clipped screenshot back.
+ *
+ * Chrome hands `Page.captureScreenshot` back as a PNG and the whole point of these cases is
+ * that no API in the page can answer them — a CSS filter is applied when the canvas is
+ * composited, so every colour the DOM will tell you about is the colour before it. Eight-bit,
+ * colour type 2 or 6, which is all Chrome emits; the five row filters are all handled because
+ * which one it picks for a given strip is its business, not ours.
+ */
+function decodePng(buffer) {
+  let at = 8;
+  let header = null;
+  const parts = [];
+  while (at + 8 <= buffer.length) {
+    const length = buffer.readUInt32BE(at);
+    const type = buffer.toString('ascii', at + 4, at + 8);
+    const body = buffer.subarray(at + 8, at + 8 + length);
+    if (type === 'IHDR') header = { width: body.readUInt32BE(0), height: body.readUInt32BE(4), depth: body[8], colour: body[9] };
+    if (type === 'IDAT') parts.push(body);
+    at += 12 + length;
+  }
+  const lanes = header?.colour === 6 ? 4 : header?.colour === 2 ? 3 : 0;
+  if (!lanes || header.depth !== 8) throw new Error(`unreadable screenshot: ${JSON.stringify(header)}`);
+  const raw = inflateSync(Buffer.concat(parts));
+  const stride = header.width * lanes;
+  const out = Buffer.alloc(stride * header.height);
+  let source = 0;
+  for (let row = 0; row < header.height; row++) {
+    const filter = raw[source++];
+    for (let index = 0; index < stride; index++) {
+      const value = raw[source + index];
+      const left = index >= lanes ? out[row * stride + index - lanes] : 0;
+      const up = row > 0 ? out[(row - 1) * stride + index] : 0;
+      const upLeft = row > 0 && index >= lanes ? out[(row - 1) * stride + index - lanes] : 0;
+      let restored;
+      if (filter === 0) restored = value;
+      else if (filter === 1) restored = value + left;
+      else if (filter === 2) restored = value + up;
+      else if (filter === 3) restored = value + ((left + up) >> 1);
+      else {
+        const guess = left + up - upLeft;
+        const toLeft = Math.abs(guess - left);
+        const toUp = Math.abs(guess - up);
+        const toCorner = Math.abs(guess - upLeft);
+        restored = value + (toLeft <= toUp && toLeft <= toCorner ? left : toUp <= toCorner ? up : upLeft);
+      }
+      out[row * stride + index] = restored & 255;
+    }
+    source += stride;
+  }
+  return (x, y) => {
+    const base = y * stride + x * lanes;
+    return [out[base], out[base + 1], out[base + 2]];
+  };
 }
 
 // ─── A project with a terminal ────────────────────────────────
@@ -181,6 +288,14 @@ writeFileSync(join(projectDir, 'colours.js'), [
   "  words.push(esc + '[' + code + 'm' + 'C' + index + 'X' + esc + '[39m');",
   '}',
   "process.stdout.write(words.join(' ') + '\\n');",
+  '',
+].join('\n'), 'utf8');
+
+/** `vim`'s trick, and nothing else: switch to the alternate screen and leave a word on it. */
+const ALT_MARK = 'ALTSCREENMARK';
+writeFileSync(join(projectDir, 'alt.js'), [
+  'const esc = String.fromCharCode(27);',
+  `process.stdout.write(esc + '[?1049h' + esc + '[H' + ${JSON.stringify(ALT_MARK)} + '\\r\\n');`,
   '',
 ].join('\n'), 'utf8');
 
@@ -268,6 +383,15 @@ async function shot(name) {
   writeFileSync(join(shotDir, `${name}.png`), Buffer.from(data, 'base64'));
 }
 
+/** What one point of the screen really is, filter and all. */
+async function pixelAt(x, y) {
+  const { data } = await send('Page.captureScreenshot', {
+    format: 'png',
+    clip: { x: Math.round(x), y: Math.round(y), width: 1, height: 1, scale: 1 },
+  });
+  return decodePng(Buffer.from(data, 'base64'))(0, 0);
+}
+
 async function click(x, y) {
   await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1, buttons: 1 });
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, buttons: 0 });
@@ -335,6 +459,12 @@ const PROBE = `(() => {
                  offsetLeft: state.offsetLeft, offsetTop: state.offsetTop };
   }
 
+  // Which theme the board is in, from the two places that have to agree about it: the shell
+  // around the canvas and Excalidraw's own container, whose class is what carries the filter.
+  const shell = document.querySelector('.app');
+  out.theme = shell ? shell.getAttribute('data-theme') : null;
+  out.filtered = /theme--dark/.test((document.querySelector('.excalidraw') || {}).className || '');
+
   const boxOf = (node) => {
     if (!node) return null;
     const box = node.getBoundingClientRect();
@@ -349,7 +479,7 @@ const PROBE = `(() => {
   const rows = card.querySelector('.xterm-rows');
   const screen = card.querySelector('.xterm-screen');
   const header = card.querySelector('.terminal-card__header');
-  const prompt = card.querySelector('.terminal-card__prompt');
+  const emulator = card.querySelector('.xterm');
 
   out.card = {
     box: boxOf(card),
@@ -359,10 +489,10 @@ const PROBE = `(() => {
     rowsFontFamily: rows ? getComputedStyle(rows).fontFamily : null,
     rowsFontSize: rows ? Number.parseFloat(getComputedStyle(rows).fontSize) : null,
     rowsColour: rows ? getComputedStyle(rows).color : null,
+    rowsText: rows ? (rows.textContent || '') : '',
     screen: boxOf(screen),
     body: boxOf(card.querySelector('.terminal-card__body')),
     header: header ? { ...boxOf(header), background: getComputedStyle(header).backgroundColor } : null,
-    prompt: prompt ? { ...boxOf(prompt), background: getComputedStyle(prompt).backgroundColor } : null,
     // The emulator's own backdrop, which xterm paints from the theme it was given rather
     // than from the stylesheet. A card that is paper over a viewport that is not is still a
     // dark terminal with a light frame around it.
@@ -370,6 +500,9 @@ const PROBE = `(() => {
       const node = card.querySelector('.xterm-viewport');
       return node ? getComputedStyle(node).backgroundColor : null;
     })(),
+    // Put here by this check before the theme is toggled. An emulator that was disposed and
+    // rebuilt is a new node, and a new node has no mark.
+    emulatorMark: emulator ? (emulator.dataset.paperCheck || null) : null,
   };
 
   // Whether the face is really in the document, rather than named in a list. fonts.check()
@@ -403,6 +536,133 @@ async function viewAt(zoom, left = 60, top = 120) {
   return evaluate(PROBE);
 }
 
+/**
+ * The board's theme, set the way a reader sets it: through Excalidraw's own appState, which
+ * is where its menu puts it and which the app mirrors onto `.app[data-theme]`.
+ */
+async function useTheme(theme) {
+  await evaluate(`window.__paperCheckApi.updateScene({ appState: { theme: ${JSON.stringify(theme)} } })`);
+  await waitFor(async () => (await evaluate(PROBE)).theme === theme, `the board to go ${theme}`, 40);
+  await sleep(900);
+}
+
+/**
+ * Two points of the card's own surface, chosen so that nothing is drawn on them.
+ *
+ * The card is `padding: 0.35em 0.5em 0.4em` and the emulator's host has no horizontal margin
+ * of its own, so a half-em strip down each side of the card is the card's background and
+ * nothing else — no glyph, no band, no chip. Three pixels in is inside that strip at any font
+ * size the block is legible at, and it is inside the block's fill too, which is what makes
+ * the same coordinate answerable twice.
+ */
+const surfacePoints = (card) => [
+  { x: card.left + 3, y: card.top + card.height * 0.6 },
+  { x: card.right - 3, y: card.top + card.height * 0.6 },
+];
+
+/**
+ * What the canvas has painted where the block is.
+ *
+ * The overlay covers the block's bounds exactly — measured, not assumed: the card's box and
+ * the shape's viewport bounds are the same rectangle, and the only canvas pixel outside the
+ * card's edge is the shape's own two-pixel stroke. So the way to see the fill is to take the
+ * overlay away for one frame, which is not a contrivance: `suppressed` does exactly this,
+ * with `visibility`, every time the block is dragged or resized — and a block whose fill only
+ * matches the card while the card is over it is a block that changes colour as it is dragged.
+ */
+async function shapeUnder(card) {
+  await evaluate(`document.querySelector('.terminal-card').style.visibility = 'hidden'`);
+  await sleep(400);
+  const middle = await pixelAt(card.left + card.width / 2, card.top + card.height * 0.6);
+  const edges = [];
+  for (const point of surfacePoints(card)) edges.push(await pixelAt(point.x, point.y));
+  await evaluate(`document.querySelector('.terminal-card').style.visibility = ''`);
+  await sleep(400);
+  return { middle, edges };
+}
+
+// ─── The cases, once per theme ────────────────────────────────
+
+/** The block and the overlay are one surface — as painted, not as declared. */
+async function surfaceCase(theme, scene) {
+  const surface = SURFACE[theme];
+  console.log(`\n${theme} 1. the block and the overlay are one surface`);
+  check("the shape's fill is the board's own paper, the same literal in both themes",
+        same(scene.block.backgroundColor, SURFACE.light),
+        `the rectangle is ${scene.block.backgroundColor}, not ${SURFACE.light}`);
+  check(`the overlay paints ${surface}`, same(scene.card.background, surface),
+        `the card is ${scene.card.background}, not ${surface}`);
+  check("and the emulator's own backdrop is that surface too, not the theme it shipped with",
+        scene.card.viewport === null || same(scene.card.viewport, surface),
+        `the xterm viewport is ${scene.card.viewport}`);
+
+  // The case the old string comparison could not fail. In dark mode the canvas is under
+  // `filter: invert(93%) hue-rotate(180deg)` and the overlay is not, so a card and a block
+  // that declare the same hex are painted eight stops apart. Same two coordinates, asked
+  // twice: once with the overlay over them and once with it out of the way.
+  const painted = await shapeUnder(scene.card.box);
+  const card = [];
+  for (const point of surfacePoints(scene.card.box)) card.push(await pixelAt(point.x, point.y));
+  console.log(`     block renders ${hex(painted.middle)}, `
+    + `edges ${painted.edges.map(hex).join(' ')} under card ${card.map(hex).join(' ')}, `
+    + `declared fill ${scene.block.backgroundColor}`);
+  check(`the shape renders as ${surface} once the canvas has been drawn`,
+        nearly(painted.middle, surface),
+        `the block is painted ${hex(painted.middle)}, not ${surface}`);
+  const apart = card.map((pixel, at) => ({ pixel, under: painted.edges[at] }))
+    .filter((pair) => !nearly(pair.pixel, pair.under));
+  check('so the card and the block under it are one surface on the screen', apart.length === 0,
+        apart.map((pair) => `card ${hex(pair.pixel)} over block ${hex(pair.under)}`).join(', '));
+}
+
+/** All sixteen, read off the render, against this theme's own surface. */
+async function inkCase(theme, scene) {
+  const surface = SURFACE[theme];
+  console.log(`\n${theme} 3. all sixteen ANSI colours are ink a reader can read`);
+  const inks = scene.inks ?? [];
+  const worst = [];
+  for (let index = 0; index < 16; index++) {
+    const ink = inks.find((span) => span.text === `C${index}X`);
+    const ratio = ink ? contrast(ink.colour, surface) : null;
+    worst.push({ index, colour: ink?.colour ?? null, ratio });
+  }
+  console.log('     ' + worst.map((ink) => `${ink.index}:${ink.ratio ? ink.ratio.toFixed(1) : '?'}`).join(' '));
+  const faint = worst.filter((ink) => !(ink.ratio >= LEGIBLE));
+  check(`every one of the sixteen clears ${LEGIBLE}:1 against ${surface}`, faint.length === 0,
+        faint.map((ink) => `${ink.index} ${ink.colour} at ${ink.ratio ? ink.ratio.toFixed(2) : 'unreadable'}`).join(', '));
+  check('and the default foreground is darker still, since most of the text is that one',
+        contrast(scene.card.rowsColour, surface) >= 4.5,
+        `${scene.card.rowsColour} at ${(contrast(scene.card.rowsColour, surface) ?? 0).toFixed(2)}`);
+}
+
+/** And it still says terminal at a zoom where nothing on it can be read. */
+async function bandCase(theme) {
+  const surface = SURFACE[theme];
+  console.log(`\n${theme} 4. and it still says terminal at a zoom where nothing can be read`);
+  const scene = await viewAt(0.15);
+  await shot(`${theme}-03-zoomed-out`);
+  check('the text is past legibility', scene.card.fontSize <= 5, `${scene.card.fontSize}px`);
+  check('the block is still on screen to be read', scene.card.box.width > 60,
+        `${scene.card.box.width.toFixed(0)}×${scene.card.box.height.toFixed(0)}`);
+
+  // The dark fill used to do this. Whatever took it over has to be an area with a colour of
+  // its own — a glyph at four pixels is a smudge, and a rule one pixel high is nothing. And
+  // it has to be one in *this* theme: a dark band on a dark card is not a band.
+  // It was two bands, top and bottom, until #144 took the bottom one away; the question was
+  // always whether *a* band survives being shrunk, and the header is the one that also has a
+  // second job — it is what selects and drags the block.
+  const bands = [scene.card.header].filter(Boolean).map((band) => ({
+    ...band,
+    ratio: contrast(band.background, surface),
+  }));
+  console.log('     ' + bands.map((band) => `${band.background} ${band.width.toFixed(0)}×${band.height.toFixed(1)} at ${band.ratio ? band.ratio.toFixed(1) : '?'}:1`).join('  '));
+  const marks = bands.filter((band) => band.ratio >= LEGIBLE
+    && band.height >= 2 && band.width >= scene.card.box.width * 0.7);
+  check(`a band of its own colour still crosses the block, against ${surface}`, marks.length > 0,
+        bands.map((band) => `${band.background} ${band.width.toFixed(0)}×${band.height.toFixed(1)}`).join(', ')
+        || 'nothing on the card carries a background');
+}
+
 try {
   await waitFor(async () => (await fetch(`${BASE}/health`)).ok, 'the canvas server');
 
@@ -427,6 +687,16 @@ try {
   await attach();
   await send('Page.enable');
   await send('Runtime.enable');
+
+  // Pinned, not inherited. Without this the theme falls through to `prefers-color-scheme`,
+  // and a check whose answer depends on the machine's own setting is a check that passes
+  // somewhere and fails somewhere else for a reason nobody can see.
+  await send('Page.addScriptToEvaluateOnNewDocument', {
+    source: `try { localStorage.setItem('excalidraw-canvas-theme', 'light') } catch (error) { /* no storage */ }`,
+  });
+  await send('Page.reload', { ignoreCache: false });
+  await sleep(500);
+
   await waitFor(() => evaluate(GRAB_API), 'the Excalidraw API handle');
   await waitFor(async () => (await evaluate(PROBE)).block, 'the terminal block to be placed');
   await waitFor(async () => (await evaluate(PROBE)).card?.screen, 'the terminal overlay to render');
@@ -436,21 +706,13 @@ try {
   let scene = await viewAt(1);
   check('the board is at zoom 1, where a scene unit is a pixel', scene.view.zoom === 1,
         String(scene.view.zoom));
-  await shot('01-paper');
+  check('and it is pinned light rather than left to the machine', scene.theme === 'light',
+        `the board is ${scene.theme}`);
+  await shot('light-01-paper');
 
-  console.log('\n1. the block and the overlay are one paper surface');
-  check('the shape underneath is filled with paper', same(scene.block.backgroundColor, PAPER),
-        `the rectangle is ${scene.block.backgroundColor}, not ${PAPER}`);
-  check('the overlay paints the same paper', same(scene.card.background, PAPER),
-        `the card is ${scene.card.background}, not ${PAPER}`);
-  check('so the two are the same colour, not two colours that both look light',
-        same(scene.card.background, scene.block.backgroundColor),
-        `card ${scene.card.background} over block ${scene.block.backgroundColor}`);
-  check("and the emulator's own backdrop is paper too, not the theme it shipped with",
-        scene.card.viewport === null || same(scene.card.viewport, PAPER),
-        `the xterm viewport is ${scene.card.viewport}`);
+  await surfaceCase('light', scene);
 
-  console.log('\n2. the rows are drawn in the face the blocks use');
+  console.log('\nlight 2. the rows are drawn in the face the blocks use');
   check(`the face is registered on the document and loaded`,
         scene.face?.registered > 0 && scene.face?.loaded > 0,
         JSON.stringify(scene.face));
@@ -476,52 +738,60 @@ try {
           + `${Math.abs(perPixel - FALLBACK_ADVANCE) < 0.01 ? 'that is the fallback stack' : 'neither face'}`);
   }
 
-  console.log('\n3. all sixteen ANSI colours are ink a reader can read');
-  await click(scene.card.prompt.x, scene.card.prompt.y);
+  // The sixteen are printed once and read twice: the transcript stays on the screen across a
+  // theme toggle, and what changes is the colour xterm draws it in.
+  await click(scene.card.body.x, scene.card.body.y);
   await waitFor(async () => /xterm/.test((await evaluate(PROBE)).focused), 'the keyboard to reach the shell');
   await sleep(700);
   await typeText('node colours.js');
   await pressKey('Enter', 'Enter', 0, 13, '\r');
-  const inks = await waitFor(async () => {
-    const found = (await evaluate(PROBE)).inks ?? [];
-    return found.length >= 16 ? found : null;
-  }, 'the sixteen colours to be drawn');
+  await waitFor(async () => ((await evaluate(PROBE)).inks ?? []).length >= 16, 'the sixteen colours to be drawn');
   scene = await evaluate(PROBE);
-  await shot('02-ansi');
+  await shot('light-02-ansi');
+  await inkCase('light', scene);
 
-  const worst = [];
-  for (let index = 0; index < 16; index++) {
-    const ink = inks.find((span) => span.text === `C${index}X`);
-    const ratio = ink ? contrast(ink.colour, PAPER) : null;
-    worst.push({ index, colour: ink?.colour ?? null, ratio });
-  }
-  console.log('     ' + worst.map((ink) => `${ink.index}:${ink.ratio ? ink.ratio.toFixed(1) : '?'}`).join(' '));
-  const faint = worst.filter((ink) => !(ink.ratio >= LEGIBLE));
-  check(`every one of the sixteen clears ${LEGIBLE}:1 against the paper`, faint.length === 0,
-        faint.map((ink) => `${ink.index} ${ink.colour} at ${ink.ratio ? ink.ratio.toFixed(2) : 'unreadable'}`).join(', '));
-  check('and the default foreground is darker still, since most of the text is that one',
-        contrast(scene.card.rowsColour, PAPER) >= 4.5,
-        `${scene.card.rowsColour} at ${(contrast(scene.card.rowsColour, PAPER) ?? 0).toFixed(2)}`);
+  await bandCase('light');
 
-  console.log('\n4. and it still says terminal at a zoom where nothing can be read');
-  scene = await viewAt(0.15);
-  await shot('03-zoomed-out');
-  check('the text is past legibility', scene.card.fontSize <= 5, `${scene.card.fontSize}px`);
-  check('the block is still on screen to be read', scene.card.box.width > 60,
-        `${scene.card.box.width.toFixed(0)}×${scene.card.box.height.toFixed(0)}`);
+  console.log('\n5. the theme is a repaint, not a rebuild');
+  scene = await viewAt(1);
+  await evaluate(`document.querySelector('.terminal-card .xterm').dataset.paperCheck = 'one'`);
+  const beforeToggle = await evaluate(PROBE);
+  await useTheme('dark');
+  scene = await evaluate(PROBE);
+  check('the canvas is under the dark filter', scene.filtered === true, String(scene.filtered));
+  check('the emulator is the same node it was — not disposed and rebuilt',
+        scene.card.emulatorMark === 'one', String(scene.card.emulatorMark));
+  check('and it repainted: the surface it was opened with is not the one it has now',
+        !same(scene.card.viewport, beforeToggle.card.viewport),
+        `still ${scene.card.viewport}`);
 
-  // The dark fill used to do this. Whatever took it over has to be an area with a colour of
-  // its own — a glyph at four pixels is a smudge, and a rule one pixel high is nothing.
-  const bands = [scene.card.header, scene.card.prompt].filter(Boolean).map((band) => ({
-    ...band,
-    ratio: contrast(band.background, PAPER),
-  }));
-  console.log('     ' + bands.map((band) => `${band.background} ${band.width.toFixed(0)}×${band.height.toFixed(1)} at ${band.ratio ? band.ratio.toFixed(1) : '?'}:1`).join('  '));
-  const marks = bands.filter((band) => band.ratio >= LEGIBLE
-    && band.height >= 2 && band.width >= scene.card.box.width * 0.7);
-  check('a band of its own colour still crosses the block', marks.length > 0,
-        bands.map((band) => `${band.background} ${band.width.toFixed(0)}×${band.height.toFixed(1)}`).join(', ')
-        || 'nothing on the card carries a background');
+  await shot('dark-01-paper');
+  await surfaceCase('dark', scene);
+  await inkCase('dark', scene);
+  await bandCase('dark');
+
+  // The one a rebuild really costs, and the reason the theme is pushed into the live
+  // emulator rather than the emulator being made again: a program on the alternate screen
+  // replayed into a fresh parser comes back as its own scrollback.
+  console.log('\n6. a program on the alternate screen survives the toggle');
+  scene = await viewAt(1);
+  await click(scene.card.body.x, scene.card.body.y);
+  await waitFor(async () => /xterm/.test((await evaluate(PROBE)).focused), 'the keyboard to reach the shell');
+  await typeText('node alt.js');
+  await pressKey('Enter', 'Enter', 0, 13, '\r');
+  await waitFor(async () => (await evaluate(PROBE)).card.rowsText.includes(ALT_MARK),
+                'the alternate screen to be drawn');
+  await evaluate(`document.querySelector('.terminal-card .xterm').dataset.paperCheck = 'two'`);
+  await useTheme('light');
+  scene = await evaluate(PROBE);
+  await shot('06-alt-screen');
+  check('the emulator survived the toggle', scene.card.emulatorMark === 'two',
+        String(scene.card.emulatorMark));
+  check('and the program is still on the alternate screen', scene.card.rowsText.includes(ALT_MARK),
+        JSON.stringify(scene.card.rowsText.slice(0, 120)));
+  check('and the board is light again, with the light surface on the card',
+        scene.theme === 'light' && same(scene.card.background, SURFACE.light),
+        `${scene.theme} / ${scene.card.background}`);
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);

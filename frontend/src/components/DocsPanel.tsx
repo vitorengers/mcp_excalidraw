@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { closureView, offersImplement, offersResume } from '../../../src/core/issue-appearance'
+import { closureView, offersImplement, offersRecreate, offersResume } from '../../../src/core/issue-appearance'
 import type { ClosingPullRequest, PanelRunState } from '../../../src/core/issue-appearance'
 import { clipboardImages, isWritableTarget, panelTakesPaste } from '../../../src/core/pasted-images'
-import { recallIssue, rememberImplement, rememberIssue } from '../issue-cache'
+import { forgetIssue, recallIssue, rememberImplement, rememberIssue } from '../issue-cache'
 import './DocsPanel.css'
 
 type DocState =
@@ -46,6 +46,14 @@ export interface IssueTarget {
    */
   implementStartedAt?: string | null
   implementEndedAt?: string | null
+  /**
+   * Whether this shape is one whose issue is still waiting, so it may be researched again.
+   *
+   * A mirrored card carries it because the mirror stamps the Todo column onto the card; an
+   * authored block is `true` because there is no column to read. Undefined is a shape from
+   * before this existed, and reads as "no".
+   */
+  recreatable?: boolean
 }
 
 /** A comment as the server hands it over. */
@@ -190,6 +198,15 @@ export interface DocsPanelBodyProps {
    * two above, and for the same reason.
    */
   onAddComment?: (issue: IssueTarget, body: string) => Promise<CommentPosted>
+  /**
+   * Sends an agent back at an issue that already exists, to investigate it again and rewrite
+   * it in place — the same number, the same card, the same comments.
+   *
+   * Offered only while nothing has been started against the issue, because a rewrite past
+   * that point changes the specification behind a running agent's back. Answers with an error
+   * to show, or null; the outcome arrives minutes later and is polled for.
+   */
+  onRecreateIssue?: (issue: IssueTarget, observations: string) => Promise<string | null>
 }
 
 /** What is known about implementing the issue, wherever it was learned. */
@@ -356,7 +373,7 @@ function knownAlready(
 export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   docKey, title, workspace, collapsible, onToggleCollapse, issue, onCreateIssue,
   onImplementIssue, onResetImplement, onResetIssue, onAdoptIssue, onAddComment,
-  onAttachImages, onDetachImage
+  onRecreateIssue, onAttachImages, onDetachImage
 }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
   const [atSelection] = useState(() => knownAlready(issue, workspace))
@@ -385,6 +402,27 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   const [draft, setDraft] = useState('')
   const [posting, setPosting] = useState(false)
   const [commentError, setCommentError] = useState<string | null>(null)
+  /**
+   * The observations a rewrite is being asked for, and what became of the run.
+   *
+   * Separate state from the comment box above rather than one box with two buttons: the two
+   * write different things — one appends to the issue, the other replaces it — and a control
+   * that changed meaning depending on which button was pressed last is how somebody rewrites
+   * an issue they meant to annotate.
+   */
+  const [recreating, setRecreating] = useState(false)
+  const [recreateDraft, setRecreateDraft] = useState('')
+  const [recreateSending, setRecreateSending] = useState(false)
+  const [recreateState, setRecreateState] = useState<PanelRunState>(null)
+  const [recreateError, setRecreateError] = useState<string | null>(null)
+  /**
+   * Whether the run being watched is one this panel started.
+   *
+   * The record outlives the run — it is kept against the issue URL until the server restarts
+   * — so a card selected an hour later would otherwise still be announcing a rewrite nobody
+   * is waiting for. Only the panel that started one reports its ending.
+   */
+  const wasRecreating = useRef(false)
   // The URL of an issue this block already produced, and whether the box for it is open.
   const [adopting, setAdopting] = useState(false)
   const [adoptUrl, setAdoptUrl] = useState('')
@@ -554,6 +592,13 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
     setComposing(false)
     setDraft('')
     setCommentError(null)
+    // Half-written observations belong to the issue they were being written about, and a run
+    // being watched belongs to the shape that started it — neither is carried across.
+    setRecreating(false)
+    setRecreateDraft('')
+    setRecreateState(null)
+    setRecreateError(null)
+    wasRecreating.current = false
   }
 
   // A refusal belongs to the block it was refused for, and to the state it was refused in.
@@ -633,6 +678,82 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
     const timer = setInterval(read, 4000)
     return () => { cancelled = true; clearInterval(timer) }
   }, [issueUrl, implement.state, workspace])
+
+  /**
+   * Whether the issue is being researched again, and what that run left behind.
+   *
+   * Polled rather than pushed, for the reason the implement record is: a mirrored card has no
+   * element for the socket to update, and a recreate writes nothing onto a shape while it
+   * runs. Read once on every selection too, so a reader who clicked away from a run and back
+   * is told it is still going rather than being offered to start a second one.
+   *
+   * A run that settles under the reader's eyes is the case this exists for: the body on
+   * screen is now the one the run replaced, and everything remembering it — the server's memo
+   * and this browser's cache — has to be dropped before the issue is read again.
+   */
+  useEffect(() => {
+    if (!issueUrl || issueState !== 'created') return
+
+    let cancelled = false
+    const read = (): void => {
+      fetch(`/api/issue/recreate?url=${encodeURIComponent(issueUrl)}&workspace=${encodeURIComponent(workspace)}`)
+        .then((response) => response.json())
+        .then((body) => {
+          if (cancelled || !body?.success) return
+          const record = (body.recreate ?? null) as { state?: string; error?: string | null } | null
+          const state = (record?.state as PanelRunState) ?? null
+          setRecreateState(state === 'done' && !wasRecreating.current ? null : state)
+          setRecreateError(state === 'failed' ? (record?.error ?? 'The run failed.') : null)
+        })
+        .catch(() => undefined)
+    }
+
+    if (recreateState !== 'running') {
+      if (wasRecreating.current) {
+        wasRecreating.current = false
+        forgetIssue(workspace, issueUrl)
+        fetch(`/api/issue?url=${encodeURIComponent(issueUrl)}&workspace=${encodeURIComponent(workspace)}`)
+          .then((response) => response.json())
+          .then((body) => {
+            if (cancelled || !body?.success) return
+            const view = implementView(body.implement)
+            rememberIssue(workspace, issueUrl, { issue: body.issue ?? {}, implement: view })
+            setIssueDetail(loadedIssue(body.issue ?? {}))
+          })
+          .catch(() => undefined)
+      } else {
+        read()
+      }
+      return () => { cancelled = true }
+    }
+
+    const timer = setInterval(read, 4000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [issueUrl, issueState, workspace, recreateState])
+
+  /**
+   * Ask for the issue to be researched again, from what is in the box.
+   *
+   * Optimistic like starting a run is, and for the same reason: the route answers as soon as
+   * the agent is under way and the result arrives minutes later. On a refusal the text stays
+   * in the box — it is the only copy of itself.
+   */
+  const startRecreate = async (): Promise<void> => {
+    if (!issue || !onRecreateIssue) return
+
+    setRecreateSending(true)
+    setRecreateError(null)
+    const error = await onRecreateIssue(issue, recreateDraft)
+    setRecreateSending(false)
+    if (error) {
+      setRecreateError(error)
+      return
+    }
+    wasRecreating.current = true
+    setRecreateState('running')
+    setRecreating(false)
+    setRecreateDraft('')
+  }
 
   // What GitHub says about the issue, once it has said anything. Null while it is being
   // read, which is not the same as open — the controls below treat it as "unknown" rather
@@ -795,6 +916,29 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                     </button>
                   )}
 
+                  {/* Beside adding observations, because the two are the same gesture with
+                      different consequences: one appends to the issue, the other replaces
+                      it. Offered only while nothing has been started against the issue —
+                      past that, rewriting a body would change the specification behind a
+                      running agent's back. */}
+                  {onRecreateIssue && recreateState !== 'running'
+                    && offersRecreate({
+                      githubState,
+                      implementState: implement.state,
+                      recreatable: issue.recreatable === true
+                    }) && (
+                    <button
+                      type="button"
+                      className="element-docs__collapse element-docs__action"
+                      onClick={() => {
+                        setRecreateError(null)
+                        setRecreating((open) => !open)
+                      }}
+                    >
+                      Recreate with observations
+                    </button>
+                  )}
+
                   {/* Before Implement / Fix, because for an interrupted run it is the
                       answer more often — and because the two must not be one control that
                       changes meaning with the state, which is how somebody starts over on
@@ -875,6 +1019,54 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                     {commentError && <p className="element-docs__error">{commentError}</p>}
                   </div>
                 )}
+
+                {recreating && onRecreateIssue && (
+                  <div className="element-docs__compose">
+                    <textarea
+                      className="element-docs__draft"
+                      value={recreateDraft}
+                      autoFocus
+                      placeholder="What the first investigation got wrong. An agent reads the issue, its comments and this, investigates the repository again, and rewrites the issue in place — same number, same comments."
+                      onChange={(event) => setRecreateDraft(event.target.value)}
+                    />
+                    <div className="element-docs__actions">
+                      <button
+                        type="button"
+                        className="element-docs__collapse element-docs__action"
+                        disabled={recreateSending || !recreateDraft.trim()}
+                        onClick={() => { void startRecreate() }}
+                      >
+                        {recreateSending ? 'Starting…' : 'Research it again'}
+                      </button>
+                      <button
+                        type="button"
+                        className="element-docs__collapse element-docs__action"
+                        disabled={recreateSending}
+                        onClick={() => {
+                          setRecreating(false)
+                          setRecreateDraft('')
+                          setRecreateError(null)
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {recreateState === 'running' && (
+                  <p className="element-docs__hint">
+                    An agent is investigating this issue again and will rewrite it in place.
+                    The observations are already on the issue as a comment. This takes minutes,
+                    and there is no time limit on the run.
+                  </p>
+                )}
+                {recreateState === 'done' && (
+                  <p className="element-docs__hint">
+                    The issue was rewritten. Its number, its card and its comments are unchanged.
+                  </p>
+                )}
+                {recreateError && <p className="element-docs__error">{recreateError}</p>}
               </div>
 
               {issueDetail.status === 'loading' && (

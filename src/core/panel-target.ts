@@ -57,6 +57,16 @@ export interface IssueTargetData {
    */
   implementStartedAt: string | null;
   implementEndedAt: string | null;
+  /**
+   * Whether this shape is one whose issue may be researched again and rewritten.
+   *
+   * The gate is "nothing has been started against it yet", and for a mirrored card that is a
+   * fact about the column: the mirror stamps `inTodo` on a card in the workspace's Todo
+   * column, so the panel reads a flag rather than parsing a header's label text. It is only
+   * half the answer — whether the issue is open, and whether a run has been made, are the
+   * other half, and they are read from GitHub and from the server's own record.
+   */
+  recreatable: boolean;
 }
 
 export interface CollapsibleTargetData {
@@ -170,6 +180,9 @@ function mirrorCardIssue(
     implementError: null,
     implementStartedAt: null,
     implementEndedAt: null,
+    // The one thing about a card that this *is* read off the shape, because it is a fact
+    // about the column the card was drawn in and the mirror redraws it every poll.
+    recreatable: card.customData?.inTodo === true,
   };
 }
 
@@ -241,6 +254,11 @@ export function resolvePanelTarget(
           implementError: asString(issueCustom.implementError),
           implementStartedAt: asString(issueCustom.implementStartedAt),
           implementEndedAt: asString(issueCustom.implementEndedAt),
+          // An authored block that still exists is either on a board with no project, where
+          // there is no column and so no Todo gate to apply, or one poll away from being
+          // retired by `reconcileDrafts` in favour of the card that replaces it. Neither has
+          // a column to read, and the route is the authority in both cases.
+          recreatable: true,
         };
 
   // An image gets a collapse control whether or not it carries documentation: an image is

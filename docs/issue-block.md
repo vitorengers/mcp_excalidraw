@@ -158,7 +158,11 @@ Three things are deliberate:
 
 Attaching is offered only before the run — by either route. Once a block has an issue there is
 nothing left for an image to inform, and attaching one does not make the block runnable again.
-Issue #53's **Add observations** is what a created block gets instead.
+**Add observations** and **Recreate with observations** are what a created block gets instead:
+the first appends to the issue, the second sends an agent back at it. Neither takes images —
+the file store is in memory and the block holding `customData.issueImages` is gone by the time a
+card exists, so a recreate starts with none. A screenshot is often exactly what a first
+investigation was missing, and that is worth an issue of its own rather than a guess here.
 
 ## What a block looks like
 
@@ -255,8 +259,10 @@ So a read issue is now remembered in two places, and on neither of them is it st
 
 It is dropped, rather than waited out, where the server already knows the issue changed: posting
 an observation (`POST /api/issue/comment` re-reads afterwards, and that read becomes what the next
-selection is served) and `recordImplement`, because a run ends in a pull request and a pull
-request is what closes an issue. The panel writes the same three actions through to its own cache.
+selection is served), `recordImplement`, because a run ends in a pull request and a pull request
+is what closes an issue, and a recreate landing, which has rewritten the body outright. The panel
+writes the same actions through to its own cache — and for the recreate it *drops* its entry
+rather than patching it, because what it is holding is the issue the run replaced.
 
 **Both are session memory**, lost on a reload and on a restart, like the implement record and the
 file store. Anything that survived those would be the stored copy this section rejects: what the
@@ -277,10 +283,9 @@ back, with the answer sitting on the shape under the pointer. It is read off the
 
 ## Adding observations
 
-A created block's panel has two actions on one row: **Add observations** and
-**Implement / Fix**. The first opens a box, and what is typed there is posted to the issue as a
-GitHub comment by `POST /api/issue/comment`. The comments are read back with the issue and shown
-under its body.
+A created block's panel offers **Add observations** on the action row. It opens a box, and what
+is typed there is posted to the issue as a GitHub comment by `POST /api/issue/comment`. The
+comments are read back with the issue and shown under its body.
 
 **It exists because the board asks questions it then has to answer itself.** The issue agent is
 told to end with the open questions rather than fill a gap with a guess; the implement agent is
@@ -311,6 +316,96 @@ Four things are deliberate:
 `IMPLEMENT_AGENT_PROMPT` now sends the agent to `gh issue view --comments` as well as
 `gh issue view` — piped, that flag prints the comments *instead of* the body, so both calls are
 needed — and says that where a comment and the body disagree, the comment is the later word.
+
+## Researching it again
+
+A comment can only append, and that rule is exactly what makes a *wrong* issue permanent. When
+the first investigation went the wrong way — wrong root cause, wrong file cited, a scope that
+misses the point — the body stays wrong, and the reader it is wrong at is an unattended coding
+agent. The rule above is the evidence: the implement agent is asked to reconcile two texts that
+contradict each other, when what was wanted was one text that is right.
+
+So a shape standing for an issue **nothing has been started on** also offers **Recreate with
+observations**. It opens a box of its own, and confirming starts an agent through
+`POST /api/issue/recreate` with `{ url, observations }`.
+
+**It rewrites the issue; it does not replace it.** The number, the project card, the column, the
+comments and everything the server keys on the URL — the memo, the implement record, the queue's
+"one record per issue" rule — all stay valid, and nothing downstream has to learn a new fact.
+Closing the old issue and opening a new one would abandon the card in Todo, leave a closed
+duplicate on the board, and point every one of those at a dead issue.
+
+### The Todo gate
+
+The control is offered, and the route only answers, while the issue is **open, in the Todo
+column, with no implement record against it**. Each is a refusal the route names:
+
+| Refused | Because |
+| --- | --- |
+| the issue is closed | it is shipped or abandoned; there is nothing left to research |
+| its card is not in Todo | past Todo, something has been built against it |
+| its card is not on the project | there is no column it could be waiting in |
+| an implement record exists — `running`, `done`, `failed` or `interrupted` | an agent has already read this issue |
+| a recreate is already in flight for the URL | the same guard the research run has |
+
+Todo is not cosmetic and it is not "not started yet" in a looser sense: it is the workspace's own
+`projectTodoColumn`, matched trimmed and without regard to case, and it is where a finished
+research run already puts the issue it created. Past it, rewriting a body would change the
+specification behind a running agent's back — the same hazard **Add observations** already names,
+except that a comment cannot silently replace what the agent read and a rewrite can.
+
+A board with **no project** has no column, so there is nothing to gate on and no project is read:
+a dormant board stays as dormant as it was. That is also the case the *authored block* is covered
+for. On a board with a project, `reconcileDrafts` retires a block as soon as the mirror draws a
+card for its issue, so the surface this is offered on is almost always the card.
+
+**The panel gates on a mark, not on a label.** `readProjectBoard` puts the workspace's Todo
+column name on the board it returns, `layoutBoard` stamps `customData.inTodo` on the cards drawn
+in it, and `resolvePanelTarget` carries that through to `IssueTargetData.recreatable`. Reading
+the gate out of a column header's text would be reading a string that wraps and carries a count.
+
+### What the run does
+
+1. **The observations are posted to the issue as a comment, first.** A body that changed with
+   nothing on the issue explaining why is a body nobody can review — and a run that dies having
+   posted this leaves the reader exactly where **Add observations** would have, rather than
+   losing what they typed. On stdin and never in argv, for the reason the comment route already
+   is. It is best-effort: `gh` dropping a socket must not cost the rewrite.
+2. **`ISSUE_REVISE_PROMPT` sends the agent at the issue**, not at a blank page. It reads the
+   issue and its comments, treats the new observations as the later word, investigates the
+   repository again rather than inheriting a conclusion because it is already written down, and
+   rewrites the body — and the title, when the re-investigation changed what the issue is about
+   — with `gh issue edit <url> --body-file -`. It is told not to run `gh issue create`, not to
+   close the issue and not to delete its comments.
+3. **The answer is the same URL.** A run is read as successful from the issue URL it prints, the
+   way researching is; here there is one right answer, and an agent that named a different issue
+   opened one instead of rewriting this one. That is recorded as a failure.
+4. **Both caches are dropped when the run lands** — `issueMemo` on the server and
+   `frontend/src/issue-cache.ts` in the browser — and the panel reads the issue again. Without
+   that the reader would be shown the body the run replaced for up to thirty seconds.
+
+The original observation is **not** an input: it was deleted with the block when the card
+appeared. The current body is what the run starts from, which is why the prompt tells the agent
+to read it and then not to trust it.
+
+The run's state lives in memory against the workspace and the URL, and `GET
+/api/issue/recreate?url=` is what the panel polls — a card has no element for a socket to update
+and no `issueState` to hold `running`. It is forgotten on a restart, which is honest: the edit an
+agent makes is a single call that either happened or did not, so there is nothing half-written to
+recover. Only the panel that started a run reports its ending; a card selected an hour later is
+not still announcing one.
+
+Guarded like the research run rather than like the comment route, because it spawns an agent:
+`EXCALIDRAW_ISSUE_AGENT` set or the route 404s, loopback or it 403s.
+
+**`POST /api/issue-block/:id` is untouched.** It still answers 409 for any block carrying an
+`issueUrl`, and `DELETE /api/issue-block/:id` still puts such a block back to `created` rather
+than making it runnable. Recreating is a route of its own precisely so that the "one observation,
+one issue" guard did not have to be relaxed — this one opens no issue at all.
+
+`scripts/check-issue-recreate.mjs` covers the route, the prompt and every refusal against a stub
+`gh` and a stub agent; `scripts/check-issue-recreate-browser.mjs` covers the control, the box and
+the body arriving on screen with no reselection.
 
 ## The prompt
 
@@ -368,7 +463,7 @@ anyone would have made on purpose. So it has its own variable and is **off until
 set**:
 
 ```
-EXCALIDRAW_IMPLEMENT_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
+EXCALIDRAW_IMPLEMENT_AGENT='<agent-binary> -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
 ```
 
 `--dangerously-skip-permissions` rather than a list of tools, because an enumerated list is
@@ -893,15 +988,16 @@ own; `--forward-subagent-text` is where it would start.
 ## Configuration
 
 ```
-EXCALIDRAW_ISSUE_AGENT='C:/Users/vtr_d/.local/bin/claude.exe -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob WebFetch WebSearch"'
+EXCALIDRAW_ISSUE_AGENT='<agent-binary> -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob WebFetch WebSearch"'
 EXCALIDRAW_IMPLEMENT_CONCURRENCY=4
 EXCALIDRAW_ISSUE_MEMO_MS=30000
 ```
 
 `EXCALIDRAW_ISSUE_AGENT_TIMEOUT=1200` used to be here, and pinning it in the environment is
 how the twenty minutes outlived the code default. **Whatever starts the board sets these
-variables and lives outside this repository** — `start-board.ps1`, per `HANDOFF.md` — so a
-board still exporting a ceiling keeps it until that file is edited by hand.
+variables**, and it is the operator's, not this repository's — [running.md](running.md) is the
+procedure and the full table of what it can set — so a board still exporting a ceiling keeps it
+until that environment is edited by hand.
 
 **Pin the model and the effort.** Without `--model` and `--effort` the agent inherits whatever
 `~/.claude/settings.json` happens to say, so changing the model of an interactive session
@@ -944,7 +1040,7 @@ repository the way `git` and `gh` inside that distro do.
 
 One board runs several projects, and until #82 every setting above applied to all of them: the
 two command lines were module constants read once at startup, so retuning one project meant
-editing `start-board.ps1` and restarting the board for every other project too.
+editing the board's own environment and restarting it for every other project too.
 
 A project's own `board.config.json` can now say three things per agent, under
 `agents.issue` and `agents.implement` — see [workspaces.md](workspaces.md) for the shape:

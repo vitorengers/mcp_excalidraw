@@ -71,6 +71,19 @@ export function rememberIssue(workspace: string, issueUrl: string, value: Cached
 }
 
 /**
+ * Forget an issue, because something just rewrote it.
+ *
+ * The one caller is a recreate landing. Everything else this cache holds goes stale the
+ * ordinary way — a revalidation on the next selection replaces it — but a rewritten body is a
+ * change the panel *caused*, and the copy it is holding is of the issue the run replaced.
+ * Selecting the card straight afterwards has to show the new one, and stale-while-revalidate
+ * would paint the old body first.
+ */
+export function forgetIssue(workspace: string, issueUrl: string): void {
+  remembered.delete(keyOf(workspace, issueUrl))
+}
+
+/**
  * Patch what is remembered about the run, leaving the issue alone.
  *
  * The panel starts a run itself, and an optimistic **running** that the cache did not hear
