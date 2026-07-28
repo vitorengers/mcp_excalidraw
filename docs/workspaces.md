@@ -66,7 +66,12 @@ roots, which on Windows is the drive letters.
   "githubProject": "https://github.com/users/vitorengers/projects/5",
   "agents": {
     "issue":     { "model": "claude-fable-5", "effort": "high" },
-    "implement": { "model": "claude-opus-5",  "effort": "max", "timeoutSeconds": 5400 }
+    "implement": {
+      "model": "claude-opus-5",
+      "effort": "max",
+      "timeoutSeconds": 5400,
+      "workflow": "fable-plan-opus-build"
+    }
   }
 }
 ```
@@ -78,11 +83,45 @@ the others and a workspace that silently disappears is harder to debug than one 
 broken.
 
 `agents` is per-project agent tuning: a `model` and an `effort` appended to the command the
-operator configured, and a `timeoutSeconds` that wins over the environment's ceiling. Every
-field is optional and unset means *use the board default* — which is the only other value there
-is. A project **cannot** configure the command itself; see
+operator configured, a `timeoutSeconds` that wins over the environment's ceiling, and a
+`workflow` naming the text this project's agents are to follow. Every field is optional and
+unset means *use the board default* — which is the only other value there is. A project
+**cannot** configure the command itself; see
 [issue-block.md](issue-block.md#what-is-per-project-and-what-stays-global) for why that boundary
 is where it is.
+
+## agent-workflows/
+
+`agents.<kind>.workflow` is a **slug**, matching `[a-z0-9][a-z0-9-]*`, naming
+`<project>/agent-workflows/<slug>.md`. The text in that file is read when a run starts and
+appended to the agent's prompt as its last section — so a project that runs a pipeline (plan on
+one model, review the plan, implement, review the implementation) can say so, where before the
+prompt only pointed vaguely at "your own project memory".
+
+```
+my-project/
+  board.config.json          "agents": { "implement": { "workflow": "fable-plan-opus-build" } }
+  agent-workflows/
+    fable-plan-opus-build.md  the text the implement agent is told to follow
+```
+
+The directory sits at the project root and the file has to be **committed**: an implementation
+runs in a worktree cut from the default branch, so anything gitignored — `.claude/`, `.agent/`,
+`.agents/` — resolves on the maintainer's checkout and is missing in every board run.
+
+Two things are unlike the rest of this file, and both on purpose:
+
+- **An unresolvable workflow refuses the run**, before the agent is spawned, with the path it
+  looked for in the error the block shows. A config field pointing outside its project is
+  ignored, because the cost is a panel that shows nothing and says why; the cost of a workflow
+  quietly not applied is a run that looks completely normal and did the wrong thing.
+- **It is text for the prompt, and nothing else.** It reaches no command line, no environment
+  variable, no `--allowedTools`, and it grants the project nothing it did not already have —
+  the agent was already reading this repository and its memory. `agents.<kind>.workflow` says
+  how to use what the operator granted; only the operator grants.
+
+`scripts/check-agent-workflow.mjs` is the check: the same argv with and without a workflow, the
+prompt unchanged byte for byte when none is selected, and every escaping name refused.
 
 ## Editing it from the board
 
