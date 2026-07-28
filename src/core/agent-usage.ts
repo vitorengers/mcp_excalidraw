@@ -26,6 +26,19 @@ export interface AgentUsage {
    */
   inputTokens: number;
   outputTokens: number;
+  /**
+   * How much of `outputTokens` went on internal reasoning, when the agent breaks it down.
+   *
+   * A decomposition, not a fifth bucket: reasoning is billed as output and is already
+   * inside the figure beside it, so this says which part of `out` was thinking rather than
+   * adding anything to it. `28.4k out` alone cannot distinguish an agent that wrote a long
+   * answer from one that thought for a long time and said little.
+   *
+   * Null rather than 0 when nothing was said, and the distinction is the point: an agent
+   * that reports no breakdown has not claimed its reasoning was zero. Only one of the two
+   * shapes below ever appears in a given run, so there is nothing to reconcile.
+   */
+  thinkingTokens: number | null;
 }
 
 /**
@@ -43,17 +56,50 @@ export function streamsUsage(agentCommand: string): boolean {
 interface Counts {
   input: number;
   output: number;
+  /** Null is "not said", which is not the same answer as 0. */
+  thinking: number | null;
 }
 
-const ZERO: Counts = { input: 0, output: 0 };
+const ZERO: Counts = { input: 0, output: 0, thinking: null };
+
+/** Two figures that may each be silence: silence plus a number is that number. */
+function addThinking(left: number | null, right: number | null): number | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return left + right;
+}
 
 function add(left: Counts, right: Counts): Counts {
-  return { input: left.input + right.input, output: left.output + right.output };
+  return {
+    input: left.input + right.input,
+    output: left.output + right.output,
+    thinking: addThinking(left.thinking, right.thinking),
+  };
 }
 
 function numberAt(source: Record<string, unknown>, key: string): number {
   const value = source[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/** The same read, but able to say "absent" — which `numberAt`'s 0 cannot. */
+function optionalNumberAt(source: Record<string, unknown>, key: string): number | null {
+  const value = source[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * The reasoning share of one `usage` object, as the Messages API documents it.
+ *
+ * `output_tokens_details.thinking_tokens` is "the number of output tokens the model
+ * generated as internal reasoning", always ≤ `output_tokens`. Claude Code does not send it
+ * — see the meter below — but the configured command need not be Claude Code, and anything
+ * relaying the API's own accounting puts it here.
+ */
+function thinkingFrom(source: Record<string, unknown>): number | null {
+  const details = source.output_tokens_details;
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
+  return optionalNumberAt(details as Record<string, unknown>, 'thinking_tokens');
 }
 
 /** One `usage` object, or null when the thing handed over is not one. */
@@ -66,6 +112,7 @@ function countsFrom(usage: unknown): Counts | null {
       + numberAt(source, 'cache_creation_input_tokens')
       + numberAt(source, 'cache_read_input_tokens'),
     output: numberAt(source, 'output_tokens'),
+    thinking: thinkingFrom(source),
   };
 }
 
@@ -91,12 +138,36 @@ const MAX_LINE = 1_000_000;
  *    rather than adding to it — a running figure while the run is live, the agent's figure
  *    once there is one.
  *
+ * Reasoning is counted a third way, because Claude Code does not put it where the Messages
+ * API does. Confirmed against `claude -p --output-format stream-json --verbose` (2.1.220):
+ * no `output_tokens_details` appears anywhere in that stream — not on an assistant message
+ * and not on `result` — and reasoning arrives instead as its own event,
+ * `{"type":"system","subtype":"thinking_tokens","estimated_tokens":…,
+ * "estimated_tokens_delta":…}`. Two things follow:
+ *
+ *  - **`estimated_tokens` restarts at every assistant turn** (observed 50 → 150 → 173, then
+ *    50 → 129 for the next one), so it is the turn's total and never the run's. The deltas
+ *    are what accumulate, and they are what is added up here.
+ *  - **`result` says nothing about reasoning**, so unlike input and output the figure has no
+ *    settled counterpart to be replaced by. It is kept beside the settled totals rather than
+ *    inside them — otherwise the split would show for the length of the run and disappear at
+ *    the moment the run became worth reading. It is the agent's own estimate, and the only
+ *    number there is.
+ *
  * Anything that is not JSON is skipped rather than treated as an error. An agent that
  * prints a warning line in the middle of its stream is not a failure of this.
  */
 export class UsageMeter {
   private readonly byMessage = new Map<string, Counts>();
   private settled: Counts | null = null;
+  /**
+   * Reasoning added up from the agent's own events, kept apart from the totals above.
+   *
+   * Apart because it outlives them: the settled `result` replaces `settled` wholesale and
+   * carries no reasoning, so a figure folded in there would be thrown away with the sum it
+   * was folded into. Null until an event actually arrives.
+   */
+  private estimatedThinking: number | null = null;
   private buffer = '';
   /**
    * Starts at zero rather than at "nothing reported yet", so a run that has printed a
@@ -148,6 +219,15 @@ export class UsageMeter {
     if (!event || typeof event !== 'object') return;
     const record = event as Record<string, unknown>;
 
+    if (record.type === 'system' && record.subtype === 'thinking_tokens') {
+      // The delta, never `estimated_tokens`: that one is the current turn's total and goes
+      // back down when the next turn starts. An event with no usable delta is left alone
+      // rather than counted as nothing, so silence stays silence.
+      const delta = optionalNumberAt(record, 'estimated_tokens_delta');
+      if (delta !== null) this.estimatedThinking = (this.estimatedThinking ?? 0) + delta;
+      return;
+    }
+
     if (record.type === 'result') {
       const usage = record.usage as Record<string, unknown> | undefined;
       const iterations = usage?.iterations;
@@ -174,8 +254,12 @@ export class UsageMeter {
   }
 
   private total(): Counts {
-    if (this.settled) return this.settled;
-    return [...this.byMessage.values()].reduce(add, ZERO);
+    const counts = this.settled ?? [...this.byMessage.values()].reduce(add, ZERO);
+    // What the agent broke down itself wins; the estimate is what fills the silence. Only
+    // one of the two is ever present in a run, so this is a choice rather than a merge —
+    // and making it a choice is what stops an agent that somehow spoke twice being
+    // counted twice.
+    return { ...counts, thinking: counts.thinking ?? this.estimatedThinking };
   }
 
   /**
@@ -187,7 +271,12 @@ export class UsageMeter {
    */
   private report(force: boolean): void {
     const total = this.total();
-    if (this.reported.input === total.input && this.reported.output === total.output) return;
+    // Reasoning is compared too, and not as a formality: it moves on events of its own, so
+    // a run can think for a while without either of the other two figures changing. Watching
+    // only those two would hold the new figure back until the next message settled.
+    if (this.reported.input === total.input
+      && this.reported.output === total.output
+      && this.reported.thinking === total.thinking) return;
 
     const now = Date.now();
     if (!force && now - this.lastReportAt < this.intervalMs) {
@@ -207,6 +296,10 @@ export class UsageMeter {
     }
     this.reported = total;
     this.lastReportAt = now;
-    this.onChange({ inputTokens: total.input, outputTokens: total.output });
+    this.onChange({
+      inputTokens: total.input,
+      outputTokens: total.output,
+      thinkingTokens: total.thinking,
+    });
   }
 }

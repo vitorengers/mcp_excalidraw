@@ -201,7 +201,12 @@ interface ImplementView {
   startedAt: string | null
   endedAt: string | null
   /** Token totals, when the configured agent command reports them. Usually null. */
-  usage: { inputTokens: number; outputTokens: number } | null
+  usage: {
+    inputTokens: number
+    outputTokens: number
+    /** Part of `outputTokens`, not a third total. Null when the agent never said. */
+    thinkingTokens: number | null
+  } | null
 }
 
 /** Nothing known about a run, which is also what a reset leaves behind. */
@@ -269,9 +274,17 @@ const RunClock: React.FC<{ startedAt: string; endedAt: string | null }> = ({ sta
  * The tokens are absent far more often than not — they arrive only when the board's
  * configured agent command already asks for a machine-readable stream — so the layout has
  * to read properly with the clock alone.
+ *
+ * Reasoning is rarer still, and it hangs off `out` rather than standing beside it: those
+ * tokens are billed as output and are already counted there, so a third `·` segment would
+ * read as a third total to be added to the other two. In brackets it reads as what it is —
+ * how much of the figure in front of it went on thinking rather than on saying anything.
+ * Absent when the agent never broke it down, which is not the same as a run that thought
+ * for nothing.
  */
 const RunProgress: React.FC<{ implement: ImplementView }> = ({ implement }) => {
   if (!implement.startedAt) return null
+  const thinking = implement.usage?.thinkingTokens
   return (
     <p className="element-docs__progress">
       <RunClock startedAt={implement.startedAt} endedAt={implement.endedAt} />
@@ -279,6 +292,14 @@ const RunProgress: React.FC<{ implement: ImplementView }> = ({ implement }) => {
         <span className="element-docs__tokens">
           {' · '}{formatTokens(implement.usage.inputTokens)} in
           {' · '}{formatTokens(implement.usage.outputTokens)} out
+          {typeof thinking === 'number' && (
+            <span
+              className="element-docs__thinking"
+              title="Of the output tokens, how many the agent spent on internal reasoning. Its own estimate, and already inside the figure before it."
+            >
+              {' ('}{formatTokens(thinking)} thinking{')'}
+            </span>
+          )}
         </span>
       )}
     </p>
