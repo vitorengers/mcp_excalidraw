@@ -321,11 +321,17 @@ const PROBE = `(() => {
   const out = { drafts: [], cards: [], add: null, headers: {} };
   const sections = [];
   const labels = [];
+  const draftLabels = [];
   for (const element of api.getSceneElements()) {
     const custom = element.customData || {};
     if (custom.projectBoardDraft && !element.containerId) {
       out.drafts.push({ id: element.id, x: element.x, y: element.y, w: element.width, h: element.height,
-                        col: custom.sectionOptionId, at: custom.draftCreatedAt });
+                        col: custom.sectionOptionId, at: custom.draftCreatedAt, text: null });
+    }
+    // What is written in a block, which is what says whether anybody has written in it: the
+    // `+` hands an unwritten block back rather than making a second one.
+    if (element.containerId && element.type === 'text') {
+      draftLabels.push({ containerId: element.containerId, text: element.originalText || element.text || '' });
     }
     if (custom.kind === 'project-board' && custom.role === 'card') {
       out.cards.push({ id: element.id, x: element.x, y: element.y, h: element.height, col: custom.sectionOptionId });
@@ -342,6 +348,10 @@ const PROBE = `(() => {
     if (element.containerId && custom.kind === 'project-board' && custom.role === 'label') {
       labels.push({ containerId: element.containerId, text: element.text || '' });
     }
+  }
+  for (const draft of out.drafts) {
+    const label = draftLabels.find((entry) => entry.containerId === draft.id);
+    draft.text = label ? label.text : null;
   }
   for (const section of sections) {
     const label = labels.find((entry) => entry.containerId === section.id);
@@ -494,6 +504,32 @@ try {
         scene.headers[DONE.id] === 'Done (0)', JSON.stringify(scene.headers));
 
   // The second one is where the report came from: it went underneath the first.
+  //
+  // It is asked for by a reader who has already written the first observation down, which
+  // is the gesture this now has to make. Until #135 the `+` made a block on every press
+  // whatever was already in the column, so this case used to click twice with nothing typed
+  // and get two empty blocks — which is exactly what #135 is about. The cap hands an
+  // unwritten block back instead, so a click here with nothing typed would leave one block
+  // and everything below would be checking the stacking of a stack of one.
+  await evaluate('window.__boardCheckApi.updateScene({ appState: { selectedElementIds: {} } })');
+  await sleep(400);
+  scene = await evaluate(PROBE);
+  const untouched = scene.drafts[0];
+  const firstCentre = toViewport(scene, untouched.x + untouched.w / 2, untouched.y + untouched.h / 2);
+  await click(firstCentre.x, firstCentre.y, 2);
+  await sleep(500);
+  check('the first block opens for typing, so it can stop being an unwritten one',
+        (await evaluate(PROBE)).editorOpen);
+  await typeText('The first observation. ');
+  await pressKey('Escape', 'Escape', 0, 27);
+  await sleep(1000);
+  await evaluate('window.__boardCheckApi.updateScene({ appState: { selectedElementIds: {} } })');
+  await sleep(400);
+  scene = await evaluate(PROBE);
+  check('and what was typed is on it, so the + owes the reader a fresh block',
+        (scene.drafts[0]?.text ?? '').includes('The first observation'),
+        JSON.stringify(scene.drafts[0]?.text));
+
   await click(plus.x, plus.y);
   await sleep(1000);
   scene = await evaluate(PROBE);

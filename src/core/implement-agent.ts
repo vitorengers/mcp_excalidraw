@@ -13,7 +13,7 @@
  */
 import { AgentUsage } from './agent-usage.js';
 import { HeldWorktree, ImplementWorktree } from './implement-worktree.js';
-import { applyAgentSettings, AgentRun, runAgent } from './issue-agent.js';
+import { applyAgentSettings, AgentHost, AgentRun, runAgent } from './issue-agent.js';
 import { Workspace } from './workspaces.js';
 
 /**
@@ -216,6 +216,14 @@ export async function runImplementAgent(
      * line the operator wrote, so nothing about it is worth telling the agent.
      */
     onUsage?: (usage: AgentUsage) => void;
+    /**
+     * Where the board would like to show the run, when it has somewhere to show it.
+     *
+     * Passed through untouched, and note what it does **not** change: the prompt. Whether a
+     * reader can watch a run is a fact about the board it was started from, and telling the
+     * agent about it would make the same run send two different prompts on two boards.
+     */
+    host?: AgentHost | null;
   }
 ): Promise<AgentRun> {
   const worktree = options.worktree ?? null;
@@ -238,5 +246,6 @@ export async function runImplementAgent(
     what: 'implement agent',
     directory: worktree,
     ...(options.onUsage ? { onUsage: options.onUsage } : {}),
+    ...(options.host ? { host: options.host } : {}),
   });
 }

@@ -311,6 +311,72 @@ export interface AgentRun {
   error: string | null;
 }
 
+/**
+ * A run the board is showing, once something has agreed to host it.
+ *
+ * The handle is deliberately narrow — an id, an ending, and a way to stop it. Everything
+ * else a run needs is already here: the output arrives through the `onOutput` the host was
+ * given, and what it *means* is settled below, once, for a hosted run and a private child
+ * alike. A host that decided for itself whether a run had succeeded would be a second
+ * `extractGithubUrl` to keep in step with this one.
+ */
+export interface AgentHostHandle {
+  /** What the board calls what it opened, for a record that says where the run went. */
+  id: string;
+  /** Settles with the exit code once the process ends; null when it was killed. */
+  exited: Promise<number | null>;
+  /** Take it down, for a run that ran out of time. */
+  close(): void;
+}
+
+/**
+ * Somewhere to put the run that a reader can watch, or nothing at all.
+ *
+ * Nothing at all is the important half, and it is the *common* half: a board with no
+ * terminal, a board whose session cap is full, a host that could not spawn. Every one of
+ * them returns null, and null means the run happens the way it always did — in a private
+ * child of this process. A tab is something a run is given, never something it needs, so
+ * nothing here may turn a refusal into a failed implementation.
+ */
+export type AgentHost = (spec: {
+  agentCommand: string;
+  directory: AgentDirectory | null;
+  /** The prompt, which the host has to deliver on the process's stdin and then close. */
+  prompt: string;
+  /** Every chunk the process writes, as it writes it. */
+  onOutput: (chunk: string) => void;
+}) => Promise<AgentHostHandle | null>;
+
+/**
+ * What a finished run means, from what it printed and how it ended.
+ *
+ * Shared by the hosted path and the private child rather than written twice: which URL
+ * counts, what an exit code of zero with no URL is, and how much of the tail an error
+ * carries are all the *contract*, and a second copy of it would be a second answer.
+ *
+ * `stderr` is empty for a hosted run — a terminal shows one stream, so the two are already
+ * interleaved in `stdout` — which is why the message falls back to the output it does have.
+ */
+function agentOutcome(
+  code: number | null,
+  stdout: string,
+  stderr: string,
+  expects: 'issues' | 'pull',
+  noun: string
+): AgentRun {
+  const url = extractGithubUrl(stdout, expects);
+  return {
+    ok: code === 0 && Boolean(url),
+    url,
+    output: stdout,
+    error: code === 0
+      ? (url
+          ? null
+          : `Agent finished without returning ${noun}. It said: ${stdout.trim().slice(-600) || '(nothing)'}`)
+      : `Agent exited with code ${code}: ${(stderr || stdout).slice(-500)}`,
+  };
+}
+
 export interface RunAgentOptions {
   agentCommand: string;
   /**
@@ -338,6 +404,15 @@ export interface RunAgentOptions {
    * `worktreeSection` and `imageReferenceSection` are careful about.
    */
   onUsage?: (usage: AgentUsage) => void;
+  /**
+   * Somewhere to run the agent where the board can show it, or nothing.
+   *
+   * Asked first and fallen through when it declines, which is what makes the tab an
+   * addition rather than a dependency: everything below this line is the path every run
+   * took before a board had a terminal, and it is still the path a run takes when there is
+   * no tab to be had.
+   */
+  host?: AgentHost | null;
 }
 
 /**
@@ -357,6 +432,15 @@ export async function runAgent(
   const noun = options.expects === 'pull' ? 'a pull request URL' : 'an issue URL';
 
   logger.info(`Running ${options.what} for workspace "${workspace.id}"`, { command, cwd });
+
+  // `undefined` means "use the default"; `null` and 0 mean "no ceiling at all".
+  const timeoutMs = options.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : options.timeoutMs;
+
+  if (options.host) {
+    const hosted = await runHostedAgent(options.host, options, prompt, noun, timeoutMs);
+    if (hosted) return hosted;
+    logger.info(`Nothing could host ${options.what}, so it runs in a private child`, { command });
+  }
 
   return new Promise<AgentRun>((resolve) => {
     const child = spawn(command, args, {
@@ -381,8 +465,6 @@ export async function runAgent(
       ? new UsageMeter(options.onUsage)
       : null;
 
-    // `undefined` means "use the default"; `null` and 0 mean "no ceiling at all".
-    const timeoutMs = options.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : options.timeoutMs;
     const timeout = timeoutMs ? setTimeout(() => {
       if (settled) return;
       settled = true;
@@ -429,19 +511,87 @@ export async function runAgent(
       settled = true;
       clearIfSet();
       meter?.flush();
-      const url = extractGithubUrl(stdout, options.expects);
-      resolve({
-        ok: code === 0 && Boolean(url),
-        url,
-        output: stdout,
-        error: code === 0
-          ? (url
-              ? null
-              : `Agent finished without returning ${noun}. It said: ${stdout.trim().slice(-600) || '(nothing)'}`)
-          : `Agent exited with code ${code}: ${stderr.slice(-500)}`,
-      });
+      resolve(agentOutcome(code, stdout, stderr, options.expects, noun));
     });
   });
+}
+
+/**
+ * The same run, in something a reader can watch — or null, when nothing would host it.
+ *
+ * Null rather than an error, and that distinction is the whole of the fallback: a board with
+ * no terminal and a board whose tabs are all taken both arrive here, and both must end up
+ * running the implementation. Only the *place* is in question.
+ *
+ * What is deliberately not different is everything after the process ends. The exit code and
+ * the transcript go through `agentOutcome` exactly as a private child's do, so a run that is
+ * being watched and a run that is not are settled by one piece of code — which is what makes
+ * "the run still settles as it did" a property of the design rather than of a check.
+ *
+ * The timeout is the one place the two paths diverge in shape rather than in wording. There
+ * is no child here to `kill()`; the host owns the process, so it is asked to close, and the
+ * ending it reports is awaited either way rather than raced against.
+ */
+async function runHostedAgent(
+  host: AgentHost,
+  options: RunAgentOptions,
+  prompt: string,
+  noun: string,
+  timeoutMs: number | null
+): Promise<AgentRun | null> {
+  let stdout = '';
+
+  // Reads the totals out of the stream the agent is already writing. Null unless the
+  // caller asked *and* the command streams, which is what keeps this off by default.
+  const meter = options.onUsage && streamsUsage(options.agentCommand)
+    ? new UsageMeter(options.onUsage)
+    : null;
+
+  let handle: AgentHostHandle | null = null;
+  try {
+    handle = await host({
+      agentCommand: options.agentCommand,
+      directory: options.directory ?? null,
+      prompt,
+      onOutput: (chunk) => { stdout += chunk; meter?.take(chunk); },
+    });
+  } catch (error) {
+    // A host that threw is a host that declined, loudly. The run is not the place to
+    // report it: it still has an implementation to do.
+    logger.warn(`Could not host ${options.what}, so it runs in a private child`, {
+      error: (error as Error).message,
+    });
+    return null;
+  }
+  if (!handle) return null;
+
+  let timedOut = false;
+  const timeout = timeoutMs
+    ? setTimeout(() => { timedOut = true; handle?.close(); }, timeoutMs)
+    : null;
+
+  const code = await handle.exited;
+  if (timeout) clearTimeout(timeout);
+  meter?.flush();
+
+  if (timedOut) {
+    // The same salvage a private child gets, and for the same reason: an agent may well
+    // have finished the visible work and kept going, and reporting a failure for work that
+    // succeeded invites a second run for it. It is worth more here — a hosted run's
+    // transcript is everything the process wrote, streamed, rather than a buffer that a
+    // non-streaming `claude -p` leaves empty until it exits.
+    const salvaged = extractGithubUrl(stdout, options.expects);
+    return {
+      ok: Boolean(salvaged),
+      url: salvaged,
+      output: stdout,
+      error: salvaged
+        ? null
+        : `Agent timed out after ${(timeoutMs as number) / 1000}s without returning ${noun}`,
+    };
+  }
+
+  return agentOutcome(code, stdout, '', options.expects, noun);
 }
 
 /**

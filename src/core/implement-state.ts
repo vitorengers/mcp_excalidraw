@@ -64,12 +64,29 @@ export interface ImplementRecord {
    * reaches this process. See `agent-usage.ts`.
    */
   usage: ImplementUsage | null;
+  /**
+   * The terminal session the run is being shown in, or null when it had no tab.
+   *
+   * Null is not a failure and is the ordinary answer on most boards: `EXCALIDRAW_TERMINAL`
+   * is a separate opt-in from `EXCALIDRAW_IMPLEMENT_AGENT`, and a board whose session cap
+   * is already full gives its next run no tab either. A run without one is the run this
+   * board did before it had a terminal at all — so this records *where the run went*, and
+   * never whether it may go.
+   */
+  terminal: string | null;
 }
 
 /** Cumulative token counts for a run, as the agent reported them. */
 export interface ImplementUsage {
   inputTokens: number;
   outputTokens: number;
+  /**
+   * The reasoning share of `outputTokens`, or null when the agent never broke it down.
+   *
+   * Inside the output figure rather than beside it — reasoning is billed as output — so the
+   * two must not be added together anywhere. See `agent-usage.ts`.
+   */
+  thinkingTokens: number | null;
 }
 
 /** A record with the issue it belongs to, which the map holds as a key rather than a field. */
