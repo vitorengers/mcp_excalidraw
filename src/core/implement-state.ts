@@ -80,6 +80,13 @@ export interface ImplementRecord {
 export interface ImplementUsage {
   inputTokens: number;
   outputTokens: number;
+  /**
+   * The reasoning share of `outputTokens`, or null when the agent never broke it down.
+   *
+   * Inside the output figure rather than beside it — reasoning is billed as output — so the
+   * two must not be added together anywhere. See `agent-usage.ts`.
+   */
+  thinkingTokens: number | null;
 }
 
 /** A record with the issue it belongs to, which the map holds as a key rather than a field. */

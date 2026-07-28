@@ -131,21 +131,65 @@ process.stdin.on('end', async () => {
   }
 
   const line = (event) => process.stdout.write(JSON.stringify(event) + '\\n');
-  const usage = (input_tokens, cache_creation, cache_read, output_tokens) => ({
+  const usage = (input_tokens, cache_creation, cache_read, output_tokens, details) => ({
     input_tokens,
     cache_creation_input_tokens: cache_creation,
     cache_read_input_tokens: cache_read,
     output_tokens,
+    ...(details ? { output_tokens_details: details } : {}),
   });
+  /**
+   * Reasoning, in the shape Claude Code actually publishes it.
+   *
+   * Not inside \`usage\`: \`claude -p --output-format stream-json --verbose\` (2.1.220) carries
+   * no \`output_tokens_details\` anywhere — not on an assistant message, not on \`result\` — and
+   * says this instead, in an event of its own. Its running total **restarts at every
+   * assistant turn** (observed 50 → 150 → 173, then 50 → 129), so a run's figure is the sum
+   * of the deltas and never the last \`estimated_tokens\`.
+   */
+  const thinking = (estimated_tokens, estimated_tokens_delta) =>
+    line({ type: 'system', subtype: 'thinking_tokens', estimated_tokens, estimated_tokens_delta });
 
   line({ type: 'system', subtype: 'init', session_id: 'stub' });
+
+  if (number === '402') {
+    // Streams its spending and never mentions reasoning: silence, not a zero.
+    line({ type: 'assistant', message: { id: 'msg_a', usage: usage(10, 30, 60, 10) } });
+    await waitFor('release');
+    line({ type: 'result', subtype: 'success', result: url, usage: usage(10, 30, 60, 40) });
+    return;
+  }
+
+  if (number === '403') {
+    // An agent answering in the Messages API's own shape, breakdown included. Nothing
+    // requires the configured command to be Claude Code, and this is where the figure
+    // lives for anything that reports usage the way the API documents it.
+    line({ type: 'assistant', message: { id: 'msg_a', usage: usage(4, 10, 20, 3, { thinking_tokens: 2 }) } });
+    line({ type: 'assistant', message: { id: 'msg_a', usage: usage(10, 30, 60, 25, { thinking_tokens: 17 }) } });
+    await waitFor('release');
+    line({
+      type: 'result', subtype: 'success', result: url,
+      usage: usage(10, 30, 60, 40, { thinking_tokens: 22 }),
+    });
+    return;
+  }
+
+  thinking(30, 30);
   // The same id twice: the partial, then the same message finished.
   line({ type: 'assistant', message: { id: 'msg_a', usage: usage(4, 10, 20, 3) } });
   line({ type: 'assistant', message: { id: 'msg_a', usage: usage(10, 30, 60, 10) } });
+  thinking(80, 50);
   await waitFor('bump');
   line({ type: 'assistant', message: { id: 'msg_b', usage: usage(20, 30, 150, 20) } });
+  await waitFor('think');
+  // A new turn, so the agent's own running total starts over at 45 — the run is at 125.
+  // Alone in its chunk on purpose: nothing about the in/out totals changes here, and a
+  // reporter that only watches those two would never hand this on.
+  thinking(45, 45);
   await waitFor('release');
-  // The run's own final accounting, and the URL inside a JSON string.
+  // The run's own final accounting, and the URL inside a JSON string. It settles input and
+  // output and says nothing at all about reasoning — which is exactly how the figure gets
+  // lost, if the settled totals are allowed to replace it along with the rest.
   line({
     type: 'result',
     subtype: 'success',
@@ -380,6 +424,15 @@ try {
         `inputTokens=${first?.usage?.inputTokens}, expected 100`);
   check('output too', first?.usage?.outputTokens === 10, `outputTokens=${first?.usage?.outputTokens}`);
 
+  const thought = await until(async () => {
+    const found = await record(streamed, 401);
+    return (found?.usage?.thinkingTokens ?? 0) >= 80 ? found : null;
+  }, 'the reasoning figure to appear');
+  check('reasoning is reported while the run is live', thought?.usage?.thinkingTokens === 80,
+        `thinkingTokens=${thought?.usage?.thinkingTokens}, expected 80 (30 + 50)`);
+  check('and the run is still going as it is reported', thought?.state === 'running',
+        `state=${thought?.state}`);
+
   mark('bump', 401);
   const grown = await until(async () => {
     const found = await record(streamed, 401);
@@ -390,8 +443,25 @@ try {
   check('and the output with it', grown?.usage?.outputTokens === 30,
         `outputTokens=${grown?.usage?.outputTokens}`);
   check('still running while it grows', grown?.state === 'running', `state=${grown?.state}`);
+  check('reasoning did not move with a message that reported none',
+        grown?.usage?.thinkingTokens === 80, `thinkingTokens=${grown?.usage?.thinkingTokens}`);
 
-  console.log('\n10. and the pull request is still found in a stream of JSON');
+  console.log('\n10. a new turn restarts the agent\'s reasoning total, and the run\'s keeps going');
+  mark('think', 401);
+  const rethought = await until(async () => {
+    const found = await record(streamed, 401);
+    return (found?.usage?.thinkingTokens ?? 0) > 80 ? found : null;
+  }, 'the reasoning figure to grow on its own');
+  // 45 is the agent's total for a *new* turn, not the run's. Taking the figure at face
+  // value reads 45 here — a run's reasoning going backwards from 80.
+  check('the deltas accumulate across turns', rethought?.usage?.thinkingTokens === 125,
+        `thinkingTokens=${rethought?.usage?.thinkingTokens}, expected 125 (30 + 50 + 45)`);
+  check('the input total stood still while it moved', rethought?.usage?.inputTokens === 300,
+        `inputTokens=${rethought?.usage?.inputTokens}`);
+  check('and the output total with it', rethought?.usage?.outputTokens === 30,
+        `outputTokens=${rethought?.usage?.outputTokens} — reasoning alone must be enough to report`);
+
+  console.log('\n11. and the pull request is still found in a stream of JSON');
   mark('release', 401);
   const streamedDone = await settled(streamed, 401);
   check('the run finished', streamedDone?.state === 'done', JSON.stringify(streamedDone));
@@ -405,9 +475,51 @@ try {
   check('the final total is the one the agent settled on',
         streamedDone?.usage?.inputTokens === 300 && streamedDone?.usage?.outputTokens === 95,
         JSON.stringify(streamedDone?.usage));
+  // The settled totals are the agent's own and carry no reasoning at all. If they replace
+  // the whole figure rather than the two halves they speak for, the split is shown for the
+  // length of the run and then vanishes at the moment it becomes worth reading.
+  check('the reasoning figure survived the event that settled the others',
+        streamedDone?.usage?.thinkingTokens === 125,
+        `thinkingTokens=${streamedDone?.usage?.thinkingTokens}, expected 125`);
+
+  console.log('\n12. a stream that never mentions reasoning reports none, rather than zero');
+  await start(streamed, 402);
+  const quiet = await until(async () => {
+    const found = await record(streamed, 402);
+    return (found?.usage?.inputTokens ?? 0) >= 100 ? found : null;
+  }, 'the quiet run to report its spending');
+  check('it reports what it did say', quiet?.usage?.outputTokens === 10,
+        JSON.stringify(quiet?.usage));
+  // Null and 0 are different answers. `0 thinking` on a run whose agent has said nothing
+  // about reasoning is a claim, and the wrong one.
+  check('and says nothing about reasoning', quiet?.usage?.thinkingTokens === null,
+        `thinkingTokens=${JSON.stringify(quiet?.usage?.thinkingTokens)} — silence is not zero`);
+  mark('release', 402);
+  const quietDone = await settled(streamed, 402);
+  check('it finished', quietDone?.state === 'done', JSON.stringify(quietDone));
+  check('still nothing about reasoning once settled', quietDone?.usage?.thinkingTokens === null,
+        `thinkingTokens=${JSON.stringify(quietDone?.usage?.thinkingTokens)}`);
+
+  console.log('\n13. an agent that answers in the Messages API shape is read there instead');
+  await start(streamed, 403);
+  // At least 17, not exactly, for the reason section 9 gives about the two halves of one
+  // message: seeing the partial's 2 on the way there is honest. What is not allowed is 19.
+  const detailed = await until(async () => {
+    const found = await record(streamed, 403);
+    return (found?.usage?.thinkingTokens ?? 0) >= 17 ? found : null;
+  }, 'the breakdown inside usage to be read');
+  // 2 and 17 are one message twice, exactly like the input and output beside them.
+  check('output_tokens_details.thinking_tokens is counted once, not twice',
+        detailed?.usage?.thinkingTokens === 17,
+        `thinkingTokens=${detailed?.usage?.thinkingTokens}, expected 17`);
+  mark('release', 403);
+  const detailedDone = await settled(streamed, 403);
+  check('and the breakdown on the settled event wins at the end',
+        detailedDone?.usage?.thinkingTokens === 22,
+        `thinkingTokens=${detailedDone?.usage?.thinkingTokens}, expected 22`);
 } finally {
-  for (const n of [301, 302, 401]) {
-    try { mark('bump', n); mark('release', n); } catch { /* the world may already be gone */ }
+  for (const n of [301, 302, 401, 402, 403]) {
+    try { mark('bump', n); mark('think', n); mark('release', n); } catch { /* the world may already be gone */ }
   }
   await sleep(500);
   stopAll();
