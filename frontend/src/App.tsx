@@ -827,6 +827,35 @@ function App(): JSX.Element {
   }
 
   /**
+   * Tell a block which issue it already produced.
+   *
+   * The way back from #118, where a run's result was overwritten by this browser's own
+   * autosync and the block was left carrying nothing: not `running`, so the reset does not
+   * apply; no `issueUrl`, so a run would open a *second* issue for an observation that
+   * already has one. Deleting the block by hand was the only answer, and it takes the
+   * observation with it.
+   *
+   * Nothing is guessed here. The server reads the issue through `gh` and refuses the URL if
+   * it cannot, and what it then writes is what the end of a successful run writes — so the
+   * block comes out indistinguishable from one whose result was recorded properly, and the
+   * update arrives over the socket the same way.
+   */
+  const adoptIssueOnBlock = async (target: IssueTarget, issueUrl: string): Promise<string | null> => {
+    try {
+      const response = await fetch(apiUrl(`/api/issue-block/${target.id}/adopt`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ issueUrl })
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) return body?.error ?? `HTTP ${response.status}`
+      return null
+    } catch (error) {
+      return (error as Error).message
+    }
+  }
+
+  /**
    * Clear a `running` research run whose agent is gone.
    *
    * The run has no time limit, so nothing else ever clears that state — and the create
@@ -4048,6 +4077,7 @@ function App(): JSX.Element {
             onImplementIssue={implementIssueFromBlock}
             onResetImplement={resetImplementOnBlock}
             onResetIssue={resetIssueOnBlock}
+            onAdoptIssue={adoptIssueOnBlock}
             onAddComment={addObservationToIssue}
           />
 
