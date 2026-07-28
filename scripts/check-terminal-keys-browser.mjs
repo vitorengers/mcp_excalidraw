@@ -435,8 +435,11 @@ async function readyPage() {
   await evaluate(HOOK_INPUT);
   await waitFor(async () => (await evaluate(PROBE)).block, 'the terminal block to be placed');
   await waitFor(async () => (await evaluate(PROBE)).card, 'the overlay to render');
+  // Generously, and not for the shell's sake: this runs three times, and the two after the
+  // first are a reload, where the page has to reconnect and replay the transcript before
+  // anything is on the screen at all.
   await waitFor(async () => String((await evaluate(PROBE)).card?.screen).trim().length > 3,
-                'the shell to draw its first prompt');
+                'the shell to draw its first prompt', 320);
   await sleep(700);
 }
 
