@@ -20,7 +20,9 @@
  * - **is the shape still a shape?** A corner drag has to resize it after the terminal has
  *   had the pointer, and the new size has to reach the server as `cols` × `rows`.
  * - **and is the wheel used rather than swallowed?** The scrollback takes it while there is
- *   scrollback to show; the canvas takes it once there is not.
+ *   scrollback to show; the canvas takes it once there is not. And since #162 that is asked
+ *   of each axis on its own: a touchpad pan carries both, and the emulator has no use for
+ *   the horizontal one, so it goes to the board even while the vertical one does not.
  *
  * Chrome is driven over the DevTools protocol through `ws`, which the server already
  * depends on. Self-contained otherwise: it builds a throwaway workspace, starts its own
@@ -238,11 +240,17 @@ async function drag(from, to, steps = 12) {
   await sleep(300);
 }
 
-/** One notch of the wheel, where the pointer is. Negative `deltaY` is towards the top. */
-async function wheel(x, y, deltaY, notches = 1) {
+/**
+ * One notch of the wheel, where the pointer is. Negative `deltaY` is towards the top.
+ *
+ * `deltaX` is the axis a touchpad pan carries and a wheel usually does not, which is why it
+ * is last and defaults to nothing: every case written before #162 turns a mouse wheel. A
+ * pan carries both at once, so the two are separate arguments rather than a direction.
+ */
+async function wheel(x, y, deltaY, notches = 1, deltaX = 0) {
   for (let notch = 0; notch < notches; notch++) {
     await send('Input.dispatchMouseEvent', {
-      type: 'mouseWheel', x, y, deltaX: 0, deltaY, button: 'none', buttons: 0,
+      type: 'mouseWheel', x, y, deltaX, deltaY, button: 'none', buttons: 0,
     });
     await sleep(80);
   }
@@ -339,6 +347,10 @@ const PROBE = `(() => {
     grid: (card.querySelector('.terminal-card__grid') || {}).textContent || '',
     selectionRects: card.querySelectorAll('.xterm-selection div').length,
     screen: (card.querySelector('.xterm-rows') || {}).textContent || '',
+    // xterm marks a live mouse protocol with a class on its own root rather than on the
+    // event, and that class is the guard forwardWheelToCanvas reads. True here means a
+    // program has asked for the pointer, so the wheel is being sent to it as an escape.
+    mouseEvents: !!card.querySelector('.xterm.enable-mouse-events'),
   };
   out.focused = String((document.activeElement || {}).className || '');
   return out;
@@ -365,6 +377,68 @@ const LONG_WAIT = isWindows
 const MARKER = isWindows
   ? "Write-Output ('IN'+'TERRUPTED')"
   : 'echo "IN""TERRUPTED"';
+
+/**
+ * `DECSET 1006` and `1000` — how a program says it wants the pointer — into the parser.
+ *
+ * Both, and in that order, because the pair is what a program actually sends: `1000` alone
+ * leaves xterm on its default encoding, and a report in that encoding leaves the emulator
+ * through `onBinary` rather than `onData` — a door this frontend does not listen at, so the
+ * report would be dropped before the network and the case would be measuring the wrong
+ * thing. `1006` is SGR, which every mouse-reporting program of the last decade asks for.
+ *
+ * Into the *parser* rather than through the shell, and that is a Windows fact rather than a
+ * preference: a `printf '\\033[?1000h'` from `bash` arrives at the pty intact, but the same
+ * sequence written by anything running under PowerShell is swallowed by the pseudoconsole
+ * and never reaches the browser. Measured both ways before this was written. The shell is
+ * the machine's, so the check would be asking a different question on this machine than on
+ * a Linux one, and the question it wants is about xterm: the moment its parser sees this it
+ * puts `enable-mouse-events` on its own root and starts sending the wheel out as an escape,
+ * which is exactly the state `claude` — what blocks here routinely run — leaves it in.
+ *
+ * The emulator is reached the way the Excalidraw handle above is, through the React fibre,
+ * because it lives in a ref inside `TerminalScreen` and nothing exports it.
+ */
+const MOUSE_ON = `(() => {
+  for (const screen of document.querySelectorAll('.terminal-card__screen')) {
+    const key = Object.keys(screen).find((name) => name.startsWith('__reactFiber$'));
+    if (!key) continue;
+    let node = screen[key];
+    for (let up = 0; up < 8 && node; up++) {
+      let state = node.memoizedState;
+      for (let along = 0; along < 40 && state; along++) {
+        const held = state.memoizedState;
+        const terminal = held && typeof held === 'object' ? held.current : null;
+        if (terminal && typeof terminal.write === 'function' && terminal.options) {
+          terminal.write('\\u001b[?1006h\\u001b[?1000h');
+          return true;
+        }
+        state = state.next;
+      }
+      node = node.return;
+    }
+  }
+  return false;
+})()`;
+
+/**
+ * Every byte the block sent to the shell, so "the program was told" is an observation.
+ *
+ * The keyboard and the mouse leave by the same door — `POST /api/terminal/input` — so the
+ * list is emptied before each gesture rather than read as a whole.
+ */
+const SPY_INPUT = `(() => {
+  window.__terminalInput = [];
+  const real = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (String(url).includes('/api/terminal/input') && init && typeof init.body === 'string') {
+      try { window.__terminalInput.push(JSON.parse(init.body).data); } catch { /* not ours */ }
+    }
+    return real(input, init);
+  };
+  return true;
+})()`;
 
 /**
  * The board where this check wants it: round numbers, so a corner converts back exactly.
@@ -591,15 +665,94 @@ try {
           `${JSON.stringify(before.view)} → ${JSON.stringify(scene.view)}`);
   }
 
-  console.log('\n8. the header is a target the reader can hit, at any zoom');
+  console.log('\n8. the horizontal axis of a wheel is the board\'s, whoever wanted the vertical');
+  // #162: a touchpad pan carries both axes at once, and the emulator has no use for one of
+  // them — xterm has no horizontal scrolling and emits no escape sequence for one. So the
+  // gesture is answered per axis rather than whole, or a pan over a block is a pan that
+  // only goes up and down.
+  {
+    scene = await placeBoard();
+    const before = { view: scene.view, screen: scene.card.screen };
+    const expected = 120 / before.view.zoom;
+    await wheel(scene.card.body.x, scene.card.body.y, 0, 1, -120);
+    scene = await evaluate(PROBE);
+    check('a wheel with only a horizontal axis pans the board',
+          Math.abs(scene.view.scrollX - before.view.scrollX - expected) < expected * 0.35,
+          `${before.view.scrollX} → ${scene.view.scrollX}, wanted +${expected} at zoom ${before.view.zoom}`);
+    check('and does not move the board up or down',
+          Math.abs(scene.view.scrollY - before.view.scrollY) < 1,
+          `${before.view.scrollY} → ${scene.view.scrollY}`);
+    check('and does not scroll the scrollback either',
+          scene.card.screen === before.screen,
+          `${String(before.screen).slice(0, 60)} … / ${String(scene.card.screen).slice(0, 60)} …`);
+  }
+
+  {
+    // Back to the bottom of the scrollback first, so the wheel below is one the emulator
+    // can genuinely use — that is the half of the gesture it is allowed to keep.
+    await wheel(scene.card.body.x, scene.card.body.y, 120, 6);
+    scene = await placeBoard();
+    const before = { view: scene.view, screen: scene.card.screen };
+    const expected = 120 / before.view.zoom;
+    await wheel(scene.card.body.x, scene.card.body.y, -120, 1, -120);
+    scene = await evaluate(PROBE);
+    await shot('07-panned-diagonally');
+    check('a diagonal wheel scrolls the scrollback',
+          scene.card.screen !== before.screen,
+          `${String(before.screen).slice(0, 60)} … / ${String(scene.card.screen).slice(0, 60)} …`);
+    check('and pans the board sideways at the same time',
+          Math.abs(scene.view.scrollX - before.view.scrollX - expected) < expected * 0.35,
+          `${before.view.scrollX} → ${scene.view.scrollX}, wanted +${expected} at zoom ${before.view.zoom}`);
+    check('while leaving the board where it was up and down',
+          Math.abs(scene.view.scrollY - before.view.scrollY) < 1,
+          `${before.view.scrollY} → ${scene.view.scrollY}`);
+  }
+
+  await evaluate(SPY_INPUT);
+  check('a program can ask for the pointer', await evaluate(MOUSE_ON) === true);
+  await waitFor(async () => (await evaluate(PROBE)).card?.mouseEvents,
+                'the emulator to hand the pointer over');
+  {
+    scene = await placeBoard();
+    const before = { view: scene.view };
+    const expected = 120 / before.view.zoom;
+    await evaluate('window.__terminalInput.length = 0');
+    await wheel(scene.card.body.x, scene.card.body.y, 0, 1, -120);
+    scene = await evaluate(PROBE);
+    const sent = await evaluate('window.__terminalInput');
+    check('a horizontal wheel pans the board even while a program holds the pointer',
+          Math.abs(scene.view.scrollX - before.view.scrollX - expected) < expected * 0.35,
+          `${before.view.scrollX} → ${scene.view.scrollX}, wanted +${expected} at zoom ${before.view.zoom}`);
+    // xterm takes the button from the sign of `deltaY`, so it has nothing to report for a
+    // wheel that only went sideways — it cancels the event and sends nothing at all.
+    check('and the program was sent nothing for it',
+          Array.isArray(sent) && sent.length === 0, JSON.stringify(sent));
+  }
+
+  {
+    const before = { view: scene.view };
+    await evaluate('window.__terminalInput.length = 0');
+    await wheel(scene.card.body.x, scene.card.body.y, -120, 1);
+    scene = await evaluate(PROBE);
+    const sent = await evaluate('window.__terminalInput');
+    check('a vertical wheel still reaches that program',
+          Array.isArray(sent) && sent.some((data) => /\[(M|<)/.test(String(data))),
+          JSON.stringify(sent));
+    check('and leaves the board exactly where it was',
+          Math.abs(scene.view.scrollX - before.view.scrollX) < 1
+          && Math.abs(scene.view.scrollY - before.view.scrollY) < 1,
+          `${JSON.stringify(before.view)} → ${JSON.stringify(scene.view)}`);
+  }
+
+  console.log('\n9. the header is a target the reader can hit, at any zoom');
   await evaluate('window.__focusCheckApi.updateScene({ appState: { zoom: { value: 0.15 } } })');
   await sleep(400);
   scene = await evaluate(PROBE);
-  await shot('07-zoomed-out');
+  await shot('08-zoomed-out');
   check('the band that drags the block does not vanish with the zoom',
         scene.card.header.height >= 12, `${scene.card.header.height}px at zoom ${scene.view.zoom}`);
 
-  console.log('\n9. and none of it was ever stored');
+  console.log('\n10. and none of it was ever stored');
   await sleep(2400);
   const stored = await (await api('/api/elements')).json();
   check('the authored shape is in the store',
