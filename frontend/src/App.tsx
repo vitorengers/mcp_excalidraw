@@ -937,10 +937,33 @@ function App(): JSX.Element {
   /** The board whose first scene is still on its way, while the previous one is on screen. */
   const pendingSceneWorkspaceRef = useRef<string | null>(null)
 
+  /**
+   * The board whose shapes are actually on the canvas.
+   *
+   * Not the same as `activeWorkspaceRef`, and the difference is a real window rather than a
+   * technicality: a switch names the new board at once and leaves the old board's shapes up
+   * until the new scene lands, so for the length of a reconnect the two disagree. Anything
+   * derived from what is *drawn* has to follow the drawing — the terminal's cache of where
+   * each block sits did not, and put one project's terminal on another project's board
+   * (#156). Moved on by `finishBoardSwitch`, which is the moment the swap happened.
+   */
+  const sceneWorkspaceRef = useRef<string>('default')
+
   /** Append the active workspace to an API path, so no request is ever board-agnostic. */
-  const apiUrl = (path: string): string => {
+  const apiUrl = (path: string): string => apiUrlOn(path, activeWorkspaceRef.current)
+
+  /**
+   * The same, for a board named rather than read off the ref at the moment of the call.
+   *
+   * `apiUrl` resolves late by design — a handler that never re-renders must not send a board
+   * it closed over — but a request scheduled on a *timer* wants the opposite: the board it
+   * was scheduled for. The terminal's resize report is debounced and retried, so read late
+   * it could arrive at whichever board the reader had switched to in the meantime, naming a
+   * session id that board has one of its own (#156).
+   */
+  const apiUrlOn = (path: string, workspaceId: string): string => {
     const separator = path.includes('?') ? '&' : '?'
-    return `${path}${separator}workspace=${encodeURIComponent(activeWorkspaceRef.current)}`
+    return `${path}${separator}workspace=${encodeURIComponent(workspaceId)}`
   }
 
   // Documentation panel: which shape's doc is on screen
@@ -1547,9 +1570,67 @@ function App(): JSX.Element {
     autoSyncHoldRef.current = setTimeout(() => { finishBoardSwitch() }, BOARD_SWITCH_HOLD_MS)
   }
 
+  /**
+   * Where each board was left looking.
+   *
+   * There is one viewport for the page and there always was: the Excalidraw element carries
+   * no React key, so it is never remounted, and a switch swaps the scene underneath it —
+   * `scrollX`, `scrollY` and `zoom` carry straight over from the board you left. That is the
+   * whole of "moving the view on one tab moves it on the other" (#156): not two views wired
+   * together, one view shared. So each board's is written down on the way out and put back
+   * on the way in, and a board arrived at for the first time is shown its own content
+   * instead of wherever the last board happened to be parked.
+   */
+  const boardViewportsRef = useRef<Map<string, { scrollX: number; scrollY: number; zoom: number }>>(new Map())
+
+  const rememberViewport = (workspaceId: string): void => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+    const state = api.getAppState()
+    boardViewportsRef.current.set(workspaceId, {
+      scrollX: state.scrollX,
+      scrollY: state.scrollY,
+      zoom: state.zoom?.value ?? 1
+    })
+  }
+
+  /**
+   * Put a board back where it was, or show it its own drawing if it has never been seen.
+   *
+   * `fitToViewport` on that first visit rather than a plain centring: the zoom is inherited
+   * too, and a board opened at the zoom another project was read at is the same complaint
+   * one step down. Nothing at all when the board is empty — there is no content to fit, and
+   * moving to an arbitrary origin would only be a different wrong place.
+   */
+  const restoreViewport = (workspaceId: string): void => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+    const seen = boardViewportsRef.current.get(workspaceId)
+    if (seen) {
+      applySceneUpdateWithoutAutoSync(api, {
+        appState: { scrollX: seen.scrollX, scrollY: seen.scrollY, zoom: { value: seen.zoom } }
+      } as Parameters<ExcalidrawImperativeAPI['updateScene']>[0])
+      return
+    }
+    const elements = api.getSceneElements()
+    if (elements.length === 0) return
+    api.scrollToContent(elements as unknown as ExcalidrawElement[], {
+      fitToViewport: true,
+      animate: false
+    })
+  }
+
   /** The new board is on screen (or never will be): let autosync go again. */
   const finishBoardSwitch = (): void => {
+    // Read before it is cleared, and only a real switch has one: `loadExistingElements`
+    // calls this on an ordinary first load too, where there is no board being landed on and
+    // nothing to restore.
+    const landed = pendingSceneWorkspaceRef.current
     pendingSceneWorkspaceRef.current = null
+    if (landed !== null) {
+      sceneWorkspaceRef.current = landed
+      restoreViewport(landed)
+    }
     if (!autoSyncHoldRef.current) return
     clearTimeout(autoSyncHoldRef.current)
     autoSyncHoldRef.current = null
@@ -2278,6 +2359,20 @@ function App(): JSX.Element {
   /** What was last rendered, so a pan that changes nothing does not re-render every block. */
   const terminalViewsRef = useRef<string>('')
 
+  /**
+   * A session id, qualified by the board whose scene it is drawn on.
+   *
+   * `nextTerminalId` counts from 1 per board, so the first shell of *every* board is called
+   * `s1` and the second `s2`. Anything the browser caches per session therefore has to say
+   * which board's session it means, or the two boards share one entry — which is how the
+   * geometry of one project's terminal came to place another project's block (#156).
+   *
+   * `sceneWorkspaceRef`, not `activeWorkspaceRef`: these are all read and written from what
+   * is drawn on the canvas, and during a switch the canvas is still showing the board being
+   * left while the active id already names the one being entered.
+   */
+  const terminalKeyOf = (sessionId: string): string => `${sceneWorkspaceRef.current}::${sessionId}`
+
   /** The grid last reported per session, so a pan or a re-render does not re-report a size. */
   const terminalGridRef = useRef<Map<string, string>>(new Map())
   const terminalResizeTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
@@ -2301,6 +2396,10 @@ function App(): JSX.Element {
    * Keyed by session, the restore groups the orphans by the geometry they remember and puts
    * a block back around each group — which for the ordinary case of one erased block is one
    * block, at its own size and position.
+   *
+   * By `terminalKeyOf`, so the session is the one on the board it was drawn on. It survives
+   * a board switch on purpose: where a reader put a project's terminal is that project's,
+   * and going away to another tab and coming back is not a reason to lose it.
    */
   const terminalHomesRef = useRef<Map<string, { x: number; y: number; width: number; height: number }>>(new Map())
 
@@ -2519,9 +2618,10 @@ function App(): JSX.Element {
     // Where this board's block was last left, if it has ever been left anywhere (#154).
     //
     // A floor under the two refs above rather than a replacement for them: they are page
-    // state and both doors out of a page drop them — a reload, and a switch of board and
-    // back, which clears them by hand because the next board's blocks are not this one's. A
-    // session that came back at the default was not only a shape moving. The block reports
+    // state, and a reload is the door out of a page that drops them. A switch of board and
+    // back used to be a second such door, because the refs were cleared by hand on the way
+    // into a board; since #156 they are keyed by board and survive it. A session that came
+    // back at the default was not only a shape moving. The block reports
     // its own grid, the server puts it at the live shell, and a full-screen program repaints
     // into a smaller screen than the reader left it at.
     //
@@ -2605,7 +2705,7 @@ function App(): JSX.Element {
     const restoring = new Map<string, string[]>()
     const stray: string[] = []
     for (const sessionId of homeless) {
-      const home = terminalHomesRef.current.get(sessionId)
+      const home = terminalHomesRef.current.get(terminalKeyOf(sessionId))
       if (!home) { stray.push(sessionId); continue }
       const key = `${home.x},${home.y},${home.width},${home.height}`
       restoring.set(key, [...(restoring.get(key) ?? []), sessionId])
@@ -2640,8 +2740,8 @@ function App(): JSX.Element {
         return next
       })
       for (const sessionId of cleared) {
-        terminalHomesRef.current.delete(sessionId)
-        terminalGridRef.current.delete(sessionId)
+        terminalHomesRef.current.delete(terminalKeyOf(sessionId))
+        terminalGridRef.current.delete(terminalKeyOf(sessionId))
       }
     }
 
@@ -2779,7 +2879,7 @@ function App(): JSX.Element {
       delete next[sessionId]
       return next
     })
-    terminalGridRef.current.delete(sessionId)
+    terminalGridRef.current.delete(terminalKeyOf(sessionId))
     reconcileTerminalBlocks()
   }
 
@@ -2992,10 +3092,13 @@ function App(): JSX.Element {
       // is about to report about it: a font change, and a block that has been erased.
       const geometry = { x: element.x, y: element.y, width: element.width, height: element.height }
       terminalGeometryRef.current.set(element.id, { ...geometry, sessions: data.sessions })
-      if (!switching) {
-        for (const sessionId of data.sessions) terminalHomesRef.current.set(sessionId, geometry)
-        if (!leading) leading = geometry
-      }
+      // Written mid-switch as well as outside one, because the key now says which board's
+      // `s1` this is (#156): the shapes on screen during a switch are the board being left,
+      // and this is where that board's own arrangement gets recorded. `leading` still waits,
+      // because `rememberTerminalGeometry` files by the *active* board, which mid-switch is
+      // already the one being entered.
+      for (const sessionId of data.sessions) terminalHomesRef.current.set(terminalKeyOf(sessionId), geometry)
+      if (!switching && !leading) leading = geometry
 
       reportTerminalGrid(element.id, geometry, data.sessions)
     }
@@ -3053,12 +3156,18 @@ function App(): JSX.Element {
    * Every session in the block, not just the tab on top. They all draw into the same frame,
    * so a background tab left at the size it had when it was hidden would repaint to the
    * wrong width the moment it came back.
+   *
+   * Nothing at all mid-switch. The blocks still on the canvas then belong to the board being
+   * left, while `apiUrl` already names the board being entered — so the report would tell
+   * one board's server about another board's block, for a session it has never heard of.
+   * The new board's own blocks report for themselves the moment its scene lands.
    */
   const reportTerminalGrid = (
     elementId: string,
     size: { width: number; height: number },
     sessions: string[]
   ): void => {
+    if (pendingSceneWorkspaceRef.current !== null) return
     // Measured here rather than remembered, and both halves of the cell: a row is the font's
     // own line box times the line height the emulator was given, a column is its advance
     // width, and only the browser that resolved the font knows either. Since #115 the face
@@ -3067,9 +3176,16 @@ function App(): JSX.Element {
     const font = terminalFontRef.current
     const grid = terminalGrid(size, font, terminalLineBox(font), terminalAdvance(font))
     const signature = `${grid.cols}x${grid.rows}`
-    const stale = sessions.filter((id) => terminalGridRef.current.get(id) !== signature)
+    // Resolved once, here, rather than on each use: the debounce and the retry below both run
+    // on a timer, and by then the reader may be on another board — whose `s1` is a different
+    // shell entirely. The board is pinned for the same reason the keys are: a report that read
+    // `apiUrl` when it finally fired would resize whichever board was in front by then, which
+    // is a live shell repainting into a frame that is not its own.
+    const board = sceneWorkspaceRef.current
+    const keyed = new Map(sessions.map((id) => [id, terminalKeyOf(id)]))
+    const stale = sessions.filter((id) => terminalGridRef.current.get(keyed.get(id)!) !== signature)
     if (stale.length === 0) return
-    stale.forEach((id) => terminalGridRef.current.set(id, signature))
+    stale.forEach((id) => terminalGridRef.current.set(keyed.get(id)!, signature))
 
     const pending = terminalResizeTimersRef.current.get(elementId)
     if (pending) clearTimeout(pending)
@@ -3081,7 +3197,7 @@ function App(): JSX.Element {
     // longer has.
     const report = (attempt: number): void => {
       terminalResizeTimersRef.current.delete(elementId)
-      Promise.all(stale.map((sessionId) => fetch(apiUrl('/api/terminal/resize'), {
+      Promise.all(stale.map((sessionId) => fetch(apiUrlOn('/api/terminal/resize', board), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, ...grid })
@@ -3090,8 +3206,8 @@ function App(): JSX.Element {
       }))).catch(() => {
         // Only while this is still the size being reported: a later gesture has its own
         // request, and retrying an overtaken one would report a size nobody is looking at.
-        if (stale.some((id) => terminalGridRef.current.get(id) !== signature)) return
-        if (attempt >= 2) { stale.forEach((id) => terminalGridRef.current.delete(id)); return }
+        if (stale.some((id) => terminalGridRef.current.get(keyed.get(id)!) !== signature)) return
+        if (attempt >= 2) { stale.forEach((id) => terminalGridRef.current.delete(keyed.get(id)!)); return }
         terminalResizeTimersRef.current.set(
           elementId,
           setTimeout(() => report(attempt + 1), TERMINAL_RESIZE_DEBOUNCE_MS)
@@ -3167,11 +3283,15 @@ function App(): JSX.Element {
   // than the wasted socket it was introduced for — it is a process.
   useEffect(() => {
     if (!excalidrawAPI || !boardReady) return
-    terminalGridRef.current.clear()
-    // The next board's blocks are not this one's, and a restore there must measure the
-    // content rather than reuse where the reader dragged a different project's.
+    // Keyed by element id, and the next board's shapes are not this one's: left in, the
+    // blocks of the board being left would read as blocks this board has just had erased.
     terminalGeometryRef.current.clear()
-    terminalHomesRef.current.clear()
+    // The homes and the grids are *not* cleared, and since #156 they need not be: both are
+    // keyed by board, so this board's entries were never the other board's to begin with —
+    // and wiping them was itself losing something, namely where the reader had put this
+    // board's terminal the last time they were on it. The wipe was also never the guard it
+    // looked like: the scene of the board being left stays on screen through the reconnect,
+    // so anything drawn in that window wrote the old geometry straight back in.
     writeTerminalSessions(() => ({}))
     terminalViewsRef.current = ''
     setTerminalViews([])
@@ -3424,6 +3544,9 @@ function App(): JSX.Element {
       const resolved = resolveInitialWorkspace(list)
       if (resolved) {
         activeWorkspaceRef.current = resolved
+        // No switch to land: the first scene of the load *is* this board's, so the scene
+        // and the active board agree from the start.
+        sceneWorkspaceRef.current = resolved
         setActiveWorkspace(resolved)
         rememberWorkspace(resolved)
       }
@@ -3471,6 +3594,10 @@ function App(): JSX.Element {
    */
   const switchWorkspace = (workspaceId: string): void => {
     if (workspaceId === activeWorkspaceRef.current) return
+
+    // Written down against the board whose shapes are on screen, which during a second
+    // switch made before the first one landed is not the board `activeWorkspaceRef` names.
+    rememberViewport(sceneWorkspaceRef.current)
 
     activeWorkspaceRef.current = workspaceId
     setActiveWorkspace(workspaceId)

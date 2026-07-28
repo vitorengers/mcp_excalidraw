@@ -536,17 +536,68 @@ module. Neither palette survives as shipped: on paper Latte's yellow is 2.4:1 an
 The greys are the awkward part and no terminal theme escapes it, in either direction. On a dark
 background the ramp runs black → bright white from least ink to most; on paper "white" is the
 colour of the page, so a program asking for white text is asking for nothing, and on night
-"black" is the colour of the card. The ramp is therefore read as **contrast** rather than as
-lightness in both: `brightBlack` is the dim one every tool uses for comments, `brightWhite` is
-the strongest mark, and "bright" means *further from the surface* rather than lighter. The cost
-is that `black` and `white` end up two similar greys, so a program that distinguishes those two
-will not be distinguished here.
+"black" is the colour of the card. The **white end** of the ramp is therefore read as
+**contrast** rather than as lightness in both: `brightBlack` is the dim one every tool uses for
+comments, `brightWhite` is the strongest mark, and "bright" means *further from the surface*
+rather than lighter. The cost is that `white` and `brightBlack` end up two similar greys on
+paper, so a program that distinguishes those two will not be distinguished here.
 
-**Only foregrounds are checked.** A slot used as a *background* is not, and the one program this
-surface was built for uses one: Claude Code draws its hint chip as `black` on `brightCyan`,
-which is **1.11:1** on paper and 2.15:1 on night — the illegible strip in #147's screenshot,
-and it is illegible in light mode too. Checking the sixteen as backgrounds, and as pairs from
-within the sixteen, is its own question and its own issue.
+**The black end is not turned round, and #159 is what turning it round cost.** On paper `black`
+is a near-black — Mocha's `crust` — because that is what the word means and because it is the
+one slot a program reaches for when it draws *on* a colour. It used to be `#5c5f77`, a mid grey
+picked for symmetry with `white`, and that symmetry is the section below.
+
+### A slot is ink, and a slot is also a page
+
+This is #159. The floor above asks each of the sixteen to be legible **on the surface**; a
+program that draws a chip asks something else of them, and until now nothing checked it. Claude
+Code — the program this block exists to run — draws its hint as ANSI `black` on ANSI
+`brightCyan`, which was **1.11:1** on paper and 2.15:1 on night: the illegible steel-blue strip
+in #147's screenshot, worse in light mode than in dark, and there since #115.
+
+**The contract.** A pair drawn from within the sixteen clears the same **3:1** the ink does.
+Which pairs are in reach is arithmetic rather than taste, and it comes out differently in the
+two themes because the ink floor pushes `black` in opposite directions:
+
+- **`black` is the ink, and it is the end of the ramp.** On paper the darkest of the sixteen; on
+  night the slot *closest to the surface* that still clears the ink floor, since a `black` below
+  that floor fails the other check.
+- **On paper that is nearly free.** `black` can go all the way out, so fourteen of the other
+  fifteen are pages under it, the worst at 3.3:1. Only `brightWhite` is not, and cannot be: on
+  paper it is the strongest grey ink, and `black` on it is ink on ink.
+- **On night the floor holds `black` up** at 3.3:1 against the surface, so a page has to be
+  about **ten times** the surface to clear 3:1 over it. That is the light half of Mocha:
+  `yellow`, `green`, `cyan` and `magenta` in both their members, plus `brightWhite`. `red`,
+  `blue`, `white`, `brightRed`, `brightBlue` and `brightBlack` are **out of reach**, and the
+  reason is the hue: a red or a blue lifted to a 10:1 ink is a pink or a powder blue, which is
+  no longer that colour, and the comment grey is near `black` by trade.
+- **`brightWhite` is the other ink, on night only**, where it clears `black` and `brightBlack`.
+  On paper there is no light ink at all and there cannot be — every one of the sixteen is 3:1
+  ink on a light page, so every one of them is dark. **A program that draws light-on-colour
+  cannot be served on paper by any palette that keeps the ink floor.** That is a cost of the
+  floor rather than an oversight, and it is written here rather than hidden.
+
+**What moved.** `black` on paper, from `#5c5f77` to `#11111b`; `black` on night, from `#7f849c`
+to `#666a81`, which is as near the floor as ink gets and therefore as much of the palette in
+reach as there is. And the six chromatic pairs on night are **swapped** — not one new hex —
+because they were the wrong way round: `brightCyan` was `#6bd7ca` against a `cyan` of `#94e2d5`,
+the light palette's rule applied to a surface it is backwards on. Emphasis read as less
+emphasis, and the dimmer member of each pair was exactly the one a program picks for a chip's
+page, which is how the worst pair on this card came to be `bgCyanBright`.
+
+`scripts/check-terminal-pairs-browser.mjs` prints all sixteen as pages from a real shell, reads
+both colours back off the render in both themes, and asserts the lists above **exactly** — a
+slot that quietly comes into reach fails it too, because the same lists are in
+`terminal-palette.ts` and a list that is true in one place only is what this file has paid for
+before.
+
+**`COLORFGBG` is still not set**, and #159 asked again whether it should be. It should not. It
+names the terminal's background so a program can pick against it, the shell is spawned once, and
+the surface now follows a theme the reader toggles — so the value would be right until the first
+`Alt`-less click on Excalidraw's menu and wrong for the rest of the session, with nothing to
+re-send it and nothing that re-reads it. The two answers it would have to hold are also no
+longer the question they were: the palette is legible in both themes now, as ink and as page,
+which is what a program consulting `COLORFGBG` was going to be told anyway.
 
 **What says "terminal" when the text has gone.** That was the dark fill's other job, and paper
 cannot do it — at a zoom where the overlay's text is four pixels tall there is nothing to read
@@ -581,11 +632,13 @@ Four things the issues left open, decided here:
   because a grid the shell is told is a real constraint on a real block. A colour scheme is not
   that, and a preference nobody asked for is a preference that has to be kept working. The
   canvas theme is not that preference — it is the board's, and this follows it.
-- **Programs that assume a dark terminal are out of scope.** `COLORFGBG` is still not set, so
-  `vim` — and Claude Code, which this surface was built for — pick foregrounds against a
-  background nobody told them about. On a dark board they now happen to be right; on a light one
-  they are wrong for the same reason as before. Setting it is `agentEnv()` in
-  `src/core/issue-agent.ts` and its own issue.
+- **Programs that assume a dark terminal are told nothing, and are served anyway.** `COLORFGBG`
+  is still not set, so `vim` — and Claude Code, which this surface was built for — pick
+  foregrounds and pairs against a background nobody named for them. #159 asked whether to set it
+  and decided not to, for the reason given above: the shell is spawned once, the surface follows
+  a theme the reader toggles, and a variable that goes stale on the toggle with nothing to
+  re-send it is worse than none. What is done instead is to make the palette right for whatever
+  the program picks — as ink *and* as page, in both themes — which is the section above.
 
 ## The font size is an input to the grid
 
@@ -805,6 +858,38 @@ back only the block: the live scene is what goes into `updateScene`, since
 rebuild from, and handed the tombstones it would return everything else the eraser had just
 taken.
 
+### `s1` on one board is not `s1` on another
+
+`nextTerminalId` counts from 1 **per board**, so the first shell of every project is called `s1`.
+Everything the browser remembers per session is therefore keyed by board *and* session
+(`terminalKeyOf`): where each block sits, and what grid each shell has been told.
+
+Unqualified, the restore above turned into a leak between projects, which is #156. Switching
+tabs takes the old board's blocks off the scene, and to the restore that is indistinguishable
+from an erase; the board being switched *to* has an `s1` of its own; so the restore looked `s1`
+up, found where the reader had dragged the other project's terminal, and put this project's
+block there — at that position and that size, with the shell inside it resized to match.
+
+The key is `sceneWorkspaceRef`, not the active board. A switch names the new board immediately
+and leaves the old board's shapes on screen until the new scene lands, so for the length of a
+reconnect the blocks being measured belong to the board being left. For the same reason a grid
+report is skipped entirely while a switch is in flight: the request would carry the new board's
+id and name a session that board has never heard of.
+
+**A resize report names the board it was scheduled for**, through `apiUrlOn` rather than
+`apiUrl`. Everything else here resolves the board late on purpose — a handler that never
+re-renders must not send the board it closed over — but this one is debounced and retried, so
+read late it arrives at whichever board the reader switched to while it was waiting, naming a
+session id that board has one of its own. What that costs is not a stale label: it is a live
+full-screen program on the other project repainting into a frame that is not its own. It was
+invisible until the caches stopped being wiped on a switch, because the wipe made the board
+being returned to re-report its true size and heal it a moment later.
+
+Nothing is wiped on a switch any more, either. It used to be, and that was both insufficient —
+the old scene stays up, so the geometry was written straight back in — and lossy: where a reader
+put a project's terminal is that project's, and visiting another tab is not a reason to forget
+it. A board returned to puts its block back where it was left.
+
 ## Checked
 
 - `scripts/check-terminal.mjs` — the guards, the workspace root, incremental output, input,
@@ -846,6 +931,12 @@ taken.
   in the same drag that has to stay erased, so a restore that resurrected the whole scene could
   not pass; the block still absent from the store afterwards; and the key opening a session
   after `exit`, and on a page that never opened one, both without a reload.
+- `scripts/check-terminal-workspace-isolation-browser.mjs` — also in Chrome, and two projects:
+  the reader drags and shrinks the block on one board, switches to the other, and the second
+  board's `s1` gets a block of its own at a fresh size rather than the first board's — asserted
+  on the canvas, and through `GET /api/terminal` per board, where a shell placed in the wrong
+  frame shows up as a shell running at the wrong grid. Then back to the first board, whose block
+  is still where it was put.
 - `scripts/check-terminal-font.mjs` — the arithmetic behind the size buttons: the cell, the
   frame and therefore the grid all move with the font, the grid never grows on the way up the
   range, and no size in it asks for a screen the block cannot hold.
@@ -876,6 +967,16 @@ taken.
   colour still crossing the block at zoom 0.15 in both; and the toggle itself — done with a
   program on the alternate screen and the emulator's DOM node marked, so an emulator that was
   rebuilt rather than re-themed would lose the mark and be caught.
+- `scripts/check-terminal-pairs-browser.mjs` — the other half of that question, and #159's: each
+  of the sixteen as a **page** rather than as ink. A real shell prints all sixteen as
+  backgrounds inked with ANSI `black`, plus `brightWhite` on the two greys dim enough to take
+  it, plus Claude Code's own chip in Claude Code's own words; every pair is read back off the
+  render as `color` and `background-color`, in both themes. The named sets are asserted
+  **exactly**, so a slot that drifts into reach fails it as surely as one that drifts out — the
+  same lists are prose in `terminal-palette.ts` and here, and a list true in one place only is
+  what this document has paid for before. Two structural cases carry the rest: that `black` is
+  the strongest ink of the sixteen on paper, and the one closest to the surface on night, since
+  a `black` that drifts back into the middle of the ramp is precisely how this defect happened.
 - `scripts/check-terminal-focus-browser.mjs` — who owns the pointer where, in Chrome. A click
   in the middle of the screen focusing the shell and a command typed straight after it running;
   a drag on the header moving the block and a drag on the screen selecting text and *not*
@@ -904,7 +1005,7 @@ taken.
   fix that stopped the overlay covering the chrome by making it transparent or by moving it
   would pass everything above.
 
-All seventeen were written first and seen to fail against the code as it stood.
+All eighteen were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.

@@ -61,6 +61,38 @@
  * theme's surface and moved — darkened on paper, lifted on night — until it cleared **3:1**,
  * which the check then asserts of a real render in **both** themes. The hues are Catppuccin's;
  * the lightness is this board's.
+ *
+ * ## Ink is half the question, and the other half is what a slot is a page for
+ *
+ * That floor asks each of the sixteen to be legible **on the surface**. A program that draws a
+ * chip asks something else of them: it picks one as a *background* and inks it with another,
+ * and no pair was ever checked. Claude Code — the program this block exists to run — draws its
+ * hint as ANSI `black` on ANSI `brightCyan`, which was **1.11:1** on paper and 2.15:1 on night,
+ * the illegible strip in #147's screenshot. That is #159, and the contract it settles is:
+ *
+ * - **`black` is the ink**, and it is the end of the ramp rather than a grey in the middle of
+ *   one. On paper that means the darkest colour the palette has; on night it means the slot
+ *   *closest to the surface* that still clears the ink floor, because a black below the floor
+ *   fails the other check.
+ * - **A pair clears the same 3:1** the ink does. On paper `black` can go all the way out, so
+ *   fourteen of the other fifteen are pages under it; only `brightWhite` is not, and cannot be,
+ *   since on paper it is the strongest grey ink and `black` on it is ink on ink.
+ * - **On night the ink floor holds `black` up**, so a page has to be about **ten times** the
+ *   surface to clear 3:1 over it. That is the light half of Mocha: `yellow`, `green`, `cyan`
+ *   and `magenta` in both their members, plus `brightWhite`. `red`, `blue`, `white`,
+ *   `brightRed`, `brightBlue` and `brightBlack` are **out of reach**, and the reason is the hue
+ *   rather than the taste — a red or a blue lifted to a 10:1 ink is a pink or a powder blue,
+ *   which is no longer that colour.
+ * - **`brightWhite` is the other ink, on night only.** On paper there is no light ink at all
+ *   and there cannot be: every one of the sixteen is 3:1 ink on a light page, so every one of
+ *   them is dark. A program that draws light-on-colour cannot be served by any palette that
+ *   keeps the ink floor. That is a cost of the floor, written down rather than hidden.
+ *
+ * `scripts/check-terminal-pairs-browser.mjs` prints all sixteen as pages from a real shell and
+ * reads both colours back off the render, in both themes, and it asserts the lists above
+ * **exactly** — a slot that quietly comes into reach fails it too, because the same lists are
+ * in `docs/terminal.md` and a list that is true in one place only is how this file drifted
+ * before.
  */
 
 /** Which of the two the board is in. Excalidraw's own word for it, mirrored by `App.tsx`. */
@@ -144,14 +176,27 @@ export interface TerminalPalette {
  * The sixteen: the **greys are the awkward ones**, and no light terminal theme escapes it. On
  * a dark background the ramp runs black → bright white from least ink to most; on paper
  * "white" is the colour of the page, so a program that asks for white text is asking for
- * nothing. The ramp is therefore read as *contrast* rather than as lightness: `black` and
- * `white` are both mid inks, `brightBlack` is the dim one every tool uses for comments and
- * secondary text, and `brightWhite` is the strongest ink, which is what a program means when
- * it asks for it. The cost is that `black` and `white` are two similar greys, so a program
- * that distinguishes them will not be distinguished here. That is inherent to printing sixteen
- * colours on paper and is written down in `docs/terminal.md` rather than hidden.
+ * nothing. The **white end** of the ramp is therefore read as *contrast* rather than as
+ * lightness: `white` is a mid ink, `brightBlack` is the dim one every tool uses for comments
+ * and secondary text, and `brightWhite` is the strongest of those three, which is what a
+ * program means when it asks for it.
  *
- * "Bright" is likewise more ink rather than more light: a bright colour is the darker, more
+ * **The black end is not inverted, and #159 is what inverting it cost.** Turning a colour round
+ * is what you do when its own meaning is unavailable, and "white" on paper is unavailable.
+ * "Black" is not: it is the darkest ink there is, which is exactly what the word means, and it
+ * is the one slot a program reaches for when it draws *on* a colour. It was `#5c5f77` — a mid
+ * grey, picked for symmetry with `white` — and that symmetry is the whole of why every pair
+ * from within the sixteen was illegible: a chip inked from the middle of the ramp has nothing
+ * under it to be read against. It is Mocha's `crust` now, the darkest colour Catppuccin has,
+ * borrowed from the other side of the family exactly as the dark palette's surface is this
+ * one's paper after the filter. Latte has no near-black of its own; its darkest is `text`
+ * `#4c4f69`, which is already `brightWhite` here.
+ *
+ * The cost that remains is that `white` and `brightBlack` are two similar greys, so a program
+ * that distinguishes those two will not be distinguished here. That is inherent to printing
+ * sixteen colours on paper and is written down in `docs/terminal.md` rather than hidden.
+ *
+ * "Bright" is otherwise more ink rather than more light: a bright colour is the darker, more
  * saturated member of its pair, so emphasis still reads as emphasis.
  */
 const LIGHT: TerminalPalette = {
@@ -170,7 +215,8 @@ const LIGHT: TerminalPalette = {
   chip: '#f1ead9',
   selection: '#dfd7c4',
   ansi: {
-    black: '#5c5f77',
+    // Mocha's `crust`. The ink a chip is drawn with, and therefore the far end of the ramp.
+    black: '#11111b',
     red: '#d20f39',
     green: '#3f8f24',
     yellow: '#a6791a',
@@ -209,7 +255,25 @@ const LIGHT: TerminalPalette = {
  * lights — `brightBlack` the dimmer of them, since that is the one every tool uses for
  * comments — and `brightWhite` is the brightest, which is what a program means when it asks
  * for it. Mocha's own `black` `#45475a` is 1.8:1 here and its `surface2` 2.5:1, so neither
- * survives the floor; `overlay1` and `overlay0` are what clear it.
+ * survives the floor.
+ *
+ * **`black` sits as close to that floor as ink can**, and #159 is why the number matters. It
+ * was `overlay1` `#7f849c`, comfortably clear at 4.7:1, and every chip drawn on this card paid
+ * for the comfort: the higher `black` is, the fewer slots are far enough above it to be a page
+ * under it. `#666a81` is between Mocha's `surface2` and `overlay0` and clears the floor at
+ * 3.3:1, which is what puts the light half of the palette in reach as pages. It cannot go
+ * lower — the ink floor is the other check — and that ceiling is what makes `red`, `blue` and
+ * their bright members out of reach for good. See the contract at the top of this file.
+ *
+ * **"Bright" means further from the surface here, which on a dark card means lighter**, and the
+ * six chromatic pairs were the wrong way round: `brightCyan` was `#6bd7ca` against a `cyan` of
+ * `#94e2d5`, the light palette's rule — bright is the darker, more saturated member — applied
+ * to a surface it is backwards on. Emphasis was reading as *less* emphasis, and the dimmer
+ * member of each pair was the one a program picks for a chip's page, which is how the worst
+ * pair on this card came to be `bgCyanBright`. The six pairs are swapped rather than
+ * re-invented: not one hex changed, they are simply the way round the ramp already claimed to
+ * be, and `white`/`brightWhite` always were. `brightBlack` stays the exception it was — the
+ * comment grey is dimmer than `black` by trade, everywhere.
  */
 const DARK: TerminalPalette = {
   paper: '#1d1912',
@@ -228,21 +292,23 @@ const DARK: TerminalPalette = {
   chip: '#313244',
   selection: '#45475a',
   ansi: {
-    black: '#7f849c',
-    red: '#f38ba8',
-    green: '#a6e3a1',
-    yellow: '#f9e2af',
-    blue: '#89b4fa',
-    magenta: '#f5c2e7',
-    cyan: '#94e2d5',
+    // As near the ink floor as a slot can be, so that as much of the palette as possible is
+    // far enough above it to be a page. See the note above.
+    black: '#666a81',
+    red: '#f37799',
+    green: '#89d88b',
+    yellow: '#ebd391',
+    blue: '#74a8fc',
+    magenta: '#f2aede',
+    cyan: '#6bd7ca',
     white: '#a6adc8',
     brightBlack: '#6c7086',
-    brightRed: '#f37799',
-    brightGreen: '#89d88b',
-    brightYellow: '#ebd391',
-    brightBlue: '#74a8fc',
-    brightMagenta: '#f2aede',
-    brightCyan: '#6bd7ca',
+    brightRed: '#f38ba8',
+    brightGreen: '#a6e3a1',
+    brightYellow: '#f9e2af',
+    brightBlue: '#89b4fa',
+    brightMagenta: '#f5c2e7',
+    brightCyan: '#94e2d5',
     brightWhite: '#cdd6f4',
   },
 };
