@@ -329,6 +329,14 @@ const PROBE = `(() => {
         close: middle(tab.querySelector('.terminal-card__tab-close')),
         pointerEvents: getComputedStyle(tab).pointerEvents,
       })),
+      // Low in the header and in from the left: the middle of the row is where the font
+      // buttons and the mode chip are, and those do take the pointer.
+      header: (() => {
+        const header = card.querySelector('.terminal-card__header');
+        if (!header) return null;
+        const headerBox = header.getBoundingClientRect();
+        return { x: headerBox.left + 6, y: headerBox.top + headerBox.height - 2 };
+      })(),
       add: middle(card.querySelector('.terminal-card__add')),
       detach: middle(card.querySelector('.terminal-card__detach')),
       merge: middle(card.querySelector('.terminal-card__merge')),
@@ -537,13 +545,12 @@ try {
   const before = { w: scene.blocks[0].w, h: scene.blocks[0].h };
   const gridBefore = (await sessions())[0];
 
-  // A click at the block's centre has to select the *shape*: the overlay is on top of it,
-  // and if the strip had taken the pointer there would be no selection and no handles.
-  const centre = toViewport(scene, scene.blocks[0].x + scene.blocks[0].w / 2,
-                            scene.blocks[0].y + scene.blocks[0].h / 2);
-  await click(centre.x, centre.y);
+  // A click on the header has to select the *shape*. Since #112 the screen below it takes
+  // the pointer for the shell, so the header is the whole of what still reaches the block —
+  // and if the tab row had taken the pointer too there would be no selection and no handles.
+  await click(scene.cards[0].header.x, scene.cards[0].header.y);
   scene = await evaluate(PROBE);
-  check('clicking the block selects it through the overlay',
+  check('clicking the header selects the block through the overlay',
         scene.selected.includes(scene.blocks[0].id), JSON.stringify(scene.selected));
 
   const corner = toViewport(scene, scene.blocks[0].x + scene.blocks[0].w, scene.blocks[0].y + scene.blocks[0].h);

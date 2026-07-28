@@ -201,8 +201,8 @@ that and split panes inside one block. A detached tab becomes an ordinary shape,
 resizing it and putting it where you want it are all things the canvas already does; a splitter
 inside a block would have been a drag handle competing with the shape's own. The same reasoning
 picks the buttons over dragging a tab from one strip to another: dragging would mean the strip
-taking drag events across the width of the block, which is more pointer than this overlay may
-take (below). "Nearest" is not a guess either — the choosing *is* the drag. Put the block beside
+taking drag events across the width of the block, and the top of the card is the whole of what
+still grabs the shape (below). "Nearest" is not a guess either — the choosing *is* the drag. Put the block beside
 the one you mean and press `⇥`.
 
 **Closing the last tab takes the block with it**, and `Alt+T` opens a fresh session when there
@@ -465,29 +465,49 @@ The font family and the line height live in `terminal-block.ts` for the same rea
 measurement does: the emulator is opened with both of them, so a grid derived from one font and
 drawn in another would be two fonts agreeing on a number.
 
-**Resizing is Excalidraw's own.** The block is a real scene element, so dragging its corner
-resizes it, dragging its middle moves it, and selecting it opens the usual style panel. That
-works only because the overlay's body is `pointer-events: none` — an overlay that swallowed
-clicks would take the shape's handles away with it. The reader's new size reaches the server as
-`cols` × `rows`, derived from the block's **scene** size so that a pinch is not a resize, and
-debounced so a drag is one request rather than one per frame.
+**Resizing is Excalidraw's own.** The block is a real scene element, so dragging a corner
+resizes it and selecting it opens the usual style panel. The reader's new size reaches the
+server as `cols` × `rows`, derived from the block's **scene** size so that a pinch is not a
+resize, and debounced so a drag is one request rather than one per frame.
 
-That is the collision an emulator brings, and this is how it is resolved: **the pointer stays
-with the canvas, and it is handed back only where the overlay says what it is for.** xterm would
-like the pointer, for selection and for scrolling, and taking it would cost the block its
-handles. So three small places take a click and nothing else does: the two font buttons on the
-header, the tab chips, and the strip along the bottom — whose click focuses the terminal. From
-then on every keystroke goes to the shell — Ctrl+C, arrows, Escape included — and none of them
-reach Excalidraw, which binds every bare letter to a tool. Clicking anywhere on the canvas blurs
-it and gives the keyboard back. The strip says which of the two states it is in.
+That is the collision an emulator brings, and #112 is where it was resolved the other way
+round from how it started. **The screen takes the pointer; the header is what still reaches
+the shape.** For three revisions the whole overlay was transparent and one strip along the
+bottom was carved back out of it, saying `click here to type`, on the reasoning that an
+overlay taking clicks would take the block's resize handles with it. That reasoning was
+measured and found wrong: Excalidraw's handles sit two to ten screen pixels *outside* an
+element's bounds and the overlay covers exactly the bounds, so the screen can take every
+click it likes and the block keeps every handle.
 
-The tab strip is the newest of the three, and what takes the pointer is **the chips rather than
-the row they sit in**. The row spans the card, the card is the block, and a full-width strip that
-took the pointer would sit over the block's own top edge and swallow the resize handles along it.
-The chips are inset from the card's edges for the same reason — Excalidraw's handles reach a few
-pixels either side of the outline, which is also why the font buttons are as small as a target
-can be and still be one. `scripts/check-terminal-tabs-browser.mjs` drags a corner after
-everything else it does, which is what those two paragraphs are worth without a browser.
+What a pointer-taking screen really costs is selecting and dragging the block from its
+middle, and the header buys that back. Click the header to select the block, drag it to move
+the block; the handles that appear then are the shape's own, so the header is load bearing
+for resizing too — a handle only exists while something is selected. It has a **minimum
+height in screen pixels** for that reason: everything on this overlay is sized in `em` and
+follows the zoom, which left the only draggable band about five pixels tall on a zoomed-out
+board. The minimum is a no-op above about 70% zoom, and it does not change what any shell is
+told, because the grid comes from the block's scene size rather than from the frame on screen.
+
+Below the header the pointer is the shell's. A click focuses the emulator; a drag selects
+text; **Ctrl+C copies while something is selected and interrupts the rest of the time**, the
+way this machine's own terminal settles it, dropping the selection so the next press is an
+interrupt again; Ctrl+V pastes, because the browser's own paste event is left alone rather
+than being sent to the shell as the `\x16` Ctrl+V means on a terminal; the wheel scrolls the
+scrollback; and Alt+click moves the shell's cursor along the line it is editing. A wheel the
+scrollback cannot use — the screen is at the bottom, or there is none — is handed to the
+canvas instead of dropped, so panning and zooming still work over a block. Every keystroke
+otherwise goes to the shell, Ctrl+C and arrows and Escape included, and none reach Excalidraw,
+which binds every bare letter to a tool. Clicking the canvas blurs the terminal and gives the
+keyboard back. The strip along the bottom is now a status line and says which of the two
+states the block is in.
+
+The tab chips and the font buttons stay small for the reason that survived, inverted: the top
+of the card is the whole of what selects and drags the block, so what takes the pointer is
+**the chips rather than the row they sit in**, and the buttons are as small as a target can be
+and still be one. `scripts/check-terminal-focus-browser.mjs` is the check for all of this —
+it clicks the middle of the screen and types, drags the header and the body and compares what
+moved, turns the wheel both ways, and drags a corner afterwards to say the shape is still a
+shape.
 
 ## The hotkey
 
@@ -588,8 +608,15 @@ taken.
   fallback gives itself away; all sixteen ANSI colours, printed by a real shell and read back
   off the render, clear 3:1 against the paper they are drawn on; and at zoom 0.15, where the
   card's text is under five pixels, a band of its own colour still crosses the block.
+- `scripts/check-terminal-focus-browser.mjs` — who owns the pointer where, in Chrome. A click
+  in the middle of the screen focusing the shell and a command typed straight after it running;
+  a drag on the header moving the block and a drag on the screen selecting text and *not*
+  moving it; Ctrl+C copying that selection and, with nothing selected, still interrupting; the
+  wheel scrolling the scrollback and, when there is none left to scroll, reaching the canvas;
+  the header still a target at a zoom that shrinks everything else; and the corner still
+  resizing the block, with the new size reaching the server.
 
-All eleven were written first and seen to fail against the code as it stood.
+All twelve were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.
@@ -601,16 +628,17 @@ browser does.
 - **Nothing streams the agents into it.** That is the destination the observation behind #51
   named, and it is a second producer on this surface rather than part of building it: tap
   `issue-agent.ts` where the chunks arrive and broadcast them. It deserves its own issue.
-- **The transcript cannot be scrolled or selected with the mouse.** The body has to stay
-  transparent to the pointer for the block underneath to remain a block, so the wheel and a drag
-  both belong to the canvas. A taller block shows more; a full-screen program is unaffected,
-  because it repaints rather than scrolls.
+- **A program that turns mouse reporting on takes the pointer with it.** Once the screen has
+  the pointer, `vim` or `claude` asking for mouse tracking receives clicks and the wheel as
+  escape sequences, which is what those programs expect and also means the reader cannot
+  select text inside one. Nobody has asked for a way round it — a modifier that forces
+  selection is what other terminals do — so it is here rather than in the design above.
 - **Alt+T fits the block to the viewport, which puts its top edge under Excalidraw's toolbar.**
   The path in the header reads through it awkwardly. Alt+B has the same shape of problem.
 - **A tab is moved between blocks by a button, not by dragging it.** `⧉` detaches the tab on
   top and `⇥` merges into the nearest block, so the geometry is a block drag rather than a tab
-  drag. Dragging a chip onto another block's strip would read better and would cost this
-  overlay more pointer than it may take; if it is ever worth it, it is worth its own issue.
+  drag. Dragging a chip onto another block's strip would read better and would cost the band
+  that still grabs the shape; if it is ever worth it, it is worth its own issue.
 - **The tab layout does not survive a reload.** The blocks are derived, so which session was in
   which block is not saved, and a reload puts every live session back into one block.
 - **A tab that has ended keeps its transcript but cannot be restarted in place.** `×` then `+`
