@@ -4445,7 +4445,21 @@ function App(): JSX.Element {
           }}
           // Relative so the card's absolute position is measured from the canvas area,
           // which is the box its placement was computed against.
-          style={{ width: '100%', height: '100%', position: 'relative' }}
+          //
+          // And clipped to it, which is #153. A terminal card is drawn at its block's bounds
+          // in viewport coordinates with no clamp, so a block panned above the top of the
+          // canvas gets a negative `top` — and with nothing clipping this box, the card was
+          // painted across the project tabs and the header row, taking their clicks with it.
+          // The documentation card never showed it because its placement is clamped into the
+          // viewport before it is drawn; this one is pinned to its shape on purpose, so
+          // clipping is the answer rather than moving it back on screen. The card should
+          // stop where the board stops, the way the rectangle underneath it already does.
+          //
+          // Safe for Excalidraw: everything it draws — its islands, its popups, its
+          // `.excalidraw-modal-container` — is inside `.excalidraw`, which is itself
+          // `overflow: hidden` and fills this box exactly. Nothing of its own was reaching
+          // past this edge to begin with, so this clips only what we put here.
+          style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}
         >
           <Excalidraw
             excalidrawAPI={(api: ExcalidrawAPIRefValue) => setExcalidrawAPI(api)}
