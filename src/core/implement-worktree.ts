@@ -126,6 +126,31 @@ async function isCheckedOut(workspace: Workspace, directory: AgentDirectory): Pr
 }
 
 /**
+ * Which checkout has this branch out, or null when none has.
+ *
+ * `show-ref` answers whether a branch *exists* and never where it is checked out, so the one
+ * state that makes `git worktree add` impossible was the one state nothing looked at. The
+ * porcelain listing carries both: a `worktree <path>` line, then a `branch refs/heads/<name>`
+ * line for the branch that path holds.
+ *
+ * The project's own directory is in that listing too, and is listed exactly like a worktree —
+ * which is why git's refusal calls it one, and why a reader looking at their own project
+ * directory being described as a worktree cannot act on it.
+ */
+async function checkoutHolding(workspace: Workspace, branch: string): Promise<string | null> {
+  const listed = await git(workspace, workspaceDirectory(workspace), ['worktree', 'list', '--porcelain']);
+  if (!listed.ok) return null;
+
+  let current: string | null = null;
+  for (const line of listed.stdout.split('\n')) {
+    const text = line.trim();
+    if (text.startsWith('worktree ')) current = text.slice('worktree '.length).trim();
+    else if (text === `branch refs/heads/${branch}`) return current;
+  }
+  return null;
+}
+
+/**
  * The branch a new worktree is cut from.
  *
  * `origin/HEAD` first, because that is the default branch as the remote declares it. A
@@ -326,6 +351,34 @@ export async function ensureWorktree(
     const current = await git(workspace, target, ['rev-parse', '--abbrev-ref', 'HEAD']);
     logger.info(`Reusing worktree ${target.path} for ${issueUrl}`);
     return { ...target, branch: current.ok ? current.stdout : branch };
+  }
+
+  // Before the attempt, because git's own refusal is unreadable here. It reports the project
+  // directory as "worktree at <path>" — true of the porcelain listing, and unactionable for a
+  // reader looking at the directory their project lives in. What they need is which checkout
+  // holds the branch and how to free it, and only this process knows which of those two the
+  // holder is.
+  //
+  // After the reuse check above, deliberately: the checkout holding this issue's branch is
+  // usually this issue's own worktree, and reusing it is what makes a retry after an
+  // interrupted run land in the work the previous attempt left.
+  const holder = await checkoutHolding(workspace, branch);
+  if (holder) {
+    const project = argPath(workspace, at);
+    if (samePath(holder, project)) {
+      const base = (await baseRef(workspace)).replace(/^origin\//, '');
+      throw new Error(
+        `Could not create a worktree at ${target.path}: branch ${branch} is checked out in the `
+        + `project itself, at ${holder}, and git cannot check one branch out in two places. `
+        + `Free it there — git -C "${holder}" switch ${base} — and start the run again. `
+        + `Nothing is lost: the branch and its commits stay where they are.`
+      );
+    }
+    throw new Error(
+      `Could not create a worktree at ${target.path}: branch ${branch} is checked out in another `
+      + `worktree, at ${holder}. If that is this issue's run, the work is already set up there; `
+      + `if it is stale, git worktree remove "${holder}" releases the branch.`
+    );
   }
 
   const added = await serialiseWorktreeAdd(workspace.path, () => addWorktree(workspace, at, target, branch));
