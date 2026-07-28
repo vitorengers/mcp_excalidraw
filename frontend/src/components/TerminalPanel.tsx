@@ -63,6 +63,15 @@ export interface TerminalPanelProps {
   onMerge: () => void
   /** Keystrokes, as bytes: `\r` for Enter, `\x03` for Ctrl+C, `ESC [ A` for an arrow. */
   onInput: (sessionId: string, data: string) => void
+  /**
+   * The four keys the board navigates by, answered on the press by whoever owns the scene.
+   *
+   * This block sees a keystroke before anything on `window` does — xterm reads the keyboard
+   * through its own hidden textarea inside this card — so the board cannot take these back
+   * after the fact. It has to be asked here, before the emulator writes the meta escape and
+   * before the card stops the event propagating. See `board-hotkeys.ts` for all three layers.
+   */
+  isBoardHotkey: (event: KeyboardEvent) => boolean
   /** The reader's text size, before the board's zoom multiplies it. */
   fontSize: number
   /** A new one, from the buttons on the header. Clamped by whoever holds the state. */
@@ -75,6 +84,56 @@ export interface TerminalPanelProps {
    * dark board over a block the filter has already darkened. See `terminal-palette.ts`.
    */
   theme: TerminalTheme
+}
+
+/**
+ * The board's own canvas, told a wheel it was never on the path of.
+ *
+ * Re-dispatched rather than left to bubble: this overlay is a *sibling* of the canvas, not
+ * a child, so Excalidraw's listener is nowhere on this event's path. And it goes to the
+ * **canvas** rather than to the container that listens, because that listener drops any
+ * wheel whose target is not a canvas, a textarea or an iframe — a board that scrolled while
+ * the pointer was over a menu is the bug it is guarding against.
+ */
+function dispatchWheelToCanvas(event: React.WheelEvent, deltaX: number, deltaY: number): void {
+  const canvas = document.querySelector('.excalidraw__canvas.interactive')
+    ?? document.querySelector('.excalidraw__canvas')
+  if (!canvas) return
+  canvas.dispatchEvent(new WheelEvent('wheel', {
+    deltaX,
+    deltaY,
+    deltaMode: event.deltaMode,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
+    altKey: event.altKey,
+    bubbles: true,
+    cancelable: true
+  }))
+}
+
+/**
+ * The sideways half of a wheel, which is the board's whatever the emulator is doing.
+ *
+ * Nothing under this overlay has a use for it. xterm has no horizontal scrolling —
+ * `_getPixelsScrolled` reads `deltaY` and never `deltaX` — and it emits no escape sequence
+ * for one either: a mouse report takes its button from the sign of `deltaY`, so a wheel
+ * that only went sideways is cancelled and reported as nothing at all. So this axis is
+ * answered without asking either of the questions below.
+ *
+ * **In the capture phase, and that is the whole reason it is a second handler.** A program
+ * holding the pointer has xterm cancelling the wheel with `stopPropagation` as well as
+ * `preventDefault`, and React listens at the root: an event stopped at the `.xterm` element
+ * never reaches the bubbling handler at all, so a guard there is a guard that never runs.
+ * The capture pass goes root-first and has already happened by then.
+ */
+function forwardHorizontalWheelToCanvas(event: React.WheelEvent): void {
+  // The three the board reads as one gesture rather than as a pan; see below.
+  if (event.ctrlKey || event.metaKey || event.shiftKey) return
+  if (event.deltaX === 0) return
+  dispatchWheelToCanvas(event, event.deltaX, 0)
 }
 
 /**
@@ -91,31 +150,28 @@ export interface TerminalPanelProps {
  * mouse reporting on is being sent the wheel as an escape sequence, which xterm marks with a
  * class on its own root rather than with the event.
  *
- * What is left has to be re-dispatched rather than left to bubble: this overlay is a
- * *sibling* of the canvas, not a child, so Excalidraw's listener is nowhere on this event's
- * path. And it goes to the **canvas** rather than to the container that listens, because
- * that listener drops any wheel whose target is not a canvas, a textarea or an iframe — a
- * board that scrolled while the pointer was over a menu is the bug it is guarding against.
+ * What is left is handed to `dispatchWheelToCanvas` above rather than left to bubble.
+ *
+ * **Both of those ways of saying it are answers about the event, and a touchpad pan is two
+ * axes at once.** That is #162: the reader pans diagonally over a block, the scrollback has
+ * room, xterm scrolls four pixels of it and calls `preventDefault` — and the hundred and
+ * twenty pixels of sideways pan in the same event go with it. So the question is put per
+ * axis, by `forwardHorizontalWheelToCanvas` above and by this one below it. What is left
+ * here is the vertical half, asked exactly what the whole event used to be asked, and it
+ * carries no `deltaX` because the other half has already been answered.
+ *
+ * Ctrl, Meta and Shift are left whole, and this is where whole still means whole. Those
+ * three are not a pan: the first two are the zoom gesture and Shift is Excalidraw's own
+ * sideways wheel, and all three read the axes together — `deltaY || deltaX` for Shift, the
+ * sign of `deltaY` for the zoom — so splitting one would be two gestures where the reader
+ * made one.
  */
 function forwardWheelToCanvas(event: React.WheelEvent): void {
   if (event.nativeEvent.defaultPrevented) return
   if ((event.target as Element | null)?.closest?.('.xterm.enable-mouse-events')) return
-  const canvas = document.querySelector('.excalidraw__canvas.interactive')
-    ?? document.querySelector('.excalidraw__canvas')
-  if (!canvas) return
-  canvas.dispatchEvent(new WheelEvent('wheel', {
-    deltaX: event.deltaX,
-    deltaY: event.deltaY,
-    deltaMode: event.deltaMode,
-    clientX: event.clientX,
-    clientY: event.clientY,
-    ctrlKey: event.ctrlKey,
-    metaKey: event.metaKey,
-    shiftKey: event.shiftKey,
-    altKey: event.altKey,
-    bubbles: true,
-    cancelable: true
-  }))
+  const whole = event.ctrlKey || event.metaKey || event.shiftKey
+  if (!whole && event.deltaY === 0) return
+  dispatchWheelToCanvas(event, whole ? event.deltaX : 0, event.deltaY)
 }
 
 /**
@@ -141,15 +197,20 @@ const TerminalScreen: React.FC<{
   theme: TerminalTheme
   onData: (data: string) => void
   registerFocus: (focus: (() => void) | null) => void
-}> = ({ active, fontSize, cols, rows, output, ended, theme, onData, registerFocus }) => {
+  isBoardHotkey: (event: KeyboardEvent) => boolean
+}> = ({ active, fontSize, cols, rows, output, ended, theme, onData, registerFocus, isBoardHotkey }) => {
   const hostRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   /** How much of `output` has been handed to the emulator, so a redraw is a delta. */
   const writtenRef = useRef<string>('')
   const onDataRef = useRef(onData)
   const registerFocusRef = useRef(registerFocus)
+  // Through a ref for the reason the other two are: the emulator is built once, in an effect
+  // that must not depend on a prop React hands over fresh on every render.
+  const isBoardHotkeyRef = useRef(isBoardHotkey)
   onDataRef.current = onData
   registerFocusRef.current = registerFocus
+  isBoardHotkeyRef.current = isBoardHotkey
 
   useEffect(() => {
     const host = hostRef.current
@@ -172,11 +233,21 @@ const TerminalScreen: React.FC<{
     terminal.open(host)
     terminal.onData((data) => onDataRef.current(data))
 
-    // The two keystrokes a browser and a shell both claim, settled the way this machine's own
-    // terminal settles them. Everything else is the shell's, which is the whole point of the
-    // block taking the keyboard.
+    // The keystrokes a browser, a board and a shell all claim, settled the way this machine's
+    // own terminal settles them. Everything else is the shell's, which is the whole point of
+    // the block taking the keyboard.
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true
+
+      // The board's four keys are the board's, even in here. #177: the reader asked to be
+      // able to navigate the canvas without clicking out of the terminal first, and the
+      // comment on it was "it should not send it to the terminal" — so this is not only a
+      // matter of letting the key through. Returning false is what does both: xterm stops
+      // before it writes the meta escape, and it stops *without* calling `preventDefault`,
+      // so the event goes on bubbling to the listeners on `window`. Four Readline word
+      // motions are what the shell gives up for it, named in `docs/terminal.md`.
+      if (isBoardHotkeyRef.current(event)) return false
+
       // AltGr arrives as Ctrl+Alt on several layouts, and it is somebody typing a `@`.
       if (event.altKey || !(event.ctrlKey || event.metaKey)) return true
       const key = event.key.toLowerCase()
@@ -358,7 +429,7 @@ const TerminalScreen: React.FC<{
  */
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   rect, zoom, suppressed, tabs, activeId, canAdd, canMerge,
-  onSelect, onAdd, onClose, onDetach, onMerge, onInput,
+  onSelect, onAdd, onClose, onDetach, onMerge, onInput, isBoardHotkey,
   fontSize: readerFontSize, onFontSize, theme
 }) => {
   /** Focus handles, one per live screen, so a click anywhere can reach the active one. */
@@ -434,8 +505,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       // Every key the emulator has taken stops here. Excalidraw binds bare letters to tools
       // and listens below this container, so a keystroke that got past would change the
       // active tool instead of reaching the shell.
-      onKeyDown={(event) => event.stopPropagation()}
-      onKeyUp={(event) => event.stopPropagation()}
+      //
+      // Except the four the board navigates by. React's `stopPropagation` calls the native
+      // one, and React listens at its own root — *below* `window` — so a chord stopped here
+      // never reaches the four listeners at all. That is the layer #177 did not name, and the
+      // reason letting the key past xterm alone changed nothing a reader could see. What goes
+      // on past this point is an `Alt` chord, which is not one of the bare letters Excalidraw
+      // binds, and the handler that catches it calls `preventDefault` itself.
+      onKeyDown={(event) => { if (!isBoardHotkey(event.nativeEvent)) event.stopPropagation() }}
+      onKeyUp={(event) => { if (!isBoardHotkey(event.nativeEvent)) event.stopPropagation() }}
     >
       <div className="terminal-card__header">
         <span className="terminal-card__where" title={status?.cwd ?? ''}>{status?.cwd ?? ''}</span>
@@ -443,8 +521,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
         {/* The reader's own size, and one of the three things on this overlay that take a
             click.
-            Buttons rather than a shortcut because while the terminal has the keyboard every
-            keystroke belongs to the shell — Ctrl+- would reach the shell, not the block.
+            Buttons rather than a shortcut because while the terminal has the keyboard a
+            keystroke belongs to the shell unless something claimed it by name — Ctrl+- would
+            reach the shell, not the block. #177 claimed the four board keys and no more.
             They are as small as a target can be and still be one: every pixel that takes
             the pointer is a pixel that no longer selects or drags the shape underneath.
             The grid beside them is the confirmation, since it is what the shell was told. */}
@@ -554,6 +633,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           event.stopPropagation()
           if (active) focusRef.current.get(active.id)?.()
         }}
+        onWheelCapture={forwardHorizontalWheelToCanvas}
         onWheel={forwardWheelToCanvas}
       >
         {/* `onData` is dropped rather than posted for a read-only session: the route refuses
@@ -570,6 +650,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             ended={tab.ended}
             theme={theme}
             onData={(data) => { if (!tab.status?.readOnly) onInput(tab.id, data) }}
+            // Asked whatever the tab's stdin is. A read-only session drops keystrokes, but
+            // the four board keys were never the session's to drop — they navigate the
+            // canvas, and a reader watching a headless run has the same board to get back to.
+            isBoardHotkey={isBoardHotkey}
             registerFocus={(focus) => {
               if (focus) focusRef.current.set(tab.id, focus)
               else focusRef.current.delete(tab.id)

@@ -18,6 +18,7 @@ import { resolvePanelTarget } from '../../src/core/panel-target'
 import type { PanelElement } from '../../src/core/panel-target'
 import { describeIgnoredClaims, resolveBoardSectionHotkeys } from '../../src/core/board-sections'
 import type { BoardSectionElement } from '../../src/core/board-sections'
+import { isBoardHotkeyChord, textEntryOwnsKeyboard } from './board-hotkeys'
 import { referenceImageName } from '../../src/core/pasted-images'
 import { layoutLabel } from '../../src/core/text-layout'
 import {
@@ -857,6 +858,43 @@ const HEARTBEAT_INTERVAL_MS = 10000
 
 /** Ceiling on holding autosync off during a board switch, if the new scene never lands. */
 const BOARD_SWITCH_HOLD_MS = 8000
+
+/**
+ * How many boards stay live behind the one on screen.
+ *
+ * The question #173 left open was which boards those are, and the answer here is: the ones
+ * this reader has actually opened, up to this many. Every *registered* board would be a
+ * socket per project whether or not anybody had ever looked at it, and on a machine with a
+ * dozen projects registered that is a dozen connections paid for by nobody. Visiting a board
+ * is the reader saying they are working on it.
+ *
+ * Four is a bound rather than a measurement: what a warm board costs is a socket and a second
+ * copy of its scene, and the reader switching between two or three projects — which is the
+ * observation this comes from — is well inside it. The board waited on longest goes cold past
+ * the cap, which costs it nothing except the reconnect it used to pay on every single switch.
+ */
+const WARM_BOARD_LIMIT = 4
+
+/**
+ * A board kept live while another one is on screen.
+ *
+ * `elements` is the board's **scene**, not its store, and the difference is the point: the
+ * mirror's cards and the terminal's blocks are derived and are in no store at all, so a copy
+ * of the store would come back missing exactly the things that take a `gh` call and a shell
+ * to put back. `tombstones` rides along for the reason `renderMirror` keeps it — a deletion
+ * travels as an element marked deleted, and a redraw that dropped one would undo it.
+ */
+interface WarmBoard {
+  socket: WebSocket
+  elements: Partial<ExcalidrawElement>[]
+  tombstones: Partial<ExcalidrawElement>[]
+  /** Files that arrived while the board was in the background, added back when it returns. */
+  files: unknown[]
+  heartbeat: ReturnType<typeof setInterval> | null
+  awaitingPong: boolean
+  /** Visit order, so the cap drops the board the reader has been away from longest. */
+  visitedAt: number
+}
 
 /** Where this browser remembers whether Excalidraw's own menus are hidden. */
 const CHROME_STORAGE_KEY = 'excalidraw-canvas-chrome'
@@ -3046,6 +3084,33 @@ function App(): JSX.Element {
   }
 
   /**
+   * Has the board claimed this chord? Asked by the terminal overlay, which sees the key first.
+   *
+   * It has to be asked *there* rather than answered here, and that is the shape of #177 rather
+   * than a preference: xterm listens on its own helper textarea and the four board listeners
+   * are on `window`, so by the time one of them could say "this one is mine" the emulator has
+   * already written the meta escape to the shell and the card has already stopped the event
+   * propagating. The overlay needs the answer before it decides, so the question comes to the
+   * board instead of the answer going out to the block.
+   *
+   * Resolved on the press, for the reason the section listener resolves there: a section is a
+   * shape like any other, so it can be drawn, retitled or deleted while the page is open.
+   *
+   * The two constants are the board's whether or not there is anything to jump to — `Alt+B` on
+   * a board with no mirror does nothing, and it does nothing *rather than* reaching the shell.
+   * A key whose owner depended on what happened to be drawn would be a key the reader could
+   * not learn.
+   */
+  const isBoardHotkey = (event: KeyboardEvent): boolean => {
+    if (!isBoardHotkeyChord(event)) return false
+    if (event.code === MIRROR_HOTKEY_CODE || event.code === TERMINAL_HOTKEY_CODE) return true
+    const api = excalidrawAPIRef.current
+    if (!api) return false
+    const elements = api.getSceneElements() as unknown as BoardSectionElement[]
+    return resolveBoardSectionHotkeys(elements).bindings.some((binding) => binding.code === event.code)
+  }
+
+  /**
    * Follow the blocks: where each is on screen, and what size it now stands for.
    *
    * The rects are in viewport coordinates, the same arithmetic the documentation card uses,
@@ -3340,14 +3405,12 @@ function App(): JSX.Element {
   // canvas, and the point of this one is to work from anywhere on the page.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.code !== TERMINAL_HOTKEY_CODE || !event.altKey || event.ctrlKey || event.metaKey) return
+      if (event.code !== TERMINAL_HOTKEY_CODE || !isBoardHotkeyChord(event)) return
 
-      // A text field owns the keyboard — including this feature's own prompt, where Alt+T
-      // has to be a keystroke rather than a jump.
-      const active = document.activeElement as HTMLElement | null
-      if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) {
-        return
-      }
+      // A text field owns the keyboard. The terminal is no longer one of them — since #177
+      // this key is the board's even while the shell has the keyboard, and the shell is not
+      // sent it either. `board-hotkeys.ts` is the whole rule.
+      if (textEntryOwnsKeyboard(document.activeElement)) return
 
       const api = excalidrawAPIRef.current
       if (!api) return
@@ -3409,15 +3472,14 @@ function App(): JSX.Element {
   // point of this one is to work from anywhere on the page.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.code !== MIRROR_HOTKEY_CODE || !event.altKey || event.ctrlKey || event.metaKey) return
+      if (event.code !== MIRROR_HOTKEY_CODE || !isBoardHotkeyChord(event)) return
 
       // A label being typed into owns the keyboard. Excalidraw edits text in a real
       // textarea, so what has focus is the honest test — and it is the one that keeps
-      // this from swallowing a keystroke meant for a card's title.
-      const active = document.activeElement as HTMLElement | null
-      if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) {
-        return
-      }
+      // this from swallowing a keystroke meant for a card's title. One rule, in
+      // `board-hotkeys.ts`, because a focused xterm is a textarea too and #177 is what
+      // three copies of the tag test cost.
+      if (textEntryOwnsKeyboard(document.activeElement)) return
 
       const api = excalidrawAPIRef.current
       if (!api) return
@@ -3450,12 +3512,9 @@ function App(): JSX.Element {
   // over the scene per Alt+key costs nothing next to being wrong about what is on it.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!event.altKey || event.ctrlKey || event.metaKey) return
+      if (!isBoardHotkeyChord(event)) return
 
-      const active = document.activeElement as HTMLElement | null
-      if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) {
-        return
-      }
+      if (textEntryOwnsKeyboard(document.activeElement)) return
 
       const api = excalidrawAPIRef.current
       if (!api) return
@@ -3597,6 +3656,9 @@ function App(): JSX.Element {
         websocketRef.current.close(1000)
         websocketRef.current = null
       }
+      // The boards behind this one go with it. A warm board is a socket this page is holding
+      // on somebody's behalf, and there is nobody left.
+      for (const workspaceId of [...warmBoardsRef.current.keys()]) dropWarmBoard(workspaceId)
     }
   }, [])
 
@@ -3609,6 +3671,257 @@ function App(): JSX.Element {
     void loadExistingElements()
   }, [excalidrawAPI, boardReady, activeWorkspace, isConnected])
 
+  // ─── Boards kept warm ───────────────────────────────────────
+  //
+  // A socket belongs to one board for its lifetime, so leaving a board used to close it. The
+  // board behind then had no connection, no updates and nothing on screen, and coming back
+  // meant a new socket, a wait for `initial_elements`, and a canvas saying *Connecting* while
+  // it happened. Nothing was ever *lost* — a shell outlives the socket watching it and
+  // replays its scrollback on connect — but the redraw is what the reader is complaining
+  // about in #173, and this is what turns coming back into one.
+  //
+  // A board switched away from keeps its socket and keeps applying what arrives to a copy of
+  // its scene. Coming back paints that copy and adopts the socket, in the same turn as the
+  // click. **A background board does not autosync and does not poll**: it has no scene on
+  // screen to push, and nobody is reading its mirror. The board in front stays the only one
+  // writing anything, which was the second question #173 left open.
+
+  const warmBoardsRef = useRef<Map<string, WarmBoard>>(new Map())
+  /** Bumped per visit, so the cap can tell which board has been waited on longest. */
+  const warmVisitRef = useRef<number>(0)
+
+  /** Let a board go cold: no socket, no copy, and a switch to it pays the old price. */
+  const dropWarmBoard = (workspaceId: string): void => {
+    const warm = warmBoardsRef.current.get(workspaceId)
+    if (!warm) return
+    warmBoardsRef.current.delete(workspaceId)
+    if (warm.heartbeat) clearInterval(warm.heartbeat)
+    warm.socket.onmessage = null
+    warm.socket.onclose = null
+    warm.socket.onerror = null
+    try {
+      warm.socket.close(1000)
+    } catch (error) {
+      console.warn('Could not close a background board:', error)
+    }
+  }
+
+  /**
+   * Keep a background board's copy of its scene up to date.
+   *
+   * The same merge the foreground does, against an array instead of against the canvas, and
+   * deliberately only the messages that are about shapes. The terminal's are left alone
+   * because there is one panel and it belongs to the board in front — a background board's
+   * transcripts are read back over `GET /api/terminal` when it returns, the way they already
+   * are on every switch. An export or a viewport request is left alone because a board nobody
+   * is looking at cannot render one, which is what the server is told below.
+   */
+  const applyToWarmBoard = (warm: WarmBoard, data: WebSocketMessage): void => {
+    const mergeIn = (incoming: Partial<ExcalidrawElement>[]): void => {
+      if (incoming.length === 0) return
+      const byId = new Map<string, Partial<ExcalidrawElement>>()
+      incoming.forEach((element) => { if (element.id) byId.set(element.id, element) })
+      const merged: Partial<ExcalidrawElement>[] = warm.elements.map((element) => {
+        const found = element.id ? byId.get(element.id) : undefined
+        if (!found) return element
+        byId.delete(element.id as string)
+        return { ...element, ...found }
+      })
+      merged.push(...byId.values())
+      warm.elements = merged
+    }
+
+    switch (data.type) {
+      case 'initial_elements':
+        // An empty payload is left alone for the reason the foreground leaves it alone: away
+        // from a switch it means a message that raced the store, not a board that was emptied.
+        if (Array.isArray(data.elements) && data.elements.length > 0) {
+          warm.elements = data.elements.map(cleanElementForExcalidraw)
+        }
+        if (data.files) warm.files.push(...Object.values(data.files as Record<string, unknown>))
+        break
+
+      case 'files_added':
+        if (Array.isArray(data.files)) warm.files.push(...data.files)
+        break
+
+      case 'element_created':
+      case 'element_updated':
+        if (data.element) mergeIn([cleanElementForExcalidraw(data.element)])
+        break
+
+      case 'elements_batch_created':
+        if (data.elements) mergeIn(data.elements.map(cleanElementForExcalidraw))
+        break
+
+      case 'element_deleted':
+        if (data.elementId) {
+          warm.elements = warm.elements.filter((element) => element.id !== data.elementId)
+        }
+        break
+
+      case 'canvas_cleared':
+        warm.elements = []
+        warm.tombstones = []
+        break
+
+      default:
+        break
+    }
+  }
+
+  /** The quieter listener a socket gets while its board is off screen. */
+  const watchInBackground = (workspaceId: string, warm: WarmBoard): void => {
+    warm.socket.onmessage = (event: MessageEvent) => {
+      try {
+        const data: WebSocketMessage = JSON.parse(event.data)
+        if ((data as { type?: string }).type === 'pong') {
+          warm.awaitingPong = false
+          return
+        }
+        applyToWarmBoard(warm, data)
+      } catch (error) {
+        console.error('Error parsing a background board message:', error, event.data)
+      }
+    }
+
+    // A background board that loses its socket goes cold rather than retrying. There is
+    // nobody behind it to be told, and a retry loop per board would be several reconnect
+    // schedules running at once for boards nobody is looking at. The switch to it then does
+    // what a switch has always done, which is the worst this can cost.
+    warm.socket.onclose = () => { dropWarmBoard(workspaceId) }
+    warm.socket.onerror = (error: Event) => {
+      // Not a decision: an error is always followed by a close, and that is where it is made.
+      console.warn(`Background board "${workspaceId}" reported an error:`, error)
+    }
+
+    // Its own heartbeat, because a half-open socket reads OPEN until TCP gives up — and here
+    // nothing else would ever notice. Unanswered, the board goes cold and is reconnected the
+    // ordinary way when the reader asks for it, rather than coming back showing an hour-old
+    // scene it stopped being told about.
+    warm.heartbeat = setInterval(() => {
+      if (warm.socket.readyState !== WebSocket.OPEN || warm.awaitingPong) {
+        dropWarmBoard(workspaceId)
+        return
+      }
+      warm.awaitingPong = true
+      try {
+        warm.socket.send(JSON.stringify({ type: 'ping' }))
+      } catch (error) {
+        console.warn(`Background board "${workspaceId}" could not be pinged:`, error)
+        dropWarmBoard(workspaceId)
+      }
+    }, HEARTBEAT_INTERVAL_MS)
+  }
+
+  /** Past the cap, the board the reader has been away from longest goes cold. */
+  const trimWarmBoards = (): void => {
+    if (warmBoardsRef.current.size <= WARM_BOARD_LIMIT) return
+    const surplus = warmBoardsRef.current.size - WARM_BOARD_LIMIT
+    ;[...warmBoardsRef.current.entries()]
+      .sort((one, other) => one[1].visitedAt - other[1].visitedAt)
+      .slice(0, surplus)
+      .forEach(([workspaceId]) => dropWarmBoard(workspaceId))
+  }
+
+  /**
+   * Leave a board running instead of closing it.
+   *
+   * Only a board whose own scene is the one on screen. During a second switch made before the
+   * first has landed the socket already names the board being entered while the canvas still
+   * draws the one before it, and a copy taken then would file one project's shapes under
+   * another — the same crossing #156 was about, one layer down. That board is closed as it
+   * always was: one switch paying the old price beats a warm board that is wrong.
+   */
+  const keepBoardWarm = (workspaceId: string): void => {
+    const socket = websocketRef.current
+    const api = excalidrawAPIRef.current
+    if (!socket || !api) return
+    if (socket.readyState !== WebSocket.OPEN) return
+    if (pendingSceneWorkspaceRef.current !== null) return
+    if (sceneWorkspaceRef.current !== workspaceId) return
+
+    const scene = api.getSceneElementsIncludingDeleted() as unknown as Partial<ExcalidrawElement>[]
+    websocketRef.current = null
+    const warm: WarmBoard = {
+      socket,
+      elements: scene.filter((element) => !element.isDeleted),
+      tombstones: scene.filter((element) => element.isDeleted),
+      files: [],
+      heartbeat: null,
+      awaitingPong: false,
+      visitedAt: warmVisitRef.current++
+    }
+
+    // The server counts sockets to answer "is any browser on this board", and both routes
+    // that ask a browser to *do* something — render an export, move its camera — refuse at
+    // once when the answer is none. A socket held open for a board nobody is looking at would
+    // turn that refusal into a thirty-second timeout, so it says which of the two it is: this
+    // one is still listening, it is no longer watching.
+    try {
+      socket.send(JSON.stringify({ type: 'watching', active: false }))
+    } catch (error) {
+      console.warn('Could not hand a board to the background:', error)
+    }
+
+    warmBoardsRef.current.set(workspaceId, warm)
+    watchInBackground(workspaceId, warm)
+    trimWarmBoards()
+  }
+
+  /**
+   * Put a board that stayed live back on screen.
+   *
+   * Everything a reconnect used to do, minus the reconnecting: the socket is adopted as this
+   * page's, the scene it kept is painted, and the switch finishes in the same turn as the
+   * click — so the pill never leaves *Connected* and nothing is pulled over HTTP. The loader
+   * is marked as having already run for this connection, or the effect that follows a switch
+   * would fetch the very board that is on the canvas.
+   */
+  const resumeWarmBoard = (workspaceId: string): boolean => {
+    const warm = warmBoardsRef.current.get(workspaceId)
+    if (!warm) return false
+    const api = excalidrawAPIRef.current
+    if (!api || warm.socket.readyState !== WebSocket.OPEN) {
+      dropWarmBoard(workspaceId)
+      return false
+    }
+
+    warmBoardsRef.current.delete(workspaceId)
+    if (warm.heartbeat) clearInterval(warm.heartbeat)
+
+    websocketRef.current = warm.socket
+    attachForegroundHandlers(warm.socket)
+    try {
+      warm.socket.send(JSON.stringify({ type: 'watching', active: true }))
+    } catch (error) {
+      console.warn('Could not bring a board back to the front:', error)
+    }
+    reconnectAttemptsRef.current = 0
+    startHeartbeat(warm.socket)
+    setConnectionState('connected')
+
+    // A generation of its own, and the loader marked done for it: `loadExistingElements` runs
+    // once per board per connection, and this connection has already delivered this board.
+    connectionGenerationRef.current += 1
+    loadedSceneKeyRef.current = sceneKey()
+    filesFromSocketRef.current = sceneKey()
+
+    if (warm.files.length > 0) {
+      api.addFiles(warm.files as Parameters<ExcalidrawImperativeAPI['addFiles']>[0])
+    }
+    applySceneUpdateWithoutAutoSync(api, {
+      elements: [
+        ...convertElementsPreservingImageProps(warm.elements),
+        ...warm.tombstones
+      ] as ExcalidrawElement[],
+      captureUpdate: CaptureUpdateAction.NEVER
+    })
+    // The moment the swap happened: `sceneWorkspaceRef` moves on and the camera goes back.
+    finishBoardSwitch()
+    return true
+  }
+
   /**
    * Switch boards.
    *
@@ -3619,6 +3932,9 @@ function App(): JSX.Element {
    * board stays up until the new one lands, the pill says *Connecting*, and the swap is a
    * single replacement rather than an empty gap. What the old blanking was really
    * protecting against is autosync, and that is held off by name instead.
+   *
+   * A board that was kept warm skips all of that: there is nothing to wait for, so the
+   * replacement happens here, in the same turn as the click.
    */
   const switchWorkspace = (workspaceId: string): void => {
     if (workspaceId === activeWorkspaceRef.current) return
@@ -3626,6 +3942,12 @@ function App(): JSX.Element {
     // Written down against the board whose shapes are on screen, which during a second
     // switch made before the first one landed is not the board `activeWorkspaceRef` names.
     rememberViewport(sceneWorkspaceRef.current)
+
+    // The board being left keeps its socket, if what is on screen is really its own scene.
+    // Before anything below names the board being entered: this reads the board being left,
+    // and this is the last line where the two still agree.
+    stopHeartbeat()
+    keepBoardWarm(activeWorkspaceRef.current)
 
     activeWorkspaceRef.current = workspaceId
     setActiveWorkspace(workspaceId)
@@ -3647,18 +3969,24 @@ function App(): JSX.Element {
     pendingSceneWorkspaceRef.current = workspaceId
     holdAutoSyncForSwitch()
 
-    // A socket belongs to one board for its lifetime, so switching means reconnecting.
+    // Whatever is left of the previous connection. `keepBoardWarm` takes the socket when the
+    // board it belongs to is one being kept; what can still be here is a board that was not.
     if (websocketRef.current) {
       websocketRef.current.onclose = null
       websocketRef.current.close()
       websocketRef.current = null
     }
-    stopHeartbeat()
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current)
       reconnectTimerRef.current = null
     }
     reconnectAttemptsRef.current = 0
+
+    // A board that stayed live is put back here and now: no socket, no pull, no *Connecting*.
+    if (resumeWarmBoard(workspaceId)) return
+
+    // A socket belongs to one board for its lifetime, so a board that went cold — or was
+    // never visited on this load — is still a reconnect.
     setConnectionState('connecting')
     connectWebSocket()
   }
@@ -3845,6 +4173,44 @@ function App(): JSX.Element {
     }, delay)
   }
 
+  /**
+   * The handlers a socket has while its board is the one on screen.
+   *
+   * Separate from opening one, because a socket now arrives here two ways: newly connected,
+   * and adopted back from the background when the reader returns to a board that stayed live.
+   * `onopen` is not among them — a socket being adopted opened long ago.
+   */
+  const attachForegroundHandlers = (socket: WebSocket): void => {
+    socket.onmessage = (event: MessageEvent) => {
+      try {
+        const data: WebSocketMessage = JSON.parse(event.data)
+        if ((data as { type?: string }).type === 'pong') {
+          awaitingPongRef.current = false
+          return
+        }
+        handleWebSocketMessage(data)
+      } catch (error) {
+        console.error('Error parsing WebSocket message:', error, event.data)
+      }
+    }
+
+    socket.onclose = (event: CloseEvent) => {
+      stopHeartbeat()
+      if (websocketRef.current === socket) websocketRef.current = null
+      if (event.code !== 1000) {
+        scheduleReconnect()
+      } else {
+        setConnectionState('disconnected')
+      }
+    }
+
+    socket.onerror = (error: Event) => {
+      // Not a state change: an error is always followed by a close, and that is where the
+      // decision between "retrying" and "offline" belongs.
+      console.error('WebSocket error:', error)
+    }
+  }
+
   const connectWebSocket = (): void => {
     // Nothing connects before the board is known: a socket opened now would declare the
     // default board and have to be replaced, which is the defect this all comes from.
@@ -3880,34 +4246,7 @@ function App(): JSX.Element {
       }
     }
 
-    socket.onmessage = (event: MessageEvent) => {
-      try {
-        const data: WebSocketMessage = JSON.parse(event.data)
-        if ((data as { type?: string }).type === 'pong') {
-          awaitingPongRef.current = false
-          return
-        }
-        handleWebSocketMessage(data)
-      } catch (error) {
-        console.error('Error parsing WebSocket message:', error, event.data)
-      }
-    }
-
-    socket.onclose = (event: CloseEvent) => {
-      stopHeartbeat()
-      if (websocketRef.current === socket) websocketRef.current = null
-      if (event.code !== 1000) {
-        scheduleReconnect()
-      } else {
-        setConnectionState('disconnected')
-      }
-    }
-
-    socket.onerror = (error: Event) => {
-      // Not a state change: an error is always followed by a close, and that is where the
-      // decision between "retrying" and "offline" belongs.
-      console.error('WebSocket error:', error)
-    }
+    attachForegroundHandlers(socket)
   }
 
   const handleWebSocketMessage = async (data: WebSocketMessage): Promise<void> => {
@@ -4794,6 +5133,10 @@ function App(): JSX.Element {
               onDetach={(sessionId) => detachTerminalSession(view.elementId, sessionId)}
               onMerge={() => mergeTerminalBlock(view.elementId)}
               onInput={sendTerminalInput}
+              // The four keys the board has claimed, answered on the press. The overlay sees
+              // a keystroke before any `window` listener does, so it has to ask rather than
+              // be told — see `isBoardHotkey` and `board-hotkeys.ts`.
+              isBoardHotkey={isBoardHotkey}
               fontSize={terminalFont}
               onFontSize={changeTerminalFont}
               // The one thing about the board this overlay cannot work out for itself. Dark
