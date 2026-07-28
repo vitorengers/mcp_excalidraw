@@ -4361,6 +4361,11 @@ function App(): JSX.Element {
               onInput={sendTerminalInput}
               fontSize={terminalFont}
               onFontSize={changeTerminalFont}
+              // The one thing about the board this overlay cannot work out for itself. Dark
+              // mode is a filter Excalidraw puts on its own canvas, and the card is a sibling
+              // of that canvas rather than a child of it, so nothing filters it — told
+              // nothing, it paints a bright card over a block the filter has darkened.
+              theme={theme}
             />
           ))}
         </div>

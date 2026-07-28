@@ -384,10 +384,16 @@ export function terminalBlockElement(
     y: origin.y,
     width: size.width,
     height: size.height,
-    // Paper, and the same paper the overlay paints, so the two read as one object. This
-    // used to be dark for the zoom argument — the shape is all there is to read once the
-    // overlay's text is too small — and that argument did not go away, it moved: see
-    // `TERMINAL_BAND` in `terminal-palette.ts` for what carries it now.
+    // Paper, and the surface the overlay paints is whatever this one *renders as*, so the
+    // two read as one object in either theme. One literal rather than two, because this is
+    // scene data on a canvas Excalidraw darkens with a filter: a fill that followed the
+    // reader's theme would make every toggle a change to the board, and would be the one
+    // block here that opted out of the filter every other block is drawn through. The dark
+    // palette's surface is defined as the colour these come out — see `terminal-palette.ts`.
+    //
+    // This used to be dark for the zoom argument — the shape is all there is to read once the
+    // overlay's text is too small — and that argument did not go away, it moved: see `band`
+    // in `terminal-palette.ts` for what carries it now.
     backgroundColor: TERMINAL_PAPER,
     strokeColor: TERMINAL_INK,
     fillStyle: 'solid',
