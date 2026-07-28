@@ -279,8 +279,16 @@ Four controls sit at the end of the strip:
 |---|---|
 | `+` | one more shell in this block. Greyed out, not hidden, once the board is at the cap |
 | `×` | on each tab: end that shell, with the tree-kill semantics below, and drop the tab |
-| `⧉` | give the tab on top a **block of its own**, placed beside this one |
+| `⧉` | give the tab on top a **block of its own**, placed to its **left** |
 | `⇥` | put this block's tabs into the **nearest other** terminal block, and drop this block |
+
+`⧉` goes left, always, and not to whichever side happens to be free. The region is anchored to
+the far left of the board for the reason `terminalOrigin` records — the documentation grows down
+and right, so the left is the edge nothing runs into — and a detach that went right would author
+a block back into the direction #96 emptied. From the anchored origin, one `TERMINAL_GAP` left of
+the GitHub mirror, going right put the very first detached block on top of the mirror. Going left
+it grows into canvas nothing else claims, and the reader knows where the next one will be without
+looking.
 
 `⧉` and `⇥` are what "separate" and "join" turned out to mean here, and the choice was between
 that and split panes inside one block. A detached tab becomes an ordinary shape, so moving it,
