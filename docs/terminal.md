@@ -426,6 +426,19 @@ What still differs is what happens next. This block is the reader's to drag, and
 dragged is remembered and preferred over the rule above; the mirror has no such gesture, being
 repainted from GitHub, so its origin only ever comes from the measurement.
 
+**When the mirror moves, this block does not follow — so the mirror does not move.** That is the
+decision #188 settled, and it is the only one of the two that keeps a dragged block where the
+reader put it. The alternative was re-anchoring the block whenever the region's origin changed,
+which means a shape the reader is expected to move being moved by a timer, and no way to tell a
+block that has never been dragged from one dragged back to where it started. So the burden sits
+on the region instead: it settles once per board and stays settled, and on a board with nothing
+else to measure — a mirror and a terminal and no content, which is the board #188 was reported on
+— it is measured **from this block**, one gap right of its right edge, which is the inverse of the
+placement above. Two regions, one separation, decided in one direction only.
+`docs/project-board.md` has the whole of that, and
+`scripts/check-mirror-terminal-drift-browser.mjs` is what holds it: the two bounding boxes must
+never intersect, across polls, a column appearing, and a board switched away from and back.
+
 **Which side follows from that.** Placed once means the block never moves aside, so it cannot
 sit on the edge the board grows into — and the documentation, the only thing here that grows,
 grows down and right. It was on the right until #96, and anything authored past the right edge
