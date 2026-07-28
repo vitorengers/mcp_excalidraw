@@ -36,6 +36,15 @@ export interface IssueTargetData {
   issueTitle: string | null;
   observation: string | null;
   /**
+   * When the research run started and when it stopped, ISO.
+   *
+   * The same two instants the implement run keeps below, and for the same reason: the clock
+   * runs in the browser off the first of them, so the server writes each once rather than
+   * once a second. `issueEndedAt` is null while the investigation is live.
+   */
+  issueStartedAt: string | null;
+  issueEndedAt: string | null;
+  /**
    * Files attached as reference material for the run, by id in the server's file store.
    *
    * An explicit list rather than Excalidraw group membership: a group is a user-facing
@@ -169,6 +178,10 @@ function mirrorCardIssue(
     issueError: null,
     issueTitle: asString(card.text) ?? asString(label?.text),
     observation: null,
+    // A card exists because the research run finished, and the mirror draws it from GitHub
+    // rather than from the block that produced it — so there is no run of its own to time.
+    issueStartedAt: null,
+    issueEndedAt: null,
     // A card exists because the issue does, so there is no run left to attach anything to.
     images: [],
     implementState: asRunState(card.customData?.implementState),
@@ -248,6 +261,8 @@ export function resolvePanelTarget(
           issueError: asString(issueCustom.issueError),
           issueTitle: asString(issueCustom.issueTitle),
           observation: asString(issueCustom.observation),
+          issueStartedAt: asString(issueCustom.issueStartedAt),
+          issueEndedAt: asString(issueCustom.issueEndedAt),
           images: asIdList(issueCustom.issueImages),
           implementState: asRunState(issueCustom.implementState),
           implementUrl: asString(issueCustom.implementUrl),

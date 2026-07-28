@@ -43,6 +43,7 @@ import { listDirectories } from './core/directory-browse.js';
 import {
   AgentCommands, AgentHost, agentCommandFor, runIssueAgent, runReviseAgent, runsHeadless
 } from './core/issue-agent.js';
+import { AgentUsage } from './core/agent-usage.js';
 import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
 import {
   readProjectBoard,
@@ -1311,8 +1312,64 @@ function agentCommandOrRefuse(
   return null;
 }
 
-/** Elements with a run in flight. A second click must not open a second issue. */
-const issueRunsInFlight = new Set<string>();
+/**
+ * What a block's research run has done, kept in memory beside the block that started it.
+ *
+ * This was a bare `Set<string>` — the guard that stops a second click opening a second issue,
+ * and nothing else. A set can say *that* a run is in flight and never anything about it, which
+ * is why a running block's panel had one fixed sentence to show for however long the
+ * investigation took. It is a map now for the one fact that cannot go on the element: the
+ * token totals change throughout a run, so writing them onto a shape would bump its `version`
+ * and broadcast an update every time — the churn `docs/trap-export-noise.md` covers, arriving
+ * through the other door. The two instants *do* go on the element, because they are written
+ * once each and a block has to read correctly with nothing selected and no network.
+ *
+ * **The record outlives the run**, deliberately, the way `ImplementRecord` and `recreateRuns`
+ * do. The panel's last read happens after the run settles — the ending arrives over the socket
+ * as an element update, which carries the state and not the figures — so a record deleted at
+ * the end would lose the total at exactly the moment it became worth reading. The reset route
+ * is what clears one.
+ */
+interface IssueRunRecord {
+  /** `running` until the run settles, then whichever state the block was left in. */
+  state: 'running' | 'created' | 'failed';
+  startedAt: string;
+  /** Null while it is still going, which is what makes the clock live rather than a total. */
+  endedAt: string | null;
+  /**
+   * What the run has spent, when the agent is willing to say.
+   *
+   * Null is the normal case and not a failure: it means the configured command does not ask
+   * its agent for a machine-readable stream. See `src/core/agent-usage.ts`.
+   */
+  usage: AgentUsage | null;
+}
+
+/** The research runs, by element id. A second click must not open a second issue. */
+const issueRuns = new Map<string, IssueRunRecord>();
+
+/**
+ * Whether a run is in flight *in this process*, which is what every guard here asks.
+ *
+ * Not "is there a record": a settled record is kept so the panel can read the total one last
+ * time, and reading `has()` against this map would refuse a block a second run for the rest of
+ * the server's life.
+ */
+const issueRunInFlight = (elementId: string): boolean =>
+  issueRuns.get(elementId)?.state === 'running';
+
+/**
+ * Token counts onto the record, and nowhere else.
+ *
+ * The research-side twin of `recordImplementUsage`, and ignored once the run has settled for
+ * the same reason: a report can still be in flight when the process closes, and it must not
+ * resurrect a finished record.
+ */
+function recordIssueUsage(elementId: string, usage: AgentUsage): void {
+  const existing = issueRuns.get(elementId);
+  if (!existing || existing.state !== 'running') return;
+  issueRuns.set(elementId, { ...existing, usage });
+}
 
 /**
  * Write the state onto a block, and the look that goes with it.
@@ -1458,7 +1515,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
       issueUrl: custom.issueUrl
     });
   }
-  if (issueRunsInFlight.has(elementId)) {
+  if (issueRunInFlight(elementId)) {
     return res.status(409).json({ success: false, error: 'A run is already in flight for this block.' });
   }
 
@@ -1493,11 +1550,31 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   );
   if (!agentCommand) return;
 
-  issueRunsInFlight.add(elementId);
+  const startedAt = new Date().toISOString();
+  issueRuns.set(elementId, { state: 'running', startedAt, endedAt: null, usage: null });
   const markState = (state: string, extra: Record<string, unknown> = {}) =>
     markIssueState(workspaceId, elementId, state, extra);
 
-  markState('running');
+  /**
+   * The end of the run, written to the record and the block in one place.
+   *
+   * One function rather than an `issueEndedAt` beside each of the three `markState` calls
+   * below, because the ending is what the clock is subtracting against: a path that settled a
+   * block and forgot the instant would leave a total ticking forever, and that is precisely
+   * the failure a reader cannot see. `issueStartedAt` needs no carrying — `markIssueState`
+   * merges onto the `customData` already there.
+   */
+  const settle = (state: 'created' | 'failed', extra: Record<string, unknown> = {}): void => {
+    const endedAt = new Date().toISOString();
+    const existing = issueRuns.get(elementId);
+    if (existing) issueRuns.set(elementId, { ...existing, state, endedAt });
+    markState(state, { ...extra, issueEndedAt: endedAt });
+  };
+
+  // Two instants, not a duration: a duration kept here would have to be rewritten to stay
+  // true, and every rewrite bumps the element's `version` and broadcasts it. The browser
+  // subtracts instead, and the board never knows the clock is running.
+  markState('running', { issueStartedAt: startedAt, issueEndedAt: null });
   // Answer immediately: an investigation takes minutes, and a request held open that
   // long looks indistinguishable from a hang. Progress arrives over the socket.
   res.status(202).json({ success: true, state: 'running', elementId });
@@ -1522,10 +1599,11 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     const result = await runIssueAgent(workspace, observation, {
       agentCommand,
       imagePaths: images.paths,
-      notFoundVariable: 'EXCALIDRAW_ISSUE_AGENT_WSL'
+      notFoundVariable: 'EXCALIDRAW_ISSUE_AGENT_WSL',
+      onUsage: (usage) => recordIssueUsage(elementId, usage)
     });
     if (result.ok && result.issueUrl) {
-      markState('created', { issueUrl: result.issueUrl, issueError: null, observation });
+      settle('created', { issueUrl: result.issueUrl, issueError: null, observation });
       logger.info(`Issue block ${elementId} created ${result.issueUrl}`);
 
       // The issue exists now, so it no longer belongs where the observation was written —
@@ -1552,15 +1630,32 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
         logger.warn(`Issue block ${elementId}: could not read back the issue — ${(error as Error).message}`);
       }
     } else {
-      markState('failed', { issueError: result.error });
+      settle('failed', { issueError: result.error });
       logger.warn(`Issue block ${elementId} failed: ${result.error}`);
     }
   } catch (error) {
-    markState('failed', { issueError: (error as Error).message });
+    settle('failed', { issueError: (error as Error).message });
   } finally {
     await images.cleanup();
-    issueRunsInFlight.delete(elementId);
   }
+});
+
+/**
+ * What a block's research run has done so far, with no `gh` behind it.
+ *
+ * Its own route rather than an extension of `GET /api/issue-block/:id/issue`, which is the
+ * question the panel is *not* asking here: that one reads the issue from GitHub and answers 404
+ * for a block that has none — which is every block with a run in flight. This reads memory and
+ * costs nothing, so the panel can poll it while a run is live the way it polls the implement
+ * record.
+ *
+ * The clock is deliberately not the reason to call it. Both instants are on the element, so a
+ * block already reads correctly with nothing selected and no network; what only lives here is
+ * the token total, because a figure that changes throughout a run cannot go on a shape without
+ * broadcasting an update every time it does.
+ */
+app.get('/api/issue-block/:id/run', (req: Request, res: Response) => {
+  res.json({ success: true, run: issueRuns.get(req.params.id ?? '') ?? null });
 });
 
 /**
@@ -1609,7 +1704,7 @@ app.post('/api/issue-block/:id/adopt', async (req: Request, res: Response) => {
       issueUrl: custom.issueUrl
     });
   }
-  if (issueRunsInFlight.has(elementId)) {
+  if (issueRunInFlight(elementId)) {
     return res.status(409).json({
       success: false,
       error: 'A run is in flight for this block right now. Wait for it rather than guessing its answer.'
@@ -1675,7 +1770,7 @@ app.post('/api/issue-block/:id/adopt', async (req: Request, res: Response) => {
  *
  * It clears state; it does not stop an agent. Nothing here can reach into a process the
  * server no longer owns. What it can do is refuse while a run is in flight *in this
- * process*, which is the case that matters: `issueRunsInFlight` is in memory, so after a
+ * process*, which is the case that matters: `issueRuns` is in memory, so after a
  * restart it is empty while the element still carries `running` from browser sync — only
  * the server can tell a live run from an abandoned one.
  *
@@ -1691,14 +1786,20 @@ app.delete('/api/issue-block/:id', (req: Request, res: Response) => {
     return res.status(404).json({ success: false, error: `Element ${elementId} not found` });
   }
 
-  if (issueRunsInFlight.has(elementId)) {
+  if (issueRunInFlight(elementId)) {
     return res.status(409).json({
       success: false,
       error: 'A run is in flight for this block right now. Resetting would only hide it.'
     });
   }
 
-  const { issueState, issueError, ...rest } = (element.customData ?? {}) as Record<string, unknown>;
+  // The run is being declared lost, so what it claimed about itself goes with the state: a
+  // block left carrying the instants would keep showing a clock for a run nobody is waiting
+  // for, and the record behind it would keep answering the panel's poll.
+  issueRuns.delete(elementId);
+  const {
+    issueState, issueError, issueStartedAt, issueEndedAt, ...rest
+  } = (element.customData ?? {}) as Record<string, unknown>;
   const resetTo = rest.issueUrl ? 'created' : 'draft';
   const updated: ServerElement = {
     ...element,
@@ -2761,6 +2862,15 @@ interface RecreateRecord {
   error: string | null;
   startedAt: string;
   endedAt: string | null;
+  /**
+   * What the run has spent, when the agent is willing to say.
+   *
+   * The same opt-in as everywhere else — null unless the configured command already asks for
+   * a machine-readable stream — and here for the reason `docs/whats-next.md` gives about the
+   * two research runs: they are one seam, not two, so a rewrite reports its spending the way
+   * a first investigation does. See `src/core/agent-usage.ts`.
+   */
+  usage: AgentUsage | null;
 }
 
 /**
@@ -2893,18 +3003,36 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
   }
 
   recreateRuns.set(key, {
-    state: 'running', error: null, startedAt: new Date().toISOString(), endedAt: null
+    state: 'running', error: null, startedAt: new Date().toISOString(), endedAt: null, usage: null
   });
   // Answer immediately: an investigation takes minutes, and a request held open that long
   // looks indistinguishable from a hang. The panel polls the record.
   res.status(202).json({ success: true, state: 'running', issueUrl });
 
+  /**
+   * The totals onto the record, and nowhere else — there is nowhere else for a rewrite.
+   *
+   * A recreate leaves nothing on a shape while it runs, on purpose: a mirrored card has no
+   * element at all. Ignored once the run has settled, so a report still in flight when the
+   * process closes cannot resurrect a finished record.
+   */
+  const takeUsage = (usage: AgentUsage): void => {
+    const existing = recreateRuns.get(key);
+    if (!existing || existing.state !== 'running') return;
+    recreateRuns.set(key, { ...existing, usage });
+  };
+
   const settle = (state: 'done' | 'failed', error: string | null): void => {
+    const existing = recreateRuns.get(key);
     recreateRuns.set(key, {
       state,
       error,
-      startedAt: recreateRuns.get(key)?.startedAt ?? new Date().toISOString(),
-      endedAt: new Date().toISOString()
+      startedAt: existing?.startedAt ?? new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      // Read back rather than rebuilt from a literal, for the reason `carriedImplement`
+      // exists: the figures arrive throughout the run, and a record reassembled at the end
+      // would throw them away exactly when the total became worth reading.
+      usage: existing?.usage ?? null
     });
     // Whatever was remembered about the issue is now wrong twice over — the comment below and,
     // on the success path, the body itself. Dropped rather than waited out, so selecting the
@@ -2927,7 +3055,8 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
 
     const result = await runReviseAgent(workspace, issueUrl, observations, {
       agentCommand,
-      notFoundVariable: 'EXCALIDRAW_ISSUE_AGENT_WSL'
+      notFoundVariable: 'EXCALIDRAW_ISSUE_AGENT_WSL',
+      onUsage: takeUsage
     });
 
     // A run is read as successful from the URL it printed, the way researching is — and here
