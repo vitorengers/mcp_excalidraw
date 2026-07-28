@@ -967,7 +967,7 @@ taken.
   fix that stopped the overlay covering the chrome by making it transparent or by moving it
   would pass everything above.
 
-All seventeen were written first and seen to fail against the code as it stood.
+All eighteen were written first and seen to fail against the code as it stood.
 
 Beyond them, and not automatable at a sensible price: `claude` typed into the block on a real
 board, its interface drawn, a question answered, and Ctrl+C twice getting back to the prompt.
