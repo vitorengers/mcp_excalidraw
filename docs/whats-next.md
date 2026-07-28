@@ -34,17 +34,23 @@ An agent driving the canvas over MCP cannot target a registered project board at
 REST API can. That is a real gap for a tool whose whole point is that agents draw on project
 boards.
 
-## Nothing loads or saves `boardFile`
+## Nothing *saves* `boardFile`
 
-It is resolved from `board.config.json` and returned by `GET /api/workspaces`, and then no code
-reads it. Persistence is a manual export (`scripts/export-board.mjs`) and a manual import. A
-board that is not exported dies with the process — including this one. `src/core/workspaces.ts`
-is where the field is produced and where it stops.
+#184 landed the load half: a registered project's board file is read into its store at startup, so
+the three boards that declare one come up drawn instead of empty and the ad-hoc import is gone. See
+[element-store.md](element-store.md).
 
-This is also the loose end behind the mojibake #151 was opened about: a canvas was seen holding a
+The write half is untouched. Getting a board back into its file is still
+`node scripts/export-board.mjs --workspace <id>`, run by hand against a running server, and a change
+that is not exported still dies with the process. Nothing here argues for an autosave — a board file
+is a tracked artifact and a commit like any other, and a process writing to it on a timer would put
+diff noise into somebody's working tree — but the asymmetry is worth naming: the board now remembers
+across restarts only as far back as the last export somebody remembered to run.
+
+This was also the loose end behind the mojibake #151 was opened about: a canvas was seen holding a
 scene fifty merges older than the tracked file, with its em dashes and middle dots corrupted, and
-the only way that scene could have got there is an ad-hoc import of a historical revision. A
-board that loaded and saved its own file would not need one.
+the only way that scene could have got there is an ad-hoc import of a historical revision. That is
+the half now closed — a board that loads its own file needs no import.
 
 ## The documentation rebuild, past the root cause
 

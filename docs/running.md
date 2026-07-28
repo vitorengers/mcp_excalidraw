@@ -104,8 +104,11 @@ above, and the reason a WSL project cannot simply declare its own in `board.conf
 - `Alt+P` and `Alt+G` jump to the two halves of this repository's own board — see
   [board-sections.md](board-sections.md).
 - `Alt+B` scrolls to the GitHub project mirror, `Alt+T` to the terminal.
-- Nothing is saved. The store is in memory and dies with the process; `scripts/export-board.mjs`
-  is how `docs/board.excalidraw` is written back, and it is a commit like any other.
+- Each project that names a `board` in its `board.config.json` comes up holding it: the file is
+  read into that board's store just after the port opens ([element-store.md](element-store.md)).
+- Nothing is saved back. The store is in memory and a change dies with the process;
+  `scripts/export-board.mjs` is how `docs/board.excalidraw` is written back, and it is a commit
+  like any other.
 
 ## Verifying a change
 

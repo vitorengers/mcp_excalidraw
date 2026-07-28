@@ -38,6 +38,7 @@ import {
   writeWorkspaceConfig,
   Workspace
 } from './core/workspaces.js';
+import { BoardScene, parseBoardScene } from './core/board-seed.js';
 import { listDirectories } from './core/directory-browse.js';
 import {
   AgentCommands, AgentHost, agentCommandFor, runIssueAgent, runReviseAgent, runsHeadless
@@ -2324,6 +2325,84 @@ async function recoverInterruptedRuns(): Promise<void> {
   }
 }
 
+/**
+ * Put one registered board's saved scene into its store.
+ *
+ * Opt-in: a project that declares no `board` is left empty, which is the only way a board
+ * that is genuinely meant to start blank can stay blank.
+ *
+ * Seeded by the *normalised* id. `elementsFor` normalises its argument and the registry
+ * does not, so the raw id would reach the same store — but `broadcast` compares against
+ * what a socket registered, which is normalised, and a project id with a capital letter
+ * would be seeded correctly and told to nobody.
+ */
+async function seedBoardFromFile(workspace: Workspace): Promise<void> {
+  if (workspace.error || !workspace.boardFile) return;
+
+  const workspaceId = normalizeWorkspaceId(workspace.id);
+  const store = elementsFor(workspaceId);
+  if (store.size) {
+    // Empty at startup, which is when this runs. Said out loud rather than assumed, because
+    // the one thing this must never do is land on top of a board somebody is working on.
+    logger.warn(`Not loading ${workspace.boardFile}: "${workspaceId}" already holds ${store.size} element(s).`);
+    return;
+  }
+
+  let scene: BoardScene;
+  try {
+    scene = parseBoardScene(await fs.readFile(workspace.boardFile, 'utf-8'));
+  } catch (error) {
+    const reason = (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? 'there is no such file'
+      : (error as Error).message;
+    logger.warn(`Board for "${workspaceId}" not loaded from ${workspace.boardFile}: ${reason}`);
+    return;
+  }
+
+  if (!scene.elements.length) {
+    logger.warn(`Board for "${workspaceId}" at ${workspace.boardFile} has no elements to load.`);
+    return;
+  }
+
+  for (const element of scene.elements) store.set(element.id, element);
+  // Content-addressed and process-wide, so a file already held is the same file.
+  for (const [id, file] of Object.entries(scene.files)) if (!files.has(id)) files.set(id, file);
+
+  // A direct store write tells nobody. A browser that connected while the read was in
+  // flight took its `initial_elements` from an empty store, and would sit on a blank canvas
+  // until something else made it refetch.
+  broadcast({ type: 'elements_batch_created', elements: scene.elements } as BatchCreatedMessage, workspaceId);
+
+  logger.info(`Loaded ${scene.elements.length} element(s) into "${workspaceId}" from ${workspace.boardFile}`);
+}
+
+/**
+ * Give every registered board back the scene it was saved with.
+ *
+ * Boards are read concurrently rather than in turn: one of them lives on the `wsl$` share,
+ * where a read crosses the distro boundary and is slow when the distro is running and
+ * refused when it is not — and none of that is a reason for the three local boards to wait.
+ * A board that cannot be read is warned about and skipped, one board at a time, for the
+ * reason `loadWorkspace` returns a broken project instead of hiding it.
+ */
+async function seedBoardsFromFiles(): Promise<void> {
+  let workspaces: Workspace[];
+  try {
+    workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  } catch (error) {
+    logger.warn(`Could not look for boards to load: ${(error as Error).message}`);
+    return;
+  }
+
+  await Promise.all(workspaces.map(async (workspace) => {
+    try {
+      await seedBoardFromFile(workspace);
+    } catch (error) {
+      logger.warn(`Could not load the board for "${workspace.id}": ${(error as Error).message}`);
+    }
+  }));
+}
+
 /** The agent writes to the repository, so every entrance carries the same two guards. */
 function implementingRefused(res: Response): boolean {
   if (!IMPLEMENT_AGENT_CONFIGURED) {
@@ -4135,10 +4214,15 @@ async function startServer(): Promise<void> {
     writePidFile(PORT, process.pid);
     ownsPidFile = true;
 
-    // Whatever the last process was in the middle of when it stopped. Started here rather
-    // than before `listen` so a slow git cannot delay the board coming up, and deliberately
-    // not awaited: nothing else depends on it having finished.
-    void recoverInterruptedRuns();
+    // The boards, and then whatever the last process was in the middle of when it stopped.
+    // Started here rather than before `listen` so neither a slow read nor a slow git can
+    // delay the board coming up, and deliberately not awaited: nothing else depends on
+    // either having finished.
+    //
+    // In that order, because recovery writes what it derives from git onto the elements
+    // carrying the issue, and it can only write onto elements that are in the store when it
+    // looks. The other order leaves a recovered `interrupted` run recorded but undrawn.
+    void seedBoardsFromFiles().then(recoverInterruptedRuns);
   });
 
   const shutdown = (signal: NodeJS.Signals): void => {
