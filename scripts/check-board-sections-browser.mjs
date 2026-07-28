@@ -11,8 +11,9 @@
  * section declared bring that section into view from wherever the board happens to be
  * scrolled? Does the *other* section's key reach the other one, rather than both landing
  * on whichever mark the scene lists first? Does the key stand down while a shape's label
- * is being typed into, and while the terminal has the keyboard — where `p` and `g` have to be
- * characters rather than a jump? Does a key a section is not allowed to have leave the
+ * is being typed into — where `p` and `g` have to be characters rather than a jump — and,
+ * since #177, does it still *reach* the board while the terminal has the keyboard, which is
+ * the one focused `TEXTAREA` that is not a text field? Does a key a section is not allowed to have leave the
  * feature that owns it alone? And does a board that declares no sections bind nothing at
  * all, which is the case that keeps this right for every project that never draws one?
  *
@@ -362,7 +363,13 @@ try {
   await pressKey('Escape', 'Escape', 0, 27);
   await sleep(300);
 
-  console.log('\n3. and while the terminal has the keyboard');
+  // The reverse of what this section asked for its first three revisions, and #177 is the
+  // reversal. It used to require that Alt+G leave the board alone while the terminal had the
+  // keyboard, on the reasoning that `g` there has to be a character. The reader's complaint
+  // is that this made a focused block a hole in the board's own navigation, and the answer
+  // is that the four board keys are the board's and the shell is not sent them either — the
+  // second half is `check-terminal-hotkey-browser.mjs`, which reads the shell's own transcript.
+  console.log('\n3. and it reaches the board even while the terminal has the keyboard');
   await waitFor(async () => (await evaluate(PROBE)).terminal, 'the terminal block');
   // Alt+T first: the block sits off to the right of the board, and a screen that is not on
   // screen is not a screen anyone can click.
@@ -374,12 +381,11 @@ try {
   check('clicking the screen puts the keyboard in the terminal',
         /xterm/.test(scene.focused), scene.focused);
 
-  const parked = { ...scene.view };
   await altPress('KeyG', 'g', 71);
   scene = await evaluate(PROBE);
-  check('Alt+G leaves the board where it was while a command is being written',
-        Math.abs(scene.view.scrollX - parked.scrollX) < 1 && Math.abs(scene.view.scrollY - parked.scrollY) < 1,
-        `${JSON.stringify(parked)} → ${JSON.stringify(scene.view)}`);
+  await shot('04-from-the-terminal');
+  check('Alt+G puts Development in the viewport from inside a focused shell',
+        onScreen(scene, scene.sections.Development), JSON.stringify(scene.view));
   await evaluate('document.activeElement && document.activeElement.blur()');
   await sleep(200);
 

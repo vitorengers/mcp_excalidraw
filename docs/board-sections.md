@@ -56,9 +56,17 @@ Identical to `Alt+B`'s, and for the same reasons:
 - matched on `event.code`, so a keyboard layout where `Alt` produces a different character still
   reaches the same section;
 - it stands down while a `TEXTAREA`, an `INPUT` or a `contentEditable` has focus, and while
-  Excalidraw reports an `editingTextElement`. Typing a title into a card, or a command into the
-  terminal's prompt, must not jump the viewport out from under the cursor;
-- `Ctrl` or `Meta` held means it is not this chord.
+  Excalidraw reports an `editingTextElement`. Typing a title into a card must not jump the
+  viewport out from under the cursor;
+- **except when the `TEXTAREA` is the terminal**, which is #177. A focused xterm is a focused
+  `TEXTAREA` — the emulator reads the keyboard through a hidden `.xterm-helper-textarea` — so
+  until then a reader with the terminal focused could not navigate the board at all, and the
+  documented way back was to click the canvas first. The section keys now reach the board from
+  inside a focused shell, and the shell is not sent them: `frontend/src/board-hotkeys.ts` holds
+  the rule all four listeners read, and [terminal.md](terminal.md) has the other two layers it
+  took and what the shell gives up for it;
+- `Ctrl` or `Meta` held means it is not this chord. That also leaves AltGr alone, which arrives
+  as `Ctrl+Alt` on several layouts and is somebody typing a `@`.
 
 `Alt+D` was the obvious key for **Development** and is not the one it got. On Windows, `Alt+D`
 focuses Chrome's and Firefox's address bar, and whether `preventDefault` suppresses a browser

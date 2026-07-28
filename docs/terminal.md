@@ -711,7 +711,9 @@ Two decisions the observation left open:
   it.
 
 Buttons rather than a shortcut, for a reason beyond discoverability: while the terminal has the
-keyboard every keystroke is the shell's, so `Ctrl+-` would reach the shell and not the block.
+keyboard a keystroke is the shell's unless something has claimed it by name, so `Ctrl+-` would
+reach the shell and not the block. #177 claimed four keys that way and no more — a fifth would
+be one more Readline motion spent, and the font has buttons.
 
 ## Where a cell comes from
 
@@ -827,8 +829,10 @@ the two axes together, so splitting one would be two gestures where the reader m
 
 Every keystroke
 otherwise goes to the shell, Ctrl+C and arrows and Escape included, and none reach Excalidraw,
-which binds every bare letter to a tool. Clicking the canvas blurs the terminal and gives the
-keyboard back.
+which binds every bare letter to a tool. The four exceptions are the board's own keys — Alt+B,
+Alt+T, Alt+P and Alt+G, which navigate the canvas from inside a focused terminal and are not
+sent to the shell; see [the hotkey](#the-hotkey) below. Clicking the canvas blurs the terminal
+and gives the keyboard back, and since #177 nothing needs it to.
 
 **The strip along the bottom is gone**, which is #144 and the other side of the argument #112
 settled. #112 kept it as a status line, on the grounds that a band which reads like a prompt
@@ -869,8 +873,58 @@ bar's absence twice, live and with the shell gone.
 reason that one gives: Excalidraw owns the bare letters and much of `Ctrl+Shift`. It is matched
 on `event.code` and bound on `window`, so it survives a keyboard layout where Alt produces a
 different character and works from anywhere on the page. It stands down while text is being
-edited — including while the terminal has the keyboard, where Alt+T has to be a keystroke the
-shell receives rather than a jump.
+edited — a card's title, a search field, Excalidraw's own label editor — **but no longer while
+the terminal has the keyboard**, which is #177 and the reversal below.
+
+### The four keys are the board's, even over a focused shell
+
+For three releases the four board keys — `Alt+B`, `Alt+T`, and `Alt+P` and `Alt+G` for the
+sections ([board-sections.md](board-sections.md)) — did nothing at all while the terminal had
+the keyboard, and this document said so on purpose: `Alt+T` "has to be a keystroke the shell
+receives rather than a jump", and the way back was to click the canvas first. #177 is the
+reader saying that is the wrong trade. A block that owns the keyboard is a hole in the board's
+own navigation, which is the same complaint #112 settled for the wheel — and the answer is the
+same one: what the block cannot use, the board gets.
+
+**And the shell is not sent them either.** That is the maintainer's own word on the issue, and
+it is what makes this a change rather than half of one: `Alt+B` reaching xterm is an `ESC b`
+written to the shell, so a board that only jumped would jump *and* leave a meta escape on the
+reader's command line.
+
+Three layers had to agree, and each was a real stop — `frontend/src/board-hotkeys.ts` holds the
+rule the first of them reads:
+
+1. **The guard on the four `window` listeners** stood down for any focused `TEXTAREA`, and a
+   focused xterm **is** one: the emulator takes the keyboard through a hidden helper it marks
+   `xterm-helper-textarea`. The guard did exactly what it was written to do; it simply could
+   not tell "a card's title is being typed into" from "the terminal has the keyboard". It now
+   asks what the focused node *is*, and every other `TEXTAREA`, `INPUT`, `contentEditable` and
+   Excalidraw `editingTextElement` stands the keys down exactly as before.
+2. **The card stops `keydown` propagating**, so Excalidraw does not read a shell's keystrokes
+   as its tools. React's `stopPropagation` calls the native one and React listens at its own
+   root — *below* `window` — so a chord stopped there never reached the listeners at all. The
+   issue did not name this layer, and it is why fixing only the guard changes nothing a reader
+   can see. The card now lets exactly these four past; what goes by is an `Alt` chord, which is
+   not one of the bare letters Excalidraw binds.
+3. **xterm's `attachCustomKeyEventHandler`** returns `false` for exactly these four, which is
+   what stops the meta escape *without* calling `preventDefault` — so the event goes on
+   bubbling to `window`. Every other `Alt` key is still the shell's, AltGr included: it arrives
+   as `Ctrl+Alt` and is somebody typing a `@`.
+
+**What the shell gives up** is four Readline word motions — `Alt+B` is `backward-word`, `Alt+T`
+`transpose-words`, `Alt+P` `non-incremental-reverse-search-history`. This project's default
+shell on Windows is PowerShell with PSReadLine, whose keymap differs, and nothing here offers
+an escape hatch to send the four anyway; nobody has asked for one. Everything else is
+untouched, and deliberately: `Ctrl+C`, `Ctrl+V`, arrows, Escape, `Alt+click` and every bare
+letter stay the shell's.
+
+`scripts/check-terminal-hotkey-browser.mjs` is the check, and it asks in a real Chrome what
+only a browser can answer: each of the four moves the viewport — read off `scrollX`/`scrollY`
+rather than off a handler having run — while the server's own `scrollback` stays byte-identical
+and the page sends the shell nothing at all; a command typed straight afterwards still runs, so
+the emulator kept the keyboard; `Ctrl+C` still interrupts and `Alt+click` still reaches the
+shell; and `Alt+P` typed into a card's bound label is still a keystroke rather than a jump,
+which is the case the guard exists for.
 
 It does more than Alt+B, because the terminal has four ways of being absent and this is the one
 answer to all of them: it scrolls to the blocks, places one if the board has none, and **opens a
@@ -1050,6 +1104,16 @@ it. A board returned to puts its block back where it was left.
   state by writing `1006` and `1000` into the emulator's own parser; the header still a target
   at a zoom that shrinks everything else; and the corner still resizing the block, with the
   new size reaching the server.
+- `scripts/check-terminal-hotkey-browser.mjs` — who owns the *keyboard*, in Chrome, and the
+  sibling of the file above. Each of Alt+B, Alt+T, Alt+P and Alt+G moving the viewport with
+  real keystrokes into a focused emulator, read off `scrollX`/`scrollY` rather than off a
+  handler having run; the server's own `scrollback` byte-identical across all four and the page
+  having sent the shell nothing at all; a command typed straight afterwards still running, so
+  the emulator kept the keyboard; Ctrl+C still interrupting and Alt+click still reaching the
+  shell; and Alt+P typed into a card's bound label still a keystroke rather than a jump. Its
+  sections and its mirror are drawn *around* the block rather than away from it, so no jump
+  ever takes the card off screen — an unmounting emulator writes a focus report to the shell,
+  and the one case here that has to say "nothing at all" could not then say it.
 - `scripts/check-terminal-size-browser.mjs` — how big the block and its strip are drawn, in
   Chrome, measured off the render rather than read out of the stylesheet: #110's lesson is that
   a size which never reaches the element leaves the file reading exactly right. The block the

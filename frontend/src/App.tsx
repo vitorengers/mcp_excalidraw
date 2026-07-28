@@ -18,6 +18,7 @@ import { resolvePanelTarget } from '../../src/core/panel-target'
 import type { PanelElement } from '../../src/core/panel-target'
 import { describeIgnoredClaims, resolveBoardSectionHotkeys } from '../../src/core/board-sections'
 import type { BoardSectionElement } from '../../src/core/board-sections'
+import { isBoardHotkeyChord, textEntryOwnsKeyboard } from './board-hotkeys'
 import { referenceImageName } from '../../src/core/pasted-images'
 import { layoutLabel } from '../../src/core/text-layout'
 import {
@@ -3063,6 +3064,33 @@ function App(): JSX.Element {
   }
 
   /**
+   * Has the board claimed this chord? Asked by the terminal overlay, which sees the key first.
+   *
+   * It has to be asked *there* rather than answered here, and that is the shape of #177 rather
+   * than a preference: xterm listens on its own helper textarea and the four board listeners
+   * are on `window`, so by the time one of them could say "this one is mine" the emulator has
+   * already written the meta escape to the shell and the card has already stopped the event
+   * propagating. The overlay needs the answer before it decides, so the question comes to the
+   * board instead of the answer going out to the block.
+   *
+   * Resolved on the press, for the reason the section listener resolves there: a section is a
+   * shape like any other, so it can be drawn, retitled or deleted while the page is open.
+   *
+   * The two constants are the board's whether or not there is anything to jump to — `Alt+B` on
+   * a board with no mirror does nothing, and it does nothing *rather than* reaching the shell.
+   * A key whose owner depended on what happened to be drawn would be a key the reader could
+   * not learn.
+   */
+  const isBoardHotkey = (event: KeyboardEvent): boolean => {
+    if (!isBoardHotkeyChord(event)) return false
+    if (event.code === MIRROR_HOTKEY_CODE || event.code === TERMINAL_HOTKEY_CODE) return true
+    const api = excalidrawAPIRef.current
+    if (!api) return false
+    const elements = api.getSceneElements() as unknown as BoardSectionElement[]
+    return resolveBoardSectionHotkeys(elements).bindings.some((binding) => binding.code === event.code)
+  }
+
+  /**
    * Follow the blocks: where each is on screen, and what size it now stands for.
    *
    * The rects are in viewport coordinates, the same arithmetic the documentation card uses,
@@ -3357,14 +3385,12 @@ function App(): JSX.Element {
   // canvas, and the point of this one is to work from anywhere on the page.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.code !== TERMINAL_HOTKEY_CODE || !event.altKey || event.ctrlKey || event.metaKey) return
+      if (event.code !== TERMINAL_HOTKEY_CODE || !isBoardHotkeyChord(event)) return
 
-      // A text field owns the keyboard — including this feature's own prompt, where Alt+T
-      // has to be a keystroke rather than a jump.
-      const active = document.activeElement as HTMLElement | null
-      if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) {
-        return
-      }
+      // A text field owns the keyboard. The terminal is no longer one of them — since #177
+      // this key is the board's even while the shell has the keyboard, and the shell is not
+      // sent it either. `board-hotkeys.ts` is the whole rule.
+      if (textEntryOwnsKeyboard(document.activeElement)) return
 
       const api = excalidrawAPIRef.current
       if (!api) return
@@ -3426,15 +3452,14 @@ function App(): JSX.Element {
   // point of this one is to work from anywhere on the page.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.code !== MIRROR_HOTKEY_CODE || !event.altKey || event.ctrlKey || event.metaKey) return
+      if (event.code !== MIRROR_HOTKEY_CODE || !isBoardHotkeyChord(event)) return
 
       // A label being typed into owns the keyboard. Excalidraw edits text in a real
       // textarea, so what has focus is the honest test — and it is the one that keeps
-      // this from swallowing a keystroke meant for a card's title.
-      const active = document.activeElement as HTMLElement | null
-      if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) {
-        return
-      }
+      // this from swallowing a keystroke meant for a card's title. One rule, in
+      // `board-hotkeys.ts`, because a focused xterm is a textarea too and #177 is what
+      // three copies of the tag test cost.
+      if (textEntryOwnsKeyboard(document.activeElement)) return
 
       const api = excalidrawAPIRef.current
       if (!api) return
@@ -3467,12 +3492,9 @@ function App(): JSX.Element {
   // over the scene per Alt+key costs nothing next to being wrong about what is on it.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!event.altKey || event.ctrlKey || event.metaKey) return
+      if (!isBoardHotkeyChord(event)) return
 
-      const active = document.activeElement as HTMLElement | null
-      if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) {
-        return
-      }
+      if (textEntryOwnsKeyboard(document.activeElement)) return
 
       const api = excalidrawAPIRef.current
       if (!api) return
@@ -5055,6 +5077,10 @@ function App(): JSX.Element {
               onDetach={(sessionId) => detachTerminalSession(view.elementId, sessionId)}
               onMerge={() => mergeTerminalBlock(view.elementId)}
               onInput={sendTerminalInput}
+              // The four keys the board has claimed, answered on the press. The overlay sees
+              // a keystroke before any `window` listener does, so it has to ask rather than
+              // be told — see `isBoardHotkey` and `board-hotkeys.ts`.
+              isBoardHotkey={isBoardHotkey}
               fontSize={terminalFont}
               onFontSize={changeTerminalFont}
               // The one thing about the board this overlay cannot work out for itself. Dark
