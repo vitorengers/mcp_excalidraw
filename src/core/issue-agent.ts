@@ -920,6 +920,15 @@ export async function runIssueAgent(
     imagePaths?: readonly string[];
     /** Named when the command turns out not to exist where it was run. See RunAgentOptions. */
     notFoundVariable?: string | null;
+    /**
+     * The run's token totals so far, whenever they change. See `RunAgentOptions.onUsage`.
+     *
+     * Passed straight through, and it is the whole of the research side's opt-in: the meter
+     * is built only when the configured command already asks for a machine-readable stream,
+     * so a board running a plain `claude -p` reaches none of it and the spawn path below is
+     * byte for byte what it was.
+     */
+    onUsage?: (usage: AgentUsage) => void;
   }
 ): Promise<IssueAgentResult> {
   // Per run, not per process: one board runs several projects, and the model, the effort,
@@ -943,6 +952,7 @@ export async function runIssueAgent(
     expects: 'issues',
     what: 'issue agent',
     notFoundVariable: options.notFoundVariable ?? null,
+    ...(options.onUsage ? { onUsage: options.onUsage } : {}),
   });
   return { ok: run.ok, issueUrl: run.url, output: run.output, error: run.error };
 }
@@ -972,6 +982,8 @@ export async function runReviseAgent(
     timeoutMs?: number;
     /** Named when the command turns out not to exist where it was run. See RunAgentOptions. */
     notFoundVariable?: string | null;
+    /** The run's token totals so far. The same opt-in as `runIssueAgent`, one seam not two. */
+    onUsage?: (usage: AgentUsage) => void;
   }
 ): Promise<IssueAgentResult> {
   // The issue agent's settings, workflow included: rewriting an issue is the same agent doing
@@ -993,6 +1005,7 @@ export async function runReviseAgent(
     expects: 'issues',
     what: 'issue revise agent',
     notFoundVariable: options.notFoundVariable ?? null,
+    ...(options.onUsage ? { onUsage: options.onUsage } : {}),
   });
   return { ok: run.ok, issueUrl: run.url, output: run.output, error: run.error };
 }

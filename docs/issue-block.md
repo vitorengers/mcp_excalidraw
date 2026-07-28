@@ -884,10 +884,10 @@ The ceiling was not decoration, though — its job was that a wedged run could n
 in `running` forever. With it gone, that guarantee comes from the card instead. A running
 block offers **Reset — the run was lost**:
 
-- `DELETE /api/issue-block/:id` clears a stuck research run — `issueState` and `issueError`.
-  The issue it produced, if it got that far, is left alone, which is what stops a reset
-  becoming a second issue for one observation: `POST` still refuses a block that has an
-  `issueUrl`.
+- `DELETE /api/issue-block/:id` clears a stuck research run — `issueState`, `issueError`, and
+  the two instants its clock was counting from. The issue it produced, if it got that far, is
+  left alone, which is what stops a reset becoming a second issue for one observation: `POST`
+  still refuses a block that has an `issueUrl`.
 - `DELETE /api/issue-block/:id/implement`, and `DELETE /api/implement` for a mirrored card,
   clear a stuck implementation.
 
@@ -990,8 +990,7 @@ is a way the naive version is wrong:
 `extractGithubUrl` runs over raw stdout, which is now NDJSON with the URL inside a JSON
 string. That still works and is asserted rather than assumed.
 
-Not covered: the research agent. It shares `runAgent` and would get both halves cheaply, but
-its block has no surface to show them on.
+Covered for the research agent too, and the section below is where that differs.
 
 #### How much of `out` was thinking
 
@@ -1049,6 +1048,54 @@ the CLI emits only subagent `tool_use` and `tool_result` blocks by default, so a
 spawns subagents under-reports all three until `result` lands — and `result` settles input and
 output while leaving reasoning at whatever the main thread reported. Worth an issue of its
 own; `--forward-subagent-text` is where it would start.
+
+### The same two halves, for the run that writes the issue
+
+The paragraph above used to end *"Not covered: the research agent. It shares `runAgent` and
+would get both halves cheaply, but its block has no surface to show them on."* The first clause
+was right and the second had stopped being true: a `running` block does have a panel, and what
+it showed was one fixed sentence — *"Researching the repository and drafting the issue. This
+takes minutes, and there is no time limit on the run."* — that never changed for the length of
+the investigation. Which is the complaint the clock was built for, one agent over.
+
+So the design above transfers, unchanged where it can be and different only where the two runs
+genuinely are:
+
+- **The instants go on the block.** `issueStartedAt` at `markState('running')`, `issueEndedAt`
+  when the run settles — on the `created` and the `failed` path alike, written by one `settle`
+  rather than by three call sites, because a path that settled a block and forgot the instant
+  would leave a total ticking forever. Both are in `SERVER_AUTHORED_CUSTOM_DATA`, so the #118
+  sync race cannot drop them, and `RunClock` does the subtraction in the browser exactly as it
+  does for an implementation. A block reads correctly with nothing selected and no network.
+- **The figures go on a record, because there is nowhere else they can go.** A total that moves
+  throughout a run cannot live on a shape without rewriting it every time it moves. The
+  implement side keeps an `ImplementRecord` for this; a research run had only
+  `issueRunsInFlight`, a bare `Set<string>` that could say *that* a run was in flight and
+  nothing else. It is a map now — state, both instants, usage — and `runIssueAgent` passes
+  `onUsage` through to the meter that was already there.
+- **The panel polls `GET /api/issue-block/:id/run`** while the block is `running`, and reads it
+  once more when it settles. Its own route rather than an extension of
+  `GET /api/issue-block/:id/issue`, which is a different question: that one reads the issue from
+  GitHub through `gh` and answers 404 for a block that has none, which is every block with a run
+  in flight.
+- **The record outlives the run.** That last read happens *after* the ending, because the ending
+  arrives over the socket as an element update carrying the state and not the figures — so a
+  record deleted when the run finished would lose the total at exactly the moment it became
+  worth reading. `DELETE /api/issue-block/:id` is what clears one, and it takes the two instants
+  off the block with it: a reset says the run was lost, and a clock left behind would be
+  counting for nobody.
+
+**Researching an issue again is the same seam**, so it is the same change: `runReviseAgent`
+passes `onUsage` onto the `RecreateRecord`, which already held `startedAt` and `endedAt` and
+already had a panel polling it every four seconds and discarding both. One `RunProgress` renders
+all three runs — a second copy of it would be a second answer to *what is worth saying about a
+run in flight*, and the first one to drift would be the one nobody was looking at.
+
+Opt-in works out the same way it does above and for the same reason: the figures come from
+`streamsUsage` reading the operator's own command line, so a board configured with a plain
+`claude -p` gets a clock, no token figures, and the prompt and spawn it had before — asserted
+rather than assumed, in `scripts/check-issue-progress.mjs`.
+`scripts/check-issue-progress-browser.mjs` does the half only a browser can answer.
 
 ## Configuration
 
