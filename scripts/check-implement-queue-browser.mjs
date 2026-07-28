@@ -199,7 +199,7 @@ const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_GH_COMMAND: `node "${stubPath.replace(/\\/g, '/')}"`,
-    EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentPath.replace(/\\/g, '/')}"`,
+    EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentPath.replace(/\\/g, '/')}" -p`,
     // One at a time, so the drain is a sequence to watch rather than a burst, and so the
     // second issue starting is provably the first one finishing rather than both at once.
     EXCALIDRAW_IMPLEMENT_CONCURRENCY: '1',

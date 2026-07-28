@@ -31,6 +31,8 @@ export interface TerminalTabState {
      * what it is: `s4` beside three shells the reader opened names nothing they did.
      */
     owner: { agent: string; issueUrl: string; label: string } | null
+    /** Whether the session has stdin left for a keystroke to reach. See `App.tsx`. */
+    readOnly?: boolean
   } | null
   /** The transcript, newest at the end — escape sequences and all. */
   output: string
@@ -475,6 +477,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             ? 'A real terminal: full-screen programs work, and so does Ctrl+C.'
             : 'No PTY on this machine, so the shell is on pipes: one command in, its output back.'}
         >{status?.mode ?? ''}</span>
+
+        {/* And what the tab *is*, when it is not a shell. A session whose stdin went to an
+            agent's prompt has nothing for a keystroke to reach, and a block that said
+            nothing about it left the reader typing into a screen that answered by staying
+            exactly as it was. */}
+        {status?.readOnly ? (
+          <span
+            className="terminal-card__mode"
+            title="An agent's prompt was written to this session's stdin and ended there, so
+                   there is nothing left to type into. Its output is the whole of it."
+          >read-only</span>
+        ) : null}
       </div>
 
       {/* Inset from the card's edges on purpose — see the note on the component. */}
@@ -542,6 +556,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         }}
         onWheel={forwardWheelToCanvas}
       >
+        {/* `onData` is dropped rather than posted for a read-only session: the route refuses
+            one, and a block that posted anyway would be asking for a 409 per keystroke to
+            learn what its own status already told it. */}
         {tabs.map((tab) => (
           <TerminalScreen
             key={tab.id}
@@ -552,7 +569,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             output={tab.output}
             ended={tab.ended}
             theme={theme}
-            onData={(data) => onInput(tab.id, data)}
+            onData={(data) => { if (!tab.status?.readOnly) onInput(tab.id, data) }}
             registerFocus={(focus) => {
               if (focus) focusRef.current.set(tab.id, focus)
               else focusRef.current.delete(tab.id)

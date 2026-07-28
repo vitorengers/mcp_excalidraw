@@ -211,7 +211,7 @@ function startCanvas() {
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
       EXCALIDRAW_GH_COMMAND: `node "${stubGhPath.replace(/\\/g, '/')}"`,
-      EXCALIDRAW_IMPLEMENT_AGENT: `node "${stubAgentPath.replace(/\\/g, '/')}"`,
+      EXCALIDRAW_IMPLEMENT_AGENT: `node "${stubAgentPath.replace(/\\/g, '/')}" -p`,
       // Every case here starts a run; a cap would refuse one for the wrong reason.
       EXCALIDRAW_IMPLEMENT_CONCURRENCY: '0',
       STUB_GH_FIXTURE: fixturePath,

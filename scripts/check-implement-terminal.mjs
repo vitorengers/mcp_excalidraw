@@ -97,7 +97,7 @@ const ptylessDir = makeProject('ptyless');
 /**
  * Stands in for the implement agent.
  *
- * It reads its prompt from stdin the way the real one does — which is the half of the
+ * It reads its prompt from stdin the way a headless one does — which is the half of the
  * contract a pseudoterminal cannot keep, so a session that hosts this has to be on pipes —
  * then prints in two bursts a second apart, waits to be released, and prints a pull request
  * URL. The two bursts are what "output arrives while the run is alive" is asserted against;
@@ -145,7 +145,16 @@ writeFileSync(registryPath, JSON.stringify({
 
 const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
-const agentCommand = `node "${agentStub.replace(/\\/g, '/')}"`;
+/**
+ * The stub, in the shape it has always been in: headless.
+ *
+ * `-p` is what it means, and since #174 it is also what says so. The server reads the shape
+ * of the operator's command — a command that prints an answer and exits is handed its prompt
+ * on stdin, and one that does not is given a terminal and its prompt as an argument. This
+ * stub reads stdin and exits, so it is the first kind, and every case below is about that
+ * kind. `scripts/check-implement-interactive.mjs` is where the other one is checked.
+ */
+const agentCommand = `node "${agentStub.replace(/\\/g, '/')}" -p`;
 const shellCommand = `node "${shellStub.replace(/\\/g, '/')}"`;
 
 function startCanvas(port, extraEnv = {}) {
@@ -297,7 +306,7 @@ try {
         `session=${session?.cwd} agent=${run301.cwd}`);
   check('which is not the tree the board lives in', !samePath(run301.cwd, projectDir),
         `both ${projectDir}`);
-  check('the session is on pipes, because a prompt needs an end of file',
+  check('the session is on pipes, because a headless prompt needs an end of file',
         session?.mode === 'pipe', String(session?.mode));
 
   console.log('\n3. output arrives while the run is alive, not at the end');

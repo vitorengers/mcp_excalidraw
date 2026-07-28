@@ -178,7 +178,7 @@ function startCanvas(port, host) {
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
       EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
-      EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}"`,
+      EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}" -p`,
       STUB_GH_LOG: logPath,
       STUB_GH_COMMENTS: commentsPath,
       STUB_GH_FAIL_FLAG: failFlag,

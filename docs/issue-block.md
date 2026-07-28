@@ -1033,6 +1033,25 @@ ceiling depends on starts working, since stdout then arrives as the run goes rat
 at exit. Leave it off and the run is timed but not counted, which is the default and is not a
 degraded state.
 
+**Leave `-p` off the implement command and the run becomes something you can answer.** The
+server reads the shape of what you wrote — `-p`/`--print`, the same way it reads
+`--output-format stream-json` — and a command that does not say it is given a pseudoterminal and
+its prompt as an argument rather than on stdin. The tab is then a real `claude` drawing its
+interface, which is what the flag above otherwise turns into NDJSON, and what you type in the
+block reaches it. Three things come off with the flag, and they are the trade:
+
+- **the token counts**, because `--output-format` only works with `--print`;
+- **the ending**, because a TUI goes back to its own prompt instead of exiting. The run settles
+  when the session does — `/exit`, or the tab's `×` — and its exit code is not read, since a
+  reader closing a tab is a kill. The pull request URL is taken from the transcript, which is
+  what the prompt already orders the agent to print last;
+- **unattended runs**, which follow from the second: with `EXCALIDRAW_IMPLEMENT_CONCURRENCY`
+  draining a queue there is nobody to end anything, so those runs hold their blocks in `running`
+  and their tab slots. Keep `-p` for a board that queues, and drop it for one you watch.
+
+With the terminal off, with no PTY binding, or with `EXCALIDRAW_TERMINAL_PTY=0`, a command
+without `-p` runs exactly as one with it — `docs/terminal.md` has the whole of it.
+
 A WSL-backed project runs through `wsl.exe --cd <innerPath>`, because the agent has to see the
 repository the way `git` and `gh` inside that distro do.
 

@@ -259,7 +259,7 @@ const serverEnv = {
   EXCALIDRAW_WORKSPACES: registryPath,
   EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
   EXCALIDRAW_ISSUE_AGENT: `node "${agentStub.replace(/\\/g, '/')}"`,
-  EXCALIDRAW_IMPLEMENT_AGENT: `node "${implementStub.replace(/\\/g, '/')}"`,
+  EXCALIDRAW_IMPLEMENT_AGENT: `node "${implementStub.replace(/\\/g, '/')}" -p`,
   STUB_GH_FIXTURE: fixturePath,
   STUB_GH_ISSUES: storePath,
   STUB_AGENT_PROMPT: promptPath,

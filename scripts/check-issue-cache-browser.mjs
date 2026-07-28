@@ -217,7 +217,7 @@ const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
-    EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}"`,
+    EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}" -p`,
     EXCALIDRAW_ISSUE_MEMO_MS: String(MEMO_MS),
     STUB_GH_FIXTURE: fixturePath,
     STUB_GH_COUNTER: counterPath,

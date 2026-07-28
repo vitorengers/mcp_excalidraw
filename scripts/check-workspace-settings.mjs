@@ -132,10 +132,13 @@ process.stdin.on('end', async () => {
 
 const stub = slash(agentStub);
 const ISSUE_COMMAND = `node "${stub}" --as-issue --output-format stream-json`;
-const IMPLEMENT_COMMAND = `node "${stub}" --output-format stream-json`;
+// `-p` on the implement half because the stub reads its prompt from stdin, and since #174
+// that is what a command has to say for the server to hand it one: a command without it is
+// given a terminal and its prompt as an argument instead.
+const IMPLEMENT_COMMAND = `node "${stub}" -p --output-format stream-json`;
 /** What the stub must see when the project configures nothing at all. */
 const PLAIN_ISSUE_ARGV = ['--as-issue', '--output-format', 'stream-json'];
-const PLAIN_IMPLEMENT_ARGV = ['--output-format', 'stream-json'];
+const PLAIN_IMPLEMENT_ARGV = ['-p', '--output-format', 'stream-json'];
 
 const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];

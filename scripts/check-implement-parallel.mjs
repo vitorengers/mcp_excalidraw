@@ -154,7 +154,7 @@ function startCanvas(port, extraEnv = {}) {
       HOST: '127.0.0.1',
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
-      EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}"`,
+      EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}" -p`,
       ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
