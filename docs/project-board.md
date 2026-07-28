@@ -243,6 +243,40 @@ definition of that shape would drift from the one the library ships. It is marke
 `projectBoardDraft` and is a **real, authored** element: it persists, it syncs, and it is yours
 until the issue exists. The mirror leaves room for it at the top of its column.
 
+### One unwritten block at a time
+
+The `+` makes a block only when there is no **unwritten** one already in the column. Where there
+is, that block is selected instead and no second one is made. A double click therefore leaves one
+block, and so do five presses — before #135 they left two and five, each of which had to be
+deleted by hand.
+
+The `+` is a shape rather than a button, and this follows from that: the click on it is the
+selection landing on it, and the handler hands the selection straight back to the block it just
+made, which re-arms the shape for the very next press. Nothing gave a "done" signal either, and
+the block appears at the top of the column behind a mirror redraw — so a reader who pressed again
+because nothing seemed to have happened was answered with another empty block.
+
+**Unwritten** is read off the element, not off a flag. The label still says what the library ships
+(`Write the observation here`, compared on one line so a narrower column's wrapping does not read
+as an edit), and the block carries no `customData.issueUrl` and no `customData.issueState`. A flag
+would be a second copy of the answer that every place that can edit the text would have to
+remember to clear; the text is what the reader is looking at, so the text is what is asked.
+
+The cap is on unwritten blocks only, and never gets in the way of real work. An observation that
+has been typed into is somebody's, and so is one a research run has already turned into an issue,
+so in both cases the `+` still owes the reader a fresh block. And every draft on the canvas is
+considered, not only the ones stamped with this column — the stamp is vestigial, the layout draws
+every draft here whatever it says, so reading it would let a block stranded by an old ordering
+hide from the cap.
+
+`scripts/check-notes-add-once-browser.mjs` drives all of that in a real browser. It also asserts
+that `Ctrl+Z` after one press leaves **no** block and brings none back: `selectedElementIds` is
+part of Excalidraw's observed app state, so an undo restores the selection along with the
+elements, and a selection that arrives without a press is the one way a cap could not help — there
+is no block left for it to find. Undo turns out to restore the selection to what it was *before*
+the press rather than to the `+`, so nothing fires; the case is kept because that is a property of
+Excalidraw's history, not of this code.
+
 Blocks stack **newest on top**, the same rule the cards follow, ordered by the
 `draftCreatedAt` the `+` stamps onto each one — a timestamp seeded into an id would have been a
 weaker key, and an id is the one field anything on the canvas is free to rewrite. A block made
