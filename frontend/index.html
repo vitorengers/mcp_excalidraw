@@ -18,6 +18,50 @@
             height: 100vh;
         }
 
+        /*
+         * The one ladder everything this app draws over the board is on.
+         *
+         * It was a bare `5` in two component stylesheets and a bare `50` in a third, which is
+         * how the terminal card came to be painted across the project tabs and the header row:
+         * nothing said what those numbers were *relative to*, so nobody noticed that the two
+         * strips of chrome they had to stay under were `static` and unpositioned and therefore
+         * on no layer at all. #153.
+         *
+         * Reading up:
+         *
+         *   1–4   Excalidraw's own, inside its container: the canvas at `--zIndex-canvas: 1`
+         *         and its tool islands at `--zIndex-layerUI: 4`. Ours cannot use those tokens
+         *         — they are scoped to `.excalidraw` and every overlay here is deliberately a
+         *         sibling of it — but the numbers are the same scale, because `.excalidraw` is
+         *         `position: relative` with no `z-index` and so opens no stacking context.
+         *   5     `--board-z-overlay`: the cards drawn over the canvas, the terminal and the
+         *         documentation panel. **Above** Excalidraw's layer UI, deliberately, and this
+         *         is the half of #153 that had never been settled anywhere. The alternative —
+         *         a card that goes under the tool islands the way the shape under it does — was
+         *         considered and dropped: the documentation panel appears exactly when a shape
+         *         is selected, which is exactly when Excalidraw's properties island is on
+         *         screen beside it, so the two would collide on every left-hand shape and the
+         *         panel's own buttons would be the thing nobody could click. A card that is
+         *         over the islands can be panned off them; a panel that is under one cannot.
+         *   10    `--board-z-chrome`: the project tabs and the header row. Above the overlays,
+         *         because they are the page rather than the board — and belt to the clipping's
+         *         braces. The canvas wrapper clips the overlays into the canvas area (see
+         *         `App.tsx`), so nothing at 5 can reach up here at all; a single `overflow`
+         *         declaration is a thin thing for the connection pill and `Clear Canvas` to
+         *         depend on, and this is what holds if it is ever lost.
+         *   50    `--board-z-dialog`: the workspace dialogs, which cover both.
+         *
+         * The fallbacks are not the fallbacks `DocsPanel.css` argues against. A colour fallback
+         * can disagree with the theme; a number here is the same number, and without one an
+         * undefined token makes `z-index` invalid at computed-value time — which is `auto`, and
+         * a silent slide back down the ladder rather than a visible break.
+         */
+        .app {
+            --board-z-overlay: 5;
+            --board-z-chrome: 10;
+            --board-z-dialog: 50;
+        }
+
         .header {
             background: #fff;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
@@ -27,6 +71,9 @@
             justify-content: space-between;
             flex-wrap: wrap;
             gap: 10px;
+            /* Positioned only so that it can be on a layer at all. */
+            position: relative;
+            z-index: var(--board-z-chrome, 10);
         }
         
         .header h1 {
@@ -193,7 +240,7 @@
             --color-gray-60: #7a7a7a;
             --color-gray-70: #5c5c5c;
             --color-gray-80: #3d3d3d;
-            --color-primary: #6965db;
+            --color-primary: #6965db;
             --color-danger: #db6965;
         }
 
@@ -208,7 +255,7 @@
             --color-gray-60: #b8b8b8;
             --color-gray-70: #d6d6d6;
             --color-gray-80: #ebebeb;
-            --color-primary: #a8a5ff;
+            --color-primary: #a8a5ff;
             --color-danger: #ffa8a5;
 
             background-color: #121212;

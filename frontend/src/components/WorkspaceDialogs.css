@@ -5,7 +5,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  /* The top of the ladder named on `.app` in `frontend/index.html`: a dialog covers the board
+     and the chrome both. #153. */
+  z-index: var(--board-z-dialog, 50);
 }
 
 .workspace-dialog,
