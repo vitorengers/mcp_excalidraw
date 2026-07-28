@@ -2299,6 +2299,14 @@ function App(): JSX.Element {
      * rather than with the next number in the sequence.
      */
     owner: { agent: string; issueUrl: string; label: string } | null
+    /**
+     * Whether there is anything for a keystroke to reach.
+     *
+     * True only for an agent's session whose stdin was spent on its prompt. The block asks
+     * before it sends: a route that answered 202 for bytes it dropped, and a screen that
+     * took them without saying, agreed with each other about a message nobody received.
+     */
+    readOnly?: boolean
   }
 
   interface TerminalSessionState {

@@ -306,7 +306,7 @@ function stopAll() {
 }
 
 try {
-  const server = startCanvas(port, `node "${stubPath}"`);
+  const server = startCanvas(port, `node "${stubPath}" -p`);
   await waitForHealth(BASE, server.child, server.read);
 
   console.log('1. a run in flight says when it started');
@@ -405,7 +405,7 @@ try {
         afterReset?.customData?.issueUrl === issue(301), afterReset?.customData?.issueUrl);
 
   console.log('\n9. a command that streams reports what it is spending, while it spends it');
-  const streamingServer = startCanvas(streamedPort, `node "${stubPath}" --output-format stream-json`);
+  const streamingServer = startCanvas(streamedPort, `node "${stubPath}" -p --output-format stream-json`);
   await waitForHealth(STREAMED_BASE, streamingServer.child, streamingServer.read);
   await start(streamed, 401);
 
