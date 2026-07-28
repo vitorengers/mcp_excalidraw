@@ -13,8 +13,8 @@
  */
 import { AgentUsage } from './agent-usage.js';
 import { HeldWorktree, ImplementWorktree } from './implement-worktree.js';
-import { applyAgentSettings, AgentHost, AgentRun, runAgent } from './issue-agent.js';
-import { Workspace } from './workspaces.js';
+import { applyAgentSettings, AgentHost, AgentRun, runAgent, workflowSection } from './issue-agent.js';
+import { loadAgentWorkflow, Workspace } from './workspaces.js';
 
 /**
  * What the agent is told.
@@ -229,16 +229,25 @@ export async function runImplementAgent(
   }
 ): Promise<AgentRun> {
   const worktree = options.worktree ?? null;
+  // Workspace first, environment second. `IMPLEMENT_TIMEOUT_MS` stays what it always was:
+  // the board's own default, now the value a project falls back to rather than the only
+  // value there is.
+  const settings = workspace.agents?.implement ?? null;
+  // Before the worktree is used and before anything is spawned: a project that configured a
+  // workflow the board cannot read gets a refusal naming the file, not a run that quietly
+  // works the way it always did.
+  const workflow = await loadAgentWorkflow(workspace, 'implement', settings);
+  if (!workflow.ok) return { ok: false, url: null, output: '', error: workflow.error };
+
   const prompt = `${IMPLEMENT_AGENT_PROMPT}\n\n---\n\nThe issue to implement:\n\n${issueUrl}`
     + worktreeSection(worktree)
     // After the worktree paragraph, because it is about what is *in* the checkout that one
     // has just introduced — and because that paragraph ends by saying a worktree is kept when
     // work is left in it, which is precisely how this one came to exist.
-    + resumeSection(options.resuming ?? null);
-  // Workspace first, environment second. `IMPLEMENT_TIMEOUT_MS` stays what it always was:
-  // the board's own default, now the value a project falls back to rather than the only
-  // value there is.
-  const settings = workspace.agents?.implement ?? null;
+    + resumeSection(options.resuming ?? null)
+    // Last of all, and deliberately: everything above is what this board tells every agent,
+    // and the project's own workflow has to be the last thing a literal reader is told.
+    + workflowSection(workflow.text);
   return runAgent(workspace, prompt, {
     agentCommand: applyAgentSettings(options.agentCommand, settings),
     timeoutMs: options.timeoutMs === undefined

@@ -900,10 +900,10 @@ The ceiling was not decoration, though — its job was that a wedged run could n
 in `running` forever. With it gone, that guarantee comes from the card instead. A running
 block offers **Reset — the run was lost**:
 
-- `DELETE /api/issue-block/:id` clears a stuck research run — `issueState` and `issueError`.
-  The issue it produced, if it got that far, is left alone, which is what stops a reset
-  becoming a second issue for one observation: `POST` still refuses a block that has an
-  `issueUrl`.
+- `DELETE /api/issue-block/:id` clears a stuck research run — `issueState`, `issueError`, and
+  the two instants its clock was counting from. The issue it produced, if it got that far, is
+  left alone, which is what stops a reset becoming a second issue for one observation: `POST`
+  still refuses a block that has an `issueUrl`.
 - `DELETE /api/issue-block/:id/implement`, and `DELETE /api/implement` for a mirrored card,
   clear a stuck implementation.
 
@@ -1006,8 +1006,7 @@ is a way the naive version is wrong:
 `extractGithubUrl` runs over raw stdout, which is now NDJSON with the URL inside a JSON
 string. That still works and is asserted rather than assumed.
 
-Not covered: the research agent. It shares `runAgent` and would get both halves cheaply, but
-its block has no surface to show them on.
+Covered for the research agent too, and the section below is where that differs.
 
 #### How much of `out` was thinking
 
@@ -1065,6 +1064,54 @@ the CLI emits only subagent `tool_use` and `tool_result` blocks by default, so a
 spawns subagents under-reports all three until `result` lands — and `result` settles input and
 output while leaving reasoning at whatever the main thread reported. Worth an issue of its
 own; `--forward-subagent-text` is where it would start.
+
+### The same two halves, for the run that writes the issue
+
+The paragraph above used to end *"Not covered: the research agent. It shares `runAgent` and
+would get both halves cheaply, but its block has no surface to show them on."* The first clause
+was right and the second had stopped being true: a `running` block does have a panel, and what
+it showed was one fixed sentence — *"Researching the repository and drafting the issue. This
+takes minutes, and there is no time limit on the run."* — that never changed for the length of
+the investigation. Which is the complaint the clock was built for, one agent over.
+
+So the design above transfers, unchanged where it can be and different only where the two runs
+genuinely are:
+
+- **The instants go on the block.** `issueStartedAt` at `markState('running')`, `issueEndedAt`
+  when the run settles — on the `created` and the `failed` path alike, written by one `settle`
+  rather than by three call sites, because a path that settled a block and forgot the instant
+  would leave a total ticking forever. Both are in `SERVER_AUTHORED_CUSTOM_DATA`, so the #118
+  sync race cannot drop them, and `RunClock` does the subtraction in the browser exactly as it
+  does for an implementation. A block reads correctly with nothing selected and no network.
+- **The figures go on a record, because there is nowhere else they can go.** A total that moves
+  throughout a run cannot live on a shape without rewriting it every time it moves. The
+  implement side keeps an `ImplementRecord` for this; a research run had only
+  `issueRunsInFlight`, a bare `Set<string>` that could say *that* a run was in flight and
+  nothing else. It is a map now — state, both instants, usage — and `runIssueAgent` passes
+  `onUsage` through to the meter that was already there.
+- **The panel polls `GET /api/issue-block/:id/run`** while the block is `running`, and reads it
+  once more when it settles. Its own route rather than an extension of
+  `GET /api/issue-block/:id/issue`, which is a different question: that one reads the issue from
+  GitHub through `gh` and answers 404 for a block that has none, which is every block with a run
+  in flight.
+- **The record outlives the run.** That last read happens *after* the ending, because the ending
+  arrives over the socket as an element update carrying the state and not the figures — so a
+  record deleted when the run finished would lose the total at exactly the moment it became
+  worth reading. `DELETE /api/issue-block/:id` is what clears one, and it takes the two instants
+  off the block with it: a reset says the run was lost, and a clock left behind would be
+  counting for nobody.
+
+**Researching an issue again is the same seam**, so it is the same change: `runReviseAgent`
+passes `onUsage` onto the `RecreateRecord`, which already held `startedAt` and `endedAt` and
+already had a panel polling it every four seconds and discarding both. One `RunProgress` renders
+all three runs — a second copy of it would be a second answer to *what is worth saying about a
+run in flight*, and the first one to drift would be the one nobody was looking at.
+
+Opt-in works out the same way it does above and for the same reason: the figures come from
+`streamsUsage` reading the operator's own command line, so a board configured with a plain
+`claude -p` gets a clock, no token figures, and the prompt and spawn it had before — asserted
+rather than assumed, in `scripts/check-issue-progress.mjs`.
+`scripts/check-issue-progress-browser.mjs` does the half only a browser can answer.
 
 ## Configuration
 
@@ -1142,7 +1189,7 @@ One board runs several projects, and until #82 every setting above applied to al
 two command lines were module constants read once at startup, so retuning one project meant
 editing the board's own environment and restarting it for every other project too.
 
-A project's own `board.config.json` can now say three things per agent, under
+A project's own `board.config.json` can now say four things per agent, under
 `agents.issue` and `agents.implement` — see [workspaces.md](workspaces.md) for the shape:
 
 | Setting | Per-project | Global |
@@ -1150,6 +1197,7 @@ A project's own `board.config.json` can now say three things per agent, under
 | `model` | `agents.<kind>.model` → appended as `--model` | `--model` in the command line |
 | `effort` | `agents.<kind>.effort` → appended as `--effort` | `--effort` in the command line |
 | time limit | `agents.<kind>.timeoutSeconds` | `EXCALIDRAW_ISSUE_AGENT_TIMEOUT`, `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` |
+| how the agent works | `agents.<kind>.workflow` → the text of `agent-workflows/<slug>.md`, last section of the prompt | the base prompt, which holds no project's conventions |
 | the command itself | **never** | `EXCALIDRAW_ISSUE_AGENT`, `EXCALIDRAW_IMPLEMENT_AGENT` |
 | `--allowedTools`, `--output-format` | **never** | the command line |
 | concurrency, memo window | **never** | `EXCALIDRAW_IMPLEMENT_CONCURRENCY`, `EXCALIDRAW_ISSUE_MEMO_MS` |
@@ -1168,14 +1216,66 @@ second one. Nothing else in that command line is rewritten, which is the line `a
 already draws about `--output-format`.
 
 **A project that configures nothing spawns the command line it spawned before any of this
-existed, byte for byte.** That is the same rule `worktreeSection` and `imageReferenceSection`
-keep about the prompt, and `scripts/check-workspace-settings.mjs` asserts it against a stub agent
-that reports its own argv.
+existed, byte for byte — and sends the same prompt, byte for byte.**  That is the same rule
+`worktreeSection`, `imageReferenceSection` and `workflowSection` each keep, and
+`scripts/check-workspace-settings.mjs` asserts both against a stub agent that reports its own
+argv and the prompt it was handed.
 
-Not done here, and deliberately: the multi-stage workflow the observation behind #82 sketched —
-plan with one model, implement with another, review with a third. That is a new execution model
-rather than a setting (the board spawns **once** per implementation, and `ImplementRecord` holds
-one start, one end, one pull request), so it needs its own issue. Per-run resolution of model and
-effort is its precondition, which is what landed here. The `ultracode` keyword belongs to that
-issue too: it is not a CLI flag but a prompt-level opt-in, and the implement prompt is kept free
-of per-project content on purpose.
+### Saying how the agent works, without granting it anything
+
+`agents.<kind>.workflow` names a slug; the text at `<project>/agent-workflows/<slug>.md` is read
+and appended to the prompt as its **last** section. That is the one thing in this table which is
+about how the agent *works* rather than how well it runs, and it exists because the base prompt
+withholds a workflow on purpose — writing this repository's conventions into it would make the
+feature wrong for every other board. What it says instead is "read your own project memory […]
+and follow the workflow it records", which is a pointer: an agent may or may not follow it, a
+fresh worktree may hold no memory behind it, and a typo in it fails as silence. A project that
+runs a pipeline — plan on one model, review the plan, implement, review the implementation — had
+no way to say so.
+
+- **The text, not a pointer to it.** Authorization comes from the turn, and the prompt the board
+  writes *is* that turn. There is no size cap: how big the file is, is a property of what the
+  project wrote, and a cap that truncated silently would reinstate exactly the failure this
+  exists to remove.
+- **A slug, not a path**, matching `[a-z0-9][a-z0-9-]*`, so a name that does not resolve can be
+  reported as one file. `/`, `..`, a drive letter and anything else are refused twice: by the
+  slug shape, and again by `resolveInWorkspace` on the join.
+- **At the project root and committed.** Not `CLAUDE.md`, which interactive runs load too, so a
+  board-only pipeline would leak into every session opened by hand; not under `docsDir`, which is
+  configurable and whose markdown becomes documentation cards; and not a dot-directory, which is
+  the one shape a project has most likely gitignored already — it would resolve on the
+  maintainer's checkout and be absent in every board run, since an implementation runs in a
+  worktree cut from the default branch.
+- **A name that does not resolve refuses the run before the spawn**, naming the file it looked
+  for. Deliberately unlike the rest of a project's config, where a field pointing outside its
+  project is [ignored and the workspace still loads](workspaces.md): a workflow silently not
+  applied is a run that looks entirely normal and did the wrong thing, in a process nobody was
+  watching.
+- **It is not a capability.** Nothing from the file reaches argv, the environment,
+  `--allowedTools` or `--dangerously-skip-permissions`, and the section says so to the agent in
+  as many words. `scripts/check-agent-workflow.mjs` asserts the mechanical form of it: selecting
+  a workflow changes the prompt and leaves the command line byte-identical to the one a project
+  selecting nothing spawns. Nothing new has to be granted for a pipeline, either — the implement
+  agent already runs with `--dangerously-skip-permissions` rather than an allowlist, and its
+  prompt has always said "You may put helpers to work — sub-agents".
+
+**On the issue side the field is shipped but inert**, and that is the operator's call rather than
+this one's. The documented `EXCALIDRAW_ISSUE_AGENT` allowlist above — `Bash(gh:*) Bash(git:*)
+Read Grep Glob WebFetch WebSearch` — has no sub-agent tool in it, and in `-p` mode a tool outside
+the list is refused silently with exit 0 and no result. A workflow asking the issue agent to
+orchestrate therefore does nothing until that variable is widened. The field is there for
+symmetry, and because the same setting already covers both of that agent's runs, researching and
+rewriting.
+
+Orchestrated runs also **under-report their token totals while they run**, which was already
+true and stops being theoretical now that a project can ask for orchestration: under
+`--output-format stream-json` the CLI emits only sub-agent `tool_use`/`tool_result` blocks by
+default, so all three figures settle only when `result` lands, and reasoning stays main-thread
+only even then. `--forward-subagent-text` is where fixing that would start; it is its own issue.
+
+Still not done here, and still deliberately: **the board spawns once per implementation.**
+`ImplementRecord` holds one start, one end and one pull request, so a pipeline runs as
+sub-agents inside that single run rather than as several runs the board sequences — the agent
+orchestrates itself. A per-*card* workflow, chosen for one run rather than for the project, is a
+separate issue too: the block would need somewhere to hold the choice and the run would need to
+report which workflow it used.

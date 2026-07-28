@@ -15,7 +15,7 @@ import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
 import { AgentUsage, streamsUsage, UsageMeter } from './agent-usage.js';
-import { AgentSettings, Workspace } from './workspaces.js';
+import { AgentSettings, loadAgentWorkflow, Workspace } from './workspaces.js';
 
 /** Default instruction. Investigation first, evidence over guesswork, URL last. */
 export const ISSUE_AGENT_PROMPT = `You will receive an observation about this project and turn it into a GitHub issue.
@@ -871,6 +871,46 @@ in words whatever the issue depends on. They are deleted when this run ends, so 
 you write may point at these paths.`;
 }
 
+/**
+ * The section carrying the project's own workflow — or nothing at all.
+ *
+ * Nothing at all is the important half a third time: a project that selects no workflow must
+ * send the prompt it sent before this existed, byte for byte.
+ *
+ * **The text, not a pointer to it.** Both base prompts already point at a project's own
+ * conventions — "read your own project memory […] and follow the workflow it records" — and a
+ * pointer is exactly what this exists because of: an agent may or may not follow it, a fresh
+ * worktree may hold no memory to follow, and a typo in the name degrades to silence. What the
+ * board writes into the turn is the authorization, so what has to be in the turn is the
+ * workflow itself.
+ *
+ * **Last, and it says so.** The base prompt above has already told the agent how to decide,
+ * and a literal reader takes the first instruction it was given. So this is appended after the
+ * worktree and resume sections and states plainly that it wins — otherwise a project asking for
+ * a planning pass before any code is written is read as advice competing with an order.
+ *
+ * **And it grants nothing.** A workflow is text in a prompt: nothing from it reaches argv, the
+ * environment, `--allowedTools` or `--dangerously-skip-permissions`. That is the same boundary
+ * `applyAgentSettings` keeps — a project retunes the agent the operator allowed, it never
+ * grants itself one — so the section says it out loud rather than leaving an agent to infer
+ * that a workflow asking for something it cannot do is a licence to go and get it.
+ */
+export function workflowSection(text: string | null | undefined): string {
+  if (!text || !text.trim()) return '';
+
+  return `\n\n---\n\nThis project has written down how work like this is done in it, and that
+text is authoritative for this run: follow it. It is reproduced in full below, and it is the
+last word — where it asks for something the instructions above leave to your judgement, or
+asks for more than they do, do what it says.
+
+It cannot widen what you are allowed to do. It grants no tool, no permission and no command
+you were not already given; it says how to use the ones you have. If something in it would
+need a capability you do not have, do as much of it as you can and say in your report what you
+could not do and why — never treat it as a reason to go and obtain one.
+
+${text.trim()}`;
+}
+
 export async function runIssueAgent(
   workspace: Workspace,
   observation: string,
@@ -880,14 +920,29 @@ export async function runIssueAgent(
     imagePaths?: readonly string[];
     /** Named when the command turns out not to exist where it was run. See RunAgentOptions. */
     notFoundVariable?: string | null;
+    /**
+     * The run's token totals so far, whenever they change. See `RunAgentOptions.onUsage`.
+     *
+     * Passed straight through, and it is the whole of the research side's opt-in: the meter
+     * is built only when the configured command already asks for a machine-readable stream,
+     * so a board running a plain `claude -p` reaches none of it and the spawn path below is
+     * byte for byte what it was.
+     */
+    onUsage?: (usage: AgentUsage) => void;
   }
 ): Promise<IssueAgentResult> {
-  const prompt = `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observation}`
-    + imageReferenceSection(options.imagePaths ?? []);
-  // Per run, not per process: one board runs several projects, and the model, the effort
-  // and the ceiling are each the project's to retune. A caller that names a ceiling still
-  // wins — that is the route asking for one, not a default being applied.
+  // Per run, not per process: one board runs several projects, and the model, the effort,
+  // the ceiling and the workflow are each the project's to set. A caller that names a ceiling
+  // still wins — that is the route asking for one, not a default being applied.
   const settings = workspace.agents?.issue ?? null;
+  // Before the prompt is built, so a workflow that cannot be read stops the run here rather
+  // than spawning an agent that would silently work the wrong way.
+  const workflow = await loadAgentWorkflow(workspace, 'issue', settings);
+  if (!workflow.ok) return { ok: false, issueUrl: null, output: '', error: workflow.error };
+
+  const prompt = `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observation}`
+    + imageReferenceSection(options.imagePaths ?? [])
+    + workflowSection(workflow.text);
   const timeoutMs = options.timeoutMs !== undefined
     ? options.timeoutMs
     : settings?.timeoutMs ?? undefined;
@@ -897,6 +952,7 @@ export async function runIssueAgent(
     expects: 'issues',
     what: 'issue agent',
     notFoundVariable: options.notFoundVariable ?? null,
+    ...(options.onUsage ? { onUsage: options.onUsage } : {}),
   });
   return { ok: run.ok, issueUrl: run.url, output: run.output, error: run.error };
 }
@@ -926,11 +982,20 @@ export async function runReviseAgent(
     timeoutMs?: number;
     /** Named when the command turns out not to exist where it was run. See RunAgentOptions. */
     notFoundVariable?: string | null;
+    /** The run's token totals so far. The same opt-in as `runIssueAgent`, one seam not two. */
+    onUsage?: (usage: AgentUsage) => void;
   }
 ): Promise<IssueAgentResult> {
-  const prompt = `${ISSUE_REVISE_PROMPT}\n\n---\n\nThe issue to rewrite: ${issueUrl}`
-    + `\n\n---\n\nNew observations:\n\n${observations}`;
+  // The issue agent's settings, workflow included: rewriting an issue is the same agent doing
+  // the same work with an issue already in front of it, so a project that said how its issue
+  // agent works said it about both of its runs.
   const settings = workspace.agents?.issue ?? null;
+  const workflow = await loadAgentWorkflow(workspace, 'issue', settings);
+  if (!workflow.ok) return { ok: false, issueUrl: null, output: '', error: workflow.error };
+
+  const prompt = `${ISSUE_REVISE_PROMPT}\n\n---\n\nThe issue to rewrite: ${issueUrl}`
+    + `\n\n---\n\nNew observations:\n\n${observations}`
+    + workflowSection(workflow.text);
   const timeoutMs = options.timeoutMs !== undefined
     ? options.timeoutMs
     : settings?.timeoutMs ?? undefined;
@@ -940,6 +1005,7 @@ export async function runReviseAgent(
     expects: 'issues',
     what: 'issue revise agent',
     notFoundVariable: options.notFoundVariable ?? null,
+    ...(options.onUsage ? { onUsage: options.onUsage } : {}),
   });
   return { ok: run.ok, issueUrl: run.url, output: run.output, error: run.error };
 }

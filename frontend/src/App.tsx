@@ -4389,6 +4389,8 @@ function App(): JSX.Element {
         issueError: (custom.issueError as string) ?? null,
         issueTitle: (custom.issueTitle as string) ?? null,
         observation: (custom.observation as string) ?? null,
+        issueStartedAt: (custom.issueStartedAt as string) ?? null,
+        issueEndedAt: (custom.issueEndedAt as string) ?? null,
         images: Array.isArray(custom.issueImages) ? (custom.issueImages as string[]) : [],
         implementState: (custom.implementState as IssueTarget['implementState']) ?? null,
         implementUrl: (custom.implementUrl as string) ?? null,
