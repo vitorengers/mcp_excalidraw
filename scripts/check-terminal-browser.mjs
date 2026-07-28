@@ -329,8 +329,7 @@ const PROBE = `(() => {
   if (card) {
     const box = card.getBoundingClientRect();
     const body = card.querySelector('.terminal-card__body');
-    const prompt = card.querySelector('.terminal-card__prompt');
-    const promptBox = prompt ? prompt.getBoundingClientRect() : null;
+    const bodyBox = body ? body.getBoundingClientRect() : null;
     const header = card.querySelector('.terminal-card__header');
     const headerBox = header ? header.getBoundingClientRect() : null;
     out.card = {
@@ -346,8 +345,10 @@ const PROBE = `(() => {
       where: (card.querySelector('.terminal-card__where') || {}).textContent || '',
       grid: (card.querySelector('.terminal-card__grid') || {}).textContent || '',
       mode: (card.querySelector('.terminal-card__mode') || {}).textContent || '',
-      prompt: promptBox
-        ? { x: promptBox.left + promptBox.width / 2, y: promptBox.top + promptBox.height / 2 }
+      // The way into the shell, and the only one since #144 took the strip along the bottom
+      // of the block away.
+      screenAt: bodyBox
+        ? { x: bodyBox.left + bodyBox.width / 2, y: bodyBox.top + bodyBox.height / 2 }
         : null,
       text: body ? body.textContent : '',
       // The rendered screen alone. The body also holds the stylesheet the emulator injects
@@ -511,10 +512,10 @@ try {
   console.log('\n3. a command typed into the block runs, and its output comes back');
   check('the block says which mode the session got', /^(pty|pipe)$/.test(scene.card.mode.trim()),
         scene.card.mode);
-  // The strip at the bottom is the status line, and clicking it still hands the keyboard
-  // over — the screen above it is the way in a reader takes, which is #112's own check.
-  await click(scene.card.prompt.x, scene.card.prompt.y);
-  check('clicking the prompt strip puts the keyboard in the terminal',
+  // The screen is the way in, which is #112's arrangement and, since #144 took the strip
+  // along the bottom of the block away, the only one.
+  await click(scene.card.screenAt.x, scene.card.screenAt.y);
+  check('clicking the screen puts the keyboard in the terminal',
         /xterm/.test((await evaluate(PROBE)).focused), (await evaluate(PROBE)).focused);
 
   // A shell on a terminal has a REPL to start, and keystrokes sent into one that is still
@@ -548,7 +549,7 @@ try {
 
   // A viewport of this case's own, rather than the one Alt+T fitted. Fitting puts the block's
   // bottom-right corner hard against the bottom of the window, and the corner is where both
-  // the resize handle and the overlay's prompt strip end — so which of the two takes the
+  // the resize handle and the overlay's own frame end — so which of the two takes the
   // press is decided by a pixel, and a press that lands on the shape *moves* the block
   // instead of resizing it, which is a case failing for a reason that is not about the code.
   // Placed at a known spot, zoomed out, there is room to grab the handle and room to drag it.

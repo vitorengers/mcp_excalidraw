@@ -280,14 +280,19 @@ const PROBE = `(() => {
   if (card) {
     const box = card.getBoundingClientRect();
     const body = card.querySelector('.terminal-card__body');
-    const prompt = card.querySelector('.terminal-card__prompt');
-    const promptBox = prompt ? prompt.getBoundingClientRect() : null;
+    const bodyBox = body ? body.getBoundingClientRect() : null;
     out.card = {
       left: box.left, top: box.top, width: box.width, height: box.height,
-      prompt: promptBox
-        ? { x: promptBox.left + promptBox.width / 2, y: promptBox.top + promptBox.height / 2 }
+      // The way into the shell since #112, and the only one since #144 took the strip along
+      // the bottom of the block away.
+      screenAt: bodyBox
+        ? { x: bodyBox.left + bodyBox.width / 2, y: bodyBox.top + bodyBox.height / 2 }
         : null,
-      hint: (card.querySelector('.terminal-card__hint') || {}).textContent || '',
+      // What a block with no shell left says, at the home #144 gave it: over the transcript
+      // rather than in a row of its own, so the frame does not change height when a shell
+      // dies. The sentence is the same one, and it is still the only place Alt+T is written
+      // down where a reader will be looking.
+      hint: (card.querySelector('.terminal-card__ended') || {}).textContent || '',
       where: (card.querySelector('.terminal-card__where') || {}).textContent || '',
       // The rendered screen alone. The body also holds the stylesheet the emulator injects
       // for its palette, which is text as far as textContent is concerned.
@@ -355,7 +360,7 @@ try {
 
   console.log('0. a shell with something in its transcript');
   let scene = await evaluate(PROBE);
-  await click(scene.card.prompt.x, scene.card.prompt.y);
+  await click(scene.card.screenAt.x, scene.card.screenAt.y);
   await waitFor(async () => String((await evaluate(PROBE)).card?.screen).trim().length > 3,
                 'the shell to draw its first prompt');
   await sleep(500);
@@ -443,7 +448,7 @@ try {
 
   console.log('\n3. a shell that exited can be replaced without a reload');
   scene = await evaluate(PROBE);
-  await click(scene.card.prompt.x, scene.card.prompt.y);
+  await click(scene.card.screenAt.x, scene.card.screenAt.y);
   await typeText('exit');
   await pressKey('Enter', 'Enter', 0, 13, '\r');
   await waitFor(async () => (await terminalState()).session === null, 'the shell to exit');

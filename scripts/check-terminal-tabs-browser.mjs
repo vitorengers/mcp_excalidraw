@@ -340,7 +340,9 @@ const PROBE = `(() => {
       add: middle(card.querySelector('.terminal-card__add')),
       detach: middle(card.querySelector('.terminal-card__detach')),
       merge: middle(card.querySelector('.terminal-card__merge')),
-      prompt: middle(card.querySelector('.terminal-card__prompt')),
+      // The way into the shell since #112, and the only one since #144 took the strip along
+      // the bottom of the block away.
+      screenAt: middle(card.querySelector('.terminal-card__body')),
       // Only the screen that is on top. A hidden one still has its rows in the DOM, and a
       // case about "switching shows that session" would pass on the other tab's text.
       screen: screens
@@ -428,8 +430,8 @@ try {
         String(scene.cards[0].tabs[0].pointerEvents));
 
   console.log('\n2. the first shell is typed into');
-  await click(scene.cards[0].prompt.x, scene.cards[0].prompt.y);
-  check('clicking the prompt strip puts the keyboard in the terminal',
+  await click(scene.cards[0].screenAt.x, scene.cards[0].screenAt.y);
+  check('clicking the screen puts the keyboard in the terminal',
         /xterm/.test((await evaluate(PROBE)).focused), (await evaluate(PROBE)).focused);
   await say('alpha');
   scene = await evaluate(PROBE);
@@ -449,7 +451,7 @@ try {
   check('the new tab is the one on top', scene.cards[0].tabs[1].active, JSON.stringify(scene.cards[0].tabs));
 
   const [first, second] = scene.blocks[0].sessions;
-  await click(scene.cards[0].prompt.x, scene.cards[0].prompt.y);
+  await click(scene.cards[0].screenAt.x, scene.cards[0].screenAt.y);
   await say('bravo');
   scene = await evaluate(PROBE);
   check('what the second shell said is on the second tab\'s screen',
@@ -570,6 +572,16 @@ try {
   console.log('\n8. and the block\'s corner still resizes it');
   const before = { w: scene.blocks[0].w, h: scene.blocks[0].h };
   const gridBefore = (await sessions())[0];
+
+  // A viewport of this case's own rather than whatever the last fit left, and for a reason
+  // about the window rather than about the code: since #144 a block is 1140 × 720, so a fit
+  // puts its bottom-right corner near the edge and the 200 × 140 this case drags it by lands
+  // outside the window. A press dispatched off the viewport is not a press on the handle.
+  // Placed at a known spot and zoomed out, there is room to grab it and room to drag it —
+  // the same answer `check-terminal-browser.mjs` gives to the same question.
+  await evaluate(`window.__terminalCheckApi.updateScene({ appState: { scrollX: ${200 / 0.5 - scene.blocks[0].x}, scrollY: ${(200 - scene.view.offsetTop) / 0.5 - scene.blocks[0].y}, zoom: { value: 0.5 } } })`);
+  await sleep(500);
+  scene = await evaluate(PROBE);
 
   // A click on the header has to select the *shape*. Since #112 the screen below it takes
   // the pointer for the shell, so the header is the whole of what still reaches the block —

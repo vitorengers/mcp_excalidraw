@@ -349,7 +349,6 @@ const PROBE = `(() => {
   const rows = card.querySelector('.xterm-rows');
   const screen = card.querySelector('.xterm-screen');
   const header = card.querySelector('.terminal-card__header');
-  const prompt = card.querySelector('.terminal-card__prompt');
 
   out.card = {
     box: boxOf(card),
@@ -362,7 +361,6 @@ const PROBE = `(() => {
     screen: boxOf(screen),
     body: boxOf(card.querySelector('.terminal-card__body')),
     header: header ? { ...boxOf(header), background: getComputedStyle(header).backgroundColor } : null,
-    prompt: prompt ? { ...boxOf(prompt), background: getComputedStyle(prompt).backgroundColor } : null,
     // The emulator's own backdrop, which xterm paints from the theme it was given rather
     // than from the stylesheet. A card that is paper over a viewport that is not is still a
     // dark terminal with a light frame around it.
@@ -477,7 +475,7 @@ try {
   }
 
   console.log('\n3. all sixteen ANSI colours are ink a reader can read');
-  await click(scene.card.prompt.x, scene.card.prompt.y);
+  await click(scene.card.body.x, scene.card.body.y);
   await waitFor(async () => /xterm/.test((await evaluate(PROBE)).focused), 'the keyboard to reach the shell');
   await sleep(700);
   await typeText('node colours.js');
@@ -512,7 +510,10 @@ try {
 
   // The dark fill used to do this. Whatever took it over has to be an area with a colour of
   // its own — a glyph at four pixels is a smudge, and a rule one pixel high is nothing.
-  const bands = [scene.card.header, scene.card.prompt].filter(Boolean).map((band) => ({
+  // It was two bands, top and bottom, until #144 took the bottom one away; the question was
+  // always whether *a* band survives being shrunk, and the header is the one that also has a
+  // second job — it is what selects and drags the block.
+  const bands = [scene.card.header].filter(Boolean).map((band) => ({
     ...band,
     ratio: contrast(band.background, PAPER),
   }));

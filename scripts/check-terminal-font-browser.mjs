@@ -320,7 +320,9 @@ const PROBE = `(() => {
         return { x: headerBox.left + 6, y: headerBox.top + headerBox.height - 2 };
       })()
       : null,
-    prompt: centreOf(card.querySelector('.terminal-card__prompt')),
+    // The way into the shell since #112, and the only one since #144 took the strip along
+    // the bottom of the block away.
+    screenAt: centreOf(card.querySelector('.terminal-card__body')),
     rows: (card.querySelector('.xterm-rows') || {}).textContent || '',
   };
 
@@ -498,7 +500,7 @@ try {
 
   // And now the column itself, painted: a line exactly as wide as the grid the header
   // claims, whose last character has to land inside the block.
-  await click(scene.card.prompt.x, scene.card.prompt.y);
+  await click(scene.card.screenAt.x, scene.card.screenAt.y);
   await waitFor(async () => /xterm/.test((await evaluate(PROBE)).focused), 'the keyboard to reach the shell');
   await waitFor(async () => String((await evaluate(PROBE)).card.rows).trim().length > 3,
                 'the shell to draw its first prompt');
