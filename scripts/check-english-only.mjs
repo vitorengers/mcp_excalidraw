@@ -23,8 +23,14 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** Where a development artifact can live. Everything else is data or vendored. */
-const SCANNED_DIRS = ['src/', 'frontend/src/', 'scripts/', 'skills/'];
+/**
+ * Where a development artifact can live. Everything else is data or vendored.
+ *
+ * `docs/` was outside this list until #151, which left roughly 268 KB of tracked prose — the
+ * largest body of writing in the repository — scanned by nothing. The boundary this file
+ * exists to hold is about what a *developer reads*, and documentation is most of that.
+ */
+const SCANNED_DIRS = ['src/', 'frontend/src/', 'scripts/', 'skills/', 'docs/'];
 const SCANNED_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.md', '.css', '.html', '.json'];
 
 /**
