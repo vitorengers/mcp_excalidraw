@@ -9,7 +9,8 @@ debug it is reasoning about source that is not running.
 
 ## What to do
 
-Kill by PID before starting. `start-board.ps1` does it:
+Kill by PID before starting. [running.md](running.md) carries this as the step before the
+build:
 
 ```powershell
 $busy = Get-NetTCPConnection -LocalPort 3737 -State Listen -ErrorAction SilentlyContinue
