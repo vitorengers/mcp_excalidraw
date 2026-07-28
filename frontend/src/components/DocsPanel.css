@@ -267,16 +267,18 @@
 }
 
 /* One line rather than the comment box's many: an issue URL has no newlines in it, and a
-   textarea sized for a paragraph would suggest it takes one. */
+   textarea sized for a paragraph would suggest it takes one. No fallbacks, for #134's
+   reason: a fallback that can disagree with the theme is worse than a token that is
+   undefined, and the token set is declared on `.app` now. */
 .element-docs__url {
   display: block;
   box-sizing: border-box;
   width: 100%;
   margin: 0 0 8px;
   padding: 0.5rem;
-  border: 1px solid var(--color-gray-30, #ced4da);
+  border: 1px solid var(--color-gray-30);
   border-radius: 6px;
-  background: var(--island-bg-color, #fff);
+  background: var(--island-bg-color);
   color: inherit;
   font: inherit;
   font-size: 0.8125rem;
