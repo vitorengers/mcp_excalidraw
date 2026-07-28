@@ -259,6 +259,22 @@
   resize: vertical;
 }
 
+/* One line rather than the comment box's many: an issue URL has no newlines in it, and a
+   textarea sized for a paragraph would suggest it takes one. */
+.element-docs__url {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 0.5rem;
+  border: 1px solid var(--color-gray-30, #ced4da);
+  border-radius: 6px;
+  background: var(--island-bg-color, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 0.8125rem;
+}
+
 /* The conversation under the body: what was asked after the issue was written, and
    what was answered. */
 .element-docs__comments {

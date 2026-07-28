@@ -55,6 +55,7 @@ import type { IssueDetail } from './core/github-issue.js';
 import { IssueMemo, memoWindow } from './core/issue-memo.js';
 import { TERMINAL_SESSION_LIMIT, TerminalSession, loadPty, shellCommandFrom } from './core/terminal-session.js';
 import { issueBlockAppearance } from './core/issue-appearance.js';
+import { preserveServerAuthored } from './core/element-authorship.js';
 import { runImplementAgent } from './core/implement-agent.js';
 import {
   ImplementRecord,
@@ -946,6 +947,9 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
     let updatedCount = 0;
     let staleCount = 0;
     let deletedCount = 0;
+    // Elements that won the race but arrived without what the server had written on them.
+    // Logged because it is the only visible trace of a crossing, and #118 was invisible.
+    let carriedCount = 0;
     const processedElements: ServerElement[] = [];
 
     frontendElements.forEach((element: any, index: number) => {
@@ -971,10 +975,19 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
           return;
         }
 
+        // Winning the version race does not win the whole element. `version` is the
+        // browser's number — bumped on every keystroke and nudge, while the server bumps
+        // it once per state change — so a payload that crosses a server write reverts it.
+        // The fields the server authors are therefore taken out of the race entirely;
+        // `element-authorship.ts` has the measurement behind that, and #118 is what it
+        // cost. Everything else about the element is still the browser's.
+        const authored = preserveServerAuthored(element as ServerElement, existing);
+        if (existing && authored !== element) carriedCount++;
+
         // Add server metadata. Note version comes from the incoming element: it is
         // what makes the next reconciliation possible, so it must not be reset.
         const processedElement: ServerElement = {
-          ...element,
+          ...authored,
           id: elementId,
           syncedAt: new Date().toISOString(),
           source: 'frontend_sync',
@@ -995,7 +1008,8 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
 
     logger.info(
       `Sync reconciled: ${successCount} applied (${updatedCount} updates), ` +
-      `${deletedCount} deleted, ${staleCount} ignored as stale, ${store.size} total`
+      `${deletedCount} deleted, ${staleCount} ignored as stale, ` +
+      `${carriedCount} kept their server-authored state, ${store.size} total`
     );
 
     // 3. Broadcast sync event to all WebSocket clients
@@ -1149,6 +1163,117 @@ const ISSUE_AGENT_COMMAND = process.env.EXCALIDRAW_ISSUE_AGENT || null;
 /** Elements with a run in flight. A second click must not open a second issue. */
 const issueRunsInFlight = new Set<string>();
 
+/**
+ * Write the state onto a block, and the look that goes with it.
+ *
+ * Here rather than in the browser because this is where the state is authored: the
+ * appearance then persists, exports and reaches every connected tab through the update
+ * that already carries the state. A browser deriving it on render would have to derive it
+ * again on every path that draws a block, and a block saved to `docs/board.excalidraw`
+ * would go back to looking like a draft.
+ *
+ * At module level rather than inside the run, because the run is no longer the only writer:
+ * a block that lost its state is put back with the same two writes, through
+ * `applyIssueToBlock` below.
+ */
+function markIssueState(
+  workspaceId: string,
+  elementId: string,
+  state: string,
+  extra: Record<string, unknown> = {}
+): void {
+  const store = elementsFor(workspaceId);
+  const current = store.get(elementId);
+  if (!current) return;
+  const updated: ServerElement = {
+    ...current,
+    ...issueBlockAppearance(state),
+    customData: { ...(current.customData ?? {}), issueState: state, ...extra },
+    updatedAt: new Date().toISOString(),
+    version: (current.version || 0) + 1
+  };
+  store.set(elementId, updated);
+  broadcast({ type: 'element_updated', element: updated } as ElementUpdatedMessage, workspaceId);
+}
+
+/**
+ * Record on a block the issue it stands for: the state, the URL, the title, the look.
+ *
+ * Only the title is written onto `customData`, not the label alone: wrapping text to a box
+ * and refitting the box needs font metrics, and the server has none. Writing the label here
+ * produced a 518px title inside a 400px block, on one line, in a box still sized for the
+ * observation. The browser owns geometry — it reads `issueTitle` and relays the block itself.
+ *
+ * The observation is kept rather than discarded: it is the wording that produced this
+ * particular issue, and the panel still shows it.
+ *
+ * Best-effort by design where a run calls it: the issue is already created by the time this
+ * runs, so a failure here must not turn a successful run into a failed block.
+ */
+async function applyIssueToBlock(
+  workspace: Workspace,
+  workspaceId: string,
+  elementId: string,
+  issueUrl: string,
+  observation: string
+): Promise<void> {
+  const store = elementsFor(workspaceId);
+  const detail = await fetchIssue(workspace, issueUrl);
+  if (!detail.title) return;
+
+  markIssueState(workspaceId, elementId, 'created', {
+    issueUrl,
+    issueError: null,
+    issueTitle: detail.title,
+    observation
+  });
+
+  const label = Array.from(store.values()).find(
+    (candidate) => candidate.type === 'text'
+      && (candidate as ServerElement & { containerId?: string }).containerId === elementId
+  );
+  const container = store.get(elementId);
+  if (!label || !container) return;
+
+  // Lay the title out rather than just writing it. Excalidraw wraps bound text and
+  // refits its container in redrawTextBoundingBox, which runs on its own edit paths —
+  // never on an element that arrives from outside. Writing the text alone left a title
+  // wider than its box, on one line, in a box still sized for the observation.
+  // Excalidraw draws bound text at 20 when the element carries no size of its own, and
+  // laying the title out for 16 produced a box too short for the text and a wrap that
+  // came too late. The size is written back below rather than merely assumed, so the
+  // browser and this calculation use the same number by construction — matching a
+  // default this code does not own would only hold until that default moved.
+  const fontSize = typeof label.fontSize === 'number' ? label.fontSize : DEFAULT_BOUND_TEXT_FONT_SIZE;
+  const containerWidth = typeof container.width === 'number' ? container.width : 400;
+  const laid = layoutLabel(detail.title, containerWidth, fontSize);
+
+  const containerHeight = Math.max(laid.containerHeight, fontSize * 2);
+  const updatedContainer: ServerElement = {
+    ...container,
+    height: containerHeight,
+    updatedAt: new Date().toISOString(),
+    version: (container.version || 0) + 1
+  };
+  store.set(elementId, updatedContainer);
+  broadcast({ type: 'element_updated', element: updatedContainer } as ElementUpdatedMessage, workspaceId);
+
+  const updatedLabel: ServerElement = {
+    ...label,
+    text: laid.text,
+    fontSize,
+    width: laid.width,
+    height: laid.height,
+    // Centred in the container, the way Excalidraw centres bound text itself.
+    x: (updatedContainer.x ?? 0) + (containerWidth - laid.width) / 2,
+    y: (updatedContainer.y ?? 0) + (containerHeight - laid.height) / 2,
+    updatedAt: new Date().toISOString(),
+    version: (label.version || 0) + 1
+  };
+  store.set(updatedLabel.id, updatedLabel);
+  broadcast({ type: 'element_updated', element: updatedLabel } as ElementUpdatedMessage, workspaceId);
+}
+
 app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   const elementId = req.params.id ?? '';
 
@@ -1213,97 +1338,13 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   }
 
   issueRunsInFlight.add(elementId);
-  /**
-   * Write the state onto the block, and the look that goes with it.
-   *
-   * Here rather than in the browser because this is where the state is authored: the
-   * appearance then persists, exports and reaches every connected tab through the update
-   * that already carries the state. A browser deriving it on render would have to derive it
-   * again on every path that draws a block, and a block saved to `docs/board.excalidraw`
-   * would go back to looking like a draft.
-   */
-  const markState = (state: string, extra: Record<string, unknown> = {}) => {
-    const current = store.get(elementId);
-    if (!current) return;
-    const updated: ServerElement = {
-      ...current,
-      ...issueBlockAppearance(state),
-      customData: { ...(current.customData ?? {}), issueState: state, ...extra },
-      updatedAt: new Date().toISOString(),
-      version: (current.version || 0) + 1
-    };
-    store.set(elementId, updated);
-    broadcast({ type: 'element_updated', element: updated } as ElementUpdatedMessage, workspaceId);
-  };
+  const markState = (state: string, extra: Record<string, unknown> = {}) =>
+    markIssueState(workspaceId, elementId, state, extra);
 
   markState('running');
   // Answer immediately: an investigation takes minutes, and a request held open that
   // long looks indistinguishable from a hang. Progress arrives over the socket.
   res.status(202).json({ success: true, state: 'running', elementId });
-
-  /**
-   * Record the title of the issue the run produced.
-   *
-   * Only the title is written, not the label: wrapping text to a box and refitting the
-   * box needs font metrics, and the server has none. Writing the label here produced a
-   * 518px title inside a 400px block, on one line, in a box still sized for the
-   * observation. The browser owns geometry — it reads `issueTitle` and relays the block
-   * itself.
-   *
-   * The observation is kept rather than discarded: it is the wording that produced this
-   * particular issue, and the panel still shows it.
-   *
-   * Best-effort by design: the issue is already created by the time this runs, so a
-   * failure here must not turn a successful run into a failed block.
-   */
-  const adoptIssueTitle = async (issueUrl: string): Promise<void> => {
-    const detail = await fetchIssue(workspace, issueUrl);
-    if (!detail.title) return;
-
-    markState('created', { issueUrl, issueError: null, issueTitle: detail.title, observation });
-
-    const label = store.get(boundText?.id ?? '');
-    const container = store.get(elementId);
-    if (!label || !container) return;
-
-    // Lay the title out rather than just writing it. Excalidraw wraps bound text and
-    // refits its container in redrawTextBoundingBox, which runs on its own edit paths —
-    // never on an element that arrives from outside. Writing the text alone left a title
-    // wider than its box, on one line, in a box still sized for the observation.
-    // Excalidraw draws bound text at 20 when the element carries no size of its own, and
-    // laying the title out for 16 produced a box too short for the text and a wrap that
-    // came too late. The size is written back below rather than merely assumed, so the
-    // browser and this calculation use the same number by construction — matching a
-    // default this code does not own would only hold until that default moved.
-    const fontSize = typeof label.fontSize === 'number' ? label.fontSize : DEFAULT_BOUND_TEXT_FONT_SIZE;
-    const containerWidth = typeof container.width === 'number' ? container.width : 400;
-    const laid = layoutLabel(detail.title, containerWidth, fontSize);
-
-    const containerHeight = Math.max(laid.containerHeight, fontSize * 2);
-    const updatedContainer: ServerElement = {
-      ...container,
-      height: containerHeight,
-      updatedAt: new Date().toISOString(),
-      version: (container.version || 0) + 1
-    };
-    store.set(elementId, updatedContainer);
-    broadcast({ type: 'element_updated', element: updatedContainer } as ElementUpdatedMessage, workspaceId);
-
-    const updatedLabel: ServerElement = {
-      ...label,
-      text: laid.text,
-      fontSize,
-      width: laid.width,
-      height: laid.height,
-      // Centred in the container, the way Excalidraw centres bound text itself.
-      x: (updatedContainer.x ?? 0) + (containerWidth - laid.width) / 2,
-      y: (updatedContainer.y ?? 0) + (containerHeight - laid.height) / 2,
-      updatedAt: new Date().toISOString(),
-      version: (label.version || 0) + 1
-    };
-    store.set(updatedLabel.id, updatedLabel);
-    broadcast({ type: 'element_updated', element: updatedLabel } as ElementUpdatedMessage, workspaceId);
-  };
 
   let images: MaterializedImages = NO_IMAGES;
   try {
@@ -1349,7 +1390,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
         ));
 
       try {
-        await adoptIssueTitle(result.issueUrl);
+        await applyIssueToBlock(workspace, workspaceId, elementId, result.issueUrl, observation);
       } catch (error) {
         logger.warn(`Issue block ${elementId}: could not read back the issue — ${(error as Error).message}`);
       }
@@ -1363,6 +1404,108 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     await images.cleanup();
     issueRunsInFlight.delete(elementId);
   }
+});
+
+/**
+ * Tell a block which issue it already produced.
+ *
+ * The way back from #118. A block whose state was overwritten by a browser sync carries no
+ * `issueState` and no `issueUrl`, and nothing else in this file can touch it: `DELETE`
+ * resets a `running` block and this one is not running, and `POST` would start a **second**
+ * research run for an issue that already exists, because the guard that refuses one reads
+ * `issueUrl`. Deleting the block by hand was the only answer, and it throws away the
+ * observation with it.
+ *
+ * So the block is told the answer instead. It is the same two writes the end of a successful
+ * run makes — `applyIssueToBlock` — and therefore leaves a block indistinguishable from one
+ * whose run was recorded properly: `reconcileDrafts` can retire it, the panel renders the
+ * issue, and `POST` refuses it a second run.
+ *
+ * **It does not create anything.** The URL names an issue that already exists; the route
+ * reads it and refuses if `gh` cannot. That is what keeps this from being a way to write an
+ * arbitrary URL onto a block and have the board believe it.
+ *
+ * Guarded like the read route rather than like the run route: it starts no agent and touches
+ * no repository, but it does shell out to `gh` holding your credentials, so loopback only.
+ */
+app.post('/api/issue-block/:id/adopt', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Adopting an issue')) return;
+
+  const elementId = req.params.id ?? '';
+  const workspaceId = workspaceIdFrom(req);
+  const store = elementsFor(workspaceId);
+  const element = store.get(elementId);
+  if (!element) {
+    return res.status(404).json({ success: false, error: `Element ${elementId} not found` });
+  }
+
+  const custom = (element.customData ?? {}) as Record<string, unknown>;
+  if (custom.kind !== 'issue') {
+    return res.status(400).json({ success: false, error: 'That shape is not an issue block.' });
+  }
+  // A block that already knows its issue has nothing to adopt, and quietly pointing one at a
+  // different issue would lose the first without saying so.
+  if (custom.issueUrl) {
+    return res.status(409).json({
+      success: false,
+      error: 'This block already has an issue.',
+      issueUrl: custom.issueUrl
+    });
+  }
+  if (issueRunsInFlight.has(elementId)) {
+    return res.status(409).json({
+      success: false,
+      error: 'A run is in flight for this block right now. Wait for it rather than guessing its answer.'
+    });
+  }
+
+  const issueUrl = typeof req.body?.issueUrl === 'string' ? req.body.issueUrl.trim() : '';
+  if (!isIssueUrl(issueUrl)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Expected the URL of a GitHub issue, like https://github.com/owner/repo/issues/1.'
+    });
+  }
+
+  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace) {
+    return res.status(400).json({
+      success: false,
+      error: `Workspace "${workspaceId}" is not registered, so there is no project to read the issue in.`
+    });
+  }
+
+  // The observation is whatever the block still says, the way the run reads it — the text is
+  // about to be replaced by the issue's title, so this is the last moment it can be kept.
+  const boundText = Array.from(store.values()).find(
+    (candidate) => candidate.type === 'text' &&
+      (candidate as ServerElement & { containerId?: string }).containerId === elementId
+  );
+  const observation = typeof custom.observation === 'string' && custom.observation.trim()
+    ? custom.observation.trim()
+    : [element.text, boundText?.text]
+        .find((value) => typeof value === 'string' && value.trim())?.trim() ?? '';
+
+  try {
+    await applyIssueToBlock(workspace, workspaceId, elementId, issueUrl, observation);
+  } catch (error) {
+    return res.status(502).json({
+      success: false,
+      error: `Could not read ${issueUrl}: ${(error as Error).message}`
+    });
+  }
+
+  const adopted = (store.get(elementId)?.customData ?? {}) as Record<string, unknown>;
+  if (!adopted.issueUrl) {
+    // `applyIssueToBlock` writes nothing for an issue with no title, which is what a `gh`
+    // that answered about something else looks like. Saying so beats a silent 200.
+    return res.status(502).json({
+      success: false,
+      error: `${issueUrl} came back without a title, so nothing was written onto the block.`
+    });
+  }
+  res.json({ success: true, issueUrl, issueTitle: adopted.issueTitle ?? null, elementId });
 });
 
 /**

@@ -182,12 +182,27 @@ of the two a block is in. `check-block-appearance.mjs` holds the draft values ag
 the library ships: a mapping that disagreed with the library would repaint every block the first
 time anything touched it.
 
-The appearance is written by the server, in the same `markState` that writes
+The appearance is written by the server, in the same `markIssueState` that writes
 `customData.issueState`, rather than derived in the browser. That is where the state is
 authored, so the look persists, exports with the board, and reaches every connected tab on the
 update that already carries the state — a browser deriving it on render would have to derive it
 again on every path that draws a block, and a block saved to `docs/board.excalidraw` would go
 back to looking like a draft.
+
+### The state is the server's, and the sync is told so
+
+Authored on the server was not, on its own, enough to keep it there. `POST /api/elements/sync`
+merges whole elements by `version`, and `version` is the browser's number — bumped on every
+keystroke and nudge, against one bump per state change here. So a browser payload built before
+a run's write and applied after it took the block back to the draft it was, and three blocks
+that produced #94, #95 and #96 kept no record of having done so: no `issueState`, no
+`issueUrl`, a dashed outline, nothing able to retire them and nothing able to run them again
+without opening a second issue.
+
+`src/core/element-authorship.ts` names the fields this file writes, and the sync restores them
+onto any payload that disagrees rather than letting a version number decide them.
+[sync-reconciliation.md](sync-reconciliation.md) has the measurement and the rule in both
+directions.
 
 ## After the issue exists
 
@@ -666,6 +681,31 @@ server no longer owns, and a button that claimed to would be lying. What they do
 on the element cannot tell a live run from an abandoned one, and the server can. In-flight
 runs are tracked in memory, so a restart is precisely when a `running` element has no run
 behind it and the reset is the only way out.
+
+### And the way back from a run that lost its answer
+
+A reset is for a block stuck in `running`. The block #118 leaves behind is stuck in nothing —
+it carries no `issueState` at all, so the reset does not apply, and no `issueUrl`, so the run
+button is offered and would open a **second** issue for an observation that already has one.
+Deleting the block by hand was the only answer, and it takes the observation with it.
+
+So the block is told the answer instead. Its panel carries **This block already has an issue**
+beside the run, and what is typed into it goes to `POST /api/issue-block/:id/adopt`. That route
+reads the issue through `gh` and then makes exactly the writes the end of a successful run
+makes, so the block comes out indistinguishable from one whose result was recorded properly:
+`reconcileDrafts` can retire it, the panel renders the issue, and `POST` refuses it a run.
+
+Four things bound it.
+
+- **It creates nothing.** The URL names an issue that already exists and the route reads it;
+  a URL `gh` cannot answer for is a 502 and nothing is written. That is what stops this being
+  a way to put an arbitrary URL on a block and have the board believe it.
+- **A block that already has an issue is refused**, 409, rather than repointed. Losing the
+  first one silently is worse than making somebody reset it first.
+- **Guarded like the read route, not the run route.** It starts no agent and touches no
+  repository, but it does spawn a process holding your `gh` credentials, so loopback only.
+- **It is worded as a fact, not an action.** *This block already has an issue* — the wrong
+  reading of it, "make an issue for this", is the button directly above it.
 
 ### How long it has been running
 

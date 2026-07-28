@@ -166,6 +166,14 @@ export interface DocsPanelBodyProps {
   /** The same, for the run that researches the issue. Neither run has a time limit. */
   onResetIssue?: (issue: IssueTarget) => Promise<string | null>
   /**
+   * Tells a block which issue it already produced, for a run whose result never reached it.
+   *
+   * Neither of the two above can help there: the block is not `running`, so there is nothing
+   * to reset, and it carries no `issueUrl`, so a run would open a second issue for an
+   * observation that already has one. Answers with an error to show, or null.
+   */
+  onAdoptIssue?: (issue: IssueTarget, issueUrl: string) => Promise<string | null>
+  /**
    * Adds an observation to the issue as a GitHub comment — an answer to a question the
    * issue agent left open, or whatever the observation missed. Keyed by issue like the
    * two above, and for the same reason.
@@ -315,7 +323,8 @@ function knownAlready(
  */
 export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   docKey, title, workspace, collapsible, onToggleCollapse, issue, onCreateIssue,
-  onImplementIssue, onResetImplement, onResetIssue, onAddComment, onAttachImages, onDetachImage
+  onImplementIssue, onResetImplement, onResetIssue, onAdoptIssue, onAddComment,
+  onAttachImages, onDetachImage
 }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
   const [atSelection] = useState(() => knownAlready(issue, workspace))
@@ -344,6 +353,11 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   const [draft, setDraft] = useState('')
   const [posting, setPosting] = useState(false)
   const [commentError, setCommentError] = useState<string | null>(null)
+  // The URL of an issue this block already produced, and whether the box for it is open.
+  const [adopting, setAdopting] = useState(false)
+  const [adoptUrl, setAdoptUrl] = useState('')
+  const [adoptError, setAdoptError] = useState<string | null>(null)
+  const [adopted, setAdopted] = useState(false)
 
   const attached = issue?.images ?? []
   // A list is a new array on every render; its contents are what the effect depends on.
@@ -989,6 +1003,73 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
             >
               Research and create the issue
             </button>
+          )}
+
+          {/* Below the run rather than beside it, and worded as a statement of fact rather
+              than as an action: this is for the block whose run succeeded and whose result
+              never came back (#118), and the wrong reading of it — "make an issue for this"
+              — is the button directly above. Offered wherever a run is, because that is
+              exactly the state such a block is stranded in: no `issueUrl`, so nothing else
+              in the panel can reach it, and a run would open a second issue for an
+              observation that already has one. */}
+          {issue.state !== 'created' && issue.state !== 'running' && onAdoptIssue && (
+            <div className="element-docs__adopt">
+              {!adopting && (
+                <button
+                  type="button"
+                  className="element-docs__collapse"
+                  onClick={() => { setAdoptError(null); setAdopting(true) }}
+                >
+                  This block already has an issue
+                </button>
+              )}
+
+              {adopting && (
+                <div className="element-docs__compose">
+                  <p className="element-docs__hint">
+                    For a run that made its issue and never got the URL back onto the block.
+                    The issue is read to confirm it exists; nothing new is created.
+                  </p>
+                  <input
+                    type="url"
+                    className="element-docs__url"
+                    value={adoptUrl}
+                    autoFocus
+                    placeholder="https://github.com/owner/repo/issues/94"
+                    onChange={(event) => setAdoptUrl(event.target.value)}
+                  />
+                  <div className="element-docs__actions">
+                    <button
+                      type="button"
+                      className="element-docs__collapse element-docs__action"
+                      disabled={adopted || !adoptUrl.trim()}
+                      onClick={async () => {
+                        setAdopted(true)
+                        setAdoptError(null)
+                        const error = await onAdoptIssue(issue, adoptUrl.trim())
+                        setAdopted(false)
+                        // The URL stays in the box on a failure: retyping it is the one thing
+                        // a reader who mistyped it does not want to do twice.
+                        if (error) { setAdoptError(error); return }
+                        setAdoptUrl('')
+                        setAdopting(false)
+                      }}
+                    >
+                      {adopted ? 'Reading the issue…' : 'Record it on this block'}
+                    </button>
+                    <button
+                      type="button"
+                      className="element-docs__collapse element-docs__action"
+                      disabled={adopted}
+                      onClick={() => { setAdopting(false); setAdoptUrl(''); setAdoptError(null) }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  {adoptError && <p className="element-docs__error">{adoptError}</p>}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
