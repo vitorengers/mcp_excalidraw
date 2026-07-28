@@ -81,8 +81,24 @@ export function terminalBlockData(customData: unknown): TerminalBlockData {
  */
 export const TERMINAL_GAP = 120;
 
-/** How big the block is when it is first drawn. It is resizable from there. */
-export const TERMINAL_SIZE = { width: 760, height: 480 };
+/**
+ * How big the block is when it is first drawn. It is resizable from there.
+ *
+ * Half again as big in each direction since #144 — 760 × 480 became 1140 × 720, which is
+ * 2.25 times the area. "Fifty per cent bigger" was read as each dimension rather than as the
+ * area on purpose: the area reading gives 931 × 588, and a request about how big a window
+ * looks is a request about its edges. #110 read its own 2.5 the same way.
+ *
+ * The old pair was the one constant in this file that argued nothing for itself. It was not
+ * wrong so much as never chosen, and what it cost was a terminal that opened at about a
+ * hundred columns by twenty rows — enough for a prompt and not for the agent transcript this
+ * block was built to hold. The new pair is around 150 × 33 at the default font, which is a
+ * screen a `git diff` fits in.
+ *
+ * Only a *fresh* block reads this. A detach copies the block the tab came out of and a
+ * restore reuses the geometry the reader had, so nothing already on a board moves.
+ */
+export const TERMINAL_SIZE = { width: 1140, height: 720 };
 
 export const TERMINAL_FONT_SIZE = 13;
 
@@ -176,14 +192,27 @@ export const TERMINAL_CELL = {
 };
 
 /**
- * Room the frame takes: the header strip, the tab strip, the input row and the padding.
+ * Room the frame takes: the header strip, the tab strip and the padding.
  *
- * The tab strip is the 22 that was added for #94, and it is added rather than absorbed: the
- * grid is what the *shell* is told, so a strip that took its rows out of the screen without
- * this would have every full-screen program repainting two lines past the bottom of the
- * block.
+ * The tab strip is added rather than absorbed — that is what #94 added it for. The grid is
+ * what the *shell* is told, so a strip that took its rows out of the screen without this
+ * would have every full-screen program repainting two lines past the bottom of the block.
+ *
+ * A constant standing for a frame that is sized entirely in `em`, so it is a **measurement**
+ * rather than a decision, and #144 moved the frame in both directions at once: the tab strip
+ * became half again as tall, and the status bar along the bottom went. That is the coupling
+ * #104 is a monument to — a chrome smaller than the real frame hands the shell rows the
+ * block clips rather than scrolls, and neither `tsc` nor `vite build` can see it.
+ *
+ * So this was re-measured off a real render at zoom 1 and the default font rather than
+ * re-derived on paper: `.terminal-card__body` came back 662.3px tall inside a 720 block, so
+ * the frame is 57.7, and the 64 here is that rounded up. **Up**, deliberately and in the
+ * direction #104 is safe in: too much chrome costs the reader a row at the bottom of the
+ * block, too little costs them rows they cannot reach at all. `check-terminal-rows-browser`
+ * is what settles it, at 8, 13 and 24, because it divides by a cell read back off the render
+ * rather than by the one this file assumed.
  */
-export const TERMINAL_CHROME = { width: 20, height: 84 };
+export const TERMINAL_CHROME = { width: 20, height: 64 };
 
 /**
  * How far the reader may move the text, with `+` and `-` on the block's own header.
@@ -217,10 +246,10 @@ export function clampTerminalFont(value: unknown): number {
  * The cell and the frame at a given font size.
  *
  * Both are proportions of the text rather than constants beside it. The cell is the glyph,
- * so it is the font by definition; the frame is the header, the prompt strip and the
- * padding, and every one of those is sized in `em` in `TerminalPanel.css`, so it grows with
- * the text it holds. A frame that stayed 62 while the text doubled would hand the emulator
- * three rows the block has no room to draw.
+ * so it is the font by definition; the frame is the header, the tab strip and the padding,
+ * and every one of those is sized in `em` in `TerminalPanel.css`, so it grows with the text
+ * it holds. A frame that stayed 64 while the text doubled would hand the emulator three rows
+ * the block has no room to draw.
  *
  * Neither clamps to `TERMINAL_FONT_RANGE`. These answer about the font they were given —
  * holding 30 down to 24 here would report a grid nobody asked for and be impossible to see

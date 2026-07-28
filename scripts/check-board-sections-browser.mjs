@@ -11,7 +11,7 @@
  * section declared bring that section into view from wherever the board happens to be
  * scrolled? Does the *other* section's key reach the other one, rather than both landing
  * on whichever mark the scene lists first? Does the key stand down while a shape's label
- * is being typed into, and while the terminal's prompt is — where `p` and `g` have to be
+ * is being typed into, and while the terminal has the keyboard — where `p` and `g` have to be
  * characters rather than a jump? Does a key a section is not allowed to have leave the
  * feature that owns it alone? And does a board that declares no sections bind nothing at
  * all, which is the case that keeps this right for every project that never draws one?
@@ -241,11 +241,12 @@ const PROBE = `(() => {
   out.active = document.activeElement ? document.activeElement.tagName : null;
   out.focused = String((document.activeElement || {}).className || '');
 
-  // The strip along the bottom of the terminal block is the one part of the overlay that
-  // takes a pointer; clicking it hands the keyboard to the shell's own emulator.
-  const prompt = document.querySelector('.terminal-card__prompt');
-  const box = prompt ? prompt.getBoundingClientRect() : null;
-  out.prompt = box ? { x: box.left + box.width / 2, y: box.top + box.height / 2 } : null;
+  // The screen is the part of the overlay that takes a pointer; clicking it hands the
+  // keyboard to the shell's own emulator. It was the strip along the bottom of the block
+  // until #144 removed that strip.
+  const screen = document.querySelector('.terminal-card__body');
+  const box = screen ? screen.getBoundingClientRect() : null;
+  out.screen = box ? { x: box.left + box.width / 2, y: box.top + box.height / 2 } : null;
   return out;
 })()`;
 
@@ -361,16 +362,16 @@ try {
   await pressKey('Escape', 'Escape', 0, 27);
   await sleep(300);
 
-  console.log('\n3. and while the terminal prompt is');
+  console.log('\n3. and while the terminal has the keyboard');
   await waitFor(async () => (await evaluate(PROBE)).terminal, 'the terminal block');
-  // Alt+T first: the block sits off to the right of the board, and a prompt strip that is
-  // not on screen is not a prompt strip anyone can click.
+  // Alt+T first: the block sits off to the right of the board, and a screen that is not on
+  // screen is not a screen anyone can click.
   await altPress('KeyT', 't', 84);
-  await waitFor(async () => (await evaluate(PROBE)).prompt, 'the terminal overlay to render');
+  await waitFor(async () => (await evaluate(PROBE)).screen, 'the terminal overlay to render');
   scene = await evaluate(PROBE);
-  await click(scene.prompt.x, scene.prompt.y);
+  await click(scene.screen.x, scene.screen.y);
   scene = await evaluate(PROBE);
-  check('clicking the prompt strip puts the keyboard in the terminal',
+  check('clicking the screen puts the keyboard in the terminal',
         /xterm/.test(scene.focused), scene.focused);
 
   const parked = { ...scene.view };

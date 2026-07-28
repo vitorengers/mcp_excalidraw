@@ -261,8 +261,8 @@ const GRAB_API = `(() => {
  *
  * `.xterm-screen` is the measurement that matters: xterm sizes it as `rows × cell`, so its
  * height *is* the screen the shell was told it had, in the pixels it was actually drawn in.
- * `.terminal-card__body` is the frame around it — the block minus the header, the tab strip,
- * the prompt row and the padding.
+ * `.terminal-card__body` is the frame around it — the block minus the header, the tab strip
+ * and the padding. There was a prompt row below it too, until #144.
  */
 const PROBE = `(() => {
   const api = window.__terminalCheckApi;
@@ -299,7 +299,6 @@ const PROBE = `(() => {
     plus: boxOf(steps[1]),
     body: boxOf(card.querySelector('.terminal-card__body')),
     screen: boxOf(card.querySelector('.xterm-screen')),
-    prompt: boxOf(card.querySelector('.terminal-card__prompt')),
     drawnRows: card.querySelectorAll('.xterm-rows > div').length,
   };
 
@@ -472,7 +471,7 @@ try {
   // The geometry above says the screen fits. This says a line printed into its last row was
   // painted where a reader could read it — the vertical twin of the width check's ruler,
   // and the thing three UI defects in this repository got past by compiling.
-  await click(scene.card.prompt.x, scene.card.prompt.y);
+  await click(scene.card.body.x, scene.card.body.y);
   await waitFor(async () => /xterm/.test((await evaluate(PROBE)).focused), 'the keyboard to reach the shell');
   await sleep(600);
   await typeText(`node rows.js ${base.shell.rows}`);

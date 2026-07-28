@@ -284,8 +284,7 @@ const PROBE = `(() => {
   if (!card) return { ...out, card: null };
   const box = card.getBoundingClientRect();
   const body = card.querySelector('.terminal-card__body');
-  const prompt = card.querySelector('.terminal-card__prompt');
-  const promptBox = prompt ? prompt.getBoundingClientRect() : null;
+  const bodyBox = body ? body.getBoundingClientRect() : null;
   const header = card.querySelector('.terminal-card__header');
   const headerBox = header ? header.getBoundingClientRect() : null;
   out.card = {
@@ -297,9 +296,10 @@ const PROBE = `(() => {
     header: headerBox
       ? { x: headerBox.left + 6, y: headerBox.top + headerBox.height - 2 }
       : null,
-    promptPointerEvents: prompt ? getComputedStyle(prompt).pointerEvents : null,
-    prompt: promptBox
-      ? { x: promptBox.left + promptBox.width / 2, y: promptBox.top + promptBox.height / 2 }
+    // The way into the shell since #112, and the only one since #144 took the strip along
+    // the bottom of the block away.
+    screenAt: bodyBox
+      ? { x: bodyBox.left + bodyBox.width / 2, y: bodyBox.top + bodyBox.height / 2 }
       : null,
     emulator: Boolean(card.querySelector('.xterm')),
     dom: card.textContent || '',
@@ -384,8 +384,8 @@ try {
         scene.card.headerPointerEvents === 'none' && Boolean(scene.card.header),
         String(scene.card.headerPointerEvents));
 
-  console.log('\n2. clicking that strip puts the keyboard in the terminal');
-  await click(scene.card.prompt.x, scene.card.prompt.y);
+  console.log('\n2. clicking that screen puts the keyboard in the terminal');
+  await click(scene.card.screenAt.x, scene.card.screenAt.y);
   scene = await evaluate(PROBE);
   check('the emulator has the focus', /xterm/.test(scene.focused), scene.focused);
 

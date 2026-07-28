@@ -327,15 +327,15 @@ const PROBE = `(() => {
   };
   const body = card.querySelector('.terminal-card__body');
   const header = card.querySelector('.terminal-card__header');
-  const prompt = card.querySelector('.terminal-card__prompt');
   out.card = {
     box: boxOf(card),
     body: boxOf(body),
     header: boxOf(header),
-    prompt: boxOf(prompt),
+    // The strip along the bottom of the block, which #144 removed. Anything but null here
+    // is that strip back, offering itself as the way in the screen already is.
+    prompt: boxOf(card.querySelector('.terminal-card__prompt')),
     bodyPointerEvents: body ? getComputedStyle(body).pointerEvents : null,
     headerPointerEvents: header ? getComputedStyle(header).pointerEvents : null,
-    hint: (card.querySelector('.terminal-card__hint') || {}).textContent || '',
     grid: (card.querySelector('.terminal-card__grid') || {}).textContent || '',
     selectionRects: card.querySelectorAll('.xterm-selection div').length,
     screen: (card.querySelector('.xterm-rows') || {}).textContent || '',
@@ -420,8 +420,10 @@ try {
         String(scene.card.bodyPointerEvents));
   check('and the header does not, so it is still the shape underneath',
         scene.card.headerPointerEvents === 'none', String(scene.card.headerPointerEvents));
-  check('the strip no longer offers itself as the way in',
-        !/click here to type/i.test(scene.card.hint), scene.card.hint);
+  // It stopped *offering* itself in #112, when the screen took the pointer, and #144 took
+  // the strip away rather than leaving a band that narrates where the pointer already is.
+  check('and the strip that used to offer itself as the way in is gone',
+        scene.card.prompt === null, JSON.stringify(scene.card.prompt));
 
   console.log('\n2. a click in the middle of the body puts the keyboard in the terminal');
   await click(scene.card.body.x, scene.card.body.y);
@@ -522,7 +524,11 @@ try {
         !String(scene.card.screen).includes('SURVIVED'), String(scene.card.screen).slice(-300));
 
   console.log('\n6. the block is still a block: the header selects it and a corner resizes it');
-  scene = await placeBoard();
+  // Further out than the rest of the file, and for a reason about the window rather than
+  // about the code: since #144 a fresh block is 1140 × 720, and at 0.8 its bottom-right
+  // corner plus the 180 × 120 this case drags it by lands past the bottom of a 1500 × 950
+  // window. A press dispatched outside the viewport is not a press on the handle.
+  scene = await placeBoard(0.5);
   {
     const header = { x: scene.card.header.left + 6, y: scene.card.header.top + scene.card.header.height - 2 };
     await click(header.x, header.y);

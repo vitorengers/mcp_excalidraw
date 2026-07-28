@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import {
@@ -138,18 +138,15 @@ const TerminalScreen: React.FC<{
   ended: string | null
   theme: TerminalTheme
   onData: (data: string) => void
-  onFocusChange: (focused: boolean) => void
   registerFocus: (focus: (() => void) | null) => void
-}> = ({ active, fontSize, cols, rows, output, ended, theme, onData, onFocusChange, registerFocus }) => {
+}> = ({ active, fontSize, cols, rows, output, ended, theme, onData, registerFocus }) => {
   const hostRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   /** How much of `output` has been handed to the emulator, so a redraw is a delta. */
   const writtenRef = useRef<string>('')
   const onDataRef = useRef(onData)
-  const onFocusChangeRef = useRef(onFocusChange)
   const registerFocusRef = useRef(registerFocus)
   onDataRef.current = onData
-  onFocusChangeRef.current = onFocusChange
   registerFocusRef.current = registerFocus
 
   useEffect(() => {
@@ -224,16 +221,8 @@ const TerminalScreen: React.FC<{
       terminal.options.fontFamily = TERMINAL_FONT_FAMILY
     })
 
-    const textarea = terminal.textarea
-    const onFocus = (): void => onFocusChangeRef.current(true)
-    const onBlur = (): void => onFocusChangeRef.current(false)
-    textarea?.addEventListener('focus', onFocus)
-    textarea?.addEventListener('blur', onBlur)
-
     return () => {
       settled = true
-      textarea?.removeEventListener('focus', onFocus)
-      textarea?.removeEventListener('blur', onBlur)
       registerFocusRef.current(null)
       terminal.dispose()
       terminalRef.current = null
@@ -356,6 +345,14 @@ const TerminalScreen: React.FC<{
  * whole of what selects and drags the block, so every pixel of it that takes the pointer is
  * a pixel that no longer grabs the shape. The browser checks drag a corner afterwards to say
  * the shape is still a shape.
+ *
+ * What #144 changed about that is the *size* of a chip rather than which part of the row
+ * takes the pointer: the strip is drawn at `--terminal-tab-scale`, half again as big, while
+ * the row around the chips stays transparent and the header above them stays exactly the
+ * size it was. The budget #112 was defending is the header band, and the strip is not it.
+ * The same change took the bar off the bottom of the block — two of its three sentences
+ * described where the pointer already was, and the one that did not is now drawn over the
+ * screen, which is where the reader is looking when a shell has gone.
  */
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   rect, zoom, suppressed, tabs, activeId, canAdd, canMerge,
@@ -364,7 +361,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 }) => {
   /** Focus handles, one per live screen, so a click anywhere can reach the active one. */
   const focusRef = useRef<Map<string, () => void>>(new Map())
-  const [attached, setAttached] = useState(false)
   /**
    * Whether the tab that is about to become active was asked for from this strip.
    *
@@ -384,11 +380,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null
   const status = active?.status ?? null
 
-  // A tab that went away cannot leave the strip claiming the keyboard is in it.
-  useEffect(() => {
-    if (!tabs.some((tab) => tab.id === activeId)) setAttached(false)
-  }, [tabs, activeId])
-
   // The keyboard follows a tab that was clicked. The activation is a round trip through the
   // scene — the strip is stored on the shape — so it cannot be done in the click handler.
   useEffect(() => {
@@ -402,7 +393,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   /**
    * The one gesture the canvas must not also receive.
    *
-   * `pointerdown` rather than `click`, and for the reason the prompt strip gives: this
+   * `pointerdown` rather than `click`, and for the reason the screen below gives: this
    * overlay stops pointer events so that what it does not stop reaches the canvas, and a
    * handler waiting for the synthesised click would be reasoning about a second event that
    * the first one's `preventDefault` is entitled to suppress.
@@ -562,40 +553,30 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             ended={tab.ended}
             theme={theme}
             onData={(data) => onInput(tab.id, data)}
-            onFocusChange={(focused) => { if (tab.id === active?.id || !focused) setAttached(focused) }}
             registerFocus={(focus) => {
               if (focus) focusRef.current.set(tab.id, focus)
               else focusRef.current.delete(tab.id)
             }}
           />
         ))}
-      </div>
 
-      {/* The status line: which of the two keyboard states the block is in. It was the way
-          in before #112 and still takes a click, because a strip that reads like a prompt and
-          refuses one would be worse than either — but the screen above it is what a reader
-          clicks now, and clicking the canvas is still what gives the keyboard back. */}
-      <div
-        className="terminal-card__prompt"
-        onPointerDown={(event) => {
-          event.stopPropagation()
-          event.preventDefault()
-          if (active) focusRef.current.get(active.id)?.()
-        }}
-        onWheel={forwardWheelToCanvas}
-      >
-        <span className="terminal-card__caret">❯</span>
-        <span className="terminal-card__hint">
-          {/* The one place a reader is already looking when the shell has gone, so it is
-              where the way out belongs. Alt+T was written down only in markdown, which is
-              the half of #93 that was never about the eraser. With tabs there is a nearer
-              way out — `+` opens another shell beside this one — so the hint names both. */}
-          {active?.ended
-            ? `the shell has gone — ${active.ended} — press + for another, or Alt+T`
-            : attached
-              ? 'typing goes to the shell — click the canvas to give the keyboard back'
-              : 'click the screen to type — the header drags the block'}
-        </span>
+        {/* The way back from a shell that has gone, and all that is left of the bar that used
+            to run along the bottom of the block. Alt+T was written down only in markdown,
+            which is the half of #93 that was never about the eraser; with tabs there is a
+            nearer way out — `+` opens another shell beside this one — so it names both.
+
+            Last in the frame rather than below it. Below it was a row, and a row is chrome:
+            `terminalChrome()` is what the grid is derived from, so a band that appeared when
+            a shell exited would re-grid the block at the moment its shell died. Here it is
+            drawn over the transcript, which is what the reader is already looking at, and
+            after the screens so it is not painted under one. It takes no pointer events at
+            all — a notice is not a control, and the click underneath it still belongs to the
+            screen. */}
+        {active?.ended && (
+          <div className="terminal-card__ended">
+            the shell has gone — {active.ended} — press + for another, or Alt+T
+          </div>
+        )}
       </div>
     </div>
   )

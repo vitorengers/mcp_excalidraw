@@ -98,14 +98,12 @@ export interface TerminalPalette {
   accent: string;
   /** What a destructive control turns when the pointer is on it. */
   alert: string;
-  /** The bands across the top and bottom of the frame. See the note below. */
+  /** The band across the top of the frame. See the note below. */
   band: string;
   /** Text on a band. */
   bandInk: string;
   /** Secondary text on a band — the grid readout, the mode chip. */
   bandDim: string;
-  /** The accent, on a band: a mark chosen for the surface disappears against the band. */
-  bandAccent: string;
   /**
    * The wash a control on the band sits on, and its border.
    *
@@ -136,10 +134,12 @@ export interface TerminalPalette {
  * fourth colour. The dark fill used to answer "what says terminal when the text has gone",
  * and paper cannot: at a zoom where the overlay's text is four pixels tall there is nothing
  * to read but the shape, and a pale rectangle on a board of pale rectangles is one more
- * block. So the identity moved from the fill to a *band* — the header and the prompt row get
- * a solid strip each of the strongest colour on the card, and what is left is a card with a
- * bar top and bottom. That is an area rather than a glyph, so it survives being shrunk; the
- * check asserts it at zoom 0.15, where the text is under five pixels and nothing can be read.
+ * block. So the identity moved from the fill to a *band* — the header gets a solid strip of
+ * the strongest colour on the card, across the top of it. That is an area rather than a glyph,
+ * so it survives being shrunk; the check asserts it at zoom 0.15, where the text is under five
+ * pixels and nothing can be read. There were two such strips, top and bottom, until #144 took
+ * the bottom one away; `bandAccent` went with it, since the caret on that strip was the one
+ * thing that read it.
  *
  * The sixteen: the **greys are the awkward ones**, and no light terminal theme escapes it. On
  * a dark background the ramp runs black → bright white from least ink to most; on paper
@@ -163,10 +163,6 @@ const LIGHT: TerminalPalette = {
   band: '#4c4f69',
   bandInk: '#ece7db',
   bandDim: '#b6b8c6',
-  // A second value rather than a reuse: an accent chosen to be legible on paper is 2:1 on the
-  // band and disappears there, and the caret at the bottom of the frame is the same mark as
-  // the cursor in the screen above it.
-  bandAccent: '#8ed67a',
   bandWash: 'rgb(255 255 255 / 10%)',
   bandWashStrong: 'rgb(255 255 255 / 22%)',
   bandEdge: 'rgb(255 255 255 / 25%)',
@@ -204,9 +200,9 @@ const LIGHT: TerminalPalette = {
  * **The band mirrors, it does not stay.** `band` is the ink here as well, which now means a
  * light strip on a dark card rather than a dark strip on a light one, and it has to: the
  * board behind it is dark too, so a dark band is a card with nothing on it at the zoom the
- * band exists for. The colours *on* the band swap with it — `bandInk` is Mocha's `mantle`,
- * `bandAccent` is the light palette's own dark green, which is the one place a value crosses
- * between the two and it crosses because the surface it is drawn on crossed with it.
+ * band exists for. The colours *on* the band swap with it — `bandInk` is Mocha's `mantle`, and
+ * the washes the controls sit on are black here where they are white there, because what a
+ * wash has to lift a control off is the surface it is drawn on rather than the theme.
  *
  * The greys are the awkward ones here too, and in the mirror of the way they are on paper: on
  * this surface "black" is the colour of the card, so `black` and `brightBlack` are both mid
@@ -224,7 +220,6 @@ const DARK: TerminalPalette = {
   band: '#cdd6f4',
   bandInk: '#181825',
   bandDim: '#45475a',
-  bandAccent: '#2f7d16',
   // Black rather than white, because the band it lifts a control off is the light one here.
   bandWash: 'rgb(0 0 0 / 10%)',
   bandWashStrong: 'rgb(0 0 0 / 20%)',
@@ -314,7 +309,6 @@ export function terminalCssVars(theme: TerminalTheme): Record<string, string> {
     '--terminal-band': palette.band,
     '--terminal-band-ink': palette.bandInk,
     '--terminal-band-dim': palette.bandDim,
-    '--terminal-band-accent': palette.bandAccent,
     '--terminal-band-wash': palette.bandWash,
     '--terminal-band-wash-strong': palette.bandWashStrong,
     '--terminal-band-edge': palette.bandEdge,

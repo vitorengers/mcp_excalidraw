@@ -156,16 +156,16 @@ if (has('terminalCell', terminalCell)) {
         cell.width > 7.15, `${cell.width} against the 7.15 the face measures at 13`);
 }
 if (has('terminalChrome', terminalChrome)) {
-  // 84 rather than the 62 this was written with: #94 added the tab strip, which is `em` like
-  // the rest of the frame. The number is the measurement, not the point — what the two cases
-  // hold to is that it is a real one and that it scales.
+  // 64 now: it was 62, then 84 when #94 added the tab strip, and #144 moved it twice at once
+  // — the strip became half again as tall and the status bar along the bottom went, which
+  // between them take less room than the bar did on its own. The number is the measurement,
+  // not the point — what the two cases hold to is that it is a real one and that it scales.
   const chrome = terminalChrome(TERMINAL_FONT_SIZE);
-  check('the frame at the default is the measured 20 × 84',
-        Math.abs(chrome.width - 20) < 0.001 && Math.abs(chrome.height - 84) < 0.001,
+  check('the frame at the default is the measured 20 × 64',
+        Math.abs(chrome.width - 20) < 0.001 && Math.abs(chrome.height - 64) < 0.001,
         JSON.stringify(chrome));
-  // The header, the tab strip, the prompt strip and the padding are all `em`, so they grow
-  // with the text they hold. A frame that stood still would hand the emulator rows the block
-  // cannot show.
+  // The header, the tab strip and the padding are all `em`, so they grow with the text they
+  // hold. A frame that stood still would hand the emulator rows the block cannot show.
   const doubled = terminalChrome(TERMINAL_FONT_SIZE * 2);
   check('and it grows with the text, because every part of it is sized in em',
         Math.abs(doubled.height - chrome.height * 2) < 0.001,
