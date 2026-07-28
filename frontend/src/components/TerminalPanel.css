@@ -1,21 +1,30 @@
 /* The terminal, drawn over the block that stands for it.
 
-   Paper in both themes since #115, and the block underneath is filled to match, so the two
-   read as one object at any zoom. It used to be dark in both themes, for two reasons written
-   down here and in `terminal-block.ts`: a terminal that follows the canvas into light mode
-   stops looking like one, and a dark shape is what says "terminal" at a zoom too far out for
-   any of this text to be legible. The first is what #115 reversed — every other region of
-   this board is a pale block with a hand-drawn label, and this was the one rectangle in
-   another design language. The second is still true, and the header band below is what
-   carries it now: a dark strip across a paper card, which is an area rather than a glyph and
-   survives being shrunk. It was two strips, top and bottom, until #144 removed the bottom
-   one — the band that survives is the one that is also load bearing for something else, and
-   the header is what selects and drags the block.
+   Paper on a light board and its night side on a dark one, and the block underneath **renders
+   as** the same surface either way, so the two read as one object at any zoom. Rendered
+   rather than declared, which is #147: the block is on Excalidraw's canvas and dark mode is a
+   filter on that canvas, so its `#faf6ee` fill is painted near-black for free — while this
+   card is a sibling of the canvas that nothing filters, and painted a literal `#faf6ee` on a
+   dark board until it was told which theme it was in. The fill is what it always was; the
+   dark palette's surface is the colour that fill comes out.
 
-   Not one colour here is chosen here. They arrive as custom properties from
-   `src/core/terminal-palette.ts`, which the emulator's theme and the shape's fill read too —
-   the whole point of that module is that a stylesheet cannot import TypeScript, and three
-   copies of one palette is how the old one drifted. */
+   The block used to be dark in both themes, for two reasons written down here and in
+   `terminal-block.ts`: a terminal that follows the canvas into light mode stops looking like
+   one, and a dark shape is what says "terminal" at a zoom too far out for any of this text to
+   be legible. The first is what #115 reversed — every other region of this board is a pale
+   block with a hand-drawn label, and this was the one rectangle in another design language.
+   The second is still true in both themes, and the header band below is what carries it: a
+   strip of the card's strongest colour, which is an area rather than a glyph and survives
+   being shrunk. It inverts with the theme rather than staying dark, because a dark band on a
+   dark card on a dark board is not a band. There were two such strips, top and bottom, until
+   #144 removed the one along the bottom — the band that survives is the one that is also load
+   bearing for something else, and the header is what selects and drags the block.
+
+   Not one colour here is chosen here — not even the washes the controls on the band sit on,
+   which have to be white on one band and black on the other. They arrive as custom properties
+   from `src/core/terminal-palette.ts`, which the emulator's theme and the shape's fill read
+   too — the whole point of that module is that a stylesheet cannot import TypeScript, and
+   three copies of one palette is how the old one drifted. */
 
 .terminal-card {
   /* How much bigger the tab strip is drawn than the text around it, and the only lever on
@@ -39,9 +48,9 @@
   border-radius: 8px;
   padding: 0.35em 0.5em 0.4em;
   /* The overlay paints the surface, rather than letting the shape's fill show through it.
-     Both are the same paper, so this changes nothing to look at — what it buys is that the
-     frame's own bands and chips have something to be drawn on that is not "whatever the
-     reader last set the rectangle to". */
+     Both come out the same surface on the screen, so this changes nothing to look at — what
+     it buys is that the frame's own bands and chips have something to be drawn on that is not
+     "whatever the reader last set the rectangle to". */
   background: var(--terminal-paper);
   color: var(--terminal-ink);
   font-family: 'Comic Shanns', 'Cascadia Code', 'Cascadia Mono', Menlo, Consolas, 'Courier New', monospace;
@@ -110,9 +119,9 @@
      it claims to be. */
   min-width: 1.3em;
   padding: 0 0.2em;
-  border: 1px solid rgb(255 255 255 / 25%);
+  border: 1px solid var(--terminal-band-edge);
   border-radius: 0.35em;
-  background: rgb(255 255 255 / 10%);
+  background: var(--terminal-band-wash);
   color: var(--terminal-band-ink);
   font: inherit;
   line-height: 1.25;
@@ -121,7 +130,7 @@
 }
 
 .terminal-card__font-step:hover {
-  background: rgb(255 255 255 / 22%);
+  background: var(--terminal-band-wash-strong);
 }
 
 /* At either end of the range. Still a button, and still swallowing the click: a `+` that
@@ -141,7 +150,7 @@
   flex: 0 0 auto;
   padding: 0 0.4em;
   border-radius: 0.5em;
-  background: rgb(255 255 255 / 14%);
+  background: var(--terminal-band-wash);
   color: var(--terminal-band-ink);
   font-size: 0.85em;
   opacity: 0.85;
