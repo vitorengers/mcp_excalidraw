@@ -370,6 +370,17 @@ const MANY_LINES = isWindows
   ? '1..60 | ForEach-Object { "line $_" }'
   : 'i=1; while [ $i -le 60 ]; do echo "line $i"; i=$((i+1)); done';
 
+/**
+ * Enough scrollback for a whole pan to stay inside it.
+ *
+ * Sixty lines is three or four notches, and a gesture is longer than that: run out of
+ * scrollback halfway and the rest of the pan is handed to the board *correctly*, by the
+ * rule case 7 asserts, which would be read here as the swing this case is looking for.
+ */
+const DEEP_SCROLLBACK = isWindows
+  ? '1..400 | ForEach-Object { "deep $_" }'
+  : 'i=1; while [ $i -le 400 ]; do echo "deep $i"; i=$((i+1)); done';
+
 /** Something to interrupt, and something to say the shell survived being interrupted. */
 const LONG_WAIT = isWindows
   ? "Start-Sleep -Seconds 25; Write-Output ('SUR'+'VIVED')"
@@ -437,6 +448,37 @@ const SPY_INPUT = `(() => {
     }
     return real(input, init);
   };
+  return true;
+})()`;
+
+/**
+ * Where the board was after each wheel of a gesture, recorded in the page.
+ *
+ * A pan that swings can end where it started — the signs of a hand's tremor alternate — so
+ * the reading that matters is taken during the gesture, not after it. Listening in the
+ * capture phase at the window puts this ahead of everything the page does with the event,
+ * and the frame after is where Excalidraw has finished doing it.
+ *
+ * Only the wheels the pointer made. The overlay answers a wheel by re-dispatching one at
+ * the canvas, which arrives here too — counting those would be counting the same gesture
+ * twice, and out of order at that.
+ */
+const SPY_SCROLL_X = `(() => {
+  window.__wheelScrollX = [];
+  window.__wheelForwarded = [];
+  if (!window.__wheelScrollXBound) {
+    window.__wheelScrollXBound = true;
+    window.addEventListener('wheel', (event) => {
+      if (!event.isTrusted) { window.__wheelForwarded.push(event.deltaX); return; }
+      const seen = { deltaX: event.deltaX, deltaY: event.deltaY };
+      requestAnimationFrame(() => {
+        const state = window.__focusCheckApi.getAppState();
+        seen.scrollX = state.scrollX;
+        seen.scrollY = state.scrollY;
+        window.__wheelScrollX.push(seen);
+      });
+    }, true);
+  }
   return true;
 })()`;
 
@@ -706,6 +748,74 @@ try {
     check('while leaving the board where it was up and down',
           Math.abs(scene.view.scrollY - before.view.scrollY) < 1,
           `${before.view.scrollY} → ${scene.view.scrollY}`);
+  }
+
+  {
+    // #198: a finger moving up a trackpad is never exactly vertical. Every event of the pan
+    // carries a few pixels of sideways drift whose sign follows the tremor of the hand, and
+    // an axis split that asks only `deltaX !== 0` answers each of them as a pan — so the
+    // board swings left, right, left for the length of the gesture. One such event is
+    // invisible; the complaint is the stream, so this dispatches one.
+    //
+    // The net displacement is not the measurement: the signs alternate, so a board that
+    // swung the whole way can still end within a pixel of where it started. What is asserted
+    // is the worst position the board reached *during* the pan.
+    //
+    // Two of the events carry no vertical at all — the finger pausing on its way up while
+    // still drifting sideways. Read on their own they are a sideways pan; read as part of
+    // the gesture they are the same drift, which is what makes the lock gesture-scoped
+    // rather than a ratio applied per event.
+    scene = await placeBoard();
+    await click(scene.card.body.x, scene.card.body.y);
+    await run(DEEP_SCROLLBACK);
+    await waitFor(async () => String((await evaluate(PROBE)).card.screen).includes('deep 400'),
+                  'the shell to print four hundred lines', 120);
+    await sleep(500);
+    scene = await evaluate(PROBE);
+    const before = { view: scene.view, screen: scene.card.screen };
+    // Sampled from inside the page rather than over the protocol between events: a gesture
+    // is defined by the gaps in it, so a round trip per event would be the check dictating
+    // the timing it is measuring — and at 60-120 Hz a real pan leaves no room for one.
+    await evaluate(SPY_SCROLL_X);
+    const drift = [-3, 2, -4, 3, [-3, 0], 4, -2, 3, [-4, 0], 2, -3, 4];
+    for (const step of drift) {
+      const [deltaX, deltaY] = Array.isArray(step) ? step : [step, -120];
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseWheel', x: scene.card.body.x, y: scene.card.body.y,
+        deltaX, deltaY, button: 'none', buttons: 0,
+      });
+      await sleep(40);
+    }
+    await sleep(250);
+    const seen = await evaluate('window.__wheelScrollX');
+    const swing = Math.max(0, ...seen.map((at) => Math.abs(at.scrollX - before.view.scrollX)));
+    scene = await evaluate(PROBE);
+    await shot('07b-drifted-up-the-trackpad');
+    check('a vertical pan carrying sideways drift never swings the board',
+          swing < 2,
+          `worst ${swing.toFixed(2)}px from ${before.view.scrollX}, forwarded `
+          + `[${(await evaluate('window.__wheelForwarded')).join(' ')}], saw `
+          + seen.map((at) => `${at.deltaX}/${at.deltaY}→`
+                             + `${(at.scrollX - before.view.scrollX).toFixed(2)}`).join(' '));
+    check('and leaves it where it started when the pan ends',
+          Math.abs(scene.view.scrollX - before.view.scrollX) < 2,
+          `${before.view.scrollX} → ${scene.view.scrollX}`);
+    check('while the vertical half still reached the emulator',
+          scene.card.screen !== before.screen,
+          `${String(before.screen).slice(0, 60)} … / ${String(scene.card.screen).slice(0, 60)} …`);
+  }
+
+  {
+    // And the gesture ends when the finger comes off: a sideways pan started after the one
+    // above pans at once, with no modifier and nothing to wait for.
+    scene = await placeBoard();
+    const before = { view: scene.view };
+    const expected = 120 / before.view.zoom;
+    await wheel(scene.card.body.x, scene.card.body.y, 0, 1, -120);
+    scene = await evaluate(PROBE);
+    check('a sideways pan right after a vertical one still pans the board',
+          Math.abs(scene.view.scrollX - before.view.scrollX - expected) < expected * 0.35,
+          `${before.view.scrollX} → ${scene.view.scrollX}, wanted +${expected} at zoom ${before.view.zoom}`);
   }
 
   await evaluate(SPY_INPUT);
