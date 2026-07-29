@@ -46,6 +46,9 @@ import {
   withoutPrintFlags
 } from './core/issue-agent.js';
 import { AgentUsage } from './core/agent-usage.js';
+import {
+  ClaudeEnvironmentStatus, readClaudeStatus, STALE_AFTER_SECONDS
+} from './core/claude-status.js';
 import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
 import {
   readProjectBoard,
@@ -4405,6 +4408,74 @@ app.get('/health', (req: Request, res: Response) => {
       implement: IMPLEMENT_AGENT_CONFIGURED
     }
   });
+});
+
+/**
+ * Where the operator's status line command writes what Claude Code told it.
+ *
+ * Unset is off, and off is a 404 rather than an empty list: nothing on this board reads
+ * Claude Code by default, and a route that answered `[]` would look like a board whose
+ * sessions had never run rather than one that was never asked to look.
+ */
+const CLAUDE_STATUS_DIR = (process.env.EXCALIDRAW_CLAUDE_STATUS ?? '').trim();
+
+/**
+ * One read of that directory, however many tabs asked.
+ *
+ * The same shape `IssueMemo` uses and for the same reason, at a much shorter window: a
+ * board with four project tabs open polls this four times a minute on the same second, and
+ * all four want the same handful of files. Five seconds is long enough to collapse that
+ * burst and short enough that it can never be the reason a reading looks stale.
+ */
+const CLAUDE_STATUS_MEMO_MS = 5000;
+let claudeStatusMemo: { reading: Promise<ClaudeEnvironmentStatus[]>; at: number } | null = null;
+
+function readClaudeStatusMemoized(): Promise<ClaudeEnvironmentStatus[]> {
+  if (claudeStatusMemo && Date.now() - claudeStatusMemo.at < CLAUDE_STATUS_MEMO_MS) {
+    return claudeStatusMemo.reading;
+  }
+  const reading = (async () => {
+    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => []);
+    const distros = workspaces
+      .map((workspace) => workspace.environment)
+      .filter((environment): environment is { kind: 'wsl'; distro: string } => environment.kind === 'wsl')
+      .map((environment) => environment.distro);
+    return readClaudeStatus(CLAUDE_STATUS_DIR, distros);
+  })();
+  const entry = { reading, at: Date.now() };
+  claudeStatusMemo = entry;
+  // A failed read is never remembered, for the reason `IssueMemo` gives: one bad moment
+  // must not be five seconds of a blank HUD.
+  reading.catch(() => { if (claudeStatusMemo === entry) claudeStatusMemo = null; });
+  return reading;
+}
+
+/**
+ * What each Claude Code environment on this machine has spent, and who spent it.
+ *
+ * Global rather than workspace-scoped, because it describes machines rather than projects —
+ * the `/health` family, not the `/api/elements` one. Loopback only, and the guard comes
+ * before the 404: this serves an email address, so whether it is configured is itself
+ * something a board on a LAN address should not be answering.
+ */
+app.get('/api/claude-status', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Claude Code status is read')) return;
+
+  if (!CLAUDE_STATUS_DIR) {
+    return res.status(404).json({
+      success: false,
+      error: 'Claude Code status is off. Set EXCALIDRAW_CLAUDE_STATUS to the directory your '
+        + 'status line command writes into.'
+    });
+  }
+
+  try {
+    const environments = await readClaudeStatusMemoized();
+    res.json({ success: true, staleAfterSeconds: STALE_AFTER_SECONDS, environments });
+  } catch (error) {
+    logger.error('Failed to read the Claude Code status directory:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
 });
 
 // Sync status endpoint

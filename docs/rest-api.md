@@ -1,6 +1,6 @@
 # REST API
 
-`src/server.ts`. 54 routes, and the only surface that is workspace-aware — everything the
+`src/server.ts`. 55 routes, and the only surface that is workspace-aware — everything the
 browser does, and everything this board was built with, goes through here.
 
 The table below is the whole set, one row per route. It used to be a summary of thirty, under a
@@ -120,6 +120,7 @@ loopback only, and capped per board.
 | `GET /` | The built frontend |
 | `GET /health` | Liveness, plus the `pid` of whatever is actually answering |
 | `GET /api/sync/status` | What the store and the connected browsers currently hold |
+| `GET /api/claude-status` | What each Claude Code environment on this machine has spent (loopback only) — [claude-status.md](claude-status.md) |
 
 ## Three things worth knowing
 
