@@ -58,12 +58,13 @@ unusable there. The throwaway instances the self-contained checks start choose t
 port; the older `--url` family of checks expects one started by hand on **3838**, which is
 deliberately a different, empty server rather than the board you are working on.
 
-Everything else is `EXCALIDRAW_*`, and all seventeen are optional. Unset means the feature is off,
+Everything else is `EXCALIDRAW_*`, and all nineteen are optional. Unset means the feature is off,
 not degraded.
 
 | Variable | Default | What it does |
 |---|---|---|
 | `EXCALIDRAW_WORKSPACES` | unset | Path to the registry JSON. Unset means one `default` board and no project tabs — see [workspaces.md](workspaces.md) |
+| `EXCALIDRAW_BOARD_STATE` | beside the registry | Where each registered board is saved between processes. Unset puts them in a directory named after the registry file; with no registry, nothing is saved — [element-store.md](element-store.md) |
 | `EXCALIDRAW_DOCS_DIR` | unset | Where `GET /api/docs/:key` reads *this tool's own* documentation from. Unset disables it: serving arbitrary files from an unauthenticated local API is not a default |
 | `EXCALIDRAW_LIBRARY` | unset | An `.excalidrawlib` served to every board, alongside each project's own — [shared-library.md](shared-library.md) |
 | `EXCALIDRAW_ISSUE_AGENT` | unset | The command line that researches an observation and opens the issue. Unset means issue blocks do nothing |
@@ -76,6 +77,7 @@ not degraded.
 | `EXCALIDRAW_IMPLEMENT_QUEUE_MS` | `30000` | How often a workspace with its queue on looks for a free slot. The timer does not exist until a queue is turned on |
 | `EXCALIDRAW_ISSUE_MEMO_MS` | `30000` | How long one `gh` read of an issue is reused. `0` turns the memo off |
 | `EXCALIDRAW_GH_COMMAND` | `gh` | The GitHub CLI, when it is not on `PATH` — [trap-gh-path.md](trap-gh-path.md) |
+| `EXCALIDRAW_CLAUDE_STATUS` | unset | The directory your Claude Code status line command writes its usage files into. Unset means `GET /api/claude-status` answers 404 and the header shows nothing — [claude-status.md](claude-status.md) |
 | `EXCALIDRAW_TERMINAL` | unset | `1` for the default shell, or a command line of your own. Unset means the terminal routes answer 404 — [terminal.md](terminal.md) |
 | `EXCALIDRAW_TERMINAL_PTY` | unset | `0` forces the pipe instead of a real pty, for a machine with no prebuilt binary |
 | `EXCALIDRAW_EXPORT_DIR` | working dir | The base directory MCP file exports may write to |
@@ -117,9 +119,12 @@ above, and the reason a WSL project cannot simply declare its own in `board.conf
 - `Alt+B` scrolls to the GitHub project mirror, `Alt+T` to the terminal.
 - Each project that names a `board` in its `board.config.json` comes up holding it: the file is
   read into that board's store just after the port opens ([element-store.md](element-store.md)).
-- Nothing is saved back. The store is in memory and a change dies with the process;
-  `scripts/export-board.mjs` is how `docs/board.excalidraw` is written back, and it is a commit
-  like any other.
+- Every registered board is saved a second after it last changed, beside the registry that lists it
+  — `board-workspaces.json` keeps them in a `board-workspaces-state` directory, or wherever
+  `EXCALIDRAW_BOARD_STATE` says. That is what comes back at the next start, unless the project's
+  `board` file has been written since. Nothing is written into any project.
+- Into the *tracked* board file, nothing is saved back: `scripts/export-board.mjs` is how
+  `docs/board.excalidraw` is written, and it is a commit like any other.
 
 ## Verifying a change
 

@@ -10,6 +10,7 @@ import {
 } from '../../../src/core/terminal-block'
 import { terminalCssVars, terminalXtermTheme } from '../../../src/core/terminal-palette'
 import type { TerminalTheme } from '../../../src/core/terminal-palette'
+import { clipboardImages } from '../../../src/core/pasted-images'
 import { terminalFontReady } from '../terminal-metrics'
 import { macKeyboard, terminalEditingChord } from '../terminal-keys'
 import type { Rect } from '../../../src/core/anchored-placement'
@@ -259,6 +260,38 @@ function forwardWheelToCanvas(event: React.WheelEvent): void {
 }
 
 /**
+ * What `Ctrl+V` has always meant on a terminal, and what a program reads as "paste".
+ *
+ * It is not the image — a bitmap cannot travel over a PTY. It is the keystroke the program
+ * in the block acts on by going to the system clipboard itself, which is how a screenshot
+ * reached an agent running here before #136 and what this sends again.
+ */
+const PASTE_BYTE = '\x16'
+
+/**
+ * Whether this paste is one the shell cannot be given, so the byte goes instead.
+ *
+ * The whole rule, and it is written on **what the clipboard is offering** rather than on
+ * which chord fired. That is #224: `Ctrl+V` is left to the browser (see the key handler
+ * below), and the browser's paste into xterm reads one flavour —
+ * `clipboardData.getData('text/plain')` — so a clipboard holding a bitmap and no text
+ * pastes an empty string and the program is sent nothing at all. Not the image, and no
+ * longer the `\x16` it would have used to go and fetch the image.
+ *
+ * **Text wins where the clipboard offers both.** Text paste is the older promise and the
+ * one pasting a path or a command relies on; the opposite is defensible and this is the
+ * call made rather than a fact discovered.
+ *
+ * And an *empty* clipboard is nothing rather than an image: a rule written as "no text"
+ * would fire on every paste of nothing and send a `\x16` nobody asked for.
+ */
+function pasteIsImageOnly(data: DataTransfer | null): boolean {
+  if (!data) return false
+  if (data.getData('text/plain')) return false
+  return clipboardImages<File>(data).length > 0
+}
+
+/**
  * One session's screen, kept alive for as long as the session is in this block.
  *
  * Its own component, and mounted for every tab rather than only the one on top, because an
@@ -393,8 +426,14 @@ const TerminalScreen: React.FC<{
 
       // Ctrl+V is the browser's, not the shell's: xterm already listens for the `paste` event
       // the default action fires, and handing this to the shell instead would send it the
-      // `\x16` that Ctrl+V means on a terminal. Returning false is what leaves the default
-      // alone — xterm's own key handling would have cancelled the event.
+      // `\x16` that Ctrl+V means on a terminal whether or not there was anything to paste.
+      // Returning false is what leaves the default alone — xterm's own key handling would
+      // have cancelled the event.
+      //
+      // What the shell gets is then decided at the paste, where the clipboard's contents are
+      // knowable and the chord no longer matters: text pastes, and a screenshot sends the
+      // `\x16` after all, since a bitmap cannot travel over a PTY. See `onPasteCapture` on
+      // the card below.
       if (key === 'v') return false
 
       return true
@@ -662,6 +701,31 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       // binds, and the handler that catches it calls `preventDefault` itself.
       onKeyDown={(event) => { if (!isBoardHotkey(event.nativeEvent)) event.stopPropagation() }}
       onKeyUp={(event) => { if (!isBoardHotkey(event.nativeEvent)) event.stopPropagation() }}
+      // A screenshot, which the shell cannot be handed, offered to the program as the
+      // keystroke that fetches one — see `pasteIsImageOnly` above for the rule and #224 for
+      // the observation.
+      //
+      // **At the paste rather than in the key handler, and that is both of the reasons it
+      // is here.** A `keydown` cannot know what the clipboard holds — the chord has not
+      // fired the default action yet — and a rule written at the paste event is
+      // keyboard-agnostic, so `Cmd+V` on a Mac comes for free with no second entry in
+      // `terminal-keys.ts`. The key handler returns false for both chords already, which is
+      // what leaves the browser's own paste to fire for either one.
+      //
+      // **In the capture phase**, for the reason `forwardHorizontalWheelToCanvas` is: xterm
+      // listens for `paste` on its own hidden textarea, which is *below* this card, and it
+      // stops the event there. The capture pass goes root-first and has already happened by
+      // then, so stopping it here is what keeps the emulator from also pasting the empty
+      // string this clipboard would give it.
+      onPasteCapture={(event) => {
+        if (!pasteIsImageOnly(event.clipboardData)) return
+        event.preventDefault()
+        event.stopPropagation()
+        // Dropped rather than posted for a read-only session, for the reason `onData` is:
+        // the route refuses one, and a block that posted anyway would be asking for a 409
+        // to learn what its own status already told it.
+        if (active && !active.status?.readOnly) onInput(active.id, PASTE_BYTE)
+      }}
     >
       <div className="terminal-card__header">
         <span className="terminal-card__where" title={status?.cwd ?? ''}>{status?.cwd ?? ''}</span>

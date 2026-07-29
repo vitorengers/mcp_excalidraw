@@ -49,6 +49,8 @@ import type { Bounds } from '../../src/core/terminal-block'
 import { terminalAdvance, terminalFontReady, terminalLineBox } from './terminal-metrics'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
+import { ClaudeStatusHud } from './components/ClaudeStatusHud'
+import type { ClaudeEnvironmentStatus } from './components/ClaudeStatusHud'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
 // Type definitions
@@ -166,6 +168,32 @@ const CLIENT_ID = globalThis.crypto?.randomUUID?.()
  * being spawned all day.
  */
 const PROJECT_BOARD_POLL_MS = 20000;
+
+/**
+ * How often the header re-reads what Claude Code has spent.
+ *
+ * A minute, which is what the observation asked for and is a ceiling rather than a promise:
+ * the figures underneath are only as fresh as the last session that ran a status line, so
+ * polling faster would buy nothing and reading the directory more often would cost the same
+ * files. Slower than the mirror above deliberately — that one is watching a board somebody
+ * else can move, this one is watching a file this machine writes.
+ */
+const CLAUDE_STATUS_POLL_MS = 60000;
+
+/**
+ * `?claudeStatusPollMs=` on the board's own URL, for a reader who wants it slower.
+ *
+ * Clamped rather than trusted: `0` would be a busy loop against the disk and a very large
+ * number would be a HUD that never moves again. Read from the query string rather than
+ * given an environment variable of its own because it is this page's cadence, not the
+ * server's, and the server's own variable is the one that decides whether any of this
+ * exists at all.
+ */
+function claudeStatusPollMs(): number {
+  const asked = Number(new URLSearchParams(window.location.search).get('claudeStatusPollMs'))
+  if (!Number.isFinite(asked) || asked <= 0) return CLAUDE_STATUS_POLL_MS
+  return Math.min(600000, Math.max(200, asked))
+}
 
 /**
  * The key that jumps the viewport to the mirror.
@@ -1174,6 +1202,17 @@ function App(): JSX.Element {
     }
   })
 
+  /**
+   * What each Claude Code environment on this machine has spent, per `GET /api/claude-status`.
+   *
+   * Empty until the first read answers, and empty for good on a board that was never
+   * configured to look — the HUD draws nothing rather than drawing an empty frame, because a
+   * row that says nothing is indistinguishable from a machine that has nothing to say.
+   */
+  const [claudeStatus, setClaudeStatus] = useState<ClaudeEnvironmentStatus[]>([])
+  /** Settled once, at mount: the cadence cannot change without the URL changing. */
+  const [claudeStatusPoll] = useState<number>(() => claudeStatusPollMs())
+
   // Boards, one per project
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [activeWorkspace, setActiveWorkspace] = useState<string>('default')
@@ -1672,6 +1711,16 @@ function App(): JSX.Element {
    * the counter drops back to zero.
    */
   const autoSyncPendingRef = useRef<boolean>(false)
+  /**
+   * A reconnect that owes the server a write and has not made it yet.
+   *
+   * Up between `onopen` and the owed sync landing, and read by `initial_elements`: the store
+   * has never heard of what was drawn while the socket was down, so a scene taken from it
+   * wholesale in that window takes the drawing off the canvas as well — #225, where the
+   * evidence of the lost write was destroyed by the reconnect that should have carried it.
+   * While this is up an arriving scene is merged into what is here rather than replacing it.
+   */
+  const owedSyncFlushRef = useRef<boolean>(false)
   const userInteractedRef = useRef<boolean>(false)
 
   /** The last set of rejected hotkey claims that was printed, so it is printed once. */
@@ -3920,6 +3969,53 @@ function App(): JSX.Element {
     }
   }, [activeWorkspace, excalidrawAPI])
 
+  /**
+   * What Claude Code has spent, per environment on this machine.
+   *
+   * Not keyed on the active project, and that is the point: it describes the machines the
+   * board runs agents on rather than any one repository, so switching tabs must not restart
+   * it and must not empty it.
+   *
+   * A 404 is the answer for a board that was never asked to look — `EXCALIDRAW_CLAUDE_STATUS`
+   * unset — and it ends the loop rather than retrying every minute for the life of the page:
+   * that is a decision made when the server started, and nothing short of a restart changes
+   * it. Visibility-gated for the same reason as the mirror above; a background tab reading
+   * files nobody is looking at is pure cost.
+   */
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const everyMs = claudeStatusPoll
+
+    const read = async (): Promise<boolean> => {
+      try {
+        const response = await fetch('/api/claude-status')
+        if (response.status === 404) return false
+        if (!response.ok) return true
+        const body = await response.json()
+        if (!cancelled && Array.isArray(body?.environments)) {
+          setClaudeStatus(body.environments as ClaudeEnvironmentStatus[])
+        }
+      } catch {
+        // A dropped read is the previous reading kept, not the HUD blanked: the figures were
+        // true a minute ago and the next poll is a minute away.
+      }
+      return true
+    }
+
+    const tick = async (): Promise<void> => {
+      if (cancelled) return
+      if (document.visibilityState === 'visible' && !(await read())) return
+      if (!cancelled) timer = setTimeout(() => { void tick() }, everyMs)
+    }
+    void tick()
+
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [claudeStatusPoll])
+
   // On `window`, because Excalidraw never sees a key pressed outside its canvas, and the
   // point of this one is to work from anywhere on the page.
   useEffect(() => {
@@ -4594,6 +4690,11 @@ function App(): JSX.Element {
    * board per connection, and skips the files when the socket already brought them.
    */
   const loadExistingElements = async (): Promise<void> => {
+    // Not while a reconnect still owes the server a write. This replaces the scene with what
+    // the store holds, and the store is the one place the owed change has not reached — the
+    // effect that watches `isConnected` gets here within a frame of the socket opening, well
+    // before the flush lands (#225). `socket.onopen` calls this itself once it has.
+    if (owedSyncFlushRef.current) return
     const key = sceneKey()
     if (loadedSceneKeyRef.current === key) return
     loadedSceneKeyRef.current = key
@@ -4760,6 +4861,30 @@ function App(): JSX.Element {
       setConnectionState('connected')
       startHeartbeat(socket)
 
+      // A write owed from while the socket was down goes *up* before any scene is taken
+      // *down*. Both of the things that fill the canvas on a connection — `initial_elements`
+      // and the loader below — replace it from the store, and the store is precisely what
+      // never heard of the change made in the dark; either landing first is #225, a draft
+      // taken off the canvas by the reconnect that was supposed to save it. So the flush is
+      // what the loader waits for, and while it is out an arriving scene is merged instead
+      // of substituted.
+      //
+      // A flush that does not land leaves the write owed rather than clearing it, and the
+      // scene is left alone: the next change, or the next reconnect, comes back to it. The
+      // one thing not done here is replacing the canvas with a store that is behind it.
+      if (autoSyncPendingRef.current) {
+        owedSyncFlushRef.current = true
+        void flushAutoSync().then((landed) => {
+          owedSyncFlushRef.current = false
+          if (!landed) {
+            autoSyncPendingRef.current = true
+            return
+          }
+          if (excalidrawAPIRef.current) void loadExistingElements()
+        })
+        return
+      }
+
       // The ref, not the closure: this handler was created before Excalidraw mounted on
       // the very load it matters for, and the closure would still say it had not.
       if (excalidrawAPIRef.current) {
@@ -4778,7 +4903,20 @@ function App(): JSX.Element {
 
     try {
       const currentElements = excalidrawAPI.getSceneElements()
-      const mergeAndApplySceneElements = (incomingElements: Partial<ExcalidrawElement>[]): void => {
+      /**
+       * Fold a message's elements into the scene that is already here.
+       *
+       * The arrival wins field by field, which is what every message but one wants: it is the
+       * server correcting this page. `keepLocal` turns that around for the one case where the
+       * server is the one that is behind — a reconnect whose owed write has not landed yet, so
+       * the store's copy of a block is the copy from *before* what was typed into it while the
+       * socket was down (#225). The pull that follows the flush is what puts the two back in
+       * step, so the reversal lasts only as long as that window.
+       */
+      const mergeAndApplySceneElements = (
+        incomingElements: Partial<ExcalidrawElement>[],
+        options: { keepLocal?: boolean } = {}
+      ): void => {
         if (incomingElements.length === 0) return
 
         const incomingById = new Map<string, Partial<ExcalidrawElement>>()
@@ -4792,7 +4930,7 @@ function App(): JSX.Element {
           const incoming = incomingById.get(element.id)
           if (!incoming) return element
           incomingById.delete(element.id)
-          return { ...element, ...incoming }
+          return options.keepLocal ? { ...incoming, ...element } : { ...element, ...incoming }
         })
 
         mergedElements.push(...incomingById.values())
@@ -4811,13 +4949,25 @@ function App(): JSX.Element {
           // switched to is empty. Outside a switch an empty payload is left alone, because
           // there it would mean wiping the canvas on a reconnect that raced the store.
           const landingOnANewBoard = pendingSceneWorkspaceRef.current !== null
+          // A reconnect still carrying an owed write is the one case where the store is
+          // behind the canvas rather than ahead of it: what was drawn while the socket was
+          // down is here and nowhere else, and a wholesale replacement would take it away
+          // moments before the flush that would have saved it (#225). Merged instead — the
+          // store still wins field by field for everything it knows about, and what only
+          // this page knows about stays. A board switch is untouched: there the whole point
+          // is that another board's scene is replaced.
+          const mergeRatherThanReplace = owedSyncFlushRef.current && !landingOnANewBoard
           if (data.elements && data.elements.length > 0) {
             const cleanedElements = data.elements.map(cleanElementForExcalidraw)
-            const convertedElements = convertElementsPreservingImageProps(cleanedElements)
-            applySceneUpdateWithoutAutoSync(excalidrawAPI, {
-              elements: convertedElements,
-              captureUpdate: CaptureUpdateAction.NEVER
-            })
+            if (mergeRatherThanReplace) {
+              mergeAndApplySceneElements(cleanedElements, { keepLocal: true })
+            } else {
+              const convertedElements = convertElementsPreservingImageProps(cleanedElements)
+              applySceneUpdateWithoutAutoSync(excalidrawAPI, {
+                elements: convertedElements,
+                captureUpdate: CaptureUpdateAction.NEVER
+              })
+            }
           } else if (landingOnANewBoard) {
             applySceneUpdateWithoutAutoSync(excalidrawAPI, {
               elements: [],
@@ -5242,8 +5392,14 @@ function App(): JSX.Element {
     })
   }
 
-  // Main sync function
-  const syncToBackend = async (options: { silent?: boolean } = {}): Promise<void> => {
+  /**
+   * Main sync function. Answers whether the scene actually reached the server.
+   *
+   * The answer matters to one caller — the flush a reconnect makes before it accepts a scene
+   * back (#225). Everything else fires and forgets, as it did before: an autosync that fails
+   * is retried by the next change, and there is nothing for it to decide.
+   */
+  const syncToBackend = async (options: { silent?: boolean } = {}): Promise<boolean> => {
     const { silent = false } = options
 
     // Read through the ref: WS message handlers attached at mount capture a
@@ -5251,11 +5407,11 @@ function App(): JSX.Element {
     const api = excalidrawAPIRef.current
     if (!api) {
       console.warn('Excalidraw API not available')
-      return
+      return false
     }
 
     if (syncInFlightRef.current) {
-      return
+      return false
     }
 
     if (autoSyncTimerRef.current) {
@@ -5312,12 +5468,12 @@ function App(): JSX.Element {
           // Reset status after 2 seconds
           setTimeout(() => setSyncStatus('idle'), 2000)
         }
-      } else {
-        const error: ApiResponse = await response.json()
-        console.error('Sync failed:', error.error)
-        if (!silent) {
-          setSyncStatus('error')
-        }
+        return true
+      }
+      const error: ApiResponse = await response.json()
+      console.error('Sync failed:', error.error)
+      if (!silent) {
+        setSyncStatus('error')
       }
     } catch (error) {
       console.error('Sync error:', error)
@@ -5327,6 +5483,7 @@ function App(): JSX.Element {
     } finally {
       syncInFlightRef.current = false
     }
+    return false
   }
 
   /**
@@ -5347,7 +5504,7 @@ function App(): JSX.Element {
    * `scheduleAutoSync` applies to its own timer. The wait is bounded: if it never frees, the
    * request goes anyway, which is exactly what happened before this existed.
    */
-  const flushAutoSync = async (): Promise<void> => {
+  const flushAutoSync = async (): Promise<boolean> => {
     const deadline = Date.now() + FLUSH_WAIT_MS
     while (syncInFlightRef.current && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, FLUSH_POLL_MS))
@@ -5362,14 +5519,22 @@ function App(): JSX.Element {
     // change that was refused while the timer was out. The same rule the timer applies.
     autoSyncPendingRef.current = false
 
-    await syncToBackend({ silent: true })
+    return syncToBackend({ silent: true })
   }
 
   const scheduleAutoSync = (): void => {
-    if (!isConnected || !excalidrawAPI) {
+    if (!userInteractedRef.current) {
       return
     }
-    if (!userInteractedRef.current) {
+    // Refused, not dropped — the other half of the rule below, and the other reason a write
+    // is owed. A change made while the socket is down used to return from here bare: nothing
+    // was armed and nothing would ever arm it, so the change waited for a later one that
+    // happened to find the socket up. That is #92's defect in the branch beside it, and #225
+    // is what it cost — a draft typed into the dark, and then a reconnect that replaced the
+    // scene from a store which had never heard of it. `socket.onopen` is what comes back to
+    // this one, the way `releaseAutoSyncSuppression` comes back to the next.
+    if (!isConnected || !excalidrawAPI) {
+      autoSyncPendingRef.current = true
       return
     }
     // Refused, not dropped: `releaseAutoSyncSuppression` comes back to it. Returning
@@ -5543,6 +5708,16 @@ function App(): JSX.Element {
           </button>
 
           <button className="btn-secondary" onClick={clearCanvas}>Clear Canvas</button>
+
+          {/*
+            Last in `.controls`, which is the header's right-hand group — so this is the
+            top-right corner of the *page*. The canvas viewport's top-right corner is
+            `layer-ui__wrapper__top-right`, which Excalidraw owns and which the library
+            trigger already sits in; putting a row of this board's own text in there would
+            fight that grid and would go with the rest of the chrome. Here it survives
+            `Hide Menus`, which only ever touches Excalidraw's own.
+          */}
+          <ClaudeStatusHud environments={claudeStatus} pollMs={claudeStatusPoll} />
         </div>
       </div>
 

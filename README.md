@@ -16,7 +16,7 @@ One canvas, three ways to drive it:
 
 - **Agent Skill + CLI** — recommended for coding agents (Claude Code, Codex CLI, Cursor, OpenCode): `npx -y mcp-excalidraw-server <command>`. Zero config, auto-starts the canvas, composable JSON in/out.
 - **MCP Server** — 26 tools over stdio for any Model Context Protocol client (Claude Desktop, Cursor, Codex CLI, Antigravity, ...).
-- **REST API** — 54 routes over plain HTTP; the only workspace-aware surface, and what the board itself is built on.
+- **REST API** — 55 routes over plain HTTP; the only workspace-aware surface, and what the board itself is built on.
 
 Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Mermaid conversion runs in the local browser canvas; `share` is optional and uploads an encrypted scene to excalidraw.com.
 
