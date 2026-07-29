@@ -1,0 +1,112 @@
+/*
+ * The Claude Code usage HUD, at the right-hand end of the header.
+ *
+ * **In the header, not on the canvas.** "Top right" has two answers here and only one of
+ * them is ours: the canvas viewport's top-right corner is `layer-ui__wrapper__top-right`,
+ * which Excalidraw owns and which the library trigger and the stats corner already live in.
+ * The header is a sibling of the canvas container, so this cannot collide with Excalidraw's
+ * own islands, cannot become a scene element, and cannot reach a PNG export — and it
+ * survives `Hide Menus`, which only ever touches Excalidraw's own chrome.
+ *
+ * Coloured from the tokens `frontend/index.html` declares on `.app[data-theme=…]`, the same
+ * way every other overlay on this board is, so it follows the canvas into dark mode instead
+ * of keeping a light card's colours over a dark board.
+ */
+.claude-status {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  font-size: 11px;
+  line-height: 1.35;
+  /* Tabular figures so a percentage ticking 9% → 10% does not shuffle the row beside it. */
+  font-variant-numeric: tabular-nums;
+  color: var(--color-gray-70, #5c5c5c);
+  /*
+   * Wide enough that one machine is one line.
+   *
+   * Measured rather than guessed: label, account, `5h NN% (Hh MMm)` and `7d NN% (Nd HHh)`
+   * with the gaps between them comes to a little under 400px at 11px. At 320 every row wrapped,
+   * and a wrapped row reads as a second machine — two environments looked like four. The
+   * ceiling stays because `.controls` wraps before it overflows: an account with a very long
+   * domain costs this its second line, never the buttons beside it their place.
+   */
+  max-width: 420px;
+}
+
+.claude-status__row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* The machine's own name — `Windows`, or the distro's. The one part of the row a reader
+   scans for, so it is the one part that gets the full-strength colour. */
+.claude-status__env {
+  font-weight: 600;
+  color: var(--text-primary-color, #1b1b1f);
+}
+
+/*
+ * Which account this row is about.
+ *
+ * Two homes are two credential stores, so two rows are frequently two subscriptions — and a
+ * percentage attributed to the wrong one is worse than no percentage at all. It is quieter
+ * than the figures because it is the answer to "whose", not to "how much", and it truncates
+ * rather than wrapping so that a long address cannot cost the windows their line.
+ */
+.claude-status__account {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+}
+
+.claude-status__window {
+  color: var(--text-primary-color, #1b1b1f);
+}
+
+/* What the window has left before it resets. A percentage on its own does not say whether
+   it matters in ten minutes or in three days. */
+.claude-status__resets {
+  color: var(--color-gray-60, #7a7a7a);
+}
+
+/* Nothing said. Not `0%`, which would be a claim that nothing has been spent. */
+.claude-status__unknown,
+.claude-status__silent {
+  color: var(--color-gray-60, #7a7a7a);
+  font-style: italic;
+}
+
+/*
+ * A reading older than the window the server calls fresh.
+ *
+ * This is the honest cost of reading a file a status line wrote: it is only as fresh as the
+ * last session, and a percentage without its age reads as current when it is not. So a stale
+ * row is amber and says how old it is — the age is not decoration, it is the part that stops
+ * the number being a lie.
+ */
+.claude-status__row--stale .claude-status__env,
+.claude-status__row--stale .claude-status__window {
+  color: #8a5a00;
+}
+
+.claude-status__age {
+  color: #8a5a00;
+  font-weight: 600;
+}
+
+/*
+ * Dark mode, judged on the board's own background rather than on the light one inverted.
+ *
+ * `#8a5a00` on `#232329` is 2.4:1 — a warning nobody can read is not a warning. `#e8a33d`
+ * against that header is 8.0:1, and the light theme's `#8a5a00` on `#fff` is 6.2:1, so both
+ * clear AA for the small text this is.
+ */
+.app[data-theme="dark"] .claude-status__row--stale .claude-status__env,
+.app[data-theme="dark"] .claude-status__row--stale .claude-status__window,
+.app[data-theme="dark"] .claude-status__age {
+  color: #e8a33d;
+}
