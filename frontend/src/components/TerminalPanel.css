@@ -286,12 +286,77 @@
   height: 100%;
 }
 
-/* No scrollbar, and still scrollable: xterm moves this box's `scrollTop` itself when the
-   wheel is turned over it, and an `overflow: hidden` box scrolls perfectly well that way.
-   A real scrollbar would be a strip of the block's width the grid was never told about, so
-   the last column would go under it. */
+/* The scrollback bar, and the strip of the block that was reserved for it.
+
+   This rule used to say the opposite — `overflow: hidden`, no bar, and still scrollable,
+   because xterm moves this box's `scrollTop` itself when the wheel is turned over it. That
+   was not a shortcut; it was blocked on one missing number, named in the note it left behind:
+   a real bar is a strip of the block's width `terminalGrid()` was never told about, so the
+   last column the shell was told about would be drawn under it. #197 is that number.
+   `TERMINAL_SCROLLBAR` is now a term of the grid, and `--terminal-scrollbar` is the same
+   number in the pixels this box is drawn in — written onto the card by `TerminalPanel.tsx`,
+   because a stylesheet cannot import TypeScript and two spellings of one width drift.
+
+   What the strip buys is the half of scrolling that was missing. The wheel already moved the
+   scrollback; nothing said a block *had* one, where in it the reader was, or let them go
+   straight to a point in it. The bar is native rather than a thumb of our own on purpose: the
+   drag, the click in the track, the keyboard and the momentum are all the browser's, and
+   xterm's `Viewport` turns this box's `scrollTop` back into buffer lines whichever of them
+   moved it — so nothing here sends anything to the shell. A scrollbar is a viewer.
+
+   `auto`, so a session that fits on one screen has no bar. The *strip* is reserved either way,
+   in the arithmetic, because a strip that appeared with the first screenful would re-grid the
+   block — and repaint every full-screen program in it — the moment its shell printed enough to
+   scroll. `scrollbar-gutter: stable` says the same thing about this box's own content edge.
+
+   Horizontal is off, and cannot be otherwise: xterm has no horizontal scrolling and emits
+   nothing for a sideways wheel, so a line too wide for the block is clipped and the answer to
+   that is the block's own resize handles. */
 .terminal-card__screen .xterm-viewport {
-  overflow: hidden !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  scrollbar-gutter: stable;
+}
+
+.terminal-card__screen .xterm-viewport::-webkit-scrollbar {
+  width: var(--terminal-scrollbar, 12px);
+  background: transparent;
+}
+
+/* Nothing behind the thumb. The box underneath is xterm's own viewport, which it paints in
+   the theme's background — the same surface as the card — so a track drawn here would be a
+   second opinion about the same colour. */
+.terminal-card__screen .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* The thumb, in the ink a hint and an inactive tab are drawn in: enough to find, not enough to
+   read as text. It is inset from the strip by a transparent border rather than by a narrower
+   strip, so the *target* stays the full width the grid reserved while the mark inside it is
+   the width that looks right. */
+.terminal-card__screen .xterm-viewport::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--terminal-ink-dim);
+  background-clip: content-box;
+}
+
+.terminal-card__screen .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: var(--terminal-ink);
+  background-clip: content-box;
+}
+
+/* Firefox, which has no `::-webkit-scrollbar` and offers `thin` instead — a width it chooses
+   rather than one this file states. Guarded, because in Chromium any `scrollbar-width` other
+   than `auto` makes the rules above ignored altogether: declared unconditionally it would take
+   the exact strip away on the browser that can draw one. So the block that cannot use them is
+   the only block that gets it, and the cost is that Firefox's bar may be a pixel or two off
+   the strip the grid reserved. */
+@supports not selector(::-webkit-scrollbar) {
+  .terminal-card__screen .xterm-viewport {
+    scrollbar-width: thin;
+    scrollbar-color: var(--terminal-ink-dim) transparent;
+  }
 }
 
 /* What is left of the bar that used to run along the bottom, and the only thing it said that
