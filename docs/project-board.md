@@ -6,10 +6,11 @@ the column the queue drains — and cards you can drag between columns with the 
 to GitHub. Dormant unless a project names a `githubProject`, so a board that has none never grows
 one.
 
-Not the leftmost region since #96: the terminal sits one gap further left again, anchored to
-this one (`docs/terminal.md`). It has to be, because the mirror repaints every twenty seconds
-and the terminal is placed once — so the shape that never moves aside belongs where nothing is
-coming.
+The **leftmost** region again since #200: the canvas reads `mirror | terminals | documentation`,
+and the terminal blocks sit between this one and the board's own content, anchored to the
+documentation while this one is anchored to them (`docs/terminal.md`). It was the middle region
+between #96 and #200, with the blocks past it on the far left; the reversal re-points which of
+the two is measured from the other and changes no arithmetic.
 
 Nothing here names a column. That is the whole point — a fourth option added on GitHub is a
 fourth section on the next poll, with nothing edited in this repository.
@@ -102,13 +103,20 @@ number, and that gave it two independent ways to move with nobody touching anyth
 That is #99 — a region that drifted up and to the left over days, with no action to connect it to
 because half of it had none.
 
-**Which edge survives a width change is the trade this settles, and it is the left one.** A
-mirror whose width is set by GitHub cannot keep both. The left edge is where the `+` sits, and —
-since #96 — it is the edge the terminal block is anchored to, a block placed once and never moved
-aside, so a jump in it is a jump into something that will not give way. A column appearing
-therefore grows the region to
-the *right*, into the gap and, past that, toward the board's own content. That is a collision a
-reader can see and connect to the column that caused it, which is what the drift never was.
+**Which edge survives a width change is the trade this settles, and since #200 it is the right
+one.** A mirror whose width is set by GitHub cannot keep both. The rule is *pin the edge the
+neighbour is placed from*, and the neighbour has moved: while the blocks sat past this region on
+the far left, that was the **left** edge, so a column appearing grew the region rightward, into
+the gap it keeps from the board's own content. Under `mirror | terminals | documentation` the
+blocks are anchored to this region's **right** edge instead, and growing that way would put a new
+column on top of them. So the right edge is pinned and a column added grows the region *leftward*,
+into canvas nobody is using.
+
+What that costs is exactly the half of #99 recorded above: pinned by its right edge, the region
+gets wider by pushing every column already drawn one column-width further left, the first of them
+— the one carrying the `+` — included. Accepted rather than overlooked. Under this order the
+alternative is a collision with the blocks rather than a shift, and a column added on GitHub is a
+cause a reader can point at, which is what the drift never was.
 
 The price is the one the terminal already pays for the same decision: a board whose content is
 moved wholesale leaves the region where it was put. A reload re-measures, which is what puts it
@@ -116,8 +124,9 @@ back.
 
 What may be measured against is one predicate, `mirrorAnchors`, stated the way the autosync and
 the export state theirs: not the mirror's own shapes, or it would re-anchor to itself; not the
-terminal blocks, which are placed *from* this region's own left edge, so measuring against one
-would walk the mirror onto it and it leftward again on every pass; not the draft blocks,
+terminal blocks, which this region is placed *from* directly since #200 — they are handed in as
+a region of their own, and one counted a second time here would be measured as content and drag
+the answer a block-width further out; not the draft blocks,
 which live inside the region; **not a label bound to any of those**; and — since #188 — **not
 anything standing inside the region as it is currently drawn**, whatever it is marked with.
 Excalidraw binds text to whatever is selected and that text carries no `kind` of its own, so a
@@ -146,13 +155,23 @@ width in it is GitHub's, a column added to the project moved the region a column
 left on the next poll — onto a block anchored to where the region used to be. That is #188, and
 it is the same shape of defect as #99 on a board that never had any content to drift relative to.
 
-**The block is what such a board is measured from.** `terminalOrigin` puts it exactly one
-`TERMINAL_GAP` left of this region's left edge, so its right edge plus that gap *is* where this
-region's left edge was. Reading it back is the inverse of the placement rather than a second
-guess at it, which makes it a fixed point: the block does not move because the region was placed
-here, because the region was already placed from the block. It is a measurement, so it settles,
-and the poll after it never takes it again. A block still carrying `awaitingMirror` is not used —
-it is standing at a guess made before there was a mirror, and this same pass is about to move it.
+**The block is what such a board is measured from** — and since #200 that is true of every
+board, not only this one. The region goes one `MIRROR_GAP` left of the blocks' left edge, which
+is one step of the chain `terminalOrigin` starts from the documentation rather than a second
+derivation of the same number. That is what makes it a fixed point: the blocks do not move
+because the region was placed here, because the region was placed from the blocks. It is a
+measurement, so it settles, and the poll after it never takes it again. It read
+`terminal.maxX + TERMINAL_GAP` until #200, the block being *outside* the region then; the sign is
+the whole of the difference.
+
+**A remembered answer the blocks are now standing in is dropped, and measured again.** On a board
+with a project and no shell open, this region is measured from the content and lands in the slot
+the first block will take — a session opens on a `POST` while a board arrives on a poll, so that
+is the ordinary order. When the block lands there the remembered answer describes a board that no
+longer exists, so it is thrown away and the region re-measures around the blocks. Once, on a
+collision, and it cannot fire twice: what it settles on is a gap clear of them. It is visible —
+the region steps a block's width left at the moment a shell is opened — and that is the same
+standard as above, a move with a cause over a drift without one.
 
 Only a board with **neither** content nor a block falls back to the constant, and that one is
 still not remembered.
@@ -165,8 +184,9 @@ what the reset was actually for. A reload is what re-measures, the way it is for
 
 `scripts/check-mirror-terminal-drift-browser.mjs` is the one that asks this in a browser: a board
 holding only those two, across ten refreshes and a real twenty-second poll, a column appearing, a
-shape dropped inside the region, and a switch away and back. The region has to be where it was
-first drawn each time, and the two bounding boxes must never intersect.
+shape dropped inside the region, and a switch away and back. The region's **pinned edge** has to
+be where it was first drawn each time, and the two bounding boxes must never intersect.
+`scripts/check-canvas-order-browser.mjs` is the one that asks about all three regions at once.
 
 ## Two guards
 

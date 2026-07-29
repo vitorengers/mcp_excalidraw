@@ -290,7 +290,6 @@ const PROBE = `(() => {
       if ((element.customData || {}).kind === 'terminal') {
         out.blocks.push({ id: element.id, x: element.x, y: element.y,
                           width: element.width, height: element.height,
-                          awaiting: Boolean((element.customData || {}).awaitingMirror),
                           sessions: (element.customData || {}).sessions || [] });
       // What the board itself authored, which is how this check tells one board's scene from
       // another's: nothing else on screen carries the project it came from.

@@ -330,9 +330,6 @@ const PROBE = `(() => {
   return {
     mirror: box(mirrorParts),
     terminal: box(terminalParts),
-    // The block placed before any mirror was drawn still carries this; while it does, it is
-    // waiting to be moved and is not yet where it belongs.
-    awaiting: terminalParts.some((e) => (e.customData || {}).awaitingMirror === true),
     columns: mirrorParts
       .filter((e) => (e.customData || {}).role === 'section')
       .map((e) => ({ col: (e.customData || {}).sectionOptionId, x: e.x }))
@@ -408,12 +405,13 @@ try {
 
   console.log('1. the two are placed side by side, at the separation the block is anchored by');
 
-  // The block after the mirror rather than before it, so this phase measures a placement
-  // rather than a race: `newTerminalBlock` reads the region off the scene when there is one.
+  // The block after the mirror rather than before it, so this phase measures a settled
+  // arrangement rather than a race: since #200 the block is placed from the documentation and
+  // the *region* steps aside for it, which takes a poll on a board that had none.
   await pressKey('KeyT', 't', 1, 84);
   let scene = await waitFor(async () => {
     const now = await evaluate(PROBE);
-    return now.terminal && !now.awaiting ? now : null;
+    return now.terminal && now.mirror && now.mirror.maxX <= now.terminal.minX + 1 ? now : null;
   }, 'the terminal block to be placed', 200);
   await shot('01-side-by-side');
 
@@ -512,7 +510,7 @@ try {
   check('and this one has a tab to come back to', await clickTab('Drift Check'));
   scene = await waitFor(async () => {
     const now = await evaluate(PROBE);
-    return now.mirror && now.terminal && !now.awaiting ? now : null;
+    return now.mirror && now.terminal ? now : null;
   }, 'the board to come back with both regions on it', 200);
   await refresh();
   scene = await evaluate(PROBE);

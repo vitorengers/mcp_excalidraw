@@ -376,6 +376,24 @@ const inOrder = (scene, what, { mirror = true } = {}) => {
   check(`${what}: and do not overlap it`, !intersects(scene.terminal, scene.docs), where);
 };
 
+/**
+ * The whole board in one frame, for the eye rather than for a case.
+ *
+ * `CLAUDE.md` asks for a look in a browser, and the order this check is about is the one
+ * thing a number cannot show: three regions side by side is a picture. Every other shot here
+ * is fitted to whatever a case was clicking.
+ */
+const wide = async (name) => {
+  await evaluate(`(() => {
+    const api = window.__orderCheckApi;
+    const all = api.getSceneElements();
+    if (all.length) api.scrollToContent(all, { fitToViewport: true });
+    return all.length;
+  })()`);
+  await sleep(700);
+  await shot(name);
+};
+
 /** Fit every terminal block into the viewport, so what a case clicks is on screen. */
 const fitBlocks = async () => {
   await evaluate(`(() => {
@@ -465,7 +483,7 @@ try {
     const now = await evaluate(PROBE);
     return now.terminal && now.mirror && now.docs ? now : null;
   }, 'the terminal block to be placed', 200);
-  await shot('01-three-regions');
+  await wide('01-three-regions');
 
   inOrder(scene, 'a fresh spawn');
   check('the block is one gap left of the documentation, which is what places it',
@@ -502,7 +520,7 @@ try {
   await waitFor(async () => (await evaluate(PROBE)).blocks.length === 2, 'a second block');
   await sleep(600);
   scene = await evaluate(PROBE);
-  await shot('02-detached');
+  await wide('02-detached');
 
   const source = scene.blocks.find((block) => block.sessions.includes(stays));
   const detached = scene.blocks.find((block) => block.sessions.includes(leaves));
@@ -550,7 +568,7 @@ try {
   await waitFor(async () => (await evaluate(PROBE)).blocks.length === 1, 'the two blocks to become one');
   await sleep(600);
   scene = await evaluate(PROBE);
-  await shot('04-merged');
+  await wide('04-merged');
 
   check('the documentation is back exactly where it was, not near it',
         Math.abs(scene.docs.minX - home) < 0.01, `${home} → ${scene.docs.minX}`);
@@ -604,7 +622,7 @@ try {
     const now = await evaluate(PROBE);
     return now.terminal && now.docs ? now : null;
   }, 'the block on the plain board', 200);
-  await shot('07-no-mirror');
+  await wide('07-no-mirror');
 
   check('no mirror is drawn on a board with no project', scene.mirror === null,
         JSON.stringify(scene.mirror));
