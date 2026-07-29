@@ -176,20 +176,54 @@ export function agentPath(): string {
 const STRIPPED_FROM_CHILDREN = ['CLAUDE_CODE_CHILD_SESSION'];
 
 /**
- * The environment every child of the board is given: this process's, corrected twice.
+ * The variable that says a session captured somebody's stdout, and the one that proves it.
+ *
+ * Claude Code sets `NO_COLOR=1` in the subprocesses its Bash, PowerShell and Monitor tools
+ * spawn, and that is right for what those are: their output is read back as text rather than
+ * drawn on a screen. It is a statement about one captured subprocess, and the board inherits
+ * it by the same route it inherits the marker above — started once from a tool call, it then
+ * hands the variable to every shell and every agent it opens for the rest of its life. A
+ * terminal block is the opposite of a captured subprocess, so what the reader gets is Claude
+ * Code, `gh`, `git` and `npm` all in black and white, hours after the session that asked for
+ * that has ended.
+ *
+ * **Only when `CLAUDECODE` is beside it**, which is the difference between correcting an
+ * inheritance and overriding the machine. `NO_COLOR` is a standard an operator may hold
+ * deliberately (`no-color.org`), and a board that discarded it on sight would be deciding
+ * something that is not its to decide. With Claude Code's own marker in the same environment
+ * the variable is demonstrably one session's rather than the machine's, and nothing else in
+ * reach can say so: it carries no value that distinguishes the two, and the User and Machine
+ * environment blocks a persistent preference would live in are not readable from here.
+ *
+ * Not added to `STRIPPED_FROM_CHILDREN`, because that list is unconditional and this is not.
+ * `CLAUDECODE` itself stays: it is Claude Code telling a child what spawned it, which is true
+ * of a shell the board opens and is what a status line or a hook would read.
+ */
+const SESSION_ONLY = { key: 'NO_COLOR', witness: 'CLAUDECODE' } as const;
+
+/** Whether a key is present in an environment, whatever case it was spelled in. */
+function has(env: NodeJS.ProcessEnv, name: string): boolean {
+  return Object.keys(env).some((key) => key.toUpperCase() === name);
+}
+
+/**
+ * The environment every child of the board is given: this process's, corrected three times.
  *
  * Shared by the agents and by the terminal, because a rule kept in one of the two places
- * and not the other is how they drift apart. Both corrections are one key each and neither
+ * and not the other is how they drift apart. Every correction is one key and none of them
  * rewrites a command line, so what `agent-usage.ts` and `workspaces.ts` rule out — a
  * configurable command — is untouched.
  */
 export function agentEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: agentPath() };
+  const inherited = has(env, SESSION_ONLY.witness);
   // By comparison rather than by `delete env.X`: a Windows environment block is
   // case-insensitive, and once spread into a plain object a `Claude_Code_Child_Session`
   // would survive a delete spelled in capitals and reach the child anyway.
   for (const key of Object.keys(env)) {
-    if (STRIPPED_FROM_CHILDREN.includes(key.toUpperCase())) delete env[key];
+    const upper = key.toUpperCase();
+    if (STRIPPED_FROM_CHILDREN.includes(upper)) delete env[key];
+    if (inherited && upper === SESSION_ONLY.key) delete env[key];
   }
   return env;
 }
