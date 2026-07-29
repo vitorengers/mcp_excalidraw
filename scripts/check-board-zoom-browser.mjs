@@ -292,11 +292,29 @@ const boundsOf = (boxes) => {
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 };
 
-/** Is the middle of this box somewhere a reader can see? */
+/**
+ * Has a fit landed on this box — is the reader looking at the start of it?
+ *
+ * Across the middle and at the **top**, and the top is #232. This used to ask about the
+ * middle of the box on both axes, which was the right question only while a target taller
+ * than the canvas was *centred* in its own overflow: the middle was on screen and the title
+ * above it was not, which is the defect #232 reports. Such a target is top-aligned now, so
+ * the middle of a 2200-tall section sits well below a 660-tall canvas and the old probe
+ * would call a correct landing a miss.
+ *
+ * Asking about the top edge is also the stronger question of the two. "Some part of the
+ * section overlaps the viewport" would be true of a camera that never moved, on a board this
+ * tall; the top edge being in view is true of `Alt+P` and false of `Alt+G`, which is what
+ * these two cases are actually distinguishing. Where the landing lands relative to
+ * Excalidraw's own floating menus is `scripts/check-board-landing-browser.mjs`.
+ *
+ * In canvas pixels, so `offsetLeft` / `offsetTop` are left out: those carry the point up to
+ * the page, and `view.width` / `view.height` are the canvas box, not the page.
+ */
 const onScreen = (probe, box) => {
-  const x = (box.x + box.w / 2 + probe.view.scrollX) * probe.view.zoom + probe.view.offsetLeft;
-  const y = (box.y + box.h / 2 + probe.view.scrollY) * probe.view.zoom + probe.view.offsetTop;
-  return x > 0 && x < probe.view.width && y > 0 && y < probe.view.height;
+  const x = (box.x + box.w / 2 + probe.view.scrollX) * probe.view.zoom;
+  const y = (box.y + probe.view.scrollY) * probe.view.zoom;
+  return x > 0 && x < probe.view.width && y >= 0 && y < probe.view.height;
 };
 
 const sameView = (one, other, tolerance = 2) =>

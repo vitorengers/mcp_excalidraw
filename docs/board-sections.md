@@ -54,12 +54,24 @@ two sections' outer borders, over the width they are authored at — rather than
 number the page believes it is drawing at.
 
 Two consequences worth knowing before they surprise somebody. A section that overflows is
-**centred** in what overflows, so `Alt+P` lands in the middle of the section rather than at its
-title — Excalidraw's `scrollToContent` centres the bounds it is given, and taking the top instead
-would mean computing the whole camera here and giving up the animated pan. And the zoom a reader
-sets by hand is now kept per board in `localStorage`, beside the theme and the terminal's
-geometry, so a correction survives a reload; a board with a remembered camera is put back at it
-instead of being fitted at all.
+**top-aligned** in what overflows, so `Alt+P` lands on the section's title and runs off the
+bottom, rather than landing in its middle with the title off the top. And the zoom a reader sets
+by hand is now kept per board in `localStorage`, beside the theme and the terminal's geometry, so
+a correction survives a reload; a board with a remembered camera is put back at it instead of
+being fitted at all.
+
+Top-aligned since #232, and this document said the opposite until then. The reasoning it gave was
+that taking the top instead of the centre "would mean computing the whole camera here and giving
+up the animated pan" — which turned out not to be true. `scrollToContent` takes a `canvasOffsets`,
+`centerScrollOn` shifts the centre by `offsets.top / 2 / zoom`, and a `top` of the overflow
+therefore lands the top edge exactly where it is wanted, through the supported argument, with
+`animate: true` untouched. The rule was accepted here for `Alt+P`, where a section running off
+the bottom is at least readable from its title down; it was never considered for `Alt+B`, where
+what goes off the top is the mirror's column headers and the title saying how many items it drew.
+Both land the same way now, and both reserve Excalidraw's own floating menus, which are painted
+over the canvas in the corner the mirror is drawn in. `frontend/src/board-fit.ts` is the
+arithmetic and `scripts/check-board-landing-browser.mjs` asserts it at two canvas heights with
+the menus shown and hidden.
 
 ## Why the key is on the shape
 
