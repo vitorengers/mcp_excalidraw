@@ -684,6 +684,93 @@ export async function addWorkspace(
   return { ok: true, workspace, workspaces };
 }
 
+/** A reorder either happened, or did not and says why. There is no one workspace it is about. */
+export type WorkspaceOrderResult =
+  | { ok: true; workspaces: Workspace[] }
+  | WorkspaceWriteRefusal;
+
+/**
+ * Write down the order the tabs are in.
+ *
+ * The order *is* the array order of the registry and has never been anything else: the strip
+ * renders `GET /api/workspaces` verbatim and that route answers `loadWorkspaces` verbatim. So
+ * there is nothing to add to the file — this permutes the entries already in it.
+ *
+ * **A permutation or nothing.** The list must name exactly the workspaces the registry loads
+ * back, each once. Anything else is refused before a byte is written rather than applied as
+ * far as it goes: this is somebody else's file, a caller sending a stale list has an idea of
+ * the board that is already wrong, and a half-applied order is harder to notice than a
+ * refusal that says which id was the problem.
+ *
+ * Entries are moved **whole**, never rebuilt, so a `colour` or a comment somebody added by
+ * hand travels with the project it was written on — the same rule `addWorkspace` keeps for
+ * the file and `writeWorkspaceConfig` keeps for a project's config.
+ *
+ * Ordered against the *loaded* ids rather than against the raw entries, because the loaded
+ * list is what the strip shows and therefore what a drag is expressed in. An entry the loader
+ * dropped — a duplicate path, a duplicate id, an entry with no path at all — has no tab and
+ * so no position to state; it is kept, in its own relative order, after the ones that do.
+ * Kept, because deleting a line of somebody's registry is not what a reorder was asked to do.
+ */
+export async function reorderWorkspaces(
+  registryPath: string | undefined,
+  ids: unknown
+): Promise<WorkspaceOrderResult> {
+  if (!registryPath) return NO_REGISTRY;
+
+  if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string' && id.trim())) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'The order must be an array of workspace ids, listing every registered project exactly once.',
+    };
+  }
+  const wanted = (ids as string[]).map((id) => id.trim());
+
+  const read = await readRegistry(registryPath);
+  if (!read.ok) return read;
+  const { registry, entries } = read;
+
+  const current = await loadWorkspaces(registryPath);
+  const known = current.map((workspace) => workspace.id);
+
+  const missing = known.filter((id) => !wanted.includes(id));
+  const unknown = wanted.filter((id) => !known.includes(id));
+  const repeated = [...new Set(wanted.filter((id, at) => wanted.indexOf(id) !== at))];
+  if (missing.length || unknown.length || repeated.length) {
+    const said = [
+      unknown.length ? `${unknown.join(', ')} — not registered` : null,
+      missing.length ? `${missing.join(', ')} — registered but left out` : null,
+      repeated.length ? `${repeated.join(', ')} — listed more than once` : null,
+    ].filter(Boolean).join('; ');
+    return {
+      ok: false,
+      status: 400,
+      error: `The order must list every registered project exactly once (${said}). `
+        + `The board currently has: ${known.join(', ') || 'no projects'}. `
+        + 'Nothing was written — reload the list and try again.',
+    };
+  }
+
+  // First match wins, so two entries that collapsed onto one id under `loadWorkspaces` cannot
+  // both claim the one position that id has on the strip.
+  const remaining = [...entries];
+  const ordered: RegistryEntry[] = [];
+  for (const id of wanted) {
+    const at = remaining.findIndex((entry) => idOfEntry(entry) === id);
+    if (at >= 0) ordered.push(...remaining.splice(at, 1));
+  }
+  registry.workspaces = [...ordered, ...remaining];
+
+  try {
+    await writeJsonFile(registryPath, registry);
+  } catch (error) {
+    return { ok: false, status: 500, error: `Could not write the registry at ${registryPath}: ${(error as Error).message}` };
+  }
+
+  return { ok: true, workspaces: await loadWorkspaces(registryPath) };
+}
+
 /** Fields a project's config may carry that are plain strings. */
 const STRING_FIELDS = [
   'name', 'docsDir', 'board', 'library', 'repo',
