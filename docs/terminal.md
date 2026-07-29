@@ -50,7 +50,7 @@ directory `git` inside the distro can act on. `pwd` in such a session reports th
 ## The environment it is given
 
 The shell inherits the server's environment, and `agentEnv()` in `src/core/issue-agent.ts`
-adjusts exactly two keys of it on the way in. The agents are given the same function's result,
+adjusts exactly three keys of it on the way in. The agents are given the same function's result,
 because a rule kept for the shell and not for them is how the two drift apart.
 
 - **`PATH` gains the GitHub CLI**, where it is installed and missing. A server started before
@@ -68,6 +68,14 @@ because a rule kept for the shell and not for them is how the two drift apart.
   hours later. Stripping it is the correction the exemption would have made. Non-interactive
   `claude -p` persists either way, so the agents were never at risk — they are covered because
   one rule is easier to keep than two.
+- **`NO_COLOR` is removed when `CLAUDECODE` is beside it**, and only then. Claude Code sets
+  `NO_COLOR=1` in the subprocesses its Bash, PowerShell and Monitor tools spawn, which is right
+  for what those are: their output is read back as text rather than drawn on a screen. It
+  arrives here by the same route the marker above does, and a terminal block is the opposite of
+  a captured subprocess — measured on a real board, a block running Claude Code emitted **zero**
+  colour sequences on the native workspace against 614 on the WSL one. The palette this document
+  spends a whole section arguing about was being drawn for a program that had been told not to
+  use colour at all.
 
 **Claude Code says so itself, in its status line**, if you ever see this again from somewhere
 else: `Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker`. That is what the
@@ -78,10 +86,28 @@ transcript that is merely hidden from the picker.
 it overrides the exclusion unconditionally, including for a session that really is nested. The
 two compose, if stripping ever turns out not to be enough.
 
+**The condition on `NO_COLOR` is the decision, not an implementation detail.** It is a standard
+an operator may hold deliberately (`no-color.org`), so a board that discarded it on sight would
+be overriding the machine rather than correcting an inheritance. `CLAUDECODE` in the same
+environment is what tells the two apart, and nothing else in reach can: the variable carries no
+value that distinguishes them, and the persistent User and Machine environment blocks — where a
+real preference would live, and where this one was *not* found — are not readable from here. So
+it is conditional where the marker above is unconditional, and it sits outside
+`STRIPPED_FROM_CHILDREN` for exactly that reason. `CLAUDECODE` itself stays: it is Claude Code
+telling a child what spawned it, which is true of a shell the board opens.
+
+**A WSL board never had this**, and not because anything here protects it. `buildAgentCommand`
+runs such a workspace through `wsl.exe`, and WSL does not carry the Windows environment into the
+distro unless `WSLENV` names the variable. So one board was in colour by accident of the
+boundary and the other was not, on the same screen, which is what made an inherited variable look
+like a defect in the terminal.
+
 Nothing else is filtered. There is no allowlist and no per-project environment facility — the
-board removes one key it has a reason to remove, and everything else the machine's environment
-carries arrives untouched. `scripts/check-child-session-env.mjs` asserts both halves of that,
-on the PTY path, the pipe path and the agent path.
+board removes keys it has a reason to remove, and everything else the machine's environment
+carries arrives untouched. `scripts/check-child-session-env.mjs` and
+`scripts/check-no-color-env.mjs` assert both halves of that, on the PTY path, the pipe path and
+the agent path; the second also asserts the half that keeps this a correction, a board whose
+`NO_COLOR` came with no `CLAUDECODE` handing it on untouched.
 
 ## A PTY, where there is one
 
