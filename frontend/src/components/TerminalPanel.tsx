@@ -11,6 +11,7 @@ import {
 import { terminalCssVars, terminalXtermTheme } from '../../../src/core/terminal-palette'
 import type { TerminalTheme } from '../../../src/core/terminal-palette'
 import { terminalFontReady } from '../terminal-metrics'
+import { macKeyboard, terminalEditingChord } from '../terminal-keys'
 import type { Rect } from '../../../src/core/anchored-placement'
 import './TerminalPanel.css'
 
@@ -248,6 +249,22 @@ const TerminalScreen: React.FC<{
       // so the event goes on bubbling to the listeners on `window`. Four Readline word
       // motions are what the shell gives up for it, named in `docs/terminal.md`.
       if (isBoardHotkeyRef.current(event)) return false
+
+      // The word motions and the line ends, sent as bytes measured against both line editors
+      // rather than left to whatever xterm decided — #186, and `terminal-keys.ts` is the
+      // whole table. It is asked *before* the bail below, which returns early for every
+      // `altKey` chord and would leave a macOS `Option` entry unreachable.
+      //
+      // `preventDefault` is ours to call here. xterm cancels the event itself for the keys it
+      // handles, and returning false means it never gets that far — without it the browser
+      // would still do its own thing with the chord, and its own thing for `Alt+Left` is to
+      // navigate back out of the board.
+      const editing = terminalEditingChord(event, macKeyboard())
+      if (editing) {
+        event.preventDefault()
+        onDataRef.current(editing)
+        return false
+      }
 
       // AltGr arrives as Ctrl+Alt on several layouts, and it is somebody typing a `@`.
       if (event.altKey || !(event.ctrlKey || event.metaKey)) return true

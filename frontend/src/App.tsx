@@ -4351,6 +4351,48 @@ function App(): JSX.Element {
     switchWorkspace(workspace.id)
   }
 
+  /**
+   * A tab dragged, or moved with the chord, to a new place on the strip.
+   *
+   * Shown before it is written and reconciled against what the route answers with, the way
+   * the `+` and the settings dialog already are: the strip is what the hand is on, and a tab
+   * that only moved once the round trip came back would feel like a strip that ignored the
+   * first attempt. The registry is the store — an order kept per browser would drift between
+   * two windows on the same board, while everything else about a project already persists in
+   * files the operator owns.
+   *
+   * **A refusal puts the strip back**, rather than leaving the reader looking at an order the
+   * board does not have. The list is captured before the optimistic write for exactly that,
+   * and the restore is unconditional on failure: the alternative is a tab that stays where it
+   * was dropped and goes back on the next reload, which is the harder thing to notice.
+   */
+  const reorderWorkspaces = (ids: string[]): void => {
+    const previous = workspaces
+    const byId = new Map(previous.map((workspace) => [workspace.id, workspace]))
+    const optimistic = ids
+      .map((id) => byId.get(id))
+      .filter((workspace): workspace is WorkspaceSummary => Boolean(workspace))
+    if (optimistic.length !== previous.length) return
+    setWorkspaces(optimistic)
+
+    void (async () => {
+      try {
+        const result = await (await fetch('/api/workspaces/order', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids })
+        })).json()
+        if (!result?.success) throw new Error(result?.error ?? 'the board refused the new order')
+        // Reconciled rather than kept: the server answers with the list it actually loaded,
+        // which is the only account of the order that survives a reload.
+        setWorkspaces(result.workspaces ?? optimistic)
+      } catch (error) {
+        console.warn('Could not save the project order:', error)
+        setWorkspaces(previous)
+      }
+    })()
+  }
+
   // Reloaded per board: a project may ship its own shapes on top of the shared set.
   // Waits for the board to be resolved, or it would fetch the default board's library
   // first and the real one a moment later, every load.
@@ -5289,6 +5331,7 @@ function App(): JSX.Element {
         onSelect={switchWorkspace}
         onAdd={() => setWorkspaceDialog('add')}
         onConfigure={() => setWorkspaceDialog('config')}
+        onReorder={reorderWorkspaces}
       />
 
       {workspaceDialog === 'add' && (

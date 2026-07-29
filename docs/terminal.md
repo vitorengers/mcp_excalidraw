@@ -982,8 +982,11 @@ rule the first of them reads:
 `transpose-words`, `Alt+P` `non-incremental-reverse-search-history`. This project's default
 shell on Windows is PowerShell with PSReadLine, whose keymap differs, and nothing here offers
 an escape hatch to send the four anyway; nobody has asked for one. Everything else is
-untouched, and deliberately: `Ctrl+C`, `Ctrl+V`, arrows, Escape, `Alt+click` and every bare
-letter stay the shell's.
+untouched, and deliberately: `Ctrl+C`, `Ctrl+V`, bare arrows, Escape, `Alt+click` and every
+bare letter stay the shell's. The *modified* arrows and `Backspace` are the block's own since
+#186, and they are the shell's all the same — see [the editing chords](#the-editing-chords-are-sent-as-measured-bytes)
+below, where what the block claims it claims in order to send better bytes rather than to keep
+them.
 
 `scripts/check-terminal-hotkey-browser.mjs` is the check, and it asks in a real Chrome what
 only a browser can answer: each of the four moves the viewport — read off `scrollX`/`scrollY`
@@ -1006,6 +1009,75 @@ because a key written down only in markdown is a key nobody finds, which is the 
 that was never about the eraser. It was a permanent strip below the screen until #144; what it
 is now is a band drawn *over* the transcript, only while a shell has gone, so it costs the grid
 nothing and appears where the reader is already looking.
+
+### The editing chords are sent as measured bytes
+
+`Ctrl+Backspace` deleted one character rather than a word, and on a Mac `Cmd+Left` and
+`Cmd+Right` did nothing at all. #186 is that observation, and neither half was a bug anybody
+here had written: both were xterm.js defaults nobody had ever looked at. The key map claimed
+the four board keys, `Ctrl+C` and `Ctrl+V`, and handed the rest over.
+
+What xterm hands over is not always a chord a line editor answers:
+
+- `Ctrl+Backspace` was `\b`, which is also `Ctrl+H`, which readline reads as
+  `backward-delete-char` — one character, with nothing in the byte to tell the two apart, which
+  is why `~/.inputrc` cannot fix it either (xtermjs/xterm.js#486). On Windows it looked correct
+  because **ConPTY rewrites an incoming `0x08` into a `VK_BACK + LEFT_CTRL` key event**
+  (microsoft/terminal#3935, in conhost since build 19603), which is what fires PSReadLine's
+  `BackwardKillWord`. No such rewrite reaches `bash`, so this only ever broke there.
+- `Cmd+Left` and `Cmd+Right` were dropped on the floor — `if (ev.metaKey) break;` — and
+  `Cmd+Backspace` sent one `DEL`, because that branch never consults `metaKey`. xterm closes
+  these as the embedder's business (xtermjs/xterm.js#597).
+
+So the block claims them, in `frontend/src/terminal-keys.ts`, and it claims **all** of them
+rather than only the broken ones: xterm has already removed its own alt-to-word hack for 6.0
+(xtermjs/xterm.js#4538), telling embedders to own this, and a table that is ours does not
+change under an upgrade. The table is read before the AltGr bail, which returns early for every
+`altKey` chord and would otherwise leave a macOS `Option` entry unreachable.
+
+**Every sequence in it was measured against both line editors** — PSReadLine over ConPTY and
+readline in `bash` — because the two disagree in ways no amount of reading settles:
+
+| chord | sent | why not the obvious alternative |
+|---|---|---|
+| `Ctrl+Left` / `Ctrl+Right` | `ESC[1;5D` / `ESC[1;5C` | already what xterm sent, and both editors answer it. `ESC b`/`ESC f` print a literal `b`/`f` under ConPTY |
+| `Ctrl+Backspace` | `^W` | `\b` is one character on readline; `ESC DEL` prints a literal `^H` under ConPTY |
+| `Ctrl+Delete` | `ESC[3;5~` | `ESC d` works in both too, but this sequence *is* `Ctrl+Delete`, so it stays true to a reader who looks it up |
+| `Option+Left` / `Right` | `ESC b` / `ESC f` | macOS only, and byte-for-byte what xterm's hack sent — taken over rather than changed, so 6.0 cannot remove it |
+| `Option+Backspace` | `ESC DEL` | macOS only, and again xterm's own answer, which is right in front of readline and ZLE |
+| `Option+Delete` | `ESC d` | macOS only. xterm sent `ESC[3;3~`, which neither editor binds |
+| `Cmd+Left` / `Cmd+Right` | `ESC[H` / `ESC[F` | `^A` is `SelectAll` in PSReadLine and `^E` prints as `^E`; both editors answer these |
+| `Cmd+Backspace` | `^U` on a Mac, `ESC[1;5H` off one | the one row with no single answer — see below |
+
+`Cmd+Backspace` is "delete to the start of the line", and no sequence does it in both: `^U` is
+readline's `unix-line-discard` and ZLE's `kill-whole-line`, and PSReadLine has no binding for it
+and prints `^U` into the line it was meant to clear; `ESC[1;5H` is `Ctrl+Home`, which is
+PSReadLine's `BackwardDeleteLine` and which readline ignores in silence. So the keyboard
+decides, and the keyboard is the best proxy available for the line editor — this board is
+served over loopback, so the browser is nearly always on the machine the shell is on.
+
+`^W` costs one thing worth writing down. readline's `unix-word-rubout` is delimited by
+whitespace and PSReadLine's `BackwardKillWord` by a punctuation set, so `foo/bar-baz` goes in
+one press under `bash` and three under PowerShell. The alternative was a sequence that works in
+one shell and types `^H` into the reader's command line in the other, which is not a choice.
+
+Three shapes are turned down before the table is consulted at all. Anything with `Shift`, because
+`Shift+Ctrl+Left` grows a selection in a text box and a shell has none. Anything with more than
+one of `Ctrl`, `Alt` and `Meta`, because `Ctrl+Alt` is how AltGr arrives on several layouts and
+that is somebody typing a `@`. And `Alt` off a Mac, because there it is a third-level shift
+rather than `Option`, and xterm's own `Alt+Left` is already the word motion the table would send
+— claiming it would be taking a key for no change.
+
+`scripts/check-terminal-keys-browser.mjs` is the check, and it needs two instruments because
+there are two questions. **What the page sends** is real keystrokes into a focused emulator with
+every `POST /api/terminal/input` recorded — a statement about the chord rather than about
+whichever shell this machine runs, and the only half a Mac chord can be asked about from a
+Windows box at all, so the macOS row is asked a second time with `navigator.platform` emulated
+over CDP and skipped with a printed reason if the override does not take. **Whether the shell
+moves** is a known line typed at a real prompt, the chord pressed, and the server's own
+scrollback asserted to hold what the motion would leave: through the browser against
+PowerShell/ConPTY always, and over the API against a WSL-backed workspace when a distro exists,
+because `Ctrl+Backspace` is the one that was only ever broken in front of readline.
 
 ## Erasing it does not get rid of it
 
@@ -1193,6 +1265,17 @@ it. A board returned to puts its block back where it was left.
   sections and its mirror are drawn *around* the block rather than away from it, so no jump
   ever takes the card off screen — an unmounting emulator writes a focus report to the shell,
   and the one case here that has to say "nothing at all" could not then say it.
+- `scripts/check-terminal-keys-browser.mjs` — which *bytes* the editing chords send, and
+  whether a shell moves when they arrive. The whole table pressed once each into a focused
+  emulator with every `POST /api/terminal/input` recorded, then pressed again with
+  `navigator.platform` emulated as a Mac over CDP, which is the only way a `Cmd` chord can be
+  asked about from a Windows box — skipped with a printed reason if the override does not take.
+  Then the half a byte table cannot answer: a known line typed at a real prompt, the chord
+  pressed, and the server's own scrollback holding what the motion would leave — through the
+  browser against PowerShell/ConPTY, and over the API against a WSL-backed workspace where a
+  distro exists, because `Ctrl+Backspace` was only ever broken in front of readline. It also
+  asks that the four board keys and `Ctrl+V` still send the shell nothing, since the table is
+  read *before* the AltGr bail and could have stepped on either.
 - `scripts/check-terminal-size-browser.mjs` — how big the block and its strip are drawn, in
   Chrome, measured off the render rather than read out of the stylesheet: #110's lesson is that
   a size which never reaches the element leaves the file reading exactly right. The block the
