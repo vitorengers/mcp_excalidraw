@@ -2916,7 +2916,24 @@ function App(): JSX.Element {
    */
   const commitTerminalLayout = (
     layout: Map<string, { sessions: string[]; active: string }>,
-    added: Record<string, unknown>[] = []
+    added: Record<string, unknown>[] = [],
+    /**
+     * Whether this commit may move the documentation.
+     *
+     * Off by default, and that default is the decision. Every arrangement of the blocks
+     * comes through here, and most of them are not the tool deciding how much room the
+     * region takes: a board switched to puts its blocks back at the rects the reader left
+     * them at, an erased block is restored at its own, a tab is switched. Content that
+     * stepped aside for any of those would be the board rearranging itself whenever anybody
+     * looked at it, and a block the reader has dragged is theirs — the canvas does not run
+     * away from it.
+     *
+     * The two gestures the observation on #200 names are the two that turn it on: `⧉`
+     * splits, which grows the region by a block, and `⇥` merges, which gives that block
+     * back. Both are the tool choosing the geometry, and they are exactly the pair the round
+     * trip is between.
+     */
+    settle = false
   ): void => {
     const api = excalidrawAPIRef.current
     if (!api) return
@@ -3010,8 +3027,8 @@ function App(): JSX.Element {
     const blocks = [...next, ...added] as unknown as ExcalidrawElement[]
     const region = boxOf(blocks.filter((element) => isTerminalElement(element)))
     const documentation = documentationElements(next as unknown as ExcalidrawElement[])
-    const standing = boxOf(documentation)
-    const wanted = standing ? documentationClearance(region, standing.minX - applied) : 0
+    const standing = settle ? boxOf(documentation) : null
+    const wanted = standing ? documentationClearance(region, standing.minX - applied) : applied
     const shift = wanted - applied
     const moving = new Set(shift === 0 ? [] : documentation.map((element) => element.id))
     const placed = moving.size === 0 ? next : next.map((element) => (
@@ -3418,7 +3435,7 @@ function App(): JSX.Element {
 
     entry.sessions = entry.sessions.filter((id) => id !== sessionId)
     if (entry.active === sessionId) entry.active = entry.sessions[0] ?? ''
-    commitTerminalLayout(layout, [newTerminalBlock(api, [sessionId], { beside: source })])
+    commitTerminalLayout(layout, [newTerminalBlock(api, [sessionId], { beside: source })], true)
   }
 
   /**
@@ -3452,7 +3469,7 @@ function App(): JSX.Element {
     into.sessions = [...into.sessions, ...moving]
     if (!into.active) into.active = into.sessions[0] ?? ''
     layout.set(source.id, { sessions: [], active: '' })
-    commitTerminalLayout(layout)
+    commitTerminalLayout(layout, [], true)
   }
 
   /** Keystrokes waiting to be sent, per session, and which queues are already sending. */

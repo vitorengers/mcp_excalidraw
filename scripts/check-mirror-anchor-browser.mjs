@@ -181,6 +181,12 @@ const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
   cwd: repoRoot,
   env: {
     ...process.env,
+    // Deliberately off, and it has to be said rather than left to the shell. This check is
+    // about the region against the board's own content, and since #200 a terminal block on
+    // the canvas is what the region is placed from instead — so a machine that exports
+    // `EXCALIDRAW_TERMINAL` would have it measuring something else entirely.
+    // `check-mirror-terminal-drift-browser.mjs` is where the two are asked about together.
+    EXCALIDRAW_TERMINAL: '',
     PORT: String(PORT),
     HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
@@ -402,15 +408,22 @@ try {
   check('the fourth column arrived on a poll, with nothing touched on the canvas',
         JSON.stringify(columnIds(grown)) === JSON.stringify([NOTES.NOTES_OPTION_ID, TODO.id, DOING.id, DONE.id]),
         JSON.stringify(columnIds(grown)));
-  check('the three that were already there are at the same x',
-        JSON.stringify(xs(grown).slice(0, 3)) === JSON.stringify(placed.columns),
-        `${JSON.stringify(placed.columns)} became ${JSON.stringify(xs(grown).slice(0, 3))}`);
-  check('the + did not move with them',
-        grown.add && Math.abs(grown.add.x - placed.add.x) < 1 && Math.abs(grown.add.y - placed.add.y) < 1,
+  // The pin turned round with #200: the region is the outermost of the three now and the
+  // terminal is placed from its **right** edge, so that is the edge that holds still and the
+  // region grows leftward, into canvas nobody is using. What it costs is the columns already
+  // drawn stepping left by one column — #99's own objection to the right pin, accepted here
+  // because the alternative under this order grows the region onto the blocks.
+  check('the region\'s right edge is exactly where it was',
+        grown.title && Math.abs((grown.title.x + grown.title.w) - (placed.title.x + placed.title.w)) < 1,
+        `${JSON.stringify(placed.title)} became ${JSON.stringify(grown.title)}`);
+  check('the columns already drawn each stepped left by one column',
+        xs(grown).slice(1).every((x, index) => Math.abs(x - placed.columns[index]) < 1),
+        `${JSON.stringify(placed.columns)} became ${JSON.stringify(xs(grown))}`);
+  check('the + moved with the column it is on, which is the notes one',
+        grown.add && grown.add.x < placed.add.x && Math.abs(grown.add.y - placed.add.y) < 1,
         `${JSON.stringify(placed.add)} became ${JSON.stringify(grown.add)}`);
-  check('and the region grew to the right, into the gap, rather than away from the board',
-        grown.title && Math.abs(grown.title.x - placed.title.x) < 1
-        && grown.title.x + grown.title.w > placed.title.x + placed.title.w,
+  check('and the region grew away from the board rather than into the gap it keeps from it',
+        grown.title && grown.title.x < placed.title.x - 1,
         `${JSON.stringify(placed.title)} became ${JSON.stringify(grown.title)}`);
 
   // ─── Something dropped elsewhere on the canvas ──────────────
