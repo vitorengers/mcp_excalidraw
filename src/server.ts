@@ -3476,8 +3476,14 @@ async function startTerminalSession(
   let session: TerminalSession;
   try {
     session = new TerminalSession(sessionId, workspace, shellCommand, {
-      onOutput: (data, sequence) => {
+      // The two readers of one stream, kept apart. The tap reads for a pull request URL and
+      // for token counts, and both live in the JSON envelopes the transcript has rendered
+      // away by the time `onOutput` fires — so the tap takes the raw chunk and only the
+      // browser is sent the readable one.
+      onRaw: (data) => {
         watch.onOutput?.(data);
+      },
+      onOutput: (data, sequence) => {
         broadcast({ type: 'terminal_output', sessionId, data, sequence } as WebSocketMessage, workspaceId);
       },
       onExit: (code) => {
