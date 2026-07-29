@@ -67,17 +67,24 @@ export function terminalBlockData(customData: unknown): TerminalBlockData {
 }
 
 /**
- * Distance between the terminal's right edge and whatever it sits to the left of.
+ * Distance between the terminal region's right edge and the documentation's left edge.
  *
- * The same 120 the mirror leaves between itself and the board. Both regions are
- * `left - gap - width`, so the canvas reads terminal | mirror | content from the left and
- * every region is placed from content rather than from a coordinate somebody once picked.
+ * The same 120 the mirror leaves between itself and whatever it stands beside. The canvas
+ * reads **mirror | terminals | documentation** from the left, and this is the second of the
+ * two gaps that says so: the block is `documentation.minX - gap - width`, and the mirror is
+ * `terminals.minX - MIRROR_GAP - width` one region further out.
  *
- * Both are placed *once* and then kept — the mirror since #99, where re-measuring it on every
- * poll turned out to be what let it drift away from the board on its own. That is what makes
- * the order above safe to stand on: this block is anchored to the mirror's **left** edge, and
- * that is the edge #99 pins, so a column added on GitHub grows the region to the right, into
- * the gap it keeps from the board, rather than leftward onto this block.
+ * That order is #200, and it is the reversal of #96 — which had put the block on the far
+ * left, past the mirror, because the block is placed once and never re-anchored and the
+ * documentation grows down and right. The observation answers that argument rather than
+ * ignoring it: the documentation is now something the board **moves aside**
+ * (`documentationClearance`), so the edge the region grows into is no longer an edge the
+ * block can be run into. The two halves are load bearing on each other — the reorder is not
+ * safe without the push, which is why they landed together.
+ *
+ * The first block is still placed *once* and then left alone. What changed is which side the
+ * region grows on: a detach now goes **right**, into the documentation, and the documentation
+ * steps out of the way by exactly the room the region took.
  */
 export const TERMINAL_GAP = 120;
 
@@ -369,36 +376,71 @@ export interface Bounds { minX: number; minY: number; maxX: number; maxY: number
 /**
  * Where the block goes for a board with this much on it.
  *
- * "The far left" is a rule, not a pixel column: the caller measures the region the block
- * has to clear, and the block lands one gap to the left of it, level with its top.
+ * One rule, not a pixel column and no longer a choice between two regions: the block lands
+ * one gap to the **left of the documentation**, level with its top. `bounds` is that
+ * documentation — everything the board authored, which is everything on the canvas that is
+ * not the mirror and not another block.
  *
- * Which region that is depends on whether the board has a mirror. **With one, it is the
- * mirror** — the leftmost thing on the canvas, and the only region that repaints, so it can
- * afford something in the way of where it grows. **With none** — a project that names no
- * `githubProject`, so the mirror stays dormant — the slot the mirror would have had is free
- * and the block takes it, one gap left of the content.
+ * The mirror used to be what the block cleared, and taking it out of this is the whole of
+ * #200's arithmetic. Since #96 the block sat one gap left of the *mirror*, so the canvas read
+ * `terminal | mirror | documentation` and the mirror was the middle region. The observation
+ * swaps the two, which re-points one dependency: the block takes the slot the mirror held,
+ * measured from the content exactly as a board with no `githubProject` already measured it,
+ * and the mirror is placed from **this region** one step further out
+ * (`resolveMirrorOrigin`). A board with no mirror is therefore no longer a second case with
+ * a rule of its own — it is the same call with one region fewer on the canvas.
  *
- * The side matters because of *when* the block is anchored. Unlike the mirror it is placed
- * once and then left alone, since the reader is expected to move and resize it; a shape that
- * never moves aside cannot sit on the edge the board grows into. The documentation is the
- * only thing here that grows and it grows down and right, so the left is the edge nothing
- * runs into. This was the other way round until #96, and anything authored past the right
- * edge as it stood when the session opened ran straight into the block.
+ * The block is still placed once and then left alone; the reader is expected to move and
+ * resize it. What makes it safe to stand where the documentation grows is that the
+ * documentation now moves: `documentationClearance` steps it right by however much the
+ * region takes, and back again when the region gives it up.
  *
- * An empty board with no mirror has no edge to anchor to at all, so the block starts one gap
- * right of the origin. That is the only case where a constant is honest.
+ * An empty board has no edge to anchor to at all, so the block starts one gap right of the
+ * origin. That is the only case where a constant is honest, and it leaves the mirror — which
+ * is placed from this block — the whole of the canvas to the left of it.
  */
 export function terminalOrigin(
   bounds: Bounds | null | undefined,
-  mirror?: Bounds | null | undefined,
   size: Size = TERMINAL_SIZE
 ): Point {
-  const usable = (region: Bounds | null | undefined): region is Bounds =>
-    Boolean(region) && Number.isFinite(region!.minX) && Number.isFinite(region!.minY);
+  const usable = Boolean(bounds)
+    && Number.isFinite(bounds!.minX) && Number.isFinite(bounds!.minY);
+  if (!usable) return { x: TERMINAL_GAP, y: 0 };
+  return { x: bounds!.minX - TERMINAL_GAP - size.width, y: bounds!.minY };
+}
 
-  const clear = usable(mirror) ? mirror : (usable(bounds) ? bounds : null);
-  if (!clear) return { x: TERMINAL_GAP, y: 0 };
-  return { x: clear.minX - TERMINAL_GAP - size.width, y: clear.minY };
+/**
+ * How far right the documentation has to stand to leave the terminal region its room.
+ *
+ * The other half of #200, and the half with no precedent here: nothing in this project had
+ * ever moved authored content before. It is answered as **a displacement rather than a
+ * position** — the caller says where the documentation would sit if no block were open
+ * (`natural`), and this says how far from there it has to be. Two consequences, both of them
+ * the point:
+ *
+ *   - **The round trip is exact.** A merge asks the same question with a smaller region and
+ *     gets a smaller number; the documentation is put at `natural + answer`, never nudged by
+ *     a delta. Nothing accumulates, so opening and closing shells all day cannot walk the
+ *     board right by the rounding. The second observation on #200 asked for exactly that:
+ *     the push is keyed to detach and **merge**, not to closing a shell.
+ *   - **It is measured against the region, not against one block.** A detach steps each new
+ *     block one block-width and 40 further right, and the reader may split more than two, so
+ *     "enough room" is recomputed against the region's current extent every time rather than
+ *     against whatever block happened to be added.
+ *
+ * Never negative: a region that is already clear of the documentation asks for nothing, and
+ * this is not a rule that pulls a board's content leftward onto a terminal.
+ *
+ * The x axis only, per the observation. Each region is placed level with the top of what it
+ * measures, so there is no case here where two of them share a column and miss each other
+ * vertically.
+ */
+export function documentationClearance(
+  region: Bounds | null | undefined,
+  natural: number
+): number {
+  if (!region || !Number.isFinite(region.maxX) || !Number.isFinite(natural)) return 0;
+  return Math.max(0, region.maxX + TERMINAL_GAP - natural);
 }
 
 /**

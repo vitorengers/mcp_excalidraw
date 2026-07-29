@@ -26,7 +26,7 @@ import {
   NOTES_OPTION_ID,
   NOTES_NAME,
 } from './project-board-types.js';
-import { TERMINAL_GAP, TERMINAL_KIND } from './terminal-block.js';
+import { TERMINAL_KIND } from './terminal-block.js';
 
 // Re-exported so the canvas can name the notes column without importing two modules.
 export { NOTES_OPTION_ID, NOTES_NAME } from './project-board-types.js';
@@ -288,6 +288,27 @@ export interface MirrorOrigin {
   settled: boolean;
 }
 
+/**
+ * What is remembered about where the region went: its **right** edge, and its top.
+ *
+ * The right edge and not the left, and #200 is what turned it round. #99 pinned the left
+ * because a mirror whose width is GitHub's cannot keep both edges, and the left was the one
+ * the terminal was anchored to — so a column appearing grew the region rightward, into the
+ * gap it kept from the board's own content, rather than onto the block. The rule was "pin the
+ * edge the neighbour is placed from", and the neighbour has moved: the region is now the
+ * outermost of the three and the terminal is placed from its **right** edge. Same rule, other
+ * edge, and a column added on GitHub now grows the region leftward into empty canvas.
+ *
+ * What that costs is what #99 recorded about the right pin: the columns already drawn shift
+ * by a column-width when a new option appears. Accepted rather than overlooked — under this
+ * order the alternative grows the region onto the terminal region, which is a collision
+ * rather than a shift, and a column added on GitHub is a cause the reader can point at.
+ */
+export interface MirrorAnchor {
+  right: number;
+  y: number;
+}
+
 const kindOf = (element: AnchorCandidate): unknown => (element.customData ?? {}).kind;
 
 const isDraft = (element: AnchorCandidate): boolean =>
@@ -306,8 +327,9 @@ const isDraft = (element: AnchorCandidate): boolean =>
  * Left out, and why each one:
  *
  * - the mirror's own shapes, or the region would re-anchor to itself;
- * - the terminal blocks, which are placed *from* the board's bounds on the other side, so
- *   measuring against them would walk the two regions apart;
+ * - the terminal blocks, which the region is placed from **directly** since #200 — they are
+ *   handed to `resolveMirrorOrigin` as their own region, and a block counted a second time
+ *   here would be measured as content and drag the answer a block-width further out;
  * - the draft blocks, which live inside the mirror;
  * - anything whose container is one of those, which is the rule this adds to the terminal;
  * - anything standing **inside the region already drawn**, whatever it is marked with.
@@ -348,47 +370,42 @@ export function mirrorAnchors<T extends AnchorCandidate>(
  * #99 recorded, and neither half needed the mirror or the board's content to be touched.
  *
  * So the measurement happens once, the first time there is something to measure against,
- * and the answer is remembered. What is pinned from then on is the **left** edge: a mirror
- * whose width is set by GitHub cannot keep both, and the left one is where the `+` is, where
- * an observation is written, and — once #96 lands — where the terminal will sit. A column
- * appearing therefore grows the region to the right, toward the board's own content, which
- * is a collision the reader can see and connect to something rather than a drift they cannot.
+ * and the answer is remembered — as the region's **right** edge, which is the edge it now
+ * pins. See `MirrorAnchor` for why that turned round with #200.
  *
  * The price is the terminal's own: a board whose content is moved wholesale leaves the
  * region behind. A reload re-measures, which is what puts it back.
  *
- * A canvas with nothing to measure against still has the **terminal block**, when the board
- * has one, and that block is not an arbitrary shape: `terminalOrigin` puts it exactly
- * `TERMINAL_GAP` left of this region's left edge, so its right edge plus that gap is where
- * this region's left edge was. Reading it back is the inverse of the placement rather than a
- * second guess at it, which makes it a fixed point — the block does not move because the
- * region was placed here, because the region was already placed from the block.
+ * **What it is measured against is the terminal region, whenever there is one.** That is
+ * #200's re-pointing: the canvas reads `mirror | terminals | documentation`, so the region
+ * one step in from this one is the blocks, and `terminalOrigin` places those from the
+ * documentation. Reading the block's left edge back is one step of a chain rather than a
+ * second derivation of the same number, so the two cannot walk apart — which is what #188 is
+ * about, and this is the same fixed point it installed, pointing the other way. Before #200
+ * this branch read `terminal.maxX + TERMINAL_GAP`, the block being *outside* the region then;
+ * the sign is the whole of the difference.
  *
- * #188 is what asked for it. Before, an empty anchor set answered with
- * `{ x: -(width + MIRROR_GAP), y: 0 }`, which is an absolute coordinate that knows nothing
- * about the block, is not remembered, and is therefore re-decided every twenty seconds — and
- * `width` is GitHub's, so a column added to the project moved the region a column-width
- * further left, onto a block anchored to where it used to be. A board holding only a mirror
- * and a terminal has an empty anchor set on *every* poll, so that board got the constant every
- * time. Measured against the block instead, the answer is the same number on every pass, and
- * it is a measurement, so it settles and is never taken again.
+ * A board with no block at all is measured against the content instead, one gap left of it.
+ * The block that is opened afterwards lands in the slot this took, and the caller repairs
+ * that by dropping the remembered answer when the two overlap — one measurement, on a
+ * collision, rather than a second cadence.
  *
  * A board with neither content nor a block has nothing at all to anchor to, so the region
  * starts one gap left of the origin — the only case where a constant is honest, and the one
  * origin not worth keeping.
  */
 export function resolveMirrorOrigin(
-  remembered: { x: number; y: number } | null | undefined,
+  remembered: MirrorAnchor | null | undefined,
   bounds: AnchorBounds | null | undefined,
   width: number,
   terminal?: Region | null
 ): MirrorOrigin {
-  if (remembered) return { origin: { x: remembered.x, y: remembered.y }, settled: true };
+  if (remembered) return { origin: { x: remembered.right - width, y: remembered.y }, settled: true };
+  if (terminal && Number.isFinite(terminal.minX) && Number.isFinite(terminal.minY)) {
+    return { origin: { x: terminal.minX - MIRROR_GAP - width, y: terminal.minY }, settled: true };
+  }
   if (bounds && Number.isFinite(bounds.minX) && Number.isFinite(bounds.minY)) {
     return { origin: { x: bounds.minX - MIRROR_GAP - width, y: bounds.minY }, settled: true };
-  }
-  if (terminal && Number.isFinite(terminal.maxX) && Number.isFinite(terminal.minY)) {
-    return { origin: { x: terminal.maxX + TERMINAL_GAP, y: terminal.minY }, settled: true };
   }
   return { origin: { x: -(width + MIRROR_GAP), y: 0 }, settled: false };
 }
