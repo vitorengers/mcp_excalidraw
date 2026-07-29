@@ -129,6 +129,7 @@ interface AgentDraft {
 
 interface ConfigDraft {
   name: string
+  language: string
   docsDir: string
   board: string
   library: string
@@ -200,6 +201,7 @@ export const WorkspaceConfigDialog: React.FC<{
         const agents = (config.agents ?? {}) as Record<string, unknown>
         setDraft({
           name: text(config.name),
+          language: text(config.language),
           docsDir: text(config.docsDir),
           board: text(config.board),
           library: text(config.library),
@@ -233,6 +235,7 @@ export const WorkspaceConfigDialog: React.FC<{
       body: JSON.stringify({
         config: {
           name: orNull(draft.name),
+          language: orNull(draft.language),
           docsDir: orNull(draft.docsDir),
           board: orNull(draft.board),
           library: orNull(draft.library),
@@ -322,6 +325,9 @@ export const WorkspaceConfigDialog: React.FC<{
         {draft && (
           <>
             {field('Name', 'name', workspaceId)}
+            {/* The language the issues this board opens for the project are written in.
+                Blank is English. It is a name a model reads, not a locale code. */}
+            {field('Issue language', 'language', 'English')}
             {field('Docs folder', 'docsDir', 'docs')}
             {field('Board file', 'board', 'docs/board.excalidraw')}
             {field('Library file', 'library')}

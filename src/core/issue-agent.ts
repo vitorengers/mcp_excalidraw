@@ -17,8 +17,56 @@ import logger from '../utils/logger.js';
 import { AgentUsage, streamsUsage, UsageMeter } from './agent-usage.js';
 import { AgentSettings, loadAgentWorkflow, Workspace } from './workspaces.js';
 
+/**
+ * The language paragraph — the one thing in these prompts a project gets to set.
+ *
+ * **The rule it states is not the thing being made configurable.** Issue #20 came out
+ * entirely in Portuguese from an observation written in English: step 3 of the investigation
+ * sends the agent to read the project's own documentation, that project documents in
+ * Portuguese, and nothing in the prompt said otherwise. What fixed it was saying the language
+ * outright, and that stays said — an agent still may not take the language from the
+ * observation it was given or from the repository it just read.
+ *
+ * What was wrong was fixing it to *one* language. This board opens issues in several
+ * repositories, and a project whose own conventions require Portuguese got every card this
+ * tool opened for it written against its own rule — not a preference, a collision. So the
+ * project names the language and the prompt is as fixed as it ever was.
+ *
+ * Whitespace is collapsed and the name is cut short deliberately. A `board.config.json` may
+ * be written by hand, so this field reaches the prompt without passing
+ * `validateWorkspaceConfigPatch`; what belongs here is the name of a language, and a
+ * paragraph arriving in its place would be instructions in a slot meant for two words.
+ */
+function languageNamed(language: string | null | undefined): string {
+  const named = (language ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  return named || 'English';
+}
+
+/** Which language, and why not whichever one the agent happens to be looking at. */
+function issueLanguageParagraph(language: string | null | undefined): string {
+  const named = languageNamed(language);
+  const because = named === 'English'
+    ? 'Every development artifact in this project is English.'
+    : `This project has said that every development artifact it carries is written in ${named}.`;
+  return `Write the issue in ${named} — title and body. That is fixed: not the language of the
+observation, and not the language of the repository you just read, whose documentation may
+well be in something else. ${because} Quote the
+observation verbatim when its exact wording is the evidence; translate everything else.`;
+}
+
+/** The same, for a rewrite: the observations are plural and there is no repository to blame. */
+function reviseLanguageParagraph(language: string | null | undefined): string {
+  const named = languageNamed(language);
+  const because = named === 'English'
+    ? ''
+    : ` This project has said that every development artifact it carries is written in ${named}.`;
+  return `Write it in ${named} — title and body. That is fixed: not the language of the observations,
+and not the language of the repository you just read.${because} Quote an observation verbatim when its
+exact wording is the evidence; translate everything else.`;
+}
+
 /** Default instruction. Investigation first, evidence over guesswork, URL last. */
-export const ISSUE_AGENT_PROMPT = `You will receive an observation about this project and turn it into a GitHub issue.
+const ISSUE_AGENT_PROMPT_OPENING = `You will receive an observation about this project and turn it into a GitHub issue.
 
 Do not write the issue immediately. Investigate this repository first:
 
@@ -36,10 +84,9 @@ definition of done, and the assumptions you had to make. If the observation is t
 for a good issue, write what you can and list the open questions — never fill a gap with a
 guess presented as fact.
 
-Write the issue in English — title and body. That is fixed: not the language of the
-observation, and not the language of the repository you just read, whose documentation may
-well be in something else. Every development artifact in this project is English. Quote the
-observation verbatim when its exact wording is the evidence; translate everything else.
+`;
+
+const ISSUE_AGENT_PROMPT_CLOSING = `
 
 Create the issue with \`gh\` in this repository, add it to the configured project, and return
 only the issue URL on a line of its own.
@@ -54,6 +101,20 @@ needs. Two things stay yours and do not transfer with the work:
   already created, you print the issue URL yourself, last, on a line of its own — and you
   wait for every helper to come back before you do. A run that ends without that line leaves
   the board waiting forever on an issue that already exists.`;
+
+/**
+ * The research prompt as one project reads it.
+ *
+ * Composed rather than interpolated so that a project which names no language gets the text
+ * byte for byte as it was — that is what `ISSUE_AGENT_PROMPT` below still is, and what
+ * `check-workspace-language.mjs` holds it to.
+ */
+export function issueAgentPrompt(language: string | null | undefined): string {
+  return ISSUE_AGENT_PROMPT_OPENING + issueLanguageParagraph(language) + ISSUE_AGENT_PROMPT_CLOSING;
+}
+
+/** The default, still English, still exported: `check-english-only.mjs` reads this one. */
+export const ISSUE_AGENT_PROMPT = issueAgentPrompt(null);
 
 /**
  * The instruction for researching an issue that already exists, and rewriting it.
@@ -75,7 +136,7 @@ needs. Two things stay yours and do not transfer with the work:
  * produced it is deleted with the block once the card appears (`reconcileDrafts`), so there
  * is nothing else left of the first investigation.
  */
-export const ISSUE_REVISE_PROMPT = `You will receive new observations about a GitHub issue this project already opened, and rewrite that issue so that it is right.
+const ISSUE_REVISE_PROMPT_OPENING = `You will receive new observations about a GitHub issue this project already opened, and rewrite that issue so that it is right.
 
 Nothing has been built against it yet. The issue is still the deliverable, so what is wanted
 is one issue that is correct — not a correction bolted onto one that is not.
@@ -100,9 +161,9 @@ and the evidence you found, root cause (or the competing hypotheses, when the in
 is not conclusive), proposed scope, a verifiable definition of done, and the assumptions you
 had to make. Never fill a gap with a guess presented as fact.
 
-Write it in English — title and body. That is fixed: not the language of the observations,
-and not the language of the repository you just read. Quote an observation verbatim when its
-exact wording is the evidence; translate everything else.
+`;
+
+const ISSUE_REVISE_PROMPT_CLOSING = `
 
 Edit the issue with \`gh issue edit <url> --body-file -\`, and pass the body on **stdin**. Not
 as a command-line argument: a body is free text, and a shell will execute what it finds in
@@ -124,6 +185,14 @@ needs. Two things stay yours and do not transfer with the work:
   finished last, and no error anywhere.
 - **Finishing.** Only what *you* print is read. You print the issue URL yourself, last, on a
   line of its own — and you wait for every helper to come back before you do.`;
+
+/** The revise prompt as one project reads it. See `issueAgentPrompt`. */
+export function issueRevisePrompt(language: string | null | undefined): string {
+  return ISSUE_REVISE_PROMPT_OPENING + reviseLanguageParagraph(language) + ISSUE_REVISE_PROMPT_CLOSING;
+}
+
+/** The default, still English: `check-issue-recreate.mjs` reads this one. */
+export const ISSUE_REVISE_PROMPT = issueRevisePrompt(null);
 
 /**
  * PATH for the agent, with the GitHub CLI added when it is missing.
@@ -1014,7 +1083,10 @@ export async function runIssueAgent(
   const workflow = await loadAgentWorkflow(workspace, 'issue', settings);
   if (!workflow.ok) return { ok: false, issueUrl: null, output: '', error: workflow.error };
 
-  const prompt = `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observation}`
+  // The project's language, per run, for the reason the model and the effort are per run:
+  // one board runs several projects, and what language a project's issues are written in is
+  // that project's to say.
+  const prompt = `${issueAgentPrompt(workspace.language)}\n\n---\n\nObservation:\n\n${observation}`
     + imageReferenceSection(options.imagePaths ?? [])
     + workflowSection(workflow.text);
   const timeoutMs = options.timeoutMs !== undefined
@@ -1067,7 +1139,7 @@ export async function runReviseAgent(
   const workflow = await loadAgentWorkflow(workspace, 'issue', settings);
   if (!workflow.ok) return { ok: false, issueUrl: null, output: '', error: workflow.error };
 
-  const prompt = `${ISSUE_REVISE_PROMPT}\n\n---\n\nThe issue to rewrite: ${issueUrl}`
+  const prompt = `${issueRevisePrompt(workspace.language)}\n\n---\n\nThe issue to rewrite: ${issueUrl}`
     + `\n\n---\n\nNew observations:\n\n${observations}`
     + workflowSection(workflow.text);
   const timeoutMs = options.timeoutMs !== undefined

@@ -18,6 +18,9 @@ import { resolvePanelTarget } from '../../src/core/panel-target'
 import type { PanelElement } from '../../src/core/panel-target'
 import { describeIgnoredClaims, resolveBoardSectionHotkeys } from '../../src/core/board-sections'
 import type { BoardSectionElement } from '../../src/core/board-sections'
+import {
+  describeIgnoredSubsectionClaims, resolveBoardSubsections, stepBetweenSubsections
+} from '../../src/core/board-subsections'
 import { isBoardHotkeyChord, textEntryOwnsKeyboard } from './board-hotkeys'
 import { legibleFitFloor } from './board-fit'
 import { referenceImageName } from '../../src/core/pasted-images'
@@ -1744,6 +1747,17 @@ function App(): JSX.Element {
     if (signature) console.warn(`Board section hotkey ignored: ${signature}`)
   }
 
+  /** The same, one level down. See `reportSectionClaims`. */
+  const subsectionClaimsRef = useRef<string>('')
+
+  const reportSubsectionClaims = (elements: readonly unknown[]): void => {
+    const { ignored } = resolveBoardSubsections(elements as unknown as BoardSectionElement[])
+    const signature = describeIgnoredSubsectionClaims(ignored)
+    if (signature === subsectionClaimsRef.current) return
+    subsectionClaimsRef.current = signature
+    if (signature) console.warn(`Board subsection ignored: ${signature}`)
+  }
+
   /**
    * Track which selected shape the docs panel should describe.
    *
@@ -2080,6 +2094,24 @@ function App(): JSX.Element {
       animate,
       minZoom: legibleFitFloor(elements, api.getAppState().width)
     })
+  }
+
+  /**
+   * The middle of the canvas, in scene units — where the reader is looking.
+   *
+   * Excalidraw's own arithmetic run backwards: a scene point is drawn at
+   * `(x + scrollX) * zoom`, so the point drawn at the centre of a canvas `width` across is
+   * `width / 2 / zoom - scrollX`. `width` is the canvas rather than the window, which is why
+   * `offsetLeft` plays no part: it is the distance to the canvas, and the centre is measured
+   * from the canvas.
+   */
+  const viewportCentre = (api: ExcalidrawImperativeAPI): { x: number; y: number } => {
+    const state = api.getAppState()
+    const zoom = state.zoom?.value || 1
+    return {
+      x: state.width / 2 / zoom - state.scrollX,
+      y: state.height / 2 / zoom - state.scrollY
+    }
   }
 
   /**
@@ -3653,6 +3685,12 @@ function App(): JSX.Element {
     const api = excalidrawAPIRef.current
     if (!api) return false
     const elements = api.getSceneElements() as unknown as BoardSectionElement[]
+    // The arrows on the same footing as a section's key, and for the same reason: they are
+    // the board's only while the board has drawn something to step between. A shell keeps
+    // Alt+Left and Alt+Right on every board that draws no parts.
+    if (event.code === 'ArrowLeft' || event.code === 'ArrowRight') {
+      return resolveBoardSubsections(elements).groups.some((group) => group.subsections.length > 0)
+    }
     return resolveBoardSectionHotkeys(elements).bindings.some((binding) => binding.code === event.code)
   }
 
@@ -4120,6 +4158,51 @@ function App(): JSX.Element {
 
       event.preventDefault()
       fitLegibly(api, [section] as unknown as ExcalidrawElement[], true)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  // Alt+Left and Alt+Right — one step through the parts of the section being read.
+  //
+  // A section's key says *which* half of the board; these say *where in it*. The parts are
+  // read one after another, which is what makes them parts, so what they need is a step
+  // rather than a key each: twelve chords for a board with twelve parts is a keyboard nobody
+  // learns. Everything the step decides — which section the viewport is on, which part of it,
+  // where one step lands — is `src/core/board-subsections.ts`, so that it can be checked
+  // without a browser; what is left here is the scroll.
+  //
+  // **`preventDefault` whenever there was anything to step between, including at the ends.**
+  // On Windows these are the browser's Back and Forward, and they are not reserved
+  // accelerators: the page gets them first and a `preventDefault` keeps them, which
+  // `scripts/check-alt-arrow-accelerator.mjs` measures with a real keypress rather than a
+  // CDP-injected one. A step that has nowhere left to go still has to be swallowed, or the
+  // last Alt+Right of a section navigates the reader out of the board entirely. A board that
+  // draws no parts resolves to nothing, takes neither key, and keeps Back and Forward.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!isBoardHotkeyChord(event)) return
+      if (event.code !== 'ArrowLeft' && event.code !== 'ArrowRight') return
+
+      if (textEntryOwnsKeyboard(document.activeElement)) return
+
+      const api = excalidrawAPIRef.current
+      if (!api) return
+      if ((api.getAppState() as unknown as Record<string, unknown>).editingTextElement) return
+
+      const elements = api.getSceneElements()
+      const target = stepBetweenSubsections(
+        elements as unknown as BoardSectionElement[],
+        viewportCentre(api),
+        event.code === 'ArrowLeft' ? -1 : 1
+      )
+      if (!target) return
+
+      const part = elements.find((element) => element.id === target.elementId)
+      event.preventDefault()
+      if (!part) return
+      fitLegibly(api, [part] as unknown as ExcalidrawElement[], true)
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -5808,6 +5891,7 @@ function App(): JSX.Element {
               noteViewport(appState as unknown as { scrollX?: number; scrollY?: number; zoom?: { value?: number } })
               syncSelectedDoc(appState)
               reportSectionClaims(_elements)
+              reportSubsectionClaims(_elements)
               // Order matters: syncSelectedDoc settles which shape is anchored, and this
               // then works out where that shape is.
               syncDocsAnchor(_elements, appState as unknown as Record<string, any>)
