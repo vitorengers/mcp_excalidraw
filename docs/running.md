@@ -40,6 +40,14 @@ foreach ($processId in ($busy.OwningProcess | Select-Object -Unique)) {
 `GET /health` returns the `pid` of whatever is answering. When a change seems to have had no
 effect, compare that against the process you believe you started.
 
+It also returns **`workspaces`** — `configured` or `none` — and **`terminal`**, and those are
+what tell you the board is a board. Anything that runs a canvas-driving CLI command can
+auto-start a server (`EXCALIDRAW_NO_AUTOSTART=1` stops it), and an auto-started one inherits the
+environment of whatever started it — which for an MCP server attached to an editor is no
+`EXCALIDRAW_*` at all. It binds this port, answers `status: healthy` and is not your board: no
+project tabs, no terminal, no agents, empty canvas. `workspaces: "none"` on a port you started a
+configured board on means something replaced it; kill it and start yours again.
+
 ## The environment
 
 `PORT` and `HOST` decide where it listens. **`PORT=3737`** on the development machine — 3000 is
