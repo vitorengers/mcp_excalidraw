@@ -2,8 +2,12 @@
 
 A board is one canvas, and a big one is several things at once. This one is two: what the tool
 **is** — architecture, blocks, how to try it — and how it **got that way** — the record of every
-merge, the traps already paid for, what is still ahead. Scrolling between them is the whole
-distance of the board.
+merge, the traps already paid for, what is still ahead. They stand **side by side**, tops level:
+`Project structure | Development`, 64 apart — the same gap that separated them when Development
+sat 1892 *below* instead, which is where it was until #217. The board is read across rather than
+down, and the reason is that a canvas has width and this one was not using any of it: the two
+halves were 1892 units of scrolling apart, and the whole of what the tool is had to go past
+before the record of how it got there began.
 
 A section is a shape drawn around one of those halves, carrying the key that reaches it:
 
@@ -22,8 +26,9 @@ the GitHub mirror. What that qualification means is the next section.
 ## How far a section is allowed to shrink
 
 Not below 100%. A fit that takes both axes is decided by whichever is tighter, and on a tall,
-narrow board that is always the height: this board is 1130 x 2732, so against a maximised
-2560 x 1440 display the width fit is 2.27, the height fit is 0.48, and the old fit took 0.48 —
+narrow board that is always the height: the board was a 1130 x 2732 column then, so against a
+maximised 2560 x 1440 display the width fit was 2.27, the height fit 0.48, and the old fit took
+0.48 —
 drawing the 13px card body at 6px and throwing away every one of the extra horizontal pixels the
 display had. The wider the display, the more it discarded. That is #185, reported as the writing
 being blurry, which is what canvas glyphs look like below about 10px: no hinting, off the pixel
@@ -37,6 +42,16 @@ than 0.6, with the section running off the top and bottom of the screen. `Alt+G`
 The width still shrinks it, and the floor is written as `min(1, canvasWidth / contentWidth)` for
 that reason (`frontend/src/board-fit.ts`): content wider than the canvas held at 100% would have
 to be panned sideways to read one line of text, which is a worse answer than a smaller one.
+
+Which is the number side by side spends, and it is worth knowing how much of it is left. The
+board is **2324 x 1978** now: on the 2560 x 1440 display #185 was reported on that is a ~2544
+canvas against 2324 of content, so the floor is still 1 and the whole board still opens at the
+size it was written at. Another ~220 units of width and it stops being — a whole-board fit goes
+width-bound, and #185 arrives again by a different route. So the floor is not left to arithmetic
+in a comment: `scripts/check-board-side-by-side-browser.mjs` opens the real board on a 2560-wide
+canvas and measures the zoom **off the screenshot** — the distance in painted pixels between the
+two sections' outer borders, over the width they are authored at — rather than reading back the
+number the page believes it is drawing at.
 
 Two consequences worth knowing before they surprise somebody. A section that overflows is
 **centred** in what overflows, so `Alt+P` lands in the middle of the section rather than at its
@@ -67,10 +82,13 @@ browser — `scripts/check-board-map.mjs` runs it against boards built in memory
 
 Two keys are already taken: `KeyB` by the mirror and `KeyT` by the terminal. A section asking for
 either is **ignored**, not honoured — a data file that could silently break the terminal would be
-a bad trade for a shorter rule. Two sections asking for the same key resolve to the one higher on
-the board, and the other is ignored; deciding it by array order would make the winner change when
-nothing on the board did. A `hotkeyCode` that is not a `KeyboardEvent.code` — `"Alt+P"`, `""` —
-is ignored too.
+a bad trade for a shorter rule. Two sections asking for the same key resolve by where they sit —
+`(a.y - b.y) || (a.x - b.x)`, so the one higher on the board, and between two level with each
+other the leftmost; deciding it by array order would make the winner change when nothing on the
+board did. Since #217 this board's two *are* level, so it is the `x` half of that tie-break that
+would decide here — worth knowing before a third section is drawn, and asserted by
+`scripts/check-board-side-by-side-browser.mjs` rather than left to be noticed. A `hotkeyCode`
+that is not a `KeyboardEvent.code` — `"Alt+P"`, `""` — is ignored too.
 
 Every rejected claim is printed once to the console, because a key that is silently doing nothing
 looks like a broken canvas rather than a board that asked for something it cannot have.
@@ -225,3 +243,9 @@ request with no entry in the log.
 
 It says nothing about subsections, and that is deliberate: this board draws none. The rule is
 that both halves stay true, not that every board is cut the same depth.
+
+`scripts/check-board-side-by-side-browser.mjs` holds the arrangement: that the two sections still
+share a top edge and do not overlap, that Project structure still ends before Development begins,
+that nothing was left behind on the old canvas when the section moved, and — in a real Chrome, on
+the display #185 was reported on — that each key still lands on its own section and the whole
+board is still painted at 100%.
