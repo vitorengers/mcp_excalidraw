@@ -1,11 +1,13 @@
 /**
  * When a board hotkey stands down — one rule, in one place.
  *
- * Four keys navigate this canvas: `Alt+B` for the mirror, `Alt+T` for the terminal, and one
- * per section the board has drawn a mark around (`src/core/board-sections.ts` — `Alt+P` and
- * `Alt+G` on this project's own board). All four listen on `window`, because Excalidraw never
- * sees a key pressed outside its canvas, and all four have to stand down while something is
- * genuinely being typed into: a card's title, a search field, Excalidraw's own label editor.
+ * The keys that navigate this canvas: `Alt+B` for the mirror, `Alt+T` for the terminal, one per
+ * section the board has drawn a mark around (`src/core/board-sections.ts` — `Alt+P` and `Alt+G`
+ * on this project's own board), and `Alt+Left` / `Alt+Right` for one step between the parts of
+ * the section being read (`src/core/board-subsections.ts`). They all listen on `window`,
+ * because Excalidraw never sees a key pressed outside its canvas, and they all have to stand
+ * down while something is genuinely being typed into: a card's title, a search field,
+ * Excalidraw's own label editor.
  *
  * That test used to be written out three times in `App.tsx`, and it said `TEXTAREA`. #177 is
  * what that cost. **A focused xterm is a focused `TEXTAREA`** — the emulator takes the
@@ -46,7 +48,7 @@ export function isTerminalKeyboardHost(node: Element | null | undefined): boolea
  * Every `TEXTAREA`, `INPUT` and `contentEditable` stands the keys down exactly as before —
  * the case this guard exists for is typing `Alt+P` into a card's title and getting a `p`.
  * The terminal is the one exception, and it is an exception because the shell no longer
- * receives these four either: see `TerminalPanel.tsx`.
+ * receives them either: see `TerminalPanel.tsx`.
  */
 export function textEntryOwnsKeyboard(active: Element | null | undefined): boolean {
   if (!active) return false
@@ -57,7 +59,7 @@ export function textEntryOwnsKeyboard(active: Element | null | undefined): boole
 }
 
 /**
- * The shape all four board hotkeys share: `Alt`, and neither `Ctrl` nor `Meta`.
+ * The shape every board hotkey shares: `Alt`, and neither `Ctrl` nor `Meta`.
  *
  * The exclusions are not decoration. `Ctrl+Alt` is how AltGr arrives on several layouts, and
  * that is somebody typing a `@` rather than reaching for the board — `TerminalPanel.tsx`
