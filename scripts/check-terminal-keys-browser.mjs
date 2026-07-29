@@ -266,6 +266,29 @@ const send = (method, params = {}) => new Promise((resolve, reject) => {
   socket.send(JSON.stringify({ id, method, params }));
 });
 
+/**
+ * The clipboard permission, granted over the **browser** target rather than the page's.
+ *
+ * Section 4 asks that `Ctrl+V` still pastes, and a paste with nothing on the clipboard is a
+ * case that passes for the wrong reason. `Browser.grantPermissions` is refused on a page
+ * session — same arrangement as `check-terminal-focus-browser.mjs`.
+ */
+async function grantClipboard() {
+  const endpoint = await waitFor(async () =>
+    (await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).json()).webSocketDebuggerUrl,
+  'the Chrome browser target');
+  await new Promise((resolve, reject) => {
+    const browserSocket = new WebSocket(endpoint);
+    browserSocket.once('open', () => browserSocket.send(JSON.stringify({
+      id: 1,
+      method: 'Browser.grantPermissions',
+      params: { origin: BASE, permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'] },
+    })));
+    browserSocket.once('message', () => { browserSocket.close(); resolve(); });
+    browserSocket.once('error', reject);
+  });
+}
+
 async function attach() {
   const target = await waitFor(async () => {
     const response = await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`);
@@ -526,6 +549,7 @@ try {
     BASE,
   ], { stdio: 'ignore' }));
 
+  await grantClipboard();
   await attach();
   await send('Page.enable');
   await send('Runtime.enable');
@@ -611,19 +635,45 @@ try {
     await shot('03-shell-moved');
   }
 
-  console.log('\n4. the four board keys are still the board\'s, and Ctrl+V is still the browser\'s');
+  console.log('\n4. the four board keys are still the board\'s, and Ctrl+V is still a paste');
   {
-    // The neighbouring check owns these; what is asked here is only that a table inserted
-    // *before* the AltGr bail did not step on either of them.
+    // The neighbouring checks own these; what is asked here is only that a table inserted
+    // *before* the AltGr bail did not step on any of them.
     await focusTerminal();
-    const before = (await evaluate(PROBE)).sent;
+    let before = (await evaluate(PROBE)).sent;
     for (const [code, key, vk] of [['KeyB', 'b', 66], ['KeyT', 't', 84], ['KeyP', 'p', 80], ['KeyG', 'g', 71]]) {
       await pressKey(code, key, MODIFIER_BIT.alt, vk);
     }
-    await pressKey('KeyV', 'v', MODIFIER_BIT.ctrl, 86);
     await sleep(500);
-    check('Alt+B/T/P/G and Ctrl+V sent the shell nothing', (await sentSince(before)) === '',
+    check('Alt+B/T/P/G sent the shell nothing', (await sentSince(before)) === '',
           readable(await sentSince(before)));
+
+    // `Ctrl+V` used to be asserted here as sending nothing, and since #224 that is no longer
+    // the contract: the chord is still left to the browser, but *what the shell gets* is
+    // decided at the paste, where the clipboard's contents are knowable — text pastes, a
+    // screenshot sends `\x16`, and `check-terminal-paste-browser.mjs` owns that rule. So the
+    // clipboard is given a known string and the question here is only that the table did not
+    // step on the chord: nothing reached the shell but the text.
+    const PASTED = 'keys-check-paste';
+    const loaded = await evaluate(`(async () => {
+      try { await navigator.clipboard.writeText(${JSON.stringify(PASTED)}); return { ok: true }; }
+      catch (error) { return { ok: false, why: String((error && error.message) || error) }; }
+    })()`);
+    before = (await evaluate(PROBE)).sent;
+    await pressKey('KeyV', 'v', MODIFIER_BIT.ctrl, 86);
+    await sleep(600);
+    // `includes` rather than equality: a shell with bracketed paste on has xterm wrapping the
+    // text in `ESC[200~`/`ESC[201~`, which is the shell's business and not this chord's.
+    const pasted = await sentSince(before);
+    if (loaded?.ok) {
+      check('Ctrl+V sent the shell nothing but the text on the clipboard',
+            pasted.includes(PASTED) && !pasted.includes('\x16'), readable(pasted));
+    } else {
+      check('Ctrl+V on a clipboard this machine would not load sent the shell nothing',
+            pasted === '', readable(pasted));
+      console.log(`  note  the clipboard write was refused (${loaded?.why ?? 'no reason given'}),`
+                  + ' so the text half was not asked here.');
+    }
     await clearLine();
   }
 

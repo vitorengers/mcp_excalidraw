@@ -888,8 +888,9 @@ told, because the grid comes from the block's scene size rather than from the fr
 Below the header the pointer is the shell's. A click focuses the emulator; a drag selects
 text; **Ctrl+C copies while something is selected and interrupts the rest of the time**, the
 way this machine's own terminal settles it, dropping the selection so the next press is an
-interrupt again; Ctrl+V pastes, because the browser's own paste event is left alone rather
-than being sent to the shell as the `\x16` Ctrl+V means on a terminal; the wheel scrolls the
+interrupt again; **Ctrl+V pastes what the clipboard is offering** — text into the shell, and
+a screenshot as the `\x16` that lets the program go and fetch it, which is the rule
+[below](#a-paste-is-decided-by-what-the-clipboard-is-offering); the wheel scrolls the
 scrollback, and so does the bar along the right of the screen; and Alt+click moves the shell's
 cursor along the line it is editing. A wheel the scrollback cannot use — the screen is at the
 bottom, or there is none — is handed to the canvas instead of dropped, so panning and zooming
@@ -1168,6 +1169,60 @@ scrollback asserted to hold what the motion would leave: through the browser aga
 PowerShell/ConPTY always, and over the API against a WSL-backed workspace when a distro exists,
 because `Ctrl+Backspace` is the one that was only ever broken in front of readline.
 
+### A paste is decided by what the clipboard is offering
+
+A screenshot pasted into an agent running in a block reached it with `Ctrl+V`, and then only
+with `Alt+V`. That is #224, and nothing was ever written for `Alt+V`: it works because nothing
+claims it, so xterm sends `ESC v` and the CLI in the session reads that as "go and fetch the
+image". What changed underneath it was `Ctrl+V`.
+
+The key handler leaves `Ctrl+V` to the browser on purpose — see the section above, and #136 —
+because handing it to the shell means sending `\x16` whether or not there was anything to
+paste, *and* cancelling the paste event xterm is listening for. What that did not account for
+is that **the browser's paste into xterm reads one flavour**: `clipboardData.getData
+('text/plain')`. A clipboard holding a bitmap and no text pastes an empty string, so the block
+sent the program **nothing at all** — not the image, which cannot travel over a PTY, and no
+longer the keystroke it would have used to fetch the image itself.
+
+So the rule is written on what the clipboard is offering rather than on the chord:
+
+- **text pastes**, exactly as it did. That is what #136 bought, and what pasting a path or a
+  command relies on.
+- **an image and no text sends `\x16`**, which is what `Ctrl+V` has always meant on a terminal
+  and the keystroke the program acts on.
+- **an image *and* text is a text paste.** Text paste is the older promise; the opposite is
+  defensible and this is a call made rather than a fact discovered.
+- **an empty clipboard is nothing.** A rule written as "no text" rather than as "an image"
+  would fire on every paste of nothing and send a `\x16` nobody asked for.
+
+It lives in a **capture-phase `paste` listener on the card** rather than in the key handler,
+and both halves of that matter. A `keydown` cannot know what the clipboard holds, since the
+default action has not fired yet. And a rule written at the paste event is keyboard-agnostic,
+so **`Cmd+V` on a Mac comes for free** with no second entry in `terminal-keys.ts` — the key
+handler already returns false for both chords, which is what leaves the browser's own paste to
+fire for either one. Capture, because xterm listens on its own hidden textarea *below* the
+card and stops the event there; the capture pass goes root-first and has already happened by
+then. `clipboardImages()` in `src/core/pasted-images.ts` answers "is there an image on this
+clipboard" for the issue card too, so the board and the block have one answer rather than two.
+
+`Alt+V` is left working. It costs nothing, it is the habit this was reported from, and it is
+still accidental rather than designed — nothing claims it, so xterm sends the meta escape.
+
+**This assumes the program in the block reads the clipboard of the machine it runs on**, which
+holds while the board is served over loopback — which is how it is run, see
+[running.md](running.md). A browser driving a board on another machine would paste the
+*server's* clipboard rather than the reader's; written down rather than solved.
+
+`scripts/check-terminal-paste-browser.mjs` is the check, and it asks the rule twice over.
+Once with the **real chord against the real clipboard**: the clipboard permission granted over
+Chrome's browser target, an `image/png` `ClipboardItem` written with `navigator.clipboard.write`,
+and `Ctrl+V` pressed for real — skipped with a printed reason where the write is refused, since
+a headless clipboard is the machine's rather than the check's. `Cmd+V` is asked only on a Mac,
+because which chord fires the browser's *paste* is the platform Chrome is running on rather than
+`navigator.platform`, and no user-agent override reaches it. Once more with a **synthesised
+`paste`** dispatched at the emulator's own textarea, which needs no clipboard, runs everywhere,
+and is the half that says the rule is not keyed to a keyboard at all.
+
 ## Erasing it does not get rid of it
 
 The block is not `locked`, and `locked` is the only thing Excalidraw's eraser respects
@@ -1363,8 +1418,19 @@ it. A board returned to puts its block back where it was left.
   pressed, and the server's own scrollback holding what the motion would leave — through the
   browser against PowerShell/ConPTY, and over the API against a WSL-backed workspace where a
   distro exists, because `Ctrl+Backspace` was only ever broken in front of readline. It also
-  asks that the four board keys and `Ctrl+V` still send the shell nothing, since the table is
-  read *before* the AltGr bail and could have stepped on either.
+  asks that the four board keys still send the shell nothing and that `Ctrl+V` still sends it
+  nothing but the text on the clipboard, since the table is read *before* the AltGr bail and
+  could have stepped on any of them.
+- `scripts/check-terminal-paste-browser.mjs` — what a *paste* sends the shell, in Chrome, and
+  the sibling of the file above. The clipboard permission granted over Chrome's browser target
+  and an `image/png` `ClipboardItem` written to it, then `Ctrl+V` pressed for real: a
+  screenshot and no text sends `\x16`, text pastes and does not, and a clipboard offering both
+  is a text paste. Then the same four rules asked of a `ClipboardEvent` dispatched at the
+  emulator's own textarea, which needs no clipboard and is what says the rule is not keyed to a
+  keyboard — `Cmd+V` is asked with a real chord only on a Mac, since which chord fires the
+  browser's paste is the platform Chrome runs on rather than `navigator.platform`. An empty
+  clipboard sending nothing at all has a case of its own: it is the one a rule written as "no
+  text" rather than "an image" would get wrong.
 - `scripts/check-terminal-size-browser.mjs` — how big the block and its strip are drawn, in
   Chrome, measured off the render rather than read out of the stylesheet: #110's lesson is that
   a size which never reaches the element leaves the file reading exactly right. The block the
