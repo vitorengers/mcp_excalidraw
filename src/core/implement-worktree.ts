@@ -442,6 +442,51 @@ function countOf(result: CommandResult): number {
 }
 
 /**
+ * Whether everything on this checkout's branch is already in the base, however it got there.
+ *
+ * `rev-list base..HEAD` answers a narrower question — whether the branch's *commits* are
+ * reachable from the base — and a squash merge makes that permanently no. The base gets one new
+ * commit carrying the whole branch, and the originals are never ancestors of it. Every pull
+ * request here is a squash (`CLAUDE.md`), so counting commits reported every finished run as
+ * interrupted until somebody removed its checkout by hand, and buried the one message that
+ * exists to rescue work nobody is doing.
+ *
+ * The test is the standard one for a squashed branch: rebuild the branch as a single commit on
+ * top of the merge base — the same tree, so the same cumulative diff — and let `git cherry`
+ * compare that against the base by patch id. `git cherry base HEAD` cannot answer this on its
+ * own: it compares commit by commit, and the squash collapsed N patches into one, so none of
+ * the originals match.
+ *
+ * Any git failure answers false and keeps the count. A recovery feature that goes quiet on an
+ * unexpected error is worse than one that is occasionally noisy.
+ */
+async function workIsInBase(
+  workspace: Workspace,
+  directory: AgentDirectory,
+  base: string,
+): Promise<boolean> {
+  const mergeBase = await git(workspace, directory, ['merge-base', base, 'HEAD']);
+  if (!mergeBase.ok || !mergeBase.stdout.trim()) return false;
+
+  const tree = await git(workspace, directory, ['rev-parse', 'HEAD^{tree}']);
+  if (!tree.ok || !tree.stdout.trim()) return false;
+
+  // One unreferenced object, collected like any other dangling commit. No ref moves.
+  const synthetic = await git(workspace, directory, [
+    'commit-tree', tree.stdout.trim(), '-p', mergeBase.stdout.trim(), '-m', 'merged-work probe',
+  ]);
+  if (!synthetic.ok || !synthetic.stdout.trim()) return false;
+
+  const cherry = await git(workspace, directory, ['cherry', base, synthetic.stdout.trim()]);
+  if (!cherry.ok) return false;
+
+  // `-` is "an equivalent patch is already upstream", `+` is "not there". An empty answer is
+  // not agreement, so it keeps the count too.
+  const lines = cherry.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
+  return lines.length > 0 && lines.every((line) => line.startsWith('-'));
+}
+
+/**
  * Every `issue-<n>` checkout under this project's worktree root that still holds work.
  *
  * This is the whole of "detect an interrupted run", and it deliberately persists nothing.
@@ -491,6 +536,10 @@ export async function worktreesHoldingWork(workspace: Workspace): Promise<HeldWo
       : 0;
     const commits = countOf(await git(workspace, directory, ['rev-list', '--count', `${base}..HEAD`]));
     if (!changes && !commits) continue;
+    // Commits the base cannot reach are not the same thing as work the base does not have —
+    // a squash merge is exactly that shape. Only worth asking with a clean tree: a dirty
+    // checkout holds work whatever its history says.
+    if (!changes && (await workIsInBase(workspace, directory, base))) continue;
 
     held.push({ ...directory, name, commits, changes });
   }
