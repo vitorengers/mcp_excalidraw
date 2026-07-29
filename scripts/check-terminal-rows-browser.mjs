@@ -451,7 +451,7 @@ try {
     '--no-default-browser-check',
     '--disable-gpu',
     '--hide-scrollbars',
-    '--window-size=1500,950',
+    '--window-size=1500,1320',
     BASE,
   ], { stdio: 'ignore' }));
 
@@ -482,8 +482,8 @@ try {
         `${scene.card.box.width.toFixed(0)}×${scene.card.box.height.toFixed(0)}`);
 
   console.log('\n1. at the default size, with no button pressed');
-  check('the readout says the default', scene.card.readout === '13', scene.card.readout);
-  const base = await assertFits('13px', 13);
+  check('the readout says the default', scene.card.readout === '18', scene.card.readout);
+  const base = await assertFits('18px', 18);
   await shot('01-default');
 
   console.log('\n2. and the bottom row is a row the reader can see');

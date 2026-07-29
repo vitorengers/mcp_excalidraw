@@ -118,11 +118,27 @@ for (const file of trackedFiles().filter(isScanned)) {
 check('every scanned file is English', offenders.length === 0, `\n        ${offenders.join('\n        ')}`);
 
 console.log('\n2. the issue agent is told which language to write in');
+// Since #191 the language is the project's to name, so the prompt is composed rather than
+// held in one constant and there is no template literal here to read. What has not changed is
+// what this file is about: the language is *stated* rather than inferred, and English is what
+// is stated when a project has named nothing. Both are read off the two functions that decide
+// it. `check-workspace-language.mjs` is the fuller version — it runs a real research and a
+// real rewrite through the composition path and reads the prompt back over stdin — and it
+// needs `dist`; this one deliberately stays a scan of tracked source.
 const agentSource = readFileSync(join(repoRoot, 'src', 'core', 'issue-agent.ts'), 'utf8');
-const prompt = agentSource.match(/export const ISSUE_AGENT_PROMPT = `([\s\S]*?)`;/)?.[1] ?? '';
-check('ISSUE_AGENT_PROMPT was found', prompt.length > 0);
-check('it names English as the output language', /\bEnglish\b/.test(prompt),
+const fallback = agentSource.match(/function languageNamed\([\s\S]*?\n}/)?.[0] ?? '';
+const paragraph = agentSource.match(/function issueLanguageParagraph\([\s\S]*?\n}/)?.[0] ?? '';
+
+check('the language the issue is written in is decided in one place', fallback.length > 0,
+      'no languageNamed() — the fallback that keeps a board that configures nothing where it was');
+check('and it is English when a project names none', /['"`]English['"`]/.test(fallback),
       'an observation typed in Portuguese otherwise produces a Portuguese issue');
+
+check('the prompt has a paragraph that names it', paragraph.length > 0,
+      'no issueLanguageParagraph() — nothing tells the agent which language to write in');
+check('and it says the language is fixed rather than taken from what was read',
+      /not the language of the/.test(paragraph),
+      'this is #20: the agent takes the language from the repository it just investigated');
 
 if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
 console.log('\nall cases passed');

@@ -574,12 +574,13 @@ try {
   const gridBefore = (await sessions())[0];
 
   // A viewport of this case's own rather than whatever the last fit left, and for a reason
-  // about the window rather than about the code: since #144 a block is 1140 × 720, so a fit
-  // puts its bottom-right corner near the edge and the 200 × 140 this case drags it by lands
-  // outside the window. A press dispatched off the viewport is not a press on the handle.
+  // about the window rather than about the code: a block is the default grid in scene units, a
+  // thousand of them tall since #199 made it 30 rows of 18px text, so a fit puts its
+  // bottom-right corner near the edge and the 200 × 140 this case drags it by lands outside the
+  // window. A press dispatched off the viewport is not a press on the handle.
   // Placed at a known spot and zoomed out, there is room to grab it and room to drag it —
   // the same answer `check-terminal-browser.mjs` gives to the same question.
-  await evaluate(`window.__terminalCheckApi.updateScene({ appState: { scrollX: ${200 / 0.5 - scene.blocks[0].x}, scrollY: ${(200 - scene.view.offsetTop) / 0.5 - scene.blocks[0].y}, zoom: { value: 0.5 } } })`);
+  await evaluate(`window.__terminalCheckApi.updateScene({ appState: { scrollX: ${200 / 0.4 - scene.blocks[0].x}, scrollY: ${(200 - scene.view.offsetTop) / 0.4 - scene.blocks[0].y}, zoom: { value: 0.4 } } })`);
   await sleep(500);
   scene = await evaluate(PROBE);
 
@@ -592,7 +593,11 @@ try {
         scene.selected.includes(scene.blocks[0].id), JSON.stringify(scene.selected));
 
   const corner = toViewport(scene, scene.blocks[0].x + scene.blocks[0].w, scene.blocks[0].y + scene.blocks[0].h);
-  await drag(corner, { x: corner.x + 200, y: corner.y + 140 });
+  // A few pixels *outside* the corner rather than exactly on it: the handle is a square
+  // centred there, so both land on it, but the point exactly on the corner is also the card's own
+  // last pixel, and which of the two takes the press is a rounding — one the block size decides,
+  // and #199 changed the block size. See check-terminal-geometry-browser.
+  await drag({ x: corner.x + 5, y: corner.y + 5 }, { x: corner.x + 205, y: corner.y + 145 });
   scene = await evaluate(PROBE);
   await shot('07-resized');
   check('dragging its corner resizes it',

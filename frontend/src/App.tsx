@@ -19,8 +19,11 @@ import { resolvePanelTarget } from '../../src/core/panel-target'
 import type { PanelElement } from '../../src/core/panel-target'
 import { describeIgnoredClaims, resolveBoardSectionHotkeys } from '../../src/core/board-sections'
 import type { BoardSectionElement } from '../../src/core/board-sections'
+import {
+  describeIgnoredSubsectionClaims, resolveBoardSubsections, stepBetweenSubsections
+} from '../../src/core/board-subsections'
 import { isBoardHotkeyChord, textEntryOwnsKeyboard } from './board-hotkeys'
-import { legibleFitFloor } from './board-fit'
+import { boardFitOptions, measureBoardChrome } from './board-fit'
 import { referenceImageName } from '../../src/core/pasted-images'
 import { layoutLabel, BOUND_TEXT_PADDING } from '../../src/core/text-layout'
 import {
@@ -37,13 +40,14 @@ import type { ProjectBoard } from '../../src/core/project-board-types'
 import { TerminalPanel } from './components/TerminalPanel'
 import {
   TERMINAL_FONT_SIZE,
+  TERMINAL_GRID,
   TERMINAL_KIND,
-  TERMINAL_SIZE,
   clampTerminalFont,
   terminalBlockData,
   terminalBlockElement,
   terminalGrid,
   terminalOrigin,
+  terminalSizeFor,
   documentationClearance
 } from '../../src/core/terminal-block'
 import type { Bounds } from '../../src/core/terminal-block'
@@ -1744,6 +1748,17 @@ function App(): JSX.Element {
     if (signature) console.warn(`Board section hotkey ignored: ${signature}`)
   }
 
+  /** The same, one level down. See `reportSectionClaims`. */
+  const subsectionClaimsRef = useRef<string>('')
+
+  const reportSubsectionClaims = (elements: readonly unknown[]): void => {
+    const { ignored } = resolveBoardSubsections(elements as unknown as BoardSectionElement[])
+    const signature = describeIgnoredSubsectionClaims(ignored)
+    if (signature === subsectionClaimsRef.current) return
+    subsectionClaimsRef.current = signature
+    if (signature) console.warn(`Board subsection ignored: ${signature}`)
+  }
+
   /**
    * Track which selected shape the docs panel should describe.
    *
@@ -2069,17 +2084,52 @@ function App(): JSX.Element {
    * a wide display buys the reader nothing (#185). `minZoom` is Excalidraw's own floor on that
    * arithmetic; what it is set to is `board-fit.ts`, and the short version is that height may
    * no longer shrink the board below 100% — a board taller than the canvas is scrolled.
+   *
+   * Scrolled to **where** is #232, and it is the other half of the same argument: a target
+   * the floor has left taller than the canvas used to be centred in its own overflow, so the
+   * top of it — the mirror's column headers, a section's title — went off the top edge. It is
+   * top-aligned now, under whatever Excalidraw's floating menus are covering. `canvasOffsets`
+   * carries both, and `boardFitOptions` is the arithmetic.
+   *
+   * The container is found in the document rather than held on a ref because it is
+   * Excalidraw's own box, not one this component renders: `.excalidraw-container` is the
+   * class the library puts on it, and it is the same handle the browser checks reach for.
    */
   const fitLegibly = (
     api: ExcalidrawImperativeAPI,
     elements: readonly ExcalidrawElement[],
     animate: boolean
   ): void => {
+    const appState = api.getAppState()
+    const { minZoom, canvasOffsets } = boardFitOptions(
+      elements,
+      { width: appState.width, height: appState.height },
+      measureBoardChrome(document.querySelector('.excalidraw-container'))
+    )
     api.scrollToContent(elements as ExcalidrawElement[], {
       fitToViewport: true,
       animate,
-      minZoom: legibleFitFloor(elements, api.getAppState().width)
+      minZoom,
+      canvasOffsets
     })
+  }
+
+  /**
+   * The middle of the canvas, in scene units — where the reader is looking.
+   *
+   * Excalidraw's own arithmetic run backwards: a scene point is drawn at
+   * `(x + scrollX) * zoom`, so the point drawn at the centre of a canvas `width` across is
+   * `width / 2 / zoom - scrollX`. `width` is the canvas rather than the window, which is why
+   * `offsetLeft` plays no part: it is the distance to the canvas, and the centre is measured
+   * from the canvas.
+   */
+  const viewportCentre = (api: ExcalidrawImperativeAPI): { x: number; y: number } => {
+    const state = api.getAppState()
+    const zoom = state.zoom?.value || 1
+    return {
+      x: state.width / 2 / zoom - state.scrollX,
+      y: state.height / 2 / zoom - state.scrollY
+    }
   }
 
   /**
@@ -3216,7 +3266,23 @@ function App(): JSX.Element {
     // poll that spawns a `gh` has come back, so the answer is the same either way.
     const bounds = boundsOf(scene.filter((element) => !isDerivedElement(element)))
 
-    return terminalBlockElement(terminalOrigin(bounds), TERMINAL_SIZE, {
+    // The one placement that chooses a size, and since #199 it chooses a **grid** and lets
+    // the size fall out of it: `TERMINAL_GRID` cells against the cell this browser measured.
+    // A rectangle cannot pin a grid — the fallback stack advances five per cent wider than
+    // Comic Shanns, which is seven columns of a default block — so a constant here would be
+    // 125 columns on one machine and 132 on another.
+    //
+    // At the font the reader is on rather than at the default, so "a fresh terminal is
+    // 125 × 30" stays true after they have pressed `+`: the promise is about the screen, and
+    // a block sized for 18px text would hand a reader at 24 a little over ninety columns.
+    //
+    // Passed to `terminalOrigin` as well as to the element. The origin is measured from the
+    // block's right edge — one gap left of the documentation — so a derived size given to one
+    // and not the other is a block that hangs into the content by however much the two differ.
+    const font = terminalFontRef.current
+    const size = terminalSizeFor(TERMINAL_GRID, font, terminalLineBox(font), terminalAdvance(font))
+
+    return terminalBlockElement(terminalOrigin(bounds, size), size, {
       sessions,
       active: sessions[0] ?? ''
     })
@@ -3315,6 +3381,24 @@ function App(): JSX.Element {
 
     commitTerminalLayout(layout, added)
 
+    // The mirror is placed from this region, so a block appearing where there was none is a
+    // measurement that region has not been given yet. `resolveMirrorOrigin` answers an empty
+    // anchor set with a content-independent fallback and deliberately does not remember it —
+    // so it re-decides on every pass, and left alone the next pass is the twenty-second poll.
+    // That is the drift #188 is about, seen from the other side, and #199 turned it from a
+    // race into the usual case: waiting for the terminal's face before deriving the first
+    // block's size puts the block *after* the mirror's first draw rather than before it.
+    //
+    // Only when a block was actually added, and harmless when the region was already settled:
+    // a remembered origin is pinned by its right edge and this pass re-reads the same one.
+    if (added.length > 0) {
+      const board = projectBoardRef.current.board
+      if (board) {
+        projectBoardRef.current = { ...projectBoardRef.current, signature: '' }
+        renderMirror(board)
+      }
+    }
+
     if (options.scroll) {
       const placed = terminalBlocksOf(api)
       if (placed.length > 0) {
@@ -3348,9 +3432,19 @@ function App(): JSX.Element {
    */
   const adoptTerminalSessions = async (workspace: string): Promise<void> => {
     try {
+      // Started beside the request rather than before it, and waited for after: this is the
+      // door the *first* block of a page comes through, and since #199 that block is sized
+      // from the cell the browser measures. Excalidraw registers the code face without
+      // loading it — `terminalFontReady` is the whole note on that — so a block placed a beat
+      // early measures the fallback stack and lands 132 columns wide where 125 was asked for.
+      // Nothing else waits on this: the grid a block *reports* is re-measured whenever it is
+      // reported, and there is already a mount effect that reports it again once the face
+      // lands. It is the rectangle, placed once and then left alone, that cannot be revised.
+      const face = terminalFontReady()
       const response = await fetch(apiUrl('/api/terminal'))
       if (!response.ok) return
       const body = await response.json().catch(() => ({}))
+      await face
 
       terminalLimitRef.current = Number(body?.limit) || 0
       setTerminalLimit(terminalLimitRef.current)
@@ -3609,6 +3703,12 @@ function App(): JSX.Element {
     const api = excalidrawAPIRef.current
     if (!api) return false
     const elements = api.getSceneElements() as unknown as BoardSectionElement[]
+    // The arrows on the same footing as a section's key, and for the same reason: they are
+    // the board's only while the board has drawn something to step between. A shell keeps
+    // Alt+Left and Alt+Right on every board that draws no parts.
+    if (event.code === 'ArrowLeft' || event.code === 'ArrowRight') {
+      return resolveBoardSubsections(elements).groups.some((group) => group.subsections.length > 0)
+    }
     return resolveBoardSectionHotkeys(elements).bindings.some((binding) => binding.code === event.code)
   }
 
@@ -4076,6 +4176,51 @@ function App(): JSX.Element {
 
       event.preventDefault()
       fitLegibly(api, [section] as unknown as ExcalidrawElement[], true)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  // Alt+Left and Alt+Right — one step through the parts of the section being read.
+  //
+  // A section's key says *which* half of the board; these say *where in it*. The parts are
+  // read one after another, which is what makes them parts, so what they need is a step
+  // rather than a key each: twelve chords for a board with twelve parts is a keyboard nobody
+  // learns. Everything the step decides — which section the viewport is on, which part of it,
+  // where one step lands — is `src/core/board-subsections.ts`, so that it can be checked
+  // without a browser; what is left here is the scroll.
+  //
+  // **`preventDefault` whenever there was anything to step between, including at the ends.**
+  // On Windows these are the browser's Back and Forward, and they are not reserved
+  // accelerators: the page gets them first and a `preventDefault` keeps them, which
+  // `scripts/check-alt-arrow-accelerator.mjs` measures with a real keypress rather than a
+  // CDP-injected one. A step that has nowhere left to go still has to be swallowed, or the
+  // last Alt+Right of a section navigates the reader out of the board entirely. A board that
+  // draws no parts resolves to nothing, takes neither key, and keeps Back and Forward.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!isBoardHotkeyChord(event)) return
+      if (event.code !== 'ArrowLeft' && event.code !== 'ArrowRight') return
+
+      if (textEntryOwnsKeyboard(document.activeElement)) return
+
+      const api = excalidrawAPIRef.current
+      if (!api) return
+      if ((api.getAppState() as unknown as Record<string, unknown>).editingTextElement) return
+
+      const elements = api.getSceneElements()
+      const target = stepBetweenSubsections(
+        elements as unknown as BoardSectionElement[],
+        viewportCentre(api),
+        event.code === 'ArrowLeft' ? -1 : 1
+      )
+      if (!target) return
+
+      const part = elements.find((element) => element.id === target.elementId)
+      event.preventDefault()
+      if (!part) return
+      fitLegibly(api, [part] as unknown as ExcalidrawElement[], true)
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -5779,6 +5924,7 @@ function App(): JSX.Element {
               noteViewport(appState as unknown as { scrollX?: number; scrollY?: number; zoom?: { value?: number } })
               syncSelectedDoc(appState)
               reportSectionClaims(_elements)
+              reportSubsectionClaims(_elements)
               // Order matters: syncSelectedDoc settles which shape is anchored, and this
               // then works out where that shape is.
               syncDocsAnchor(_elements, appState as unknown as Record<string, any>)

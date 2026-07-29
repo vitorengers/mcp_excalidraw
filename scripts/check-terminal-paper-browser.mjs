@@ -641,7 +641,11 @@ async function bandCase(theme) {
   console.log(`\n${theme} 4. and it still says terminal at a zoom where nothing can be read`);
   const scene = await viewAt(0.15);
   await shot(`${theme}-03-zoomed-out`);
-  check('the text is past legibility', scene.card.fontSize <= 5, `${scene.card.fontSize}px`);
+  // 7px rather than the 5 it was, and the number is not a taste: the card's text is the
+  // reader's size times `Math.max(0.35, zoom)`, so below zoom 0.35 it stops shrinking and sits
+  // at a third of the size they read at. #199 made that size 18, so the floor is 6.3px where it
+  // used to be 4.55 — the same illegible strip of grey, a point and a half taller.
+  check('the text is past legibility', scene.card.fontSize <= 7, `${scene.card.fontSize}px`);
   check('the block is still on screen to be read', scene.card.box.width > 60,
         `${scene.card.box.width.toFixed(0)}×${scene.card.box.height.toFixed(0)}`);
 

@@ -653,6 +653,32 @@ keyboard through a hidden one of its own. Since #177 this key reaches the board 
 focused shell, and the shell is not sent it either; `frontend/src/board-hotkeys.ts` is the rule
 and [terminal.md](terminal.md) is why.
 
+### Where it lands
+
+**At the top of the region, never in the middle of it.** The region is fitted to the canvas, but
+never below the zoom the board was written at ([board-sections.md](board-sections.md) has that
+floor and why it exists), so on a short enough canvas the region is drawn taller than there is
+room for. What is left over is placed at the bottom: the title strip and the column headers are
+on the screen, and the last cards of the longest column are below the fold and scrolled to.
+
+The other way round is #232 — reported from a Mac as the region going "to back of the top bar",
+and it was the top of the region rather than any bar. Excalidraw centres the bounds it is given,
+so the overflow was split half above and half below, and the half above is exactly what a reader
+presses the key to see. Nothing about it is platform-specific: it is canvas height alone, and a
+full `Todo` column is around 900 scene pixels — taller than a laptop canvas, shorter than a
+maximised desktop one, which is why the same key behaves differently on two machines.
+
+**Under Excalidraw's own menus, not behind them.** The toolbar, the hamburger and the properties
+island are painted *over* the canvas rather than beside it, and two of the three sit in the
+top-left corner, which is the corner this region is drawn in. The fit reserves what they cover,
+measured off the rendered nodes because the island's height depends on what is selected. With
+`Hide Menus` on there is nothing to reserve and the region uses the whole canvas.
+
+`frontend/src/board-fit.ts` is the arithmetic — it is `canvasOffsets` on Excalidraw's own
+`scrollToContent`, so the animated pan is unchanged — and
+`scripts/check-board-landing-browser.mjs` asserts it at two canvas heights, with the menus shown
+and hidden. `Alt+P` and `Alt+G` land by the same rule; they share the same fit.
+
 ## What it does not do yet
 
 - **2000 items**, twenty pages of a hundred, is what one read follows. A ceiling rather than

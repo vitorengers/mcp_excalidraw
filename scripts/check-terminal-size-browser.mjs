@@ -23,7 +23,13 @@
  * a bar removed without re-homing that would take the way back out with it.
  *
  * At **zoom 1**, deliberately, for the reason `check-terminal-rows-browser.mjs` gives: scene
- * units and screen pixels are the same thing there, so "1140 wide" is one currency.
+ * units and screen pixels are the same thing there, so the block's width and the card's are
+ * one currency.
+ *
+ * The size case has outlived the change it was written for. #144 moved a constant and this
+ * asked whether the constant reached the scene; #199 replaced the constant with a grid, so it
+ * now asks whether the *derived* rectangle reached the scene — the same question about a
+ * number that is no longer written down anywhere.
  *
  * Chrome is driven over the DevTools protocol through `ws`, the way the other browser checks
  * do it. Self-contained otherwise: it builds a throwaway workspace, starts its own canvas
@@ -37,7 +43,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -85,8 +91,25 @@ const check = (name, condition, detail = '') => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** What the block is drawn at when nobody has resized it. The two numbers #144 moved. */
-const EXPECTED_SIZE = { width: 1140, height: 720 };
+const modulePath = join(repoRoot, 'dist', 'core', 'terminal-block.js');
+if (!existsSync(modulePath)) {
+  console.error('  FAIL  the terminal block module is built — dist/core/terminal-block.js not found');
+  console.error('        (run ./node_modules/.bin/tsc first)');
+  process.exit(1);
+}
+const { TERMINAL_GRID, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, terminalSizeFor } =
+  await import(pathToFileURL(modulePath).href);
+
+/**
+ * What the block is drawn at when nobody has resized it.
+ *
+ * A pair of numbers until #199 — 1140 × 720 since #144 — and since then a *grid*, 125 × 30,
+ * which is only a rectangle once a page has measured its font. So this file stopped naming the
+ * rectangle and derives it from the cell the page really has, which is the same thing the page
+ * does. `check-terminal-default-grid-browser.mjs` is what asks whether the grid itself is right,
+ * and it asks the server rather than the arithmetic.
+ */
+const expectedSize = (cell) => terminalSizeFor(TERMINAL_GRID, TERMINAL_FONT_SIZE, cell.lineBox, cell.advance);
 /** Half again as big, and the tolerance a border rounded to a device pixel needs. */
 const SCALE = { min: 1.45, max: 1.55 };
 
@@ -321,7 +344,7 @@ try {
     '--no-default-browser-check',
     '--disable-gpu',
     '--hide-scrollbars',
-    '--window-size=1700,1100',
+    '--window-size=1700,1320',
     BASE,
   ], { stdio: 'ignore' }));
 
@@ -332,13 +355,24 @@ try {
   await waitFor(async () => (await evaluate(PROBE)).cards.length > 0, 'the terminal overlay to render');
   await waitFor(async () => (await evaluate(PROBE)).cards[0].tab, 'the tab strip to render');
 
-  console.log('\n1. a fresh block is half again as big in both directions');
+  console.log('\n1. a fresh block is the default grid, at this page\'s own cell');
   let scene = await evaluate(PROBE);
   const block = scene.blocks[0];
-  check(`the block the board placed is ${EXPECTED_SIZE.width} scene units wide`,
-        block.width === EXPECTED_SIZE.width, String(block.width));
-  check(`and ${EXPECTED_SIZE.height} tall`,
-        block.height === EXPECTED_SIZE.height, String(block.height));
+  // Measured at the size the *reader* is on rather than at the card's computed size: the
+  // overlay is drawn at the board's zoom, and the grid is derived in scene units.
+  const cell = await evaluate(`(() => {
+    const ctx = document.createElement('canvas').getContext('2d');
+    ctx.font = '${TERMINAL_FONT_SIZE}px ' + ${JSON.stringify(TERMINAL_FONT_FAMILY)};
+    const metrics = ctx.measureText('W');
+    return { advance: metrics.width,
+             lineBox: metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent };
+  })()`);
+  const expected = expectedSize(cell);
+  check(`the block the board placed is ${expected.width} scene units wide — `
+        + `${TERMINAL_GRID.cols} columns of this page's cell, plus the frame`,
+        block.width === expected.width, String(block.width));
+  check(`and ${expected.height} tall — ${TERMINAL_GRID.rows} rows of it`,
+        block.height === expected.height, String(block.height));
 
   // Zoom 1 from here on: scene units and screen pixels are one currency, and the reader font
   // size is the default, so the two measurements of the strip differ only by the scale.
@@ -352,7 +386,8 @@ try {
         && Math.abs(scene.cards[0].box.height - block.height) < 2,
         `card ${scene.cards[0].box.width.toFixed(0)}×${scene.cards[0].box.height.toFixed(0)} `
         + `for block ${block.width}×${block.height}`);
-  check('at the default reader font size', Math.abs(scene.cards[0].fontSize - 13) < 0.5,
+  check('at the default reader font size',
+        Math.abs(scene.cards[0].fontSize - TERMINAL_FONT_SIZE) < 0.5,
         String(scene.cards[0].fontSize));
   await shot('01-default-block');
 

@@ -35,7 +35,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -83,9 +83,23 @@ const check = (name, condition, detail = '') => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** What a block is drawn at when nobody has resized it, and the gap it is anchored by. */
-const TERMINAL_SIZE = { width: 1140, height: 720 };
-const TERMINAL_GAP = 120;
+/**
+ * What a block is drawn at when nobody has resized it, and the gap it is anchored by.
+ *
+ * The size was two numbers here until #199 and is a **grid** now: 125 × 30 cells, which is only
+ * a rectangle once a page has measured its own font, and two font stacks measure two cells. So
+ * it is derived below from what the page really has rather than written down — read from the
+ * module for the same reason `TERMINAL_GAP` is, that a copy here is a second definition to
+ * drift from the one under test.
+ */
+const modulePath = join(repoRoot, 'dist', 'core', 'terminal-block.js');
+if (!existsSync(modulePath)) {
+  console.error('  FAIL  the terminal block module is built — dist/core/terminal-block.js not found');
+  console.error('        (run ./node_modules/.bin/tsc first)');
+  process.exit(1);
+}
+const { TERMINAL_GAP, TERMINAL_GRID, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, terminalSizeFor } =
+  await import(pathToFileURL(modulePath).href);
 
 /** A scene unit, which is the tolerance the definition of done asks for. */
 const CLOSE = 1;
@@ -369,7 +383,8 @@ try {
   await waitFor(async () => (await fetch(`${BASE}/health`)).ok, 'the canvas server');
 
   // Content on each board, at a different `x`, so the two anchored origins are different
-  // numbers: the first board's block goes to -1260, the second's to -660.
+  // numbers — a block width and a gap to the left of each, and since #199 that width is
+  // whatever 125 columns of this page's cell comes to rather than a number this file knows.
   await api(FIRST, '/api/elements', {
     method: 'POST',
     body: JSON.stringify({ type: 'rectangle', x: 0, y: 0, width: 200, height: 140,
@@ -381,9 +396,6 @@ try {
                            backgroundColor: '#b2f2bb', text: 'the second board' }),
   });
 
-  const FIRST_ANCHOR = { x: 0 - TERMINAL_GAP - TERMINAL_SIZE.width, y: 0 };
-  const SECOND_ANCHOR = { x: 600 - TERMINAL_GAP - TERMINAL_SIZE.width, y: 0 };
-
   children.push(spawn(chromePath, [
     '--headless=new',
     `--remote-debugging-port=${CDP_PORT}`,
@@ -392,7 +404,7 @@ try {
     '--no-default-browser-check',
     '--disable-gpu',
     '--hide-scrollbars',
-    '--window-size=1700,1100',
+    '--window-size=1700,1320',
     `${BASE}/?workspace=${FIRST}`,
   ], { stdio: 'ignore' }));
 
@@ -403,8 +415,23 @@ try {
   const fresh = await blockOn('the first board to place a terminal block');
 
   console.log('\n1. a board that has never had one placed gets the default, at the anchor');
-  check(`the block is ${TERMINAL_SIZE.width}×${TERMINAL_SIZE.height}`,
-        fresh.width === TERMINAL_SIZE.width && fresh.height === TERMINAL_SIZE.height,
+  // The rectangle 125 × 30 comes to on *this* page, measured the way the page measures it.
+  // Since #199 there is no constant to compare against: the same grid is 1282 units wide
+  // against Comic Shanns and 1360 against the fallback stack, and both are the default.
+  const cell = await evaluate(`(() => {
+    const ctx = document.createElement('canvas').getContext('2d');
+    ctx.font = '${TERMINAL_FONT_SIZE}px ' + ${JSON.stringify(TERMINAL_FONT_FAMILY)};
+    const metrics = ctx.measureText('W');
+    return { advance: metrics.width,
+             lineBox: metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent };
+  })()`);
+  const DEFAULT_SIZE = terminalSizeFor(TERMINAL_GRID, TERMINAL_FONT_SIZE, cell.lineBox, cell.advance);
+  const FIRST_ANCHOR = { x: 0 - TERMINAL_GAP - DEFAULT_SIZE.width, y: 0 };
+  const SECOND_ANCHOR = { x: 600 - TERMINAL_GAP - DEFAULT_SIZE.width, y: 0 };
+
+  check(`the block is ${DEFAULT_SIZE.width}×${DEFAULT_SIZE.height}, `
+        + `which is ${TERMINAL_GRID.cols}×${TERMINAL_GRID.rows} on this page`,
+        fresh.width === DEFAULT_SIZE.width && fresh.height === DEFAULT_SIZE.height,
         `${fresh.width}×${fresh.height}`);
   check(`and at the anchored origin ${FIRST_ANCHOR.x},${FIRST_ANCHOR.y}`,
         Math.abs(fresh.x - FIRST_ANCHOR.x) < CLOSE && Math.abs(fresh.y - FIRST_ANCHOR.y) < CLOSE,
@@ -423,8 +450,13 @@ try {
   check('clicking the header selects the block through the overlay',
         scene.selected.includes(scene.blocks[0].id), JSON.stringify(scene.selected));
 
+  // Aimed a few pixels *outside* the corner rather than exactly on it. The handle is a square
+  // centred on the corner, so both land on it — but the point exactly on the corner is also on
+  // the selection's south edge and on the card's own last pixel, and which of the three takes
+  // the press is a rounding. It resolved as the south edge once #199 made the block a third
+  // taller, and a south drag is a resize this case would have called a pass on height alone.
   const corner = toViewport(scene, fresh.x + fresh.width, fresh.y + fresh.height);
-  await drag(corner, { x: corner.x + 200, y: corner.y + 130 });
+  await drag({ x: corner.x + 5, y: corner.y + 5 }, { x: corner.x + 205, y: corner.y + 135 });
   scene = await evaluate(PROBE);
   const resized = scene.blocks[0];
   check('dragging the corner resizes it',
@@ -501,8 +533,8 @@ try {
     return probe.blocks[0];
   }, 'the second board to land with a terminal block of its own');
   await shot('04-second-board');
-  check(`the block is ${TERMINAL_SIZE.width}×${TERMINAL_SIZE.height}`,
-        other.width === TERMINAL_SIZE.width && other.height === TERMINAL_SIZE.height,
+  check(`the block is ${DEFAULT_SIZE.width}×${DEFAULT_SIZE.height}, the default again`,
+        other.width === DEFAULT_SIZE.width && other.height === DEFAULT_SIZE.height,
         `${other.width}×${other.height}`);
   check(`and at this board's own anchor ${SECOND_ANCHOR.x},${SECOND_ANCHOR.y}`,
         Math.abs(other.x - SECOND_ANCHOR.x) < CLOSE && Math.abs(other.y - SECOND_ANCHOR.y) < CLOSE,
