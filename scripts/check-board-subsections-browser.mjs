@@ -259,17 +259,28 @@ const toViewport = (scene, x, y) => ({
   y: (y + scene.view.scrollY) * scene.view.zoom + scene.view.offsetTop,
 });
 
+/**
+ * Has a key landed on this box — is the reader looking at the start of it?
+ *
+ * Across the middle and at the **top**, and the top is #232. Asking about the middle on both
+ * axes was the right question only while a target taller than the canvas was *centred* in its
+ * own overflow: the middle was on screen and the title above it was not, which is the defect
+ * #232 reports. Such a target is top-aligned now, so the middle of a section several canvases
+ * tall sits well below the fold and the old probe would call a correct landing a miss.
+ */
 const onScreen = (scene, box) => {
-  const point = toViewport(scene, box.x + box.w / 2, box.y + box.h / 2);
-  return point.x > 0 && point.x < scene.view.width && point.y > 0 && point.y < scene.view.height;
+  const point = toViewport(scene, box.x + box.w / 2, box.y);
+  return point.x > 0 && point.x < scene.view.width
+    && point.y >= scene.view.offsetTop && point.y < scene.view.offsetTop + scene.view.height;
 };
 
 /**
  * Put the viewport centre on one scene point.
  *
- * `Alt+P` is not a starting position: it centres the *section*, which on a section cut into
- * three parts is the middle of the second one, so a walk started from it begins one step in.
- * Every case below that cares where it starts says so here instead.
+ * `Alt+P` is not a starting position: since #232 it lands on the *top* of the section, which
+ * on a section cut into three parts is already somewhere inside the first one, so a walk
+ * started from it begins one step in — the same objection as when it centred the section and
+ * started on the second part. Every case below that cares where it starts says so here.
  */
 const park = async (sceneX, sceneY, zoom = 0.3) => {
   await evaluate(`(() => {

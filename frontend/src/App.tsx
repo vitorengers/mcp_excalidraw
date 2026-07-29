@@ -22,7 +22,7 @@ import {
   describeIgnoredSubsectionClaims, resolveBoardSubsections, stepBetweenSubsections
 } from '../../src/core/board-subsections'
 import { isBoardHotkeyChord, textEntryOwnsKeyboard } from './board-hotkeys'
-import { legibleFitFloor } from './board-fit'
+import { boardFitOptions, measureBoardChrome } from './board-fit'
 import { referenceImageName } from '../../src/core/pasted-images'
 import { layoutLabel, BOUND_TEXT_PADDING } from '../../src/core/text-layout'
 import {
@@ -2083,16 +2083,33 @@ function App(): JSX.Element {
    * a wide display buys the reader nothing (#185). `minZoom` is Excalidraw's own floor on that
    * arithmetic; what it is set to is `board-fit.ts`, and the short version is that height may
    * no longer shrink the board below 100% — a board taller than the canvas is scrolled.
+   *
+   * Scrolled to **where** is #232, and it is the other half of the same argument: a target
+   * the floor has left taller than the canvas used to be centred in its own overflow, so the
+   * top of it — the mirror's column headers, a section's title — went off the top edge. It is
+   * top-aligned now, under whatever Excalidraw's floating menus are covering. `canvasOffsets`
+   * carries both, and `boardFitOptions` is the arithmetic.
+   *
+   * The container is found in the document rather than held on a ref because it is
+   * Excalidraw's own box, not one this component renders: `.excalidraw-container` is the
+   * class the library puts on it, and it is the same handle the browser checks reach for.
    */
   const fitLegibly = (
     api: ExcalidrawImperativeAPI,
     elements: readonly ExcalidrawElement[],
     animate: boolean
   ): void => {
+    const appState = api.getAppState()
+    const { minZoom, canvasOffsets } = boardFitOptions(
+      elements,
+      { width: appState.width, height: appState.height },
+      measureBoardChrome(document.querySelector('.excalidraw-container'))
+    )
     api.scrollToContent(elements as ExcalidrawElement[], {
       fitToViewport: true,
       animate,
-      minZoom: legibleFitFloor(elements, api.getAppState().width)
+      minZoom,
+      canvasOffsets
     })
   }
 
