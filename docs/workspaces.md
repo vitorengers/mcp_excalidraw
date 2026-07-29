@@ -49,6 +49,36 @@ than to this repository:
   elsewhere gets the blank and fills it in the settings dialog; a project already registered is
   never rewritten to repair it.
 
+## The order of the tabs
+
+The strip renders the list exactly as `GET /api/workspaces` hands it over, and that route answers
+`loadWorkspaces` verbatim, so **the order of the tabs is the array order of the registry** and has
+never been anything else. It is not only cosmetic: `resolveInitialWorkspace` falls back to
+`list[0].id` when neither `?workspace=` nor the remembered id names a known board, so the first
+tab is the board a cold start opens.
+
+`PUT /api/workspaces/order` with `{ ids: [...] }`, **loopback only**, writes it down. Drag a tab
+along the strip, or put focus on one and press **Ctrl+Shift+←** / **Ctrl+Shift+→** — a drag-only
+control on a `role=tablist` is unreachable without a pointer. `Ctrl+Shift` rather than `Alt`
+because every board hotkey is `Alt` and nothing else (`isBoardHotkeyChord`), and plain arrows are
+left alone because on a tablist they mean *move between tabs* rather than *move the tab*.
+
+- **A permutation or nothing.** The list must name exactly the projects the registry loads back,
+  each once. A list that adds, drops or repeats an id is refused with a 400 naming which, and the
+  file on disk is left byte for byte as it was rather than partially applied — a caller sending a
+  stale list has an idea of the board that is already wrong.
+- **Entries move whole**, so a key somebody added by hand travels with the project it was written
+  on, the same rule the `+` keeps. An entry the loader dropped — a duplicate path, one with no
+  path — has no tab and so no position to state; it is kept, in its own relative order, after the
+  ones that do.
+- **Shared, not per browser.** The registry is the store because everything else about a project
+  already persists in files the operator owns, and an order kept in `localStorage` would drift
+  between two windows on the same board. The consequence is that dragging a project to the front
+  also makes it the cold-start default for anyone with no remembered id — accepted rather than
+  decoupled, because that is what position already meant.
+- **Shown before it is written**, and reconciled against the list the route answers with, the way
+  the `+` and the settings dialog already are. A refusal puts the strip back where it was.
+
 `GET /api/fs/directories?path=` (loopback only) is the picker's other half. It has to run on the
 server: the browser cannot learn a folder path at all — `showDirectoryPicker()` returns a handle
 that deliberately exposes none, and `<input webkitdirectory>` gives only paths relative to
@@ -159,4 +189,4 @@ agents resolve their model, effort and ceiling per run for the same reason.
   two dialogs
 - `scripts/check-workspaces.mjs`, `scripts/check-workspace-isolation.mjs`,
   `scripts/check-workspace-create.mjs`, `scripts/check-workspace-settings.mjs`,
-  `scripts/check-workspace-tabs-browser.mjs`
+  `scripts/check-workspace-reorder.mjs`, `scripts/check-workspace-tabs-browser.mjs`
