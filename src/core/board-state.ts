@@ -15,9 +15,17 @@
  * Because `docs/whats-next.md` was right about it: a board file is a tracked artifact and a
  * commit like any other, and a process writing to one on a timer would put diff noise into
  * somebody's working tree — on a board that autosaves every second or two, continuously.
- * Every board therefore saves beside the pidfile instead, under the canvas's own state
- * directory, where nothing is committed and no project directory grows a file it did not ask
- * for. `scripts/export-board.mjs` stays the only path into the tracked file.
+ * Every board therefore saves beside the registry that lists it instead, in a directory named
+ * after that file, where nothing is committed and no project directory grows a file it did not
+ * ask for. `scripts/export-board.mjs` stays the only path into the tracked file.
+ *
+ * Beside the *registry*, rather than in the canvas's own state directory next to the pidfile,
+ * for one reason that is not tidiness: a workspace id is unique within a registry and nowhere
+ * else. Every self-contained check in `scripts/` starts a server against a throwaway registry
+ * of its own, and one shared directory would let a check called `board-tool` write over the
+ * saved drafts of the real `board-tool` — silently, on somebody's machine, which is the exact
+ * failure this file exists to prevent. Following the registry makes each of them isolated
+ * without a single check having to know this feature exists.
  *
  * ## What wins at startup
  *
@@ -44,7 +52,6 @@ import { renameSync, writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
 import { ServerElement } from '../types.js';
-import { canvasStateDir } from './pidfile.js';
 import { elementsFor, isWatchedStore, normalizeWorkspaceId } from './element-store.js';
 import { BoardScene, parseBoardScene } from './board-seed.js';
 
@@ -84,15 +91,30 @@ const pending = new Map<string, PendingSave>();
 /** One write at a time per board, so a slow disk cannot interleave two saves of one file. */
 const writing = new Map<string, Promise<void>>();
 
-/** Where saved boards live. An operator who wants them elsewhere says so; nothing else does. */
-export function boardStateDir(): string {
+/**
+ * Where saved boards live, or nothing when there is nowhere for them.
+ *
+ * Derived from the registry — `board-workspaces.json` keeps its boards in
+ * `board-workspaces-state/` beside it — unless an operator names a directory outright. With
+ * no registry there is no answer and no saving: multi-project support stays dormant rather
+ * than inventing a default project, and this is the same rule seen from the other end.
+ */
+export function boardStateDir(): string | null {
   const configured = process.env.EXCALIDRAW_BOARD_STATE?.trim();
-  return configured || path.join(canvasStateDir(), 'boards');
+  if (configured) return configured;
+
+  const registry = process.env.EXCALIDRAW_WORKSPACES?.trim();
+  if (!registry) return null;
+  const directory = path.dirname(registry);
+  const named = path.basename(registry, path.extname(registry));
+  return path.join(directory, `${named}-state`);
 }
 
-/** The file one board is saved in. Named as a scene, because that is what it is. */
-export function boardStateFile(workspaceId: string): string {
-  return path.join(boardStateDir(), `${normalizeWorkspaceId(workspaceId)}.excalidraw`);
+/** The file one board is saved in, or nothing. Named as a scene, because that is what it is. */
+export function boardStateFile(workspaceId: string): string | null {
+  const directory = boardStateDir();
+  if (!directory) return null;
+  return path.join(directory, `${normalizeWorkspaceId(workspaceId)}.excalidraw`);
 }
 
 /**
@@ -104,6 +126,7 @@ export function boardStateFile(workspaceId: string): string {
  */
 export function persistBoardFor(workspaceId: string): void {
   const id = normalizeWorkspaceId(workspaceId);
+  if (!boardStateDir()) return;
   if (!isWatchedStore(id)) {
     // The default store is the Map `types.ts` exports, shared with the CLI and the MCP
     // tools, and it cannot report its own changes. Said out loud: a project registered
@@ -156,9 +179,11 @@ export async function saveBoardState(workspaceId: string): Promise<void> {
   const id = normalizeWorkspaceId(workspaceId);
   if (!persisted.has(id)) return;
 
+  const file = boardStateFile(id);
+  if (!file) return;
+
   const previous = writing.get(id) ?? Promise.resolve();
   const next = previous.then(async () => {
-    const file = boardStateFile(id);
     const temporary = `${file}.${process.pid}.tmp`;
     try {
       await fs.mkdir(path.dirname(file), { recursive: true });
@@ -178,6 +203,7 @@ export function flushBoardStateSaves(): void {
     clearTimeout(save.timer);
     pending.delete(id);
     const file = boardStateFile(id);
+    if (!file) continue;
     const temporary = `${file}.${process.pid}.tmp`;
     try {
       // Synchronous, because this runs from `process.on('exit')` as well as from the signal
@@ -239,6 +265,7 @@ export interface SavedBoard {
 export async function readBoardState(workspaceId: string): Promise<SavedBoard | null> {
   const id = normalizeWorkspaceId(workspaceId);
   const file = boardStateFile(id);
+  if (!file) return null;
   try {
     const [raw, stats] = await Promise.all([fs.readFile(file, 'utf-8'), fs.stat(file)]);
     const scene = parseBoardScene(raw);

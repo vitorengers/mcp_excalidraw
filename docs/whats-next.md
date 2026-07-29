@@ -34,18 +34,23 @@ An agent driving the canvas over MCP cannot target a registered project board at
 REST API can. That is a real gap for a tool whose whole point is that agents draw on project
 boards.
 
-## Nothing *saves* `boardFile`
+## Nothing *saves* `boardFile`, and nothing is going to
 
 #184 landed the load half: a registered project's board file is read into its store at startup, so
 the three boards that declare one come up drawn instead of empty and the ad-hoc import is gone. See
 [element-store.md](element-store.md).
 
-The write half is untouched. Getting a board back into its file is still
-`node scripts/export-board.mjs --workspace <id>`, run by hand against a running server, and a change
-that is not exported still dies with the process. Nothing here argues for an autosave — a board file
-is a tracked artifact and a commit like any other, and a process writing to it on a timer would put
-diff noise into somebody's working tree — but the asymmetry is worth naming: the board now remembers
-across restarts only as far back as the last export somebody remembered to run.
+The asymmetry this section named — the board remembering only as far back as the last export
+somebody remembered to run — is closed since #225, and not by writing to `boardFile`. The argument
+against that stands and is the reason: a board file is a tracked artifact and a commit like any
+other, and a process writing to one on a timer would put diff noise into somebody's working tree.
+Every registered board is instead saved beside the registry that lists it, a second after every
+change, and read back before the board file at startup. Getting a board into its *tracked* file is
+still `node scripts/export-board.mjs --workspace <id>`, run by hand against a running server, and
+still a commit like any other.
+
+What is left of the asymmetry is images: neither the export nor the save carries `scene.files`, so a
+pasted image comes back after a restart as an element whose file the process no longer holds.
 
 This was also the loose end behind the mojibake #151 was opened about: a canvas was seen holding a
 scene fifty merges older than the tracked file, with its em dashes and middle dots corrupted, and

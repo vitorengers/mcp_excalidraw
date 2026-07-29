@@ -96,7 +96,6 @@ const check = (name, condition, detail = '') => {
 const workDir = mkdtempSync(join(tmpdir(), 'check-notes-durability-'));
 const projectDir = join(workDir, 'durability');
 const profileDir = join(workDir, 'chrome-profile');
-const stateDir = join(workDir, 'board-state');
 const shotDir = argOf('--shots') ?? join(workDir, 'shots');
 mkdirSync(projectDir, { recursive: true });
 mkdirSync(profileDir, { recursive: true });
@@ -165,7 +164,11 @@ const CDP_PORT = PORT + 400;
 const DEAD_PORT = PORT + 800;
 const BASE = `http://127.0.0.1:${PORT}`;
 const WORKSPACE = 'durability';
-const STATE_FILE = join(stateDir, `${WORKSPACE}.excalidraw`);
+// Where the board is expected to be saved, worked out the way the server works it out: beside
+// the registry that lists the project, in a directory named after it. Nothing here sets
+// `EXCALIDRAW_BOARD_STATE` — the default is what every board actually uses, and following the
+// registry is also what keeps this check's `durability` from colliding with anybody's.
+const STATE_FILE = join(workDir, 'workspaces-state', `${WORKSPACE}.excalidraw`);
 const children = [];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -178,7 +181,6 @@ const serverEnv = {
   // the file is the only place it is written.
   LOG_FILE_PATH: join(workDir, 'server.log'),
   EXCALIDRAW_WORKSPACES: registryPath,
-  EXCALIDRAW_BOARD_STATE: stateDir,
   EXCALIDRAW_GH_COMMAND: `node "${stubPath.replace(/\\/g, '/')}"`,
   STUB_GH_FIXTURE: fixturePath,
   // The `+` drops a block *from the library*, so without one every click is a silent no-op
@@ -189,6 +191,9 @@ const serverEnv = {
 // environment is inherited. A terminal block is drawn over the board and its xterm panel is a
 // DOM overlay: with it on, the `+` ends up underneath and every click is swallowed.
 delete serverEnv.EXCALIDRAW_TERMINAL;
+// And the board is saved where this check's own registry says, not where an operator who has
+// pointed the boards somewhere else says.
+delete serverEnv.EXCALIDRAW_BOARD_STATE;
 
 let serverLog = '';
 let server = null;

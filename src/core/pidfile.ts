@@ -4,14 +4,10 @@ import { homedir } from 'os';
 import logger from '../utils/logger.js';
 
 /**
- * Platform-compatible state directory for runtime artifacts (pidfile, saved boards),
+ * Platform-compatible state directory for runtime artifacts (pidfile),
  * mirroring the log-path convention in utils/logger.ts.
- *
- * Exported because the saved boards of `core/board-state.ts` belong in the same place and
- * for the same reason: they are this process's own, they are nobody's to commit, and a
- * second convention for where a canvas keeps its state would be one more thing to find.
  */
-export function canvasStateDir(): string {
+function stateDir(): string {
   if (process.platform === 'darwin') {
     return path.join(homedir(), 'Library', 'Application Support', 'excalidraw-canvas');
   }
@@ -24,7 +20,7 @@ export function canvasStateDir(): string {
 }
 
 export function pidFilePath(port: number): string {
-  return path.join(canvasStateDir(), `server-${port}.pid`);
+  return path.join(stateDir(), `server-${port}.pid`);
 }
 
 // Written by the canvas server once it is actually listening, so `stop` and
