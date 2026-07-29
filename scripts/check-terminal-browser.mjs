@@ -7,9 +7,9 @@
  * that never opened, a race in tab initialisation, a click landing on the label instead of
  * the box. All three compiled and type-checked.
  *
- * So the questions here are the ones only a browser can answer. Is the block on the far left
- * of the board, clear of the mirror it is anchored to — including when the session opened
- * before the first poll drew that mirror, which is the ordering a reload actually produces?
+ * So the questions here are the ones only a browser can answer. Is the block between the
+ * mirror and the documentation, clear of both — including when the session opened before the
+ * first poll drew that mirror, which is the ordering a reload actually produces?
  * Does Alt+T bring it into view, and Alt+B still reach the mirror? Does a click on the
  * **header** reach the shape through the overlay — which since #112 is the band that selects
  * and drags the block, the screen below it having taken the pointer for the shell — and does
@@ -95,9 +95,10 @@ const WORKSPACE = 'terminal-project';
 writeFileSync(registryPath, JSON.stringify({
   workspaces: [{ id: WORKSPACE, path: projectDir.replace(/\\/g, '/') }],
 }), 'utf8');
-// A `githubProject`, because since #96 the mirror is what the block is anchored to. Fed by
-// a stub `gh`, so the region is drawn from a fixture rather than from a network this check
-// must not need — the same arrangement `check-board-drafts-browser.mjs` uses.
+// A `githubProject`, so all three regions are on the board and the block has a mirror to be
+// clear of — since #200 the mirror is placed from the block rather than the other way round.
+// Fed by a stub `gh`, so the region is drawn from a fixture rather than from a network this
+// check must not need — the same arrangement `check-board-drafts-browser.mjs` uses.
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Terminal Project',
   repo: 'vitorengers/mcp_excalidraw',
@@ -301,8 +302,7 @@ const PROBE = `(() => {
   for (const element of api.getSceneElements()) {
     const custom = element.customData || {};
     if (custom.kind === 'terminal') {
-      out.block = { id: element.id, x: element.x, y: element.y, w: element.width, h: element.height,
-                    awaitingMirror: custom.awaitingMirror === true };
+      out.block = { id: element.id, x: element.x, y: element.y, w: element.width, h: element.height };
     } else if (custom.kind === 'project-board') {
       mirror.push(element);
     } else if (!custom.kind) {
@@ -398,50 +398,51 @@ try {
   await send('Runtime.enable');
   await waitFor(() => evaluate(GRAB_API), 'the Excalidraw API handle');
 
-  console.log('1. the block lands on the far left, clear of the mirror, with the session drawn in it');
+  console.log('1. the block lands between the mirror and the documentation, with the session drawn in it');
   await waitFor(async () => (await evaluate(PROBE)).block, 'the terminal block to be placed');
   await waitFor(async () => (await evaluate(PROBE)).card, 'the overlay to render');
 
   // The ordering a reload really produces, and the one the placement has to survive: the
   // session opens on a `POST` that spawns a shell, the mirror arrives on a poll that spawns
-  // a `gh`, so the block is placed before there is a mirror to anchor it to. It is put in
-  // the mirror's own slot — the fallback for a board that has no project — and moved out of
-  // the way by the first board that lands. Both halves are asserted, in that order.
+  // a `gh`. Since #200 the block no longer waits on that — it is placed one gap left of the
+  // documentation, which is on the canvas before either — so the block's own answer is the
+  // same before and after the first board lands. It is the *mirror* that gives way: placed
+  // from the content while there was no block to see, it re-measures around the block that
+  // has since landed in its slot. Both halves are asserted, in that order.
   const placedBlind = await evaluate(PROBE);
   await waitFor(async () => (await evaluate(PROBE)).mirror, 'the mirror to be drawn');
   await waitFor(async () => {
     const probed = await evaluate(PROBE);
-    return probed.mirror && probed.block && !probed.block.awaitingMirror;
-  }, 'the block to be anchored to the mirror');
+    return probed.mirror && probed.block
+      && probed.mirror.maxX <= probed.block.x + 1;
+  }, 'the mirror to settle clear of the block');
 
   let scene = await evaluate(PROBE);
   await shot('01-placed');
 
   const authored = scene.authored.find((element) => element.w === 200);
   check('the authored shape is there to measure against', Boolean(authored), JSON.stringify(scene.authored));
-  check('the mirror is drawn, so there is a region to sit to the left of',
+  check('the mirror is drawn, so there are three regions on the board',
         Boolean(scene.mirror) && scene.mirror.count > 1, JSON.stringify(scene.mirror));
-  check('the block is one gap left of the mirror',
-        Boolean(scene.mirror) && Math.abs(scene.block.x - (scene.mirror.minX - 120 - scene.block.w)) < 1,
-        `block at ${scene.block?.x} (${scene.block?.w} wide), mirror starts at ${scene.mirror?.minX}`);
+  check('the block is one gap left of the documentation, which is what places it',
+        Boolean(authored) && Math.abs(scene.block.x - (authored.x - 120 - scene.block.w)) < 1,
+        `block at ${scene.block?.x} (${scene.block?.w} wide), content starts at ${authored?.x}`);
   check('and level with its top',
-        Boolean(scene.mirror) && Math.abs(scene.block.y - scene.mirror.minY) < 1,
-        `${scene.block?.y} vs ${scene.mirror?.minY}`);
-  check('so it is clear of the mirror rather than under it',
-        Boolean(scene.mirror) && scene.block.x + scene.block.w <= scene.mirror.minX,
-        `block ends at ${scene.block.x + scene.block.w}, mirror starts at ${scene.mirror?.minX}`);
-  check('and left of everything the board authored, which is the edge that grows',
-        Boolean(authored) && scene.block.x + scene.block.w < authored.x,
+        Boolean(authored) && Math.abs(scene.block.y - authored.y) < 1,
+        `${scene.block?.y} vs ${authored?.y}`);
+  check('so it is clear of the documentation rather than under it',
+        Boolean(authored) && scene.block.x + scene.block.w <= authored.x,
         `block ends at ${scene.block.x + scene.block.w}, content starts at ${authored?.x}`);
+  check('and the mirror is further out still, clear of the block',
+        Boolean(scene.mirror) && scene.mirror.maxX <= scene.block.x + 1,
+        `mirror ends at ${scene.mirror?.maxX}, block starts at ${scene.block.x}`);
 
-  // The race itself. If the session had happened to open after the first poll this would be
-  // vacuous, so it is asserted as "either it was already right, or it was corrected" — and
-  // the correction is what the second half proves either way.
-  check('a block placed before the first poll was moved off the mirror\'s slot, not left under it',
-        !placedBlind.block?.awaitingMirror || placedBlind.block.x !== scene.block.x,
-        `placed at ${placedBlind.block?.x} (awaiting: ${placedBlind.block?.awaitingMirror}), now at ${scene.block.x}`);
-  check('and it carries no mark any more, so no later poll will move it again',
-        scene.block.awaitingMirror === false, String(scene.block.awaitingMirror));
+  // The race itself. The block's own placement does not depend on the poll any more, so what
+  // is asserted is that it did not have to move: whichever order the two arrived in, the
+  // block is where it was first put.
+  check('the block placed before the first poll never had to be moved off anything',
+        !placedBlind.block || placedBlind.block.x === scene.block.x,
+        `placed at ${placedBlind.block?.x}, now at ${scene.block.x}`);
 
   check('the overlay is drawn over the block, not somewhere else',
         Math.abs(scene.card.left - toViewport(scene, scene.block.x, scene.block.y).x) < 2
