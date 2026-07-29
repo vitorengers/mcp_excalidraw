@@ -706,12 +706,14 @@ and this is how big the text is on it.
 It could not be a display tweak. xterm sizes its canvas as `cols` × `rows` × the font, and the
 grid is derived from a cell that was measured at 13px — so a `+` that only assigned
 `terminal.options.fontSize` would leave the emulator drawing past the frame, and everything past
-the frame is clipped rather than scrolled (below). Bigger text, silently fewer visible columns,
-and no scrollbar to reach them.
+the frame is clipped rather than scrolled *sideways* (below). Bigger text, silently fewer visible
+columns, and no way to reach them — the bar the block grew in #197 scrolls the scrollback, which
+is the only axis an emulator has.
 
-So `terminalGrid()` takes the font size as its second argument, and one size feeds three things:
+So `terminalGrid()` takes the font size as its second argument, and one size feeds four things:
 the cell, the frame — the header, the tab strip and the padding are all `em`, so the chrome
-grows with the text it holds — and therefore the grid. **A larger font in the same block is
+grows with the text it holds — the scrollbar's strip, which is `em` for the same reason, and
+therefore the grid. **A larger font in the same block is
 fewer columns and fewer rows**, reported down the same debounced route a corner drag uses. The
 `cols`×`rows` in the header is the confirmation, because it is what came back from the shell.
 
@@ -826,9 +828,10 @@ text; **Ctrl+C copies while something is selected and interrupts the rest of the
 way this machine's own terminal settles it, dropping the selection so the next press is an
 interrupt again; Ctrl+V pastes, because the browser's own paste event is left alone rather
 than being sent to the shell as the `\x16` Ctrl+V means on a terminal; the wheel scrolls the
-scrollback; and Alt+click moves the shell's cursor along the line it is editing. A wheel the
-scrollback cannot use — the screen is at the bottom, or there is none — is handed to the
-canvas instead of dropped, so panning and zooming still work over a block.
+scrollback, and so does the bar along the right of the screen; and Alt+click moves the shell's
+cursor along the line it is editing. A wheel the scrollback cannot use — the screen is at the
+bottom, or there is none — is handed to the canvas instead of dropped, so panning and zooming
+still work over a block.
 
 **The wheel is answered one axis at a time**, which is #162 and what a touchpad made
 visible. A pan carries both deltas in the same event, and the emulator has a use for exactly
@@ -906,6 +909,57 @@ still a shape.
 render rather than the file: it reads the block the board placed off the scene, measures each
 control against itself with `--terminal-tab-scale` forced back to 1, and asks for the bottom
 bar's absence twice, live and with the shell gone.
+
+## The scrollbar is a term of the grid
+
+The block scrolled from the day it had an emulator, and for a long time nothing said so. The
+wheel moved the scrollback; there was no thumb, so a reader could not tell a block had a
+transcript behind it, could not see where in it they were, and could not drag to a point in it.
+`TerminalPanel.css` said `overflow: hidden` on xterm's viewport and explained itself: a real bar
+is a strip of the block's width, `terminalGrid()` knew of no such strip, and everything the
+frame cannot hold is clipped rather than laid out — so the bar would have been drawn over the
+last column the shell was told it had. That was not a shortcut. It was the same coupling #104
+and #115 are monuments to, and #197 is the number it was blocked on.
+
+`TERMINAL_SCROLLBAR` is **12**, and it is a decision rather than a measurement. A native bar is
+15–17px on Windows and a zero-width overlay on macOS — xterm's own `Viewport` measures it and
+falls back to `|| 15` for exactly that reason — so a strip whose width came from the reader's
+operating system would be a grid that differed per machine for a board two people are looking
+at. The bar is therefore **styled to that number** rather than left at the platform's, and the
+number is subtracted in `terminalGrid()`: `cols` comes from `width − chrome − scrollbar`. It
+scales with the font the way the chrome does, because everything on this card is `em`, and it is
+subtracted **whether or not there is anything to scroll** — a strip that appeared with the first
+screenful would re-grid the block, and repaint every full-screen program in it, at the moment
+its shell printed enough to fill the screen.
+
+Two numbers that must not drift, so there is one: `TerminalPanel.tsx` writes
+`terminalScrollbar(fontSize)` onto the card as `--terminal-scrollbar`, in the pixels the current
+zoom draws it at, and the stylesheet's `::-webkit-scrollbar` reads nothing else. A stylesheet
+cannot import TypeScript; a width spelled twice is the last column under the bar.
+
+The bar is **native, not a thumb of our own**. The drag, the click in the track, the keyboard and
+the momentum are all the browser's, and xterm's `Viewport` turns this box's `scrollTop` back into
+buffer lines however it moved — so a bar is a **viewer** and never an input to the shell. The
+check asserts that in the strongest form available: the server's own `scrollback` is
+byte-identical across a drag, and the shell is told no new grid.
+
+Three answers this took that the observation did not settle:
+
+- **It reaches the emulator's buffer, not the server's.** The server keeps `SCROLLBACK_LIMIT`
+  bytes per session and the emulator is built with xterm's default of 1000 lines, so the thumb
+  spans the last thousand lines rather than the whole transcript the server holds. Raising the
+  client buffer is a separate question about memory per block, and it is not this one.
+- **It does not fade.** Present whenever there is scrollback and absent when there is not —
+  `overflow-y: auto` — because a bar that hides is a bar the reader has to discover twice.
+- **Firefox gets `scrollbar-width: thin` and chooses its own width**, so it may be a pixel or
+  two off the strip the grid reserved. It is behind `@supports not selector(::-webkit-scrollbar)`
+  and it has to be: in Chromium any `scrollbar-width` other than `auto` makes the
+  `::-webkit-scrollbar` rules ignored, so declaring it unconditionally would take the exact strip
+  away on the browser that can draw one.
+
+**A horizontal bar cannot be built this way and is not there.** xterm has no horizontal scrolling
+and emits nothing for a sideways wheel, so a line too wide for the block is clipped; the answer
+to that is the block's own resize handles, or `−` on its header.
 
 ## The hotkey
 
@@ -1206,6 +1260,18 @@ it. A board returned to puts its block back where it was left.
   what this document has paid for before. Two structural cases carry the rest: that `black` is
   the strongest ink of the sixteen on paper, and the one closest to the surface on night, since
   a `black` that drifts back into the middle of the ramp is precisely how this defect happened.
+- `scripts/check-terminal-scrollbar-browser.mjs` — the bar, in Chrome, and the strip it is drawn
+  in. A thumb painted in that strip once there is more output than one screen and nothing
+  painted there while a session still fits on one — read back off a **screenshot** of the strip,
+  because a native scrollbar is drawn by the browser and no API in the page has a box to
+  describe it. The thumb dragged, moving the viewport and the transcript on it while the
+  server's own `scrollback` stays byte-identical and the shell is told no new grid: a bar is a
+  viewer. The rightmost column the shell was told about drawn in full and clear of the strip, at
+  8, 13 and 24, with a ruler exactly `cols` wide — the geometry says the screen box ends before
+  the strip, the ruler says the last character in it was painted there. And the wheel unchanged:
+  one it can use still scrolls the scrollback, one it cannot still reaches the canvas. It is the
+  one browser check here that does **not** pass `--hide-scrollbars`, which would otherwise let
+  every case in it pass by measuring nothing.
 - `scripts/check-terminal-focus-browser.mjs` — who owns the pointer where, in Chrome. A click
   in the middle of the screen focusing the shell and a command typed straight after it running;
   a drag on the header moving the block and a drag on the screen selecting text and *not*

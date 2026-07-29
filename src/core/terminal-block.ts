@@ -215,6 +215,37 @@ export const TERMINAL_CELL = {
 export const TERMINAL_CHROME = { width: 20, height: 64 };
 
 /**
+ * The strip along the right of the screen the scrollback bar is drawn in.
+ *
+ * A term of the grid rather than a length in the stylesheet, and #197 is the whole reason it
+ * had to become one. The block scrolled from the day it had an emulator — the wheel moves the
+ * scrollback — but there was nothing to *see*: no thumb, so a reader could not tell a block had
+ * a transcript behind it, could not tell where in it they were, and could not drag to a point.
+ * The bar was left out deliberately, and the note that left it out named exactly this: a strip
+ * of the block's width that `terminalGrid()` was never told about is the last column drawn
+ * under the bar, because `TerminalPanel.css` clips what the frame cannot hold rather than
+ * scrolling it. So the strip is named here, subtracted below, and drawn at this width by
+ * `TerminalPanel.css` — which reads it as `--terminal-scrollbar`, written onto the card by
+ * `TerminalPanel.tsx`, because a stylesheet cannot import TypeScript.
+ *
+ * **Drawn to this number rather than to the platform's**, which is why 12 is a decision and not
+ * a measurement. A native bar is 15–17px on Windows and a zero-width overlay on macOS — xterm's
+ * own `Viewport` measures it and falls back to `|| 15` for exactly that reason — and a strip
+ * whose width came from the reader's operating system would be a grid that differed per machine
+ * for a board two people are looking at. 12 is a thumb wide enough to aim at and about a column
+ * and a half of the default block.
+ *
+ * In `em` in effect, like the frame: it is scaled by the font size the same way
+ * `terminalChrome` is, so the bar grows with the text it sits beside and the arithmetic and the
+ * stylesheet stay one number at every size.
+ *
+ * The direction of error is `TERMINAL_CELL`'s and `TERMINAL_LINE_BOX`'s: over-reserving costs a
+ * column, under-reserving costs the right-hand edge of every line. The floor in `terminalGrid()`
+ * already errs that way, so the strip is reserved at exactly what it is drawn at.
+ */
+export const TERMINAL_SCROLLBAR = 12;
+
+/**
  * How far the reader may move the text, with `+` and `-` on the block's own header.
  *
  * The bottom is where a monospace glyph stops being a letter; the top is chosen so the
@@ -315,6 +346,20 @@ export function terminalChrome(fontSize: number = TERMINAL_FONT_SIZE): Size {
   return { width: TERMINAL_CHROME.width * scale, height: TERMINAL_CHROME.height * scale };
 }
 
+/**
+ * The scrollback bar's strip at a given font size, in the same units the caller asked in.
+ *
+ * Scaled like the frame, and for the frame's reason: everything on this card is `em`, so a bar
+ * that stood still while the text doubled would be a hairline beside a 24px line at one end of
+ * the range and half a column wide at the other. Two callers, and they must not drift — the
+ * grid subtracts it in **scene** units at the reader's font size, and `TerminalPanel.tsx`
+ * writes it as `--terminal-scrollbar` in **screen** pixels at the size the board's zoom has
+ * multiplied. Both are this function; the scale is linear, so they are the same strip.
+ */
+export function terminalScrollbar(fontSize: number = TERMINAL_FONT_SIZE): number {
+  return TERMINAL_SCROLLBAR * scaleOf(fontSize);
+}
+
 export interface Point { x: number; y: number }
 export interface Size { width: number; height: number }
 
@@ -373,6 +418,12 @@ export function terminalOrigin(
  * `lineBox` and `advance` are the inputs that are not arithmetic: the font's own line box and
  * its advance width at that size, as the browser measured them. See `terminalCell` for why
  * neither half of a cell can be derived without being measured.
+ *
+ * The width has a third term since #197, and it is the one the scrollbar was blocked on: the
+ * strip the bar is drawn in is room the emulator does not have, exactly as the chrome is. It is
+ * subtracted whether or not there is a scrollback to show, because a strip that appeared with
+ * the first screenful would re-grid the block — and therefore repaint every full-screen program
+ * in it — the moment its shell printed enough to scroll. See `TERMINAL_SCROLLBAR`.
  */
 export function terminalGrid(
   size: Size,
@@ -382,7 +433,7 @@ export function terminalGrid(
 ): { cols: number; rows: number } {
   const cell = terminalCell(fontSize, lineBox, advance);
   const chrome = terminalChrome(fontSize);
-  const usableWidth = Math.max(0, (size?.width ?? 0) - chrome.width);
+  const usableWidth = Math.max(0, (size?.width ?? 0) - chrome.width - terminalScrollbar(fontSize));
   const usableHeight = Math.max(0, (size?.height ?? 0) - chrome.height);
   return {
     cols: Math.max(20, Math.floor(usableWidth / cell.width)),

@@ -5,7 +5,8 @@ import {
   TERMINAL_FALLBACK_FONT_FAMILY,
   TERMINAL_FONT_FAMILY,
   TERMINAL_FONT_RANGE,
-  TERMINAL_LINE_HEIGHT
+  TERMINAL_LINE_HEIGHT,
+  terminalScrollbar
 } from '../../../src/core/terminal-block'
 import { terminalCssVars, terminalXtermTheme } from '../../../src/core/terminal-palette'
 import type { TerminalTheme } from '../../../src/core/terminal-palette'
@@ -593,7 +594,17 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         // The whole set is swapped here rather than by a `[data-theme]` rule, and #121's trap
         // is both reasons: these are inline styles, which a rule cannot outrank, and a theme
         // that landed on part of a palette would be worse than one that landed on none of it.
-        ...(terminalCssVars(theme) as React.CSSProperties),
+        ...({
+          ...terminalCssVars(theme),
+          // The scrollback bar's strip, in the pixels it is drawn in rather than the scene
+          // units the grid reserved. Here rather than in the stylesheet because it is the
+          // *same* number `terminalGrid()` subtracts — a bar sized by a length in the CSS and
+          // a strip reserved by a constant in TypeScript is two numbers that drift, and the
+          // one they drift into is the last column drawn under the bar. `fontSize` below is
+          // already the reader's size times the board's zoom, so the strip scales with the
+          // card exactly as the frame around it does.
+          '--terminal-scrollbar': `${terminalScrollbar(fontSize)}px`
+        } as React.CSSProperties),
         left: `${rect.x}px`,
         top: `${rect.y}px`,
         width: `${rect.width}px`,
