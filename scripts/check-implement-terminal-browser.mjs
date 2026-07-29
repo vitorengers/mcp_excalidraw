@@ -412,8 +412,12 @@ try {
         JSON.stringify(scene.selected));
 
   const widthBefore = block?.w ?? 0;
+  // A few pixels *outside* the corner rather than exactly on it: the resize handle is a square
+  // centred on the vertex, so both land on it, but the vertex is also the card's own last pixel
+  // and which of the two takes the press is a rounding — one the block's size in scene units
+  // decides, and #199 changed that size. See check-terminal-geometry-browser.
   const corner = { x: card.left + card.width, y: card.top + card.height };
-  await drag(corner, { x: corner.x + 140, y: corner.y + 90 });
+  await drag({ x: corner.x + 5, y: corner.y + 5 }, { x: corner.x + 145, y: corner.y + 95 });
   scene = await evaluate(PROBE);
   await shot('03-resized');
   const resized = scene.blocks.find((one) => one.id === block?.id);

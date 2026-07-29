@@ -438,7 +438,9 @@ try {
   // and the block moves instead of growing: the case then fails on floating point rather than
   // on anything the code did. Round numbers, chosen here, convert back exactly.
   {
-    const zoom = 0.8;
+    // 0.5 rather than the 0.8 it was: since #199 a fresh block is 30 rows of 18px text, a
+    // thousand scene units tall, and at 0.8 its bottom-right corner sat below a 950-tall window.
+    const zoom = 0.5;
     await evaluate(`window.__ansiCheckApi.updateScene({ appState: { scrollX: ${300 / zoom - scene.block.x}, scrollY: ${(150 - scene.view.offsetTop) / zoom - scene.block.y}, zoom: { value: ${zoom} } } })`);
     await sleep(400);
     scene = await evaluate(PROBE);
@@ -451,7 +453,11 @@ try {
 
   const before = { w: scene.block.w, h: scene.block.h };
   const corner = toViewport(scene, scene.block.x + scene.block.w, scene.block.y + scene.block.h);
-  await drag(corner, { x: corner.x + 180, y: corner.y + 120 });
+  // A few pixels *outside* the corner rather than exactly on it: the handle is a square
+  // centred there, so both land on it, but the point exactly on the corner is also the card's own
+  // last pixel, and which of the two takes the press is a rounding — one the block size decides,
+  // and #199 changed the block size. See check-terminal-geometry-browser.
+  await drag({ x: corner.x + 5, y: corner.y + 5 }, { x: corner.x + 185, y: corner.y + 125 });
   scene = await evaluate(PROBE);
   await shot('04-resized');
   check('dragging its corner still resizes it',

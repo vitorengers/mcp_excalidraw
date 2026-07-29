@@ -43,13 +43,16 @@ if (!existsSync(modulePath)) {
 const block = await import(pathToFileURL(modulePath).href);
 const {
   TERMINAL_FONT_SIZE,
+  TERMINAL_METRICS_FONT_SIZE,
   TERMINAL_FONT_RANGE,
+  TERMINAL_GRID,
   TERMINAL_SIZE,
   TERMINAL_LINE_BOX,
   TERMINAL_LINE_HEIGHT,
   terminalCell,
   terminalChrome,
   terminalGrid,
+  terminalSizeFor,
   clampTerminalFont,
 } = block;
 
@@ -60,8 +63,14 @@ const has = (name, value, kind = 'function') => {
   return ok;
 };
 
-console.log('1. the font size is a number the reader can move, with a default that has not changed');
-check('the default is still 13', TERMINAL_FONT_SIZE === 13, String(TERMINAL_FONT_SIZE));
+console.log('1. the font size is a number the reader can move, and a base that stands still');
+// 18 since #199, which asked for it together with the 125 × 30 default grid. The two numbers
+// below are deliberately separate: this one is a preference about eyes and moves when somebody
+// asks, and the one under it is the size a render was measured at, which moves only when
+// somebody measures a render.
+check('the default the reader starts at is 18', TERMINAL_FONT_SIZE === 18, String(TERMINAL_FONT_SIZE));
+check('the size the constants in this module were measured at is still 13',
+      TERMINAL_METRICS_FONT_SIZE === 13, String(TERMINAL_METRICS_FONT_SIZE));
 if (has('TERMINAL_FONT_RANGE', TERMINAL_FONT_RANGE, 'object')) {
   const { min, max, step } = TERMINAL_FONT_RANGE;
   check('the range brackets the default', min < TERMINAL_FONT_SIZE && max > TERMINAL_FONT_SIZE,
@@ -90,7 +99,10 @@ if (has('clampTerminalFont', clampTerminalFont) && TERMINAL_FONT_RANGE) {
 
 console.log('\n2. the cell and the frame are that font size, measured');
 if (has('terminalCell', terminalCell)) {
-  const cell = terminalCell(TERMINAL_FONT_SIZE);
+  // At the size the constants were measured at rather than at the reader's default, which
+  // since #199 are two different numbers: 7.6 and 64 are what a render came back at 13, and
+  // `scaleOf` carries them to any other size from there.
+  const cell = terminalCell(TERMINAL_METRICS_FONT_SIZE);
   // Width: a little under 0.6em, and linear — this stack advances 0.5859px per font pixel at
   // every size in the range, so 7.6 at 13 is a shade conservative and the columns fit.
   //
@@ -100,56 +112,59 @@ if (has('terminalCell', terminalCell)) {
   // so a real row was nearer 1.55 × the font and the block claimed rows it had no room to
   // draw. There is no honest constant for it, so this one is only the floor-of-last-resort
   // and it is rounded up: too tall costs a row, too short costs rows nobody can reach.
-  check('the cell at the default is the width it was measured at, and the fallback height',
+  check('the cell at the measured size is the width it was measured at, and the fallback height',
         Math.abs(cell.width - 7.6) < 0.001
-        && Math.abs(cell.height - TERMINAL_FONT_SIZE * TERMINAL_LINE_BOX * TERMINAL_LINE_HEIGHT) < 0.001,
+        && Math.abs(cell.height - TERMINAL_METRICS_FONT_SIZE * TERMINAL_LINE_BOX * TERMINAL_LINE_HEIGHT) < 0.001,
         JSON.stringify(cell));
   check('and that fallback is taller than the 1.35 × font it used to be',
-        cell.height > TERMINAL_FONT_SIZE * TERMINAL_LINE_HEIGHT,
-        `${cell.height} vs ${TERMINAL_FONT_SIZE * TERMINAL_LINE_HEIGHT}`);
-  const doubled = terminalCell(TERMINAL_FONT_SIZE * 2);
+        cell.height > TERMINAL_METRICS_FONT_SIZE * TERMINAL_LINE_HEIGHT,
+        `${cell.height} vs ${TERMINAL_METRICS_FONT_SIZE * TERMINAL_LINE_HEIGHT}`);
+  const doubled = terminalCell(TERMINAL_METRICS_FONT_SIZE * 2);
   check('twice the font is twice the cell',
         Math.abs(doubled.width - cell.width * 2) < 0.001
         && Math.abs(doubled.height - cell.height * 2) < 0.001,
         JSON.stringify(doubled));
-  check('and no argument means the default', JSON.stringify(terminalCell()) === JSON.stringify(cell),
-        JSON.stringify(terminalCell()));
+  // The reader's default, not the measured base: a caller with no opinion is asking about the
+  // size the page is really drawing at, which since #199 is the larger of the two.
+  check('and no argument means the reader\'s default',
+        JSON.stringify(terminalCell()) === JSON.stringify(terminalCell(TERMINAL_FONT_SIZE)),
+        `${JSON.stringify(terminalCell())} vs ${JSON.stringify(terminalCell(TERMINAL_FONT_SIZE))}`);
 
   // The measured line box, which is what the browser passes and what a row really is. The
   // arithmetic is xterm's own — `floor(ceil(lineBox) × lineHeight)` in
   // `DomRenderer._updateDimensions` — so the block divides by the cell the emulator drew.
-  const measured = terminalCell(TERMINAL_FONT_SIZE, 15);
+  const measured = terminalCell(TERMINAL_METRICS_FONT_SIZE, 15);
   check('a measured line box is xterm\'s own arithmetic, not this module\'s guess',
         measured.height === Math.floor(15 * TERMINAL_LINE_HEIGHT),
         `${measured.height} from a 15px line box`);
   check('and it leaves the width alone, which was never the problem',
         Math.abs(measured.width - cell.width) < 0.001, JSON.stringify(measured));
   check('a measurement the browser could not make falls back rather than dividing by nothing',
-        terminalCell(TERMINAL_FONT_SIZE, null).height === cell.height
-        && terminalCell(TERMINAL_FONT_SIZE, 0).height === cell.height
-        && terminalCell(TERMINAL_FONT_SIZE, Number.NaN).height === cell.height,
-        `${terminalCell(TERMINAL_FONT_SIZE, null).height}, ${terminalCell(TERMINAL_FONT_SIZE, 0).height}`);
+        terminalCell(TERMINAL_METRICS_FONT_SIZE, null).height === cell.height
+        && terminalCell(TERMINAL_METRICS_FONT_SIZE, 0).height === cell.height
+        && terminalCell(TERMINAL_METRICS_FONT_SIZE, Number.NaN).height === cell.height,
+        `${terminalCell(TERMINAL_METRICS_FONT_SIZE, null).height}, ${terminalCell(TERMINAL_METRICS_FONT_SIZE, 0).height}`);
   // The staircase the constant could not follow: whole-pixel metrics, so the ratio is 1.5 at
   // 8px and 1.6 at 20px on one machine and something else on the next.
   check('two line boxes a pixel apart are two different cells',
-        terminalCell(TERMINAL_FONT_SIZE, 15).height < terminalCell(TERMINAL_FONT_SIZE, 16).height,
-        `${terminalCell(TERMINAL_FONT_SIZE, 15).height} → ${terminalCell(TERMINAL_FONT_SIZE, 16).height}`);
+        terminalCell(TERMINAL_METRICS_FONT_SIZE, 15).height < terminalCell(TERMINAL_METRICS_FONT_SIZE, 16).height,
+        `${terminalCell(TERMINAL_METRICS_FONT_SIZE, 15).height} → ${terminalCell(TERMINAL_METRICS_FONT_SIZE, 16).height}`);
 
   // The measured advance, which is #115's half of the same argument. A cell width measured
   // against one typeface says nothing about another, and this block changed typeface — so
   // the width stopped being a constant the same way the height did. xterm does no arithmetic
   // on it at all: `device.cell.width` is the measured advance and `css.cell.width` divides
   // it straight back out, so what is passed is the number rather than an input to a formula.
-  const narrow = terminalCell(TERMINAL_FONT_SIZE, null, 7.15);
+  const narrow = terminalCell(TERMINAL_METRICS_FONT_SIZE, null, 7.15);
   check('a measured advance is the cell width, untouched',
         Math.abs(narrow.width - 7.15) < 0.001, JSON.stringify(narrow));
   check('and it leaves the row alone, which is the other measurement\'s business',
         narrow.height === cell.height, JSON.stringify(narrow));
   check('an advance the browser could not measure falls back to the widest the stack can be',
-        terminalCell(TERMINAL_FONT_SIZE, null, null).width === cell.width
-        && terminalCell(TERMINAL_FONT_SIZE, null, 0).width === cell.width
-        && terminalCell(TERMINAL_FONT_SIZE, null, Number.NaN).width === cell.width,
-        `${terminalCell(TERMINAL_FONT_SIZE, null, 0).width}`);
+        terminalCell(TERMINAL_METRICS_FONT_SIZE, null, null).width === cell.width
+        && terminalCell(TERMINAL_METRICS_FONT_SIZE, null, 0).width === cell.width
+        && terminalCell(TERMINAL_METRICS_FONT_SIZE, null, Number.NaN).width === cell.width,
+        `${terminalCell(TERMINAL_METRICS_FONT_SIZE, null, 0).width}`);
   // The fallback is deliberately the *wider* of the two faces the stack can resolve, so an
   // unmeasured block reports fewer columns than it can draw rather than more than it can.
   check('and that fallback is no narrower than the primary face really is',
@@ -160,13 +175,13 @@ if (has('terminalChrome', terminalChrome)) {
   // — the strip became half again as tall and the status bar along the bottom went, which
   // between them take less room than the bar did on its own. The number is the measurement,
   // not the point — what the two cases hold to is that it is a real one and that it scales.
-  const chrome = terminalChrome(TERMINAL_FONT_SIZE);
-  check('the frame at the default is the measured 20 × 64',
+  const chrome = terminalChrome(TERMINAL_METRICS_FONT_SIZE);
+  check('the frame at the measured size is the measured 20 × 64',
         Math.abs(chrome.width - 20) < 0.001 && Math.abs(chrome.height - 64) < 0.001,
         JSON.stringify(chrome));
   // The header, the tab strip and the padding are all `em`, so they grow with the text they
   // hold. A frame that stood still would hand the emulator rows the block cannot show.
-  const doubled = terminalChrome(TERMINAL_FONT_SIZE * 2);
+  const doubled = terminalChrome(TERMINAL_METRICS_FONT_SIZE * 2);
   check('and it grows with the text, because every part of it is sized in em',
         Math.abs(doubled.height - chrome.height * 2) < 0.001,
         `${chrome.height} → ${doubled.height}`);
@@ -266,6 +281,67 @@ if (has('terminalGrid', terminalGrid)) {
   const tiny = terminalGrid({ width: 0, height: 0 }, TERMINAL_FONT_RANGE?.max ?? 24);
   check('an empty block still reports the floor rather than zero',
         tiny.cols >= 20 && tiny.rows >= 4, JSON.stringify(tiny));
+}
+
+console.log('\n4. the default is a grid, and the size a fresh block gets is derived from it');
+if (has('TERMINAL_GRID', TERMINAL_GRID, 'object') && has('terminalSizeFor', terminalSizeFor)) {
+  check('the default grid is the 125 × 30 the observation asked for',
+        TERMINAL_GRID.cols === 125 && TERMINAL_GRID.rows === 30, JSON.stringify(TERMINAL_GRID));
+  check('and the unmeasured default size is what that grid comes to, not a second number',
+        JSON.stringify(TERMINAL_SIZE) === JSON.stringify(terminalSizeFor()),
+        `${JSON.stringify(TERMINAL_SIZE)} vs ${JSON.stringify(terminalSizeFor())}`);
+
+  // The round trip, which is the whole claim: a size derived from a grid divides back into
+  // that grid. Swept across the font range **and** across cells, because the two cells this
+  // stack can resolve are five per cent apart and a rectangle right for one is seven columns
+  // out for the other — which is the defect #199 was opened about, and what an ordinary
+  // "the constant is 1140" case cannot see.
+  const cells = [
+    ['unmeasured', null, null],
+    ['Comic Shanns', 1.72, 0.55],
+    ['the fallback stack', 1.15, 0.5859],
+    ['a face nothing here has met', 2.4, 0.75],
+  ];
+  const wrong = [];
+  const { min, max, step } = TERMINAL_FONT_RANGE ?? { min: 8, max: 24, step: 1 };
+  for (const [name, box, advance] of cells) {
+    for (let size = min; size <= max; size += step) {
+      const lineBox = box === null ? null : box * size;
+      const glyph = advance === null ? null : advance * size;
+      const derived = terminalSizeFor(TERMINAL_GRID, size, lineBox, glyph);
+      const grid = terminalGrid(derived, size, lineBox, glyph);
+      if (grid.cols !== TERMINAL_GRID.cols || grid.rows !== TERMINAL_GRID.rows) {
+        wrong.push(`${name} at ${size}px: ${derived.width}×${derived.height} reads ${grid.cols}×${grid.rows}`);
+      }
+    }
+  }
+  check('every cell and every size in the range derives a block that reads back as the grid',
+        wrong.length === 0, wrong.slice(0, 4).join('; '));
+
+  // Rounded up rather than to the nearest, which is #199's first open question answered: a
+  // block a fraction short of `cols × advance` reports one column fewer, and a whole scene
+  // unit of slack cannot buy an extra one — a cell is ten of them.
+  const exact = terminalSizeFor(TERMINAL_GRID, TERMINAL_FONT_SIZE, 31, 9.9);
+  check('the derived size is whole scene units',
+        Number.isInteger(exact.width) && Number.isInteger(exact.height), JSON.stringify(exact));
+  check('and it is never smaller than the grid needs',
+        exact.width >= TERMINAL_GRID.cols * 9.9 + terminalChrome(TERMINAL_FONT_SIZE).width
+        && exact.height >= TERMINAL_GRID.rows * 31 + terminalChrome(TERMINAL_FONT_SIZE).height,
+        JSON.stringify(exact));
+
+  // Bigger text is a bigger block for the same screen — the other reading of "125 × 30 at 18"
+  // would have been a rectangle fixed at 18 and a grid that shrank as the reader stepped up.
+  const small = terminalSizeFor(TERMINAL_GRID, TERMINAL_FONT_RANGE?.min ?? 8);
+  const large = terminalSizeFor(TERMINAL_GRID, TERMINAL_FONT_RANGE?.max ?? 24);
+  check('the same grid at a bigger font is a bigger block',
+        large.width > small.width && large.height > small.height,
+        `${small.width}×${small.height} → ${large.width}×${large.height}`);
+
+  // A caller that asks for nonsense gets a block rather than a zero-width shape nobody can
+  // grab: the grid is what the shell is told, and no shell is told about no columns.
+  const floored = terminalSizeFor({ cols: 0, rows: -4 });
+  check('a grid of nothing still derives a block with something in it',
+        floored.width > 0 && floored.height > 0, JSON.stringify(floored));
 }
 
 if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
