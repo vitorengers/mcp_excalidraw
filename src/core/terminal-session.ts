@@ -24,6 +24,8 @@ import { delimiter, isAbsolute, join } from 'path';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
 import { AgentDirectory, agentEnv, buildAgentCommand } from './issue-agent.js';
+import { streamsUsage } from './agent-usage.js';
+import { AgentStreamRenderer } from './agent-stream-render.js';
 
 /**
  * How much transcript is kept for a socket that connects late.
@@ -414,7 +416,23 @@ export interface TerminalSessionSummary {
 }
 
 export interface TerminalSessionHooks {
+  /**
+   * What the transcript shows and the browser is sent — rendered, when the command streams.
+   *
+   * Not what the process wrote. A streaming agent's envelopes are turned into readable lines
+   * on the way here, and a chunk that completes no line does not reach this at all, so the
+   * sequence counts what a reader saw rather than what a socket delivered.
+   */
   onOutput: (data: string, sequence: number) => void;
+  /**
+   * Every byte the process wrote, before anything is done to it.
+   *
+   * This is what `runHostedAgent` accumulates for `extractGithubUrl` and feeds to
+   * `UsageMeter`, and both of them parse the envelopes `onOutput` has by then deleted. The
+   * two are separate hooks precisely so that making the block readable cannot cost a run its
+   * pull request URL.
+   */
+  onRaw?: (data: string) => void;
   onExit: (code: number | null) => void;
 }
 
@@ -452,6 +470,15 @@ export class TerminalSession {
   private readonly hooks: TerminalSessionHooks;
   private buffer = '';
   private sequenceNumber = 0;
+  /**
+   * Set only when the command asks its agent for a machine-readable stream.
+   *
+   * `streamsUsage` is the same predicate that already decides whether the token meter runs, and
+   * reusing it is deliberate: one flag in the operator's command line turns on the counts and
+   * the readable transcript together, and a session whose command does not stream keeps the
+   * old path byte for byte. The server still never appends the flag itself.
+   */
+  private render: AgentStreamRenderer | null = null;
   private cols = DEFAULT_GRID.cols;
   private rows = DEFAULT_GRID.rows;
   /** Whether the shell has gone, kept apart from *how*: a killed process reports no code. */
@@ -479,6 +506,9 @@ export class TerminalSession {
       workspace, shellCommand, directory, asArgument ? options.input : null
     );
     const binding = options.input && !asArgument ? null : pty;
+    // Read off the command as configured, before anything wraps it for a distro: the flag is
+    // the operator's, and it means the same thing on either side of the boundary.
+    this.render = streamsUsage(shellCommand) ? new AgentStreamRenderer() : null;
     this.id = id;
     this.workspaceId = workspace.id;
     this.shell = shellCommand;
@@ -681,9 +711,20 @@ export class TerminalSession {
   /** Append to the transcript, trim it to the ceiling, and hand the chunk on. */
   private emit(chunk: string): void {
     if (!chunk) return;
+
+    // The tap first, and unconditionally: it is reading for a pull request URL and for token
+    // counts, both of which live in the envelopes the renderer is about to remove.
+    this.hooks.onRaw?.(chunk);
+
+    const shown = this.render ? this.render.feed(chunk) : chunk;
+    // A chunk that completed no line is not silence, it is a half-written one. Showing it
+    // would put a torn envelope in the transcript, and counting it would spend a sequence
+    // number on nothing.
+    if (!shown) return;
+
     this.sequenceNumber += 1;
-    this.buffer = trimScrollback(this.buffer + chunk, SCROLLBACK_LIMIT);
-    this.hooks.onOutput(chunk, this.sequenceNumber);
+    this.buffer = trimScrollback(this.buffer + shown, SCROLLBACK_LIMIT);
+    this.hooks.onOutput(shown, this.sequenceNumber);
   }
 
   private settle(code: number | null): void {
