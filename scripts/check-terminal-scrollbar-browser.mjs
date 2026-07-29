@@ -453,32 +453,35 @@ const PROBE = `(() => {
     rows: (card.querySelector('.xterm-rows') || {}).textContent || '',
   };
 
-  // Where the last cell of the ruler line was actually painted. A Range rather than the row's
+  // Where the last cell of each ruler line was actually painted. A Range rather than the row's
   // own box: the question is whether that column landed clear of the strip, and the row is as
   // wide as the grid whether or not the frame could hold it.
-  out.lastCell = (() => {
-    for (const row of card.querySelectorAll('.xterm-rows > div')) {
-      const text = row.textContent || '';
-      if (!/^-{4,}#/.test(text)) continue;
-      const at = text.indexOf('#');
-      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
-      let offset = 0;
-      let node = walker.nextNode();
-      while (node) {
-        const length = node.textContent.length;
-        if (offset + length > at) {
-          const range = document.createRange();
-          range.setStart(node, at - offset);
-          range.setEnd(node, at - offset + 1);
-          const box = range.getBoundingClientRect();
-          return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: at + 1 };
-        }
-        offset += length;
-        node = walker.nextNode();
+  //
+  // Every ruler on the screen, not the first one found, because this file prints one per font
+  // size and the earlier ones are still in the buffer — reflowed into fragments by the resize,
+  // some of which are dashes ending in a hash and match just as well. The caller picks the one
+  // whose width is the grid it is asking about; a fragment never has that width.
+  out.rulers = [...card.querySelectorAll('.xterm-rows > div')].map((row) => {
+    const text = row.textContent || '';
+    if (!/^-{4,}#/.test(text)) return null;
+    const at = text.indexOf('#');
+    const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+    let offset = 0;
+    let node = walker.nextNode();
+    while (node) {
+      const length = node.textContent.length;
+      if (offset + length > at) {
+        const range = document.createRange();
+        range.setStart(node, at - offset);
+        range.setEnd(node, at - offset + 1);
+        const box = range.getBoundingClientRect();
+        return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: at + 1 };
       }
+      offset += length;
+      node = walker.nextNode();
     }
     return null;
-  })();
+  }).filter(Boolean);
 
   out.focused = String((document.activeElement || {}).className || '');
   return out;
@@ -694,12 +697,15 @@ try {
     await waitFor(async () => /xterm/.test((await evaluate(PROBE)).focused), 'the keyboard to reach the shell');
     await sleep(400);
     await run(`node ruler.js ${at.shell.cols}`);
-    const cell = await waitFor(async () => (await evaluate(PROBE)).lastCell, 'the ruler line to be drawn');
+    // The ruler *this* grid drew, by its width — an earlier size's, reflowed into fragments by
+    // the resize, is on the screen too. Waited for rather than asserted: that a line of `cols`
+    // characters comes out `cols` wide is `check-terminal-font-browser.mjs`'s question, and
+    // this one is about where its last column landed.
+    const cell = await waitFor(async () => (await evaluate(PROBE)).rulers
+      .filter((ruler) => ruler.width === at.shell.cols).pop(), `the ${at.shell.cols}-wide ruler to be drawn`);
     scene = await evaluate(PROBE);
     await shot(`0${2 + index}-ruler-${size}`);
-    check(`${size}px: the ruler is as wide as the grid the header claims`, cell.width === at.shell.cols,
-          `${cell.width} drawn of ${at.shell.cols} claimed`);
-    check(`${size}px: and its last column is drawn in full, clear of the strip`,
+    check(`${size}px: its last column is drawn in full, clear of the strip`,
           cell.right <= stripStart(scene) + 1 && cell.right > scene.card.viewport.left,
           `column ${cell.width} ends at ${cell.right.toFixed(1)}, the strip begins at `
           + `${stripStart(scene).toFixed(1)}`);

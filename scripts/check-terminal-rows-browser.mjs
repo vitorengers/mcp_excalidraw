@@ -293,6 +293,10 @@ const PROBE = `(() => {
   out.card = {
     box: boxOf(card),
     fontSize: Number.parseFloat(getComputedStyle(card).fontSize),
+    // The strip the scrollback bar is drawn in, which since #197 is part of the frame the
+    // emulator does *not* have. Read off the card rather than assumed, because it scales with
+    // the font and this file sweeps the font range.
+    reserve: Number.parseFloat(getComputedStyle(card).getPropertyValue('--terminal-scrollbar')),
     grid: (card.querySelector('.terminal-card__grid') || {}).textContent || '',
     readout: (card.querySelector('.terminal-card__font-size') || {}).textContent || '',
     minus: boxOf(steps[0]),
@@ -389,14 +393,21 @@ async function assertFits(label, size) {
   const { shell, scene } = await settled(size);
   const { body, screen } = scene.card;
   const cell = { width: screen.width / shell.cols, height: screen.height / shell.rows };
+  // The frame *the text* has, which since #197 is not the whole frame: the last
+  // `--terminal-scrollbar` pixels across are the strip the scrollback bar is drawn in, and
+  // `terminalGrid()` gives them up before it divides. Measured off the card rather than
+  // assumed, so this stays the question it was — "are the columns the shell was told about
+  // columns the frame can draw" — rather than becoming a question about the strip's width.
+  const strip = Number.isFinite(scene.card.reserve) ? scene.card.reserve : 0;
   const holds = {
-    cols: Math.floor(body.width / cell.width),
+    cols: Math.floor((body.width - strip) / cell.width),
     rows: Math.floor(body.height / cell.height),
   };
   console.log(`     ${shell.cols}×${shell.rows} claimed, cell `
     + `${cell.width.toFixed(2)}×${cell.height.toFixed(2)}px, screen `
     + `${screen.width.toFixed(1)}×${screen.height.toFixed(1)}px in a `
     + `${body.width.toFixed(1)}×${body.height.toFixed(1)}px frame `
+    + `less a ${strip.toFixed(1)}px scrollbar strip `
     + `(the frame holds ${holds.cols}×${holds.rows})`);
 
   check(`${label}: the screen the shell was told fits inside the frame`,
@@ -453,8 +464,16 @@ try {
   // Zoom 1, and the block put where the whole of it is on screen. Scene units and screen
   // pixels are then the same thing, which is the only zoom at which "the rows the block
   // reports" and "the rows the frame draws" are being measured in one currency.
+  //
+  // 180 down the page rather than 120, and that is what sections 3 and 4 below were quietly
+  // failing on: the card is clipped into the canvas area by its wrapper, the canvas area
+  // starts a little under 140px down, and a block whose top lands at 120 has its header strip
+  // — the `−` and `+` this file steps the font with — hidden behind the app's own toolbar.
+  // The clicks landed on the toolbar, the readout never moved, and the sweep timed out
+  // waiting for a font it had never asked for. 180 puts the whole 720-tall block on a
+  // 950-tall window with the header where it is drawn.
   let scene = await evaluate(PROBE);
-  await evaluate(`window.__terminalCheckApi.updateScene({ appState: { scrollX: ${60 - scene.block.x}, scrollY: ${120 - scene.view.offsetTop - scene.block.y}, zoom: { value: 1 } } })`);
+  await evaluate(`window.__terminalCheckApi.updateScene({ appState: { scrollX: ${60 - scene.block.x}, scrollY: ${180 - scene.view.offsetTop - scene.block.y}, zoom: { value: 1 } } })`);
   await sleep(600);
   scene = await evaluate(PROBE);
   check('the board is at zoom 1, where a scene unit is a pixel', scene.view.zoom === 1,
