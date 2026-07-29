@@ -507,7 +507,7 @@ try {
         && Math.abs(scene.card.left - toViewport(scene, scene.block.x, scene.block.y).x) < 2,
         JSON.stringify(scene.card));
   check('and its font scaled with the board',
-        Math.abs(scene.card.fontSize - 13 * scene.view.zoom) < 1.5,
+        Math.abs(scene.card.fontSize - 18 * scene.view.zoom) < 1.5,
         `${scene.card.fontSize}px at zoom ${scene.view.zoom}`);
 
   console.log('\n3. a command typed into the block runs, and its output comes back');
@@ -554,7 +554,12 @@ try {
   // press is decided by a pixel, and a press that lands on the shape *moves* the block
   // instead of resizing it, which is a case failing for a reason that is not about the code.
   // Placed at a known spot, zoomed out, there is room to grab the handle and room to drag it.
-  await evaluate(`window.__terminalCheckApi.updateScene({ appState: { scrollX: ${375 - scene.block.x}, scrollY: ${76.25 - scene.block.y}, zoom: { value: 0.8 } } })`);
+  //
+  // 0.5 rather than the 0.8 it was, because the block grew: since #199 a fresh one is 30 rows
+  // of 18px text, a thousand scene units tall, and at 0.8 its bottom-right corner was past the
+  // bottom of a 950-tall window. A press dispatched outside the viewport is not a press at all,
+  // and the case reported the block "not resizing" rather than the handle not being pressed.
+  await evaluate(`window.__terminalCheckApi.updateScene({ appState: { scrollX: ${375 - scene.block.x}, scrollY: ${76.25 - scene.block.y}, zoom: { value: 0.5 } } })`);
   await sleep(400);
   scene = await evaluate(PROBE);
 
@@ -566,8 +571,11 @@ try {
   check('clicking the header selects the block through the overlay',
         scene.selected.includes(scene.block.id), JSON.stringify(scene.selected));
 
+  // A few pixels *outside* the corner rather than exactly on it: the handle is a square centred
+  // there, so both land on it, but the point exactly on the corner is also on the selection's
+  // south edge and on the card's last pixel, and which one takes the press is a rounding.
   const corner = toViewport(scene, scene.block.x + scene.block.w, scene.block.y + scene.block.h);
-  await drag(corner, { x: corner.x + 180, y: corner.y + 120 });
+  await drag({ x: corner.x + 5, y: corner.y + 5 }, { x: corner.x + 185, y: corner.y + 125 });
   scene = await evaluate(PROBE);
   await shot('04-resized');
   check('dragging its corner resizes it', scene.block.w > before.w + 50 && scene.block.h > before.h + 30,

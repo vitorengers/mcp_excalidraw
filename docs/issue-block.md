@@ -500,7 +500,18 @@ It also fixes the output language, and the reason is less obvious than it looks.
 out entirely in Portuguese from an observation written in English — the observation's language
 is not what decided it. Step 3 sends the agent to read the project's own documentation before
 proposing anything, and that project documents in Portuguese, so the agent took the language
-from its surroundings. Nothing in the prompt said otherwise. Now it names English outright.
+from its surroundings. Nothing in the prompt said otherwise. Now it names the language outright.
+
+**Which language is the project's to say, and English is what it says when the project says
+nothing.** Fixing the language was right; fixing it to one was not. This board opens issues in
+more than one repository, and a project whose own conventions require Portuguese was getting
+every card this tool opened for it written against its own rule — a collision, not a taste. So
+`board.config.json` carries a `language` ([workspaces.md](workspaces.md#boardconfigjson)) and
+the paragraph names it. Everything else about the rule is unchanged, and deliberately so: the
+language is still *fixed* rather than inferred, the agent still may not take it from the
+observation or from the repository it just read, and an observation whose exact wording is the
+evidence is still quoted rather than translated. A project that sets nothing gets the prompt
+byte for byte as it was.
 
 ### What an agent may hand to a helper, and what it may not
 

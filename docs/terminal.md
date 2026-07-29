@@ -431,7 +431,7 @@ were.
 
 **The rect that one block comes back at is saved, per board** (#154). The size and the position
 of the block are not the arrangement: they are what the reader dragged, and losing them was not
-only a shape moving. A block put back at `TERMINAL_SIZE` reports the default grid, the server
+only a shape moving. A block put back at the default reports the default grid, the server
 puts it at the live shell, and a full-screen program — `claude` included — repaints into a
 smaller screen than it was left at, so *the sizes come back exactly as they were* was true of
 the server and undone a moment later by the viewer that reconnected.
@@ -450,7 +450,7 @@ the same trade a restore after an erase already makes: re-anchoring is how a rel
 a drag, and the block is an ordinary shape the reader can move. Where it lands is no longer a
 collision anybody has to live with either — the mirror re-measures around a block standing in it,
 and the documentation steps aside from one standing in the region's way. A board that has never
-had a block placed still gets `TERMINAL_SIZE` at the anchored origin.
+had a block placed still gets the default grid at the anchored origin.
 
 `scripts/check-terminal-geometry-browser.mjs` is the check: it drags a corner and a header with
 a real pointer, reloads, and asks the *scene* for the rect and `GET /api/terminal` for the grid
@@ -594,15 +594,58 @@ screen at any zoom, because it is a reading column pinned beside a shape. This o
 shape: the zoom scales the font and leaves the grid alone, so a terminal zoomed out is the same
 screen drawn smaller rather than a different number of columns.
 
-**How big it is when it is first drawn** is `TERMINAL_SIZE`, 1140 × 720 since #144, and it is
-the one number in `terminal-block.ts` that had never been argued for. It was 760 × 480, which
-is about a hundred columns by twenty rows at the default font — enough for a prompt, and not
-enough for the agent transcript this block exists to hold. Half again in each direction is
-around 150 × 33, which a `git diff` fits in. "Fifty per cent bigger" was read as each dimension
-rather than as the area, the way #110 read its own 2.5: the area reading gives 931 × 588, and a
-request about how big a window looks is a request about its edges. Only a *fresh* block reads
-the constant — a detach copies the block the tab came out of, and a restore reuses the geometry
-the reader had — so nothing already on a board moves when it changes.
+**How big it is when it is first drawn** is `TERMINAL_GRID`, **125 columns by 30 rows**, and
+since #199 that is the whole of the answer: the default is stated in the terminal's own unit and
+the rectangle is derived from it at placement time, by `terminalSizeFor` against the cell the
+browser measured. Only a *fresh* block reads it — a detach copies the block the tab came out of,
+and a restore reuses the geometry the reader had — so nothing already on a board moves when it
+changes.
+
+It was a pair of scene units for three releases: 760 × 480, then 1140 × 720 in #144, "half again
+in each direction" for a block that opened at about a hundred columns by twenty rows and could
+not hold the agent transcript it exists for. What #144 could not do, and its comment did not
+notice it had not done, was pin a *grid*. Half of a cell is a browser measurement rather than a
+number in this repository — `terminalCell` takes the line box and the advance the page measured,
+and since #115 the face is a web font, so the answer is not fixed even for the life of a page.
+1140 × 720 therefore read as 147 columns against the fallback stack and 156 against Comic
+Shanns, while the comment beside it claimed "around 150 × 33" for both; measured in a real
+browser it was **154 × 29**. The rows were four out and nothing could see it, because an
+arithmetic check that divides by the same assumed cell the code does agrees with it.
+
+So the direction of the derivation is reversed. `terminalSizeFor` is `terminalGrid` read
+backwards — the same terms in the same order, with the frame and the scrollbar strip added back
+rather than divided out — and it rounds **up**, to whole scene units. That is the answer to
+"exactly 125, or at least 125": a block exactly `cols × advance` wide is one floating-point
+error from reporting one column fewer, and a unit of slack cannot buy an extra column when a
+cell is ten of them. Two font stacks now get two different rectangles and the same screen, which
+is the half of this a re-picked constant could not buy: 1282 × 1019 against Comic Shanns at the
+default size, 1360 × 1034 against the fallback.
+
+`TERMINAL_SIZE` is still exported and is still what `terminalOrigin` and `terminalBlockElement`
+default to, but it is no longer a decision — it is `terminalSizeFor()` with nothing measured, the
+rectangle the grid comes to for a caller that has no browser to ask. The frontend is not that
+caller: it measures, and hands the answer to both.
+
+**The size is derived at the size the reader is reading at**, not at the default one. The promise
+is about the screen, so a reader who has pressed `+` to 24 still gets 125 × 30 — in a block half
+again as big again. The other reading, a rectangle fixed at 18px text, would have given them
+ninety columns and called it the default.
+
+**The face has to have landed before the rectangle is worked out**, which is the one thing this
+costs. Excalidraw registers the code face without loading it — see `terminalFontReady` — so a
+block placed a beat early measures the fallback stack and lands seven columns wide of what was
+asked for. `adoptTerminalSessions` therefore starts the load beside its first request and waits
+for it before anything is placed. Nothing else waits on this: the grid a block *reports* is
+re-measured every time it is reported, and there is a mount effect that reports it again once the
+face arrives. It is the rectangle, placed once and then left alone, that cannot be revised.
+
+One consequence, and it is the reason `reconcileTerminalBlocks` ends by redrawing the mirror. The
+mirror is placed from this region, and `resolveMirrorOrigin` answers an empty anchor set with a
+content-independent fallback it deliberately does not remember — so a block that appears *after*
+the mirror's first draw leaves the region at that fallback until the next twenty-second poll,
+which is the drift #188 is about seen from the other side. Waiting for the face made that
+ordering the usual one rather than a race, so a block being added is now a reason to re-settle
+the region.
 
 ### It stops where the canvas stops, and what it is allowed to cover
 
@@ -817,12 +860,21 @@ Four things the issues left open, decided here:
 
 ## The font size is an input to the grid
 
-The reader sets it, with `−` and `+` on the block's own header, between 8 and 24. What the zoom
-multiplies is that size, so the two questions stay separate: the zoom is how close the board is,
-and this is how big the text is on it.
+The reader sets it, with `−` and `+` on the block's own header, between 8 and 24, and it starts
+at **18** — `TERMINAL_FONT_SIZE`, which #199 moved up from 13 along with the default grid the two
+numbers were asked for together. What the zoom multiplies is that size, so the two questions stay
+separate: the zoom is how close the board is, and this is how big the text is on it.
+
+**That is not the size the constants in `terminal-block.ts` were measured at**, and since #199
+the two are named separately. `TERMINAL_METRICS_FONT_SIZE` is 13, because `TERMINAL_CHROME.height`
+is 64 from a render at 13 and `TERMINAL_CELL.width` is 7.6 from the fallback stack's advance at
+13; `scaleOf` divides by *that* to carry them anywhere else. Pointing it at the reader's new
+default instead would have re-read every one of those measurements as though it had been taken at
+18 — a frame reported 27% smaller than the one on screen, which is #104's defect exactly. The
+reader's size moves when somebody asks; the measured one moves when somebody measures.
 
 It could not be a display tweak. xterm sizes its canvas as `cols` × `rows` × the font, and the
-grid is derived from a cell that was measured at 13px — so a `+` that only assigned
+grid is derived from a cell measured at whatever size the text is at — so a `+` that only assigned
 `terminal.options.fontSize` would leave the emulator drawing past the frame, and everything past
 the frame is clipped rather than scrolled *sideways* (below). Bigger text, silently fewer visible
 columns, and no way to reach them — the bar the block grew in #197 scrolls the scrollback, which
@@ -1408,6 +1460,14 @@ it. A board returned to puts its block back where it was left.
   that divided by the same wrong cell the code did would have agreed with it. The width half was
   seen to fail against the face swapped with the cell left behind: 97 columns claimed of 104 at
   13px, 159 of 170 at 8px, 51 of 55 at 24px.
+- `scripts/check-terminal-default-grid-browser.mjs` — that a fresh block opens at 125 × 30, and
+  that it is a *grid* it opens at rather than a rectangle that happens to divide into one on the
+  machine the number was picked on. The grid is asked of `GET /api/terminal`, which is what the
+  shell was really told; the rectangle is checked against `terminalSizeFor` run on the cell the
+  page itself measured. Three cases, and the third is the one a re-picked constant cannot pass:
+  with the reader's text stepped to 24, the *next* board's fresh block is 125 × 30 again, at a
+  rectangle a third bigger. Same screen, two rectangles. Written first, red on the old code on
+  twelve cases — a default of 154 × 29 where the file claimed around 150 × 33.
 - `scripts/check-terminal-paper-browser.mjs` — the look, in Chrome, in **both themes**, and
   every case in it is one the source cannot answer. The theme is pinned rather than inherited
   from the machine's `prefers-color-scheme`, and each case is asked once on paper and again on
@@ -1490,7 +1550,8 @@ it. A board returned to puts its block back where it was left.
 - `scripts/check-terminal-size-browser.mjs` — how big the block and its strip are drawn, in
   Chrome, measured off the render rather than read out of the stylesheet: #110's lesson is that
   a size which never reaches the element leaves the file reading exactly right. The block the
-  board placed is 1140 × 720 scene units; each of `.terminal-card__tab`, `__add`, `__detach`
+  board placed is the rectangle `TERMINAL_GRID` comes to against the cell that page measured,
+  which is what it stopped being a constant for in #199; each of `.terminal-card__tab`, `__add`, `__detach`
   and `__merge` is 1.45–1.55× the height it has with `--terminal-tab-scale` forced back to 1,
   which is the strip as it was and the same one-lever question `check-workspace-tabs-scale.mjs`
   asks; the header beside them is unchanged; `.terminal-card__prompt` is absent live *and* with

@@ -89,25 +89,55 @@ export function terminalBlockData(customData: unknown): TerminalBlockData {
 export const TERMINAL_GAP = 120;
 
 /**
- * How big the block is when it is first drawn. It is resizable from there.
+ * How big a fresh block is, said in the only unit a terminal has: **its own grid**.
  *
- * Half again as big in each direction since #144 — 760 × 480 became 1140 × 720, which is
- * 2.25 times the area. "Fifty per cent bigger" was read as each dimension rather than as the
- * area on purpose: the area reading gives 931 × 588, and a request about how big a window
- * looks is a request about its edges. #110 read its own 2.5 the same way.
+ * The observation on #199 asked for a default of 125 × 30, and what was there to change was a
+ * pair of scene units — 1140 × 720 since #144, before that 760 × 480. A scene-unit constant
+ * cannot pin a grid, and this file already knew why: half of a cell is a *browser
+ * measurement*, not a number here (`terminalCell`), and since #115 the face is a web font, so
+ * it is not even fixed for the life of a page. 1140 × 720 read as 147 columns against the
+ * fallback cell and 156 against Comic Shanns, and the comment that used to stand here claimed
+ * "around 150 × 33" for both. The rows were five out and nothing could notice: an arithmetic
+ * check that divides by the same assumed cell the code does agrees with it.
  *
- * The old pair was the one constant in this file that argued nothing for itself. It was not
- * wrong so much as never chosen, and what it cost was a terminal that opened at about a
- * hundred columns by twenty rows — enough for a prompt and not for the agent transcript this
- * block was built to hold. The new pair is around 150 × 33 at the default font, which is a
- * screen a `git diff` fits in.
+ * So the default is stated as the grid and the size is derived from it at placement time, by
+ * `terminalSizeFor` against the cell the browser measured. Two font stacks then get two
+ * different rectangles and the *same* screen, which is the half of this that a re-picked
+ * constant could not buy.
  *
  * Only a *fresh* block reads this. A detach copies the block the tab came out of and a
- * restore reuses the geometry the reader had, so nothing already on a board moves.
+ * restore reuses the geometry the reader had, so nothing already on a board moves — which is
+ * the other half of the same observation, stated so this change is not scoped as if it could
+ * break it.
  */
-export const TERMINAL_SIZE = { width: 1140, height: 720 };
+export const TERMINAL_GRID = { cols: 125, rows: 30 };
 
-export const TERMINAL_FONT_SIZE = 13;
+/**
+ * The size the reader's text is drawn at until they touch `+` or `-`.
+ *
+ * 18 rather than the 13 it was, which is the second half of #199's answer: the grid above is
+ * 125 × 30 *at this size*, and the two numbers were given together. It is a preference about
+ * eyes rather than a measurement, so it moves on its own; what it must not do is drag the
+ * measured constants below with it, which is what `TERMINAL_METRICS_FONT_SIZE` is for.
+ */
+export const TERMINAL_FONT_SIZE = 18;
+
+/**
+ * The font size the fallback constants in this file were measured at, which is not the size
+ * the reader gets.
+ *
+ * They were one number until #199, and that was honest only while the default never moved:
+ * `TERMINAL_CHROME.height` is 64 because a real render at **13** came back 57.7, and
+ * `TERMINAL_CELL.width` is 7.6 because the fallback stack advances 0.5859 per font pixel at
+ * **13**. `scaleOf` divides by this to carry them to any other size, so re-pointing it at a
+ * new default would have re-read every one of those measurements as though it had been taken
+ * at 18 — a frame reported 27% smaller than the one on screen, which is #104's defect exactly:
+ * too little chrome hands the shell rows the block clips rather than scrolls.
+ *
+ * So the reader's default moved and this stood still. It changes only when somebody measures
+ * a render again, and then the numbers beside it change with it.
+ */
+export const TERMINAL_METRICS_FONT_SIZE = 13;
 
 /**
  * The face the board itself is drawn in, as far as a terminal can have it.
@@ -195,7 +225,7 @@ export const TERMINAL_LINE_BOX = 1.75;
  */
 export const TERMINAL_CELL = {
   width: 7.6,
-  height: TERMINAL_FONT_SIZE * TERMINAL_LINE_BOX * TERMINAL_LINE_HEIGHT,
+  height: TERMINAL_METRICS_FONT_SIZE * TERMINAL_LINE_BOX * TERMINAL_LINE_HEIGHT,
 };
 
 /**
@@ -211,9 +241,11 @@ export const TERMINAL_CELL = {
  * #104 is a monument to — a chrome smaller than the real frame hands the shell rows the
  * block clips rather than scrolls, and neither `tsc` nor `vite build` can see it.
  *
- * So this was re-measured off a real render at zoom 1 and the default font rather than
+ * So this was re-measured off a real render at zoom 1 and **13px** text rather than
  * re-derived on paper: `.terminal-card__body` came back 662.3px tall inside a 720 block, so
- * the frame is 57.7, and the 64 here is that rounded up. **Up**, deliberately and in the
+ * the frame is 57.7, and the 64 here is that rounded up. 13 was the default then and is
+ * `TERMINAL_METRICS_FONT_SIZE` now — the render this was read off did not move when #199
+ * moved the reader's size. **Up**, deliberately and in the
  * direction #104 is safe in: too much chrome costs the reader a row at the bottom of the
  * block, too little costs them rows they cannot reach at all. `check-terminal-rows-browser`
  * is what settles it, at 8, 13 and 24, because it divides by a cell read back off the render
@@ -256,9 +288,9 @@ export const TERMINAL_SCROLLBAR = 12;
  * How far the reader may move the text, with `+` and `-` on the block's own header.
  *
  * The bottom is where a monospace glyph stops being a letter; the top is chosen so the
- * floors in `terminalGrid()` are never what stops it — at 24 the default block is still
- * fifty columns wide, so the `+` runs out because the *block* did, which is a thing the
- * reader can see and drag.
+ * floors in `terminalGrid()` are never what stops it — a block placed at the default still
+ * holds ninety columns when the text is stepped all the way to 24, so the `+` runs out
+ * because the *block* did, which is a thing the reader can see and drag.
  */
 export const TERMINAL_FONT_RANGE = { min: 8, max: 24, step: 1 };
 
@@ -296,7 +328,10 @@ export function clampTerminalFont(value: unknown): number {
  */
 const scaleOf = (fontSize: number): number => {
   const size = Number(fontSize);
-  return Number.isFinite(size) && size > 0 ? size / TERMINAL_FONT_SIZE : 1;
+  // Against the size the constants were *measured* at, never against the size the reader is
+  // given. The two were the same number until #199 moved the default to 18. See
+  // `TERMINAL_METRICS_FONT_SIZE`.
+  return Number.isFinite(size) && size > 0 ? size / TERMINAL_METRICS_FONT_SIZE : 1;
 };
 
 /**
@@ -366,6 +401,54 @@ export function terminalChrome(fontSize: number = TERMINAL_FONT_SIZE): Size {
 export function terminalScrollbar(fontSize: number = TERMINAL_FONT_SIZE): number {
   return TERMINAL_SCROLLBAR * scaleOf(fontSize);
 }
+
+/**
+ * How big a block has to be to stand for this grid — `terminalGrid` read backwards.
+ *
+ * The one thing #199 needed that this file could not do. Every term is the same term the grid
+ * is derived from and in the same direction: a column is the measured advance, a row the
+ * measured line box, and the frame and the scrollbar strip are room the emulator does not get,
+ * so they are added back rather than divided out.
+ *
+ * Rounded **up**, to whole scene units, and that is the answer to "exact or at least". A block
+ * exactly `cols × advance` wide is one floating-point error from reporting `cols - 1`, and a
+ * cell is ten units, so a unit of slack cannot buy an extra column — it can only stop one being
+ * lost. It is the direction every other rounding in this file already errs in.
+ *
+ * `lineBox` and `advance` are the browser's measurements, exactly as `terminalCell` takes them;
+ * a caller with neither gets the fallback cell and a rectangle that is right for the fallback
+ * stack. That caller is `TERMINAL_SIZE` below.
+ */
+export function terminalSizeFor(
+  grid: { cols: number; rows: number } = TERMINAL_GRID,
+  fontSize: number = TERMINAL_FONT_SIZE,
+  lineBox?: number | null,
+  advance?: number | null
+): Size {
+  const cell = terminalCell(fontSize, lineBox, advance);
+  const chrome = terminalChrome(fontSize);
+  const cols = Math.max(1, Math.floor(Number(grid?.cols) || 0));
+  const rows = Math.max(1, Math.floor(Number(grid?.rows) || 0));
+  return {
+    width: Math.ceil(cols * cell.width + chrome.width + terminalScrollbar(fontSize)),
+    height: Math.ceil(rows * cell.height + chrome.height),
+  };
+}
+
+/**
+ * The rectangle `TERMINAL_GRID` comes out as when nobody has measured anything.
+ *
+ * Derived rather than written down, so there is one default and not two that drift: this is
+ * `terminalSizeFor()` against the fallback cell, which is what the grid falls back to off the
+ * browser — in the checks that import this module, and in a browser too old to answer
+ * `fontBoundingBoxAscent`. The fallback stack advances wider than Comic Shanns does, so it is
+ * a wider rectangle than the one a real page places, and both stand for 125 × 30.
+ *
+ * Still the default of `terminalOrigin` and `terminalBlockElement`, because a caller with
+ * nothing measured has to be given something. The frontend is not that caller: it measures,
+ * and passes the answer to both.
+ */
+export const TERMINAL_SIZE: Size = terminalSizeFor();
 
 export interface Point { x: number; y: number }
 export interface Size { width: number; height: number }

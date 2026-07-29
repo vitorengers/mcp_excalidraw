@@ -104,6 +104,20 @@ export interface WorkspaceAgents {
 
 export interface WorkspaceConfig {
   name?: string;
+  /**
+   * The language the issues this board opens for the project are written in.
+   *
+   * Unset is English, which is what the prompt said outright before this field existed. It
+   * is here because the prompt was right to *fix* the language and wrong to fix it to one:
+   * an agent taking the language from the repository it just read is issue #20, and a board
+   * that opens issues in several repositories cannot answer that with one constant. A
+   * project whose own conventions require Portuguese was getting every card this tool opened
+   * for it written against its own rule.
+   *
+   * Free text, and a language name rather than a code: it is read by a model, not by a
+   * lookup table, so `Brazilian Portuguese` says more than `pt-BR` and costs nothing.
+   */
+  language?: string;
   docsDir?: string;
   board?: string;
   library?: string;
@@ -147,6 +161,8 @@ export interface Workspace {
   path: string;
   innerPath: string;
   environment: WorkspaceEnvironment;
+  /** Null means English — see `WorkspaceConfig.language`. */
+  language: string | null;
   docsDir: string | null;
   boardFile: string | null;
   libraryFile: string | null;
@@ -277,6 +293,7 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
     path: resolved.hostPath,
     innerPath: resolved.innerPath,
     environment: resolved.environment,
+    language: null,
     docsDir: null,
     boardFile: null,
     libraryFile: null,
@@ -321,6 +338,7 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
   return {
     ...base,
     name: config.name?.trim() || id,
+    language: config.language?.trim() || null,
     docsDir,
     boardFile,
     libraryFile,
@@ -773,7 +791,7 @@ export async function reorderWorkspaces(
 
 /** Fields a project's config may carry that are plain strings. */
 const STRING_FIELDS = [
-  'name', 'docsDir', 'board', 'library', 'repo',
+  'name', 'language', 'docsDir', 'board', 'library', 'repo',
   'githubProject', 'projectField', 'projectInProgressColumn', 'projectTodoColumn',
 ] as const;
 

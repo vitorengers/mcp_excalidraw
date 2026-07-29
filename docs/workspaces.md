@@ -90,6 +90,7 @@ roots, which on Windows is the drive letters.
 ```json
 {
   "name": "Board Tool",
+  "language": "English",
   "docsDir": "docs",
   "board": "docs/board.excalidraw",
   "repo": "vitorengers/mcp_excalidraw",
@@ -111,6 +112,22 @@ still returned, with `error` explaining what was dropped. A project whose config
 malformed is also still listed, carrying its error, because one broken project should not hide
 the others and a workspace that silently disappears is harder to debug than one that shows up
 broken.
+
+`language` is the language the issues this board opens for the project are **written in**, and
+unset is English — which is exactly what the prompt said outright before the field existed. It
+is a name a model reads rather than a locale code, so `Brazilian Portuguese` says more than
+`pt-BR` and costs nothing.
+
+It exists because the prompt was right to *fix* the language and wrong to fix it to one. Issue
+#20 came out entirely in Portuguese from an observation written in English: the investigation
+sends the agent to read the project's own documentation first, that project documents in
+Portuguese, and nothing in the prompt said otherwise. Saying English outright is what stopped
+that, and none of this undoes it — the agent still may not take the language from the
+observation it was handed or from the repository it just read. What changes is who decides.
+This board opens issues in several repositories, and a project whose own conventions require
+Portuguese was getting every card this tool opened for it written against its own rule; that is
+a collision rather than a preference. See
+[issue-block.md](issue-block.md#the-prompt) for the paragraph itself.
 
 `agents` is per-project agent tuning: a `model` and an `effort` appended to the command the
 operator configured, a `timeoutSeconds` that wins over the environment's ceiling, and a
