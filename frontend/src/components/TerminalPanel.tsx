@@ -115,6 +115,75 @@ function dispatchWheelToCanvas(event: React.WheelEvent, deltaX: number, deltaY: 
 }
 
 /**
+ * How much sideways a gesture has to carry, against its vertical, to be going sideways.
+ *
+ * A ratio rather than a dominance test, and that is not a detail: `|deltaX| > |deltaY|`
+ * would refuse an exactly 45° pan, which is a diagonal the reader plainly meant and which
+ * `scripts/check-terminal-focus-browser.mjs` asserts does both. The two populations are an
+ * order of magnitude apart — a hand's tremor is around `3/120`, a deliberate diagonal is
+ * `1.0` — so anything in roughly 0.2 to 0.5 separates them, and nothing narrower is
+ * derivable from synthetic events. This end of the bracket is the forgiving one: it lets a
+ * shallow but deliberate diagonal through and only refuses what is unambiguously noise.
+ */
+const SIDEWAYS_INTENT_RATIO = 0.25
+
+/**
+ * How long the wheel has to stop for before the next one is a new gesture.
+ *
+ * The DOM gives no help here: `wheel` is discrete and has no `wheelend` to pair with it the
+ * way `pointerdown` has `pointerup`, so the end of a gesture can only be inferred from a
+ * gap. A trackpad pans at 60-120 Hz, so any gap this long is the finger off the glass, and
+ * it is short enough that lifting off and panning sideways works immediately.
+ */
+const WHEEL_GESTURE_IDLE_MS = 180
+
+/**
+ * Below this, an event says nothing about which way the gesture is going.
+ *
+ * Deciding the axis from the first event that arrives would let a half-pixel of jitter at
+ * the very start of a pan name the whole gesture. The floor is in whatever unit the event
+ * is in — a `deltaMode` of lines makes 1 a whole notch, which is real movement either way.
+ */
+const WHEEL_MEANINGFUL_DELTA = 1
+
+/**
+ * What this gesture was decided to be, and when it was last seen.
+ *
+ * Module-level rather than per block, because there is one pointer and therefore one
+ * gesture: a pan that crosses from one terminal block onto another is still the same finger
+ * still going the same way, and two locks would let it change its mind halfway across.
+ *
+ * `'undecided'` until an event carries enough movement to say. `'free'` is the state every
+ * gesture had before #198 — both axes answered on their own merits.
+ */
+let wheelGestureAxis: 'undecided' | 'vertical' | 'free' = 'undecided'
+let wheelGestureSeenAt = 0
+
+/**
+ * Which axis this gesture is on, decided once and then held.
+ *
+ * The reason the decision is gesture-scoped rather than taken per event is the middle of a
+ * pan: a finger pausing on its way up still drifts sideways, and the event it produces then
+ * has real `deltaX` and no `deltaY` at all. Read on its own that is a sideways pan. Read as
+ * part of the gesture it is the same drift as every event around it — which is a property
+ * of the span, and a handler that only ever sees one event cannot have an opinion about it.
+ */
+function wheelGestureAxisFor(event: React.WheelEvent): 'undecided' | 'vertical' | 'free' {
+  const now = performance.now()
+  const continues = now - wheelGestureSeenAt < WHEEL_GESTURE_IDLE_MS
+  wheelGestureSeenAt = now
+  if (!continues) wheelGestureAxis = 'undecided'
+  if (wheelGestureAxis === 'undecided') {
+    const across = Math.abs(event.deltaX)
+    const along = Math.abs(event.deltaY)
+    if (across >= WHEEL_MEANINGFUL_DELTA || along >= WHEEL_MEANINGFUL_DELTA) {
+      wheelGestureAxis = across >= along * SIDEWAYS_INTENT_RATIO ? 'free' : 'vertical'
+    }
+  }
+  return wheelGestureAxis
+}
+
+/**
  * The sideways half of a wheel, which is the board's whatever the emulator is doing.
  *
  * Nothing under this overlay has a use for it. xterm has no horizontal scrolling —
@@ -128,10 +197,23 @@ function dispatchWheelToCanvas(event: React.WheelEvent, deltaX: number, deltaY: 
  * `preventDefault`, and React listens at the root: an event stopped at the `.xterm` element
  * never reaches the bubbling handler at all, so a guard there is a guard that never runs.
  * The capture pass goes root-first and has already happened by then.
+ *
+ * **But not every sideways pixel is a sideways pan**, and that is #198. #162 was written
+ * against a mouse wheel and a deliberate diagonal, where every `deltaX` is one the reader
+ * meant; a finger on a trackpad is never exactly vertical, so scrolling a scrollback emits
+ * a few pixels of `deltaX` per event whose sign follows the tremor of the hand. Answered
+ * one at a time, at 60-120 Hz, that is a board swinging left and right for as long as the
+ * reader keeps reading. So the axis is decided for the gesture above and held, and a
+ * gesture that went up drops its sideways half rather than forwarding it.
+ *
+ * The lock is deliberately **not symmetric** — see `docs/terminal.md`.
  */
 function forwardHorizontalWheelToCanvas(event: React.WheelEvent): void {
-  // The three the board reads as one gesture rather than as a pan; see below.
+  // The three the board reads as one gesture rather than as a pan; see below. Left before
+  // the lock as well as outside it: those gestures are not pans, so the clock they would
+  // stamp is not theirs, and the pan on either side of one is its own gesture anyway.
   if (event.ctrlKey || event.metaKey || event.shiftKey) return
+  if (wheelGestureAxisFor(event) === 'vertical') return
   if (event.deltaX === 0) return
   dispatchWheelToCanvas(event, event.deltaX, 0)
 }
