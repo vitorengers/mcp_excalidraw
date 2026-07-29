@@ -334,6 +334,27 @@
 </head>
 <body>
     <div id="root"></div>
+    <!--
+        Where Excalidraw fetches its canvas fonts from.
+
+        Without this it has one source and it is a CDN: `ExcalidrawFontFace.createUrls` resolves
+        `./fonts/Excalifont/…woff2` against `https://esm.sh/@excalidraw/excalidraw@<version>/`,
+        which is why `GET /fonts/…woff2` against this server answers 404 while the `FontFace`
+        still reaches `loaded` — the file was never coming from here. A board on a machine with
+        no internet could not draw its own font at all, and #234's wait for the fonts would have
+        been a wait on a round trip to somebody else's server.
+
+        `/assets/` is the mount `src/server.ts` already had, pointing at the copy inside
+        `node_modules/@excalidraw/excalidraw` — a runtime dependency, so it is there wherever the
+        server runs. The CDN stays on as the second `src()` of every face, so a build without
+        that directory degrades to what it did before rather than losing the font.
+
+        Before the module script, because the value is read while Excalidraw's own chunk is
+        evaluating.
+    -->
+    <script>
+        window.EXCALIDRAW_ASSET_PATH = '/assets/';
+    </script>
     <script type="module" src="./src/main.tsx"></script>
 </body>
 </html>
