@@ -838,10 +838,37 @@ visible. A pan carries both deltas in the same event, and the emulator has a use
 one of them: xterm has no horizontal scrolling and emits no escape sequence for a sideways
 wheel, so `preventDefault` on the four pixels of scrollback it did want was taking the
 hundred and twenty pixels of pan it had no use for with it. **The horizontal delta is the
-board's, always** — while the scrollback still has room, and while a program is holding the
+board's** — while the scrollback still has room, and while a program is holding the
 pointer — and only the vertical one is offered to the emulator first. Ctrl, Meta and Shift
 stay whole: those are the zoom gesture and Excalidraw's own sideways wheel, and each reads
 the two axes together, so splitting one would be two gestures where the reader made one.
+
+**Unless the gesture was going up**, which is #198 and the word `always` coming out of the
+sentence above. #162 was written against a mouse wheel and a diagonal the reader meant, where
+every `deltaX` is one they asked for. A finger on a trackpad is never exactly vertical: read a
+scrollback and each event of the pan carries a few pixels of sideways drift whose sign follows
+the tremor of the hand, and a rule that forwards each of them on its own, sixty to a hundred
+and twenty times a second, is a board swinging left and right for as long as the reading goes
+on. So **the axis is decided once per gesture and then held**: the first event carrying real
+movement is measured, and a gesture whose sideways is under a quarter of its vertical drops its
+horizontal half for the rest of the gesture instead of forwarding it.
+
+A **ratio** rather than a dominance test, and the difference is the exactly-45° pan: `|deltaX|
+> |deltaY|` refuses it, and a diagonal drawn at exactly 45° is one the reader plainly meant.
+Drift sits around `3/120` and a deliberate diagonal at `1.0`, an order of magnitude apart, so
+the threshold has a wide bracket to sit in and 0.25 is a choice inside it rather than a
+measurement. The gesture ends after **180 ms** with no wheel: the DOM has no `wheelend` to pair
+with `wheel` the way `pointerup` pairs with `pointerdown`, so a gap is the only terminator
+there is, and one that long is the finger off the glass at any sampling rate a trackpad uses.
+Both numbers are tuned against synthetic events, and neither is derivable from this repository.
+
+The lock is **not symmetric**, deliberately: a sideways pan carrying incidental vertical still
+gives that vertical to the emulator. The two directions are not mirror images of each other,
+because the horizontal half is only ever the board's camera while the vertical half is the
+emulator's first — dropping incidental vertical here would not stop the scrollback creeping
+anyway, since xterm has already seen the event by the time this handler could refuse it, and it
+would take the wheel away from a program holding the pointer to buy nothing. Only the vertical
+case was reported; a mirror is a second decision and wants its own evidence.
 
 Every keystroke
 otherwise goes to the shell, Ctrl+C and arrows and Escape included, and none reach Excalidraw,
