@@ -48,6 +48,8 @@ import type { Bounds } from '../../src/core/terminal-block'
 import { terminalAdvance, terminalFontReady, terminalLineBox } from './terminal-metrics'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
+import { ClaudeStatusHud } from './components/ClaudeStatusHud'
+import type { ClaudeEnvironmentStatus } from './components/ClaudeStatusHud'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
 // Type definitions
@@ -165,6 +167,32 @@ const CLIENT_ID = globalThis.crypto?.randomUUID?.()
  * being spawned all day.
  */
 const PROJECT_BOARD_POLL_MS = 20000;
+
+/**
+ * How often the header re-reads what Claude Code has spent.
+ *
+ * A minute, which is what the observation asked for and is a ceiling rather than a promise:
+ * the figures underneath are only as fresh as the last session that ran a status line, so
+ * polling faster would buy nothing and reading the directory more often would cost the same
+ * files. Slower than the mirror above deliberately — that one is watching a board somebody
+ * else can move, this one is watching a file this machine writes.
+ */
+const CLAUDE_STATUS_POLL_MS = 60000;
+
+/**
+ * `?claudeStatusPollMs=` on the board's own URL, for a reader who wants it slower.
+ *
+ * Clamped rather than trusted: `0` would be a busy loop against the disk and a very large
+ * number would be a HUD that never moves again. Read from the query string rather than
+ * given an environment variable of its own because it is this page's cadence, not the
+ * server's, and the server's own variable is the one that decides whether any of this
+ * exists at all.
+ */
+function claudeStatusPollMs(): number {
+  const asked = Number(new URLSearchParams(window.location.search).get('claudeStatusPollMs'))
+  if (!Number.isFinite(asked) || asked <= 0) return CLAUDE_STATUS_POLL_MS
+  return Math.min(600000, Math.max(200, asked))
+}
 
 /**
  * The key that jumps the viewport to the mirror.
@@ -1099,6 +1127,17 @@ function App(): JSX.Element {
       return false
     }
   })
+
+  /**
+   * What each Claude Code environment on this machine has spent, per `GET /api/claude-status`.
+   *
+   * Empty until the first read answers, and empty for good on a board that was never
+   * configured to look — the HUD draws nothing rather than drawing an empty frame, because a
+   * row that says nothing is indistinguishable from a machine that has nothing to say.
+   */
+  const [claudeStatus, setClaudeStatus] = useState<ClaudeEnvironmentStatus[]>([])
+  /** Settled once, at mount: the cadence cannot change without the URL changing. */
+  const [claudeStatusPoll] = useState<number>(() => claudeStatusPollMs())
 
   // Boards, one per project
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
@@ -3808,6 +3847,53 @@ function App(): JSX.Element {
     }
   }, [activeWorkspace, excalidrawAPI])
 
+  /**
+   * What Claude Code has spent, per environment on this machine.
+   *
+   * Not keyed on the active project, and that is the point: it describes the machines the
+   * board runs agents on rather than any one repository, so switching tabs must not restart
+   * it and must not empty it.
+   *
+   * A 404 is the answer for a board that was never asked to look — `EXCALIDRAW_CLAUDE_STATUS`
+   * unset — and it ends the loop rather than retrying every minute for the life of the page:
+   * that is a decision made when the server started, and nothing short of a restart changes
+   * it. Visibility-gated for the same reason as the mirror above; a background tab reading
+   * files nobody is looking at is pure cost.
+   */
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const everyMs = claudeStatusPoll
+
+    const read = async (): Promise<boolean> => {
+      try {
+        const response = await fetch('/api/claude-status')
+        if (response.status === 404) return false
+        if (!response.ok) return true
+        const body = await response.json()
+        if (!cancelled && Array.isArray(body?.environments)) {
+          setClaudeStatus(body.environments as ClaudeEnvironmentStatus[])
+        }
+      } catch {
+        // A dropped read is the previous reading kept, not the HUD blanked: the figures were
+        // true a minute ago and the next poll is a minute away.
+      }
+      return true
+    }
+
+    const tick = async (): Promise<void> => {
+      if (cancelled) return
+      if (document.visibilityState === 'visible' && !(await read())) return
+      if (!cancelled) timer = setTimeout(() => { void tick() }, everyMs)
+    }
+    void tick()
+
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [claudeStatusPoll])
+
   // On `window`, because Excalidraw never sees a key pressed outside its canvas, and the
   // point of this one is to work from anywhere on the page.
   useEffect(() => {
@@ -5500,6 +5586,16 @@ function App(): JSX.Element {
           </button>
 
           <button className="btn-secondary" onClick={clearCanvas}>Clear Canvas</button>
+
+          {/*
+            Last in `.controls`, which is the header's right-hand group — so this is the
+            top-right corner of the *page*. The canvas viewport's top-right corner is
+            `layer-ui__wrapper__top-right`, which Excalidraw owns and which the library
+            trigger already sits in; putting a row of this board's own text in there would
+            fight that grid and would go with the rest of the chrome. Here it survives
+            `Hide Menus`, which only ever touches Excalidraw's own.
+          */}
+          <ClaudeStatusHud environments={claudeStatus} pollMs={claudeStatusPoll} />
         </div>
       </div>
 
