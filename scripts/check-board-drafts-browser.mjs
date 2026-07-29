@@ -199,6 +199,13 @@ const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
   cwd: repoRoot,
   env: {
     ...process.env,
+    // Deliberately off rather than inherited. A machine that exports `EXCALIDRAW_TERMINAL`
+    // puts a shell on this board, and since #200 the first block to open is what the mirror
+    // is placed from — so the region steps left once, mid-run, and every viewport coordinate
+    // this check took before that lands on nothing. The `+` clicked twice, and the second
+    // click was the one that missed. Nothing here is about the terminal, so it is switched
+    // off at the source instead of being raced with (#150's answer, for the same reason).
+    EXCALIDRAW_TERMINAL: '',
     PORT: String(PORT),
     HOST: '127.0.0.1',
     LOG_LEVEL: 'error',

@@ -82,6 +82,15 @@ const resolveOrigin = typeof layout.resolveMirrorOrigin === 'function'
   });
 
 /**
+ * What the caller writes down about an origin it has settled on: the edge it pins.
+ *
+ * The **right** edge since #200. The region is the outermost of the three now — the canvas
+ * reads mirror | terminals | documentation — and the terminal is placed from its right edge,
+ * so that is the edge that has to hold still. #99's rule is unchanged; the neighbour moved.
+ */
+const remember = (origin, width) => ({ right: origin.x + width, y: origin.y });
+
+/**
  * Which elements the region is measured against — the module's rule, or the component's.
  *
  * The old one left out the mirror's own shapes, the terminal block, the draft blocks and
@@ -136,37 +145,50 @@ const CONTENT = { minX: 0, minY: -150 };
 
 const columnsOf = (result) => result.columns.map((column) => column.x);
 
-// ─── 1. A column added on GitHub leaves the other columns alone ─
+// ─── 1. A column added on GitHub grows the region into the empty side ─
 
-console.log('1. a section added to the board does not move the columns already there');
+console.log('1. a section added to the board grows the region away from what it stands beside');
 
-const first = resolveOrigin(null, CONTENT, boardWidth(THREE.length));
+const THREE_WIDE = boardWidth(THREE.length);
+const FOUR_WIDE = boardWidth(FOUR.length);
+
+const first = resolveOrigin(null, CONTENT, THREE_WIDE);
 check('a first render measures the region against the board\'s own content',
-      first.origin.x === CONTENT.minX - MIRROR_GAP - boardWidth(THREE.length)
+      first.origin.x === CONTENT.minX - MIRROR_GAP - THREE_WIDE
       && first.origin.y === CONTENT.minY,
       JSON.stringify(first.origin));
 check('and that measurement is one to keep, rather than one to take again next poll',
       first.settled === true,
       'nothing remembers where the region was put, so the next poll measures again');
 
-const grown = resolveOrigin(first.origin, CONTENT, boardWidth(FOUR.length));
+const grown = resolveOrigin(remember(first.origin, THREE_WIDE), CONTENT, FOUR_WIDE);
 const before = columnsOf(layoutBoard(board(THREE), first.origin));
 const after = columnsOf(layoutBoard(board(FOUR), grown.origin));
 
-check('the columns that were already there are at the same x afterwards',
-      JSON.stringify(after.slice(0, THREE.length)) === JSON.stringify(before),
-      `${JSON.stringify(before)} became ${JSON.stringify(after.slice(0, THREE.length))}`);
-check('the new column is the one that appears, at the right-hand end',
-      after.length === FOUR.length && after[FOUR.length - 1] > (before[before.length - 1] ?? 0),
-      JSON.stringify(after));
-check('so the + keeps its place, being on the first column of all',
-      after[0] === before[0],
-      `the + moved ${Math.abs((after[0] ?? 0) - (before[0] ?? 0))} units`);
+// The pin, and it is the decision #200 re-took. The region is outermost now and the block
+// is placed from its right edge, so that edge is the one that has to hold still — a column
+// appearing grows the region leftward, into canvas nobody is using, instead of rightward
+// onto the blocks.
+check('the region\'s right edge is exactly where it was, which is where the block is placed from',
+      grown.origin.x + FOUR_WIDE === first.origin.x + THREE_WIDE,
+      `${first.origin.x + THREE_WIDE} became ${grown.origin.x + FOUR_WIDE}`);
+check('so the region grew leftward, into the empty side',
+      grown.origin.x < first.origin.x,
+      `${first.origin.x} became ${grown.origin.x}`);
+check('the column at the right-hand end is where the right-hand end already was',
+      after.length === FOUR.length && after[FOUR.length - 1] === before[before.length - 1],
+      `${JSON.stringify(before)} became ${JSON.stringify(after)}`);
+// What the right pin costs, stated rather than discovered: this is the half of #99 that is
+// being traded away, and it is a shift the reader can point at a cause for.
+check('and the columns already drawn each move left by one column, which is what that costs',
+      after.length === FOUR.length
+      && before.every((x, index) => after[index] === x - (FOUR_WIDE - THREE_WIDE)),
+      `${JSON.stringify(before)} became ${JSON.stringify(after)}`);
 
 // A `No Status` section is appended only while something is in it, so it comes and goes on
-// its own. Losing it must be as quiet as gaining it.
-const shrunk = resolveOrigin(grown.origin, CONTENT, boardWidth(THREE.length));
-check('and a section that goes away again moves nothing either',
+// its own. Losing it must put the region back exactly, not near.
+const shrunk = resolveOrigin(remember(first.origin, THREE_WIDE), CONTENT, THREE_WIDE);
+check('and a section that goes away again puts the columns back where they were',
       JSON.stringify(columnsOf(layoutBoard(board(THREE), shrunk.origin))) === JSON.stringify(before),
       JSON.stringify(columnsOf(layoutBoard(board(THREE), shrunk.origin))));
 
@@ -174,7 +196,8 @@ check('and a section that goes away again moves nothing either',
 
 console.log('\n2. an element added or deleted elsewhere on the canvas does not move the region');
 
-const width = boardWidth(THREE.length);
+const width = THREE_WIDE;
+const kept = remember(first.origin, width);
 const moved = [
   ['a shape dropped further left', { minX: -900, minY: -150 }],
   ['a card added at the top of the development map', { minX: 0, minY: -1400 }],
@@ -182,11 +205,35 @@ const moved = [
   ['the leftmost element erased', { minX: 320, minY: -150 }],
 ];
 for (const [what, bounds] of moved) {
-  const next = resolveOrigin(first.origin, bounds, width);
+  const next = resolveOrigin(kept, bounds, width);
   check(`${what} leaves the region where it was`,
         next.origin.x === first.origin.x && next.origin.y === first.origin.y,
         `${JSON.stringify(first.origin)} became ${JSON.stringify(next.origin)}`);
 }
+
+// ─── 2b. Which region it is measured from, when it is measured ─
+
+console.log('\n2b. the blocks are what the region is placed from, one step in from it');
+
+// The canvas reads mirror | terminals | documentation, so the neighbour is the terminal
+// region and not the content — `terminalOrigin` having already placed the blocks from the
+// content. One step of a chain rather than a second derivation of the same number, which is
+// what keeps the two from walking apart (#188).
+const REGION = { minX: -2400, minY: 40, maxX: -1260, maxY: 760 };
+const fromBlocks = resolveOrigin(null, CONTENT, width, REGION);
+check('with a block on the board the region is placed one gap left of it',
+      fromBlocks.origin.x === REGION.minX - MIRROR_GAP - width
+      && fromBlocks.origin.y === REGION.minY,
+      JSON.stringify(fromBlocks.origin));
+check('so it is clear of the blocks rather than under them',
+      fromBlocks.origin.x + width <= REGION.minX,
+      `region ends at ${fromBlocks.origin.x + width}, blocks start at ${REGION.minX}`);
+check('and the content is not what it measured, the blocks standing between the two',
+      fromBlocks.origin.x !== first.origin.x,
+      `${fromBlocks.origin.x} is the same as the content-measured ${first.origin.x}`);
+check('a remembered answer still outranks both, because it is the one already drawn',
+      resolveOrigin(kept, CONTENT, width, REGION).origin.x === first.origin.x,
+      JSON.stringify(resolveOrigin(kept, CONTENT, width, REGION).origin));
 
 // ─── 3. One predicate, stated the same way at all three doors ──
 

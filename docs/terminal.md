@@ -1,8 +1,9 @@
 # The terminal
 
-Shells running in the project, drawn as blocks on the **far left** of the board, one gap beyond
-the GitHub project mirror. Type into one and its output arrives as it is produced. A block
-carries a **strip of tabs**, one per shell, and a tab can be given a block of its own.
+Shells running in the project, drawn as blocks **between the GitHub project mirror and the
+board's own documentation**, one gap left of the documentation. Type into one and its output
+arrives as it is produced. A block carries a **strip of tabs**, one per shell, and a tab can be
+given a block of its own — to the right, with the documentation stepping aside to make the room.
 
 This spawns a process that runs **whatever arrives over an API with no authentication**. The
 issue block, which `docs/issue-block.md` calls the most dangerous thing this server does, at
@@ -385,16 +386,28 @@ Four controls sit at the end of the strip:
 |---|---|
 | `+` | one more shell in this block. Greyed out, not hidden, once the board is at the cap |
 | `×` | on each tab: end that shell, with the tree-kill semantics below, and drop the tab |
-| `⧉` | give the tab on top a **block of its own**, placed to its **left** |
+| `⧉` | give the tab on top a **block of its own**, placed to its **right** |
 | `⇥` | put this block's tabs into the **nearest other** terminal block, and drop this block |
 
-`⧉` goes left, always, and not to whichever side happens to be free. The region is anchored to
-the far left of the board for the reason `terminalOrigin` records — the documentation grows down
-and right, so the left is the edge nothing runs into — and a detach that went right would author
-a block back into the direction #96 emptied. From the anchored origin, one `TERMINAL_GAP` left of
-the GitHub mirror, going right put the very first detached block on top of the mirror. Going left
-it grows into canvas nothing else claims, and the reader knows where the next one will be without
-looking.
+`⧉` goes right, always, and not to whichever side happens to be free. It went **left** between
+#124 and #200, and both directions are the same argument applied to a different order. While the
+canvas read `terminal | mirror | content` the region was anchored past the mirror precisely
+because it is placed once and cannot sit where the board grows, so a detach that went right
+authored a block back into the direction #96 had emptied — and from the anchored origin the very
+first one landed on top of the mirror. #200 turned the order round to
+`mirror | terminals | documentation`, which puts the region's growing edge against the
+documentation again; what makes that safe is the other half of the same change, **the
+documentation moves aside** (`documentationClearance`). Unconditional either way, which is #124's
+decision and unchanged: a rule that picked the emptier side would put the block somewhere the
+reader cannot predict.
+
+`⇥` is the other end of that. Merging drops a block, the region gives the room back, and the
+documentation returns to **exactly** where it was authored — the round trip is computed from
+where the documentation would stand with no block open rather than nudged by a delta, because a
+delta applied twice a session walks the board right by its own rounding. The two gestures are the
+only ones that move the documentation: a board switched to, an erased block restored, a tab
+switched and a shell that exits all put the blocks back where they were and leave the content
+alone. A block the reader has dragged is theirs, and the canvas does not run away from it.
 
 `⧉` and `⇥` are what "separate" and "join" turned out to mean here, and the choice was between
 that and split panes inside one block. A detached tab becomes an ordinary shape, so moving it,
@@ -431,11 +444,13 @@ about the reader's eyes. **Not `customData`**, for the reason that section gives
 it covers are a reload and a switch of project and back, the second because the page clears its
 per-session memory on the way into a board.
 
-The rect is the reader's from then on, and nothing re-anchors it: a remembered block carries no
-`awaitingMirror` mark, so a mirror that has grown wider since may end up under it. That is the
-same trade a restore after an erase already makes — re-anchoring is how a reload comes to undo a
-drag — and the block is an ordinary shape the reader can move. A board that has never had one
-placed still gets `TERMINAL_SIZE` at the anchored origin.
+The rect is the reader's from then on, and nothing re-anchors it — including a rect remembered
+from before #200 turned the canvas round, which is left where it is rather than migrated. That is
+the same trade a restore after an erase already makes: re-anchoring is how a reload comes to undo
+a drag, and the block is an ordinary shape the reader can move. Where it lands is no longer a
+collision anybody has to live with either — the mirror re-measures around a block standing in it,
+and the documentation steps aside from one standing in the region's way. A board that has never
+had a block placed still gets `TERMINAL_SIZE` at the anchored origin.
 
 `scripts/check-terminal-geometry-browser.mjs` is the check: it drags a corner and a header with
 a real pointer, reloads, and asks the *scene* for the rect and `GET /api/terminal` for the grid
@@ -467,15 +482,37 @@ neither has ever been an element.
 
 ## Where it sits, and how it is drawn
 
-Left to right the canvas reads **terminal | mirror | content**. "The far left" is a rule, not a
-pixel column: the block is `left - 120 - width` of the region it has to clear, level with the
-top of it — the mirror's own arithmetic, applied a second time. With a `githubProject` the
-region to clear is the mirror; with none the mirror stays dormant, its slot is free, and the
-block takes it, one gap left of the content. So every region follows a board that grew instead
-of sitting at a coordinate somebody once picked, and the mirror and the terminal are each left
-out of the other's measurement, or each pass would walk them further apart. Since #99 that
-exclusion covers **a label bound to either**, which is the rule the autosync and the export
-already stated.
+Left to right the canvas reads **mirror | terminals | documentation**. That is #200, and it
+reverses #96: the block used to be the outermost region and the mirror the middle one. What
+places each of them is one rule applied twice — `left - 120 - width` of the region it stands
+beside, level with the top of it — and the reversal re-points one dependency in that chain
+rather than changing the arithmetic:
+
+| | placed from |
+|---|---|
+| the documentation | nothing; it is where the board authored it, and the only region with an author |
+| the terminal blocks | the documentation, one gap left of it |
+| the mirror | the terminal blocks, one gap left of them — or the documentation on a board that has none open |
+
+So every region still follows a board that grew instead of sitting at a coordinate somebody once
+picked, and each is measured from **one** neighbour rather than deriving the same number twice,
+which is what keeps two of them from walking apart. A board with no `githubProject` draws no
+mirror at all, and the terminal is unaffected: it was already measured from the content, so the
+vacant slot is not a second rule, it is the same one with a region fewer on the canvas.
+
+The blocks are still left out of the mirror's *content* measurement — they are handed to
+`resolveMirrorOrigin` as a region of their own, and counted a second time as content they would
+drag the answer a block-width further out. Since #99 that exclusion covers **a label bound to
+either**, which is the rule the autosync and the export already stated.
+
+**The mirror steps aside the first time a shell opens, and that is deliberate.** On a board with
+a project and no block, the mirror is measured from the content and lands in the slot the first
+block will take. When that block arrives the region is standing in it, so the mirror drops the
+answer it remembered and measures again — once, on a collision, converging immediately because
+what it settles on is a gap clear of the blocks. It is visible: the region moves a block's width
+left, at the moment the reader opened a shell. That is the standard #99 set — a move with a cause
+the reader can point at beats a drift they cannot — and the alternative was reserving a
+block-shaped hole on every board that has the feature switched on and no shell in it.
 
 Placed **once**, and since #99 the mirror is too. That used to be the difference between them:
 this block is expected to be moved and resized, and a redraw that re-anchored it every twenty
@@ -493,38 +530,57 @@ decision #188 settled, and it is the only one of the two that keeps a dragged bl
 reader put it. The alternative was re-anchoring the block whenever the region's origin changed,
 which means a shape the reader is expected to move being moved by a timer, and no way to tell a
 block that has never been dragged from one dragged back to where it started. So the burden sits
-on the region instead: it settles once per board and stays settled, and on a board with nothing
-else to measure — a mirror and a terminal and no content, which is the board #188 was reported on
-— it is measured **from this block**, one gap right of its right edge, which is the inverse of the
-placement above. Two regions, one separation, decided in one direction only.
+on the region instead: it settles once per board and stays settled, and it is measured **from
+this block**, one gap left of its left edge, which is one step of the chain above rather than a
+second guess at the same number. That was `maxX + gap` until #200, the block being outside the
+region then; the sign is the whole of the difference. Two regions, one separation, decided in one
+direction only.
 `docs/project-board.md` has the whole of that, and
 `scripts/check-mirror-terminal-drift-browser.mjs` is what holds it: the two bounding boxes must
 never intersect, across polls, a column appearing, and a board switched away from and back.
 
-**Which side follows from that.** Placed once means the block never moves aside, so it cannot
-sit on the edge the board grows into — and the documentation, the only thing here that grows,
-grows down and right. It was on the right until #96, and anything authored past the right edge
-as it stood when the session opened ran straight into a block that would not budge. Behind the
-mirror is the edge nothing runs into, and #99 is what makes that true of the mirror as well:
-the region is pinned by its **left** edge now, so a column added on GitHub grows it rightward,
-into the gap it keeps from the board, instead of stepping 324 leftward onto this block. #96
-chose this side while the mirror still moved on every poll; the two decisions have to hold
-together, and pinning that edge is what makes them.
+**Which side follows from that, and it is what #200 had to buy.** Placed once means the block
+never moves aside, so it cannot sit on the edge the board grows into — and the documentation,
+the only thing here that grew, grows down and right. That is why #96 moved the region behind the
+mirror, and why putting it back in front of the documentation is not a one-line reversal: the
+edge it now stands on is the edge that grows.
 
-The invariant this depends on is the other half of the same reading: **the documentation grows
-down and right.** Content extended leftward does not move the mirror on the next poll any more —
-neither region re-anchors while the session is open — but both re-measure on a reload, and the
-mirror re-measured against content that now reaches further left comes back further left, with
-the terminal placed from it. So content that has to extend leftward should still be moved right
-instead; what changed is when the collision shows up, not that it does.
+**So the documentation grows aside instead.** `documentationClearance` (in
+`src/core/terminal-block.ts`) answers how far right the board's own content has to stand to
+leave the region its room, and `commitTerminalLayout` moves it there on a split and back on a
+merge. It is a **displacement**, not a position: the caller says where the documentation would
+sit with no block open and the answer is added to that, so N splits and N merges leave the board
+exactly where it started rather than a rounding away from it. It is measured against the
+**region's** current extent rather than against the block that was just added, because a reader
+may split more than two and each detach steps the next block a block-width and 40 further right.
 
-**One exception to "placed once."** A session opens on a `POST` that spawns a shell; the mirror
-arrives on a poll that spawns a `gh`. On a board that has a project the block is therefore
-placed before there is a mirror to anchor it to, lands in the mirror's own slot, and would sit
-under it for the rest of the session. It is marked `customData.awaitingMirror` when that
-happens, and the first board that lands moves it aside and takes the mark off — once, and only
-while the block is still exactly where it was put, so a reader who has already dragged it keeps
-their own placement.
+**The shift is a real element move, and that is a decision with a price.** The documentation is
+authored data — synced, exported, committed to `docs/board.excalidraw` — so opening a second
+shell authors a board change, which `CLAUDE.md` treats as a commit like any other. Nothing else
+in this project had ever moved authored content. It has to be real: only a real move survives the
+reload the definition of done names, and a view offset would move the reader's camera rather than
+the room the region needs. What keeps it from accumulating is the round trip above, and what
+keeps a reload from applying it twice is that **how far the documentation has been pushed is
+written down**, per board, in `localStorage` beside the block's own rect — a pushed board and a
+board at rest are the same picture, since in both the leftmost block sits exactly one gap left of
+the content, so geometry cannot tell them apart and a page that guessed would push again. The
+move is synced immediately for the same reason: what the store holds and what that number says
+have to be one answer. A browser that has never seen the board reads zero and treats what it can
+see as where the content was authored, which is the safe direction — it pushes from there rather
+than from a home it cannot know.
+
+The board **sections** need no rule of their own. They are authored shapes drawn around halves of
+the documentation, so they are part of the region that moves and they move with what they
+contain; `Alt+P` and `Alt+G` land on them after a push because nothing about them changed except
+their `x`. `scripts/check-canvas-order-browser.mjs` asserts both keys after a split.
+
+**No exception to "placed once" any more.** A session opens on a `POST` that spawns a shell; the
+mirror arrives on a poll that spawns a `gh`, so on a board that has a project the block is
+essentially always placed before there is a mirror to see. That used to matter — the block was
+anchored to the mirror, so it guessed, landed in the mirror's slot and had to be moved out of it
+once by a `customData.awaitingMirror` mark (#124). Since #200 the block is placed from the
+documentation, which is on the canvas before either, so the guess and the correction are both
+gone. The collision is still real and it is now the **region's** to resolve, above.
 
 The block itself is a plain rectangle, and everything that reads as a terminal is a DOM overlay
 positioned over its bounds (`frontend/src/components/TerminalPanel.tsx`). Inside that overlay is
@@ -1230,7 +1286,7 @@ The block is not `locked`, and `locked` is the only thing Excalidraw's eraser re
 corner resize that *are* the interface here, so the block stays erasable and **the erase is
 undone instead**: the board notices, in `syncTerminalBlocks`, that it has lost a block whose
 shells are still running, and puts one back where the reader had it — the size and the position
-it was erased at, not re-anchored past the mirror. A block with two tabs comes back as one block
+it was erased at, not re-anchored beside the mirror. A block with two tabs comes back as one block
 with two tabs, because what is remembered is per session and the restore groups the orphans by
 the geometry they share.
 

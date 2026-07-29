@@ -279,64 +279,87 @@ const stubCommand = `node "${stubShell.replace(/\\/g, '/')}"`;
 try {
   // ─── 1. The block's placement, before any of it runs ────────
   //
-  // The block is placed once and then left alone, so it has to sit on the edge the board
-  // does *not* grow into. The documentation is the only thing here that grows, and it grows
-  // right; so the block goes on the far left, past the mirror, which repaints on a timer and
-  // can therefore afford to be in the way of something.
-  console.log('1. the block is placed to the left of the mirror, on the edge nothing grows into');
+  // The canvas reads mirror | terminals | documentation since #200, and this is the middle
+  // term: the block goes one gap left of the documentation, which is the slot a board with
+  // no `githubProject` already gave it. The mirror is no longer part of this arithmetic at
+  // all — it is placed from the block, one region further out.
+  console.log('1. the block is placed one gap left of the documentation, whatever else is on the board');
   const block = await importDist(join('core', 'terminal-block.js'), 'the terminal block module');
   if (block) {
-    const { TERMINAL_KIND, TERMINAL_GAP, TERMINAL_SIZE, terminalOrigin, terminalBlockElement, terminalGrid } = block;
+    const { TERMINAL_KIND, TERMINAL_GAP, TERMINAL_SIZE, terminalOrigin, terminalBlockElement,
+            terminalGrid, documentationClearance } = block;
 
     check('the kind is "terminal"', TERMINAL_KIND === 'terminal', String(TERMINAL_KIND));
 
-    // What the two regions look like on a board that has a project: the content, and the
-    // mirror one gap to the left of it with its own width. The numbers are `renderMirror`'s
+    // The documentation on a board that has a project. The numbers are `newTerminalBlock`'s
     // arithmetic worked out by hand, so this case cannot drift with it silently.
     const bounds = { minX: -400, minY: 120, maxX: 900, maxY: 700 };
-    const mirror = { minX: -1000, minY: 120, maxX: -520, maxY: 940 };
 
-    const origin = terminalOrigin(bounds, mirror);
-    check('anchored to the mirror\'s left edge, not to a fixed column',
-          origin.x === mirror.minX - TERMINAL_GAP - TERMINAL_SIZE.width,
-          `${JSON.stringify(origin)} for a mirror at ${mirror.minX}`);
-    check('and to the top of it, the way the mirror is level with the content',
-          origin.y === mirror.minY, String(origin.y));
-    check('so the block is clear of the mirror rather than under it',
-          origin.x + TERMINAL_SIZE.width <= mirror.minX,
-          `block ends at ${origin.x + TERMINAL_SIZE.width}, mirror starts at ${mirror.minX}`);
+    const origin = terminalOrigin(bounds);
+    check('anchored to the documentation\'s left edge, not to a fixed column',
+          origin.x === bounds.minX - TERMINAL_GAP - TERMINAL_SIZE.width,
+          `${JSON.stringify(origin)} for content starting at ${bounds.minX}`);
+    check('and to the top of it, the way the mirror is level with what it stands beside',
+          origin.y === bounds.minY, String(origin.y));
+    check('so the block is clear of the documentation rather than under it',
+          origin.x + TERMINAL_SIZE.width <= bounds.minX,
+          `block ends at ${origin.x + TERMINAL_SIZE.width}, content starts at ${bounds.minX}`);
 
-    // The point of the whole arrangement: the documentation grows rightward, and the block
-    // that is never re-anchored is no longer on that edge.
-    const grewRight = terminalOrigin({ ...bounds, maxX: bounds.maxX + 1000 }, mirror);
+    // The block is placed once and never re-anchored, so what the board does afterwards has
+    // to leave it alone. Growing rightward is what the documentation does on its own.
+    const grewRight = terminalOrigin({ ...bounds, maxX: bounds.maxX + 1000 });
     check('a board that grew rightward leaves the block exactly where it was',
           grewRight.x === origin.x, `${origin.x} → ${grewRight.x}`);
 
-    // And the parenthesis in the observation: growing leftward walks the mirror left on the
-    // next poll, so the block has to be measured from the mirror and not from the content.
-    const grewLeft = terminalOrigin({ ...bounds, minX: bounds.minX - 1000 },
-                                    { ...mirror, minX: mirror.minX - 1000 });
-    check('a board that grew leftward walks the mirror left, and the block with it',
+    // The case #96 was about, and the one #200 pays for with `documentationClearance`:
+    // content authored leftward would be *placed* on top of a block that is already there.
+    // The placement itself still follows the content — this is where a new block goes, not
+    // where an old one is moved to.
+    const grewLeft = terminalOrigin({ ...bounds, minX: bounds.minX - 1000 });
+    check('and a board that grew leftward places the next block further left with it',
           grewLeft.x === origin.x - 1000, `${origin.x} → ${grewLeft.x}`);
-    check('and the block is still clear of the mirror that moved',
-          grewLeft.x + TERMINAL_SIZE.width <= mirror.minX - 1000,
-          `block ends at ${grewLeft.x + TERMINAL_SIZE.width}, mirror starts at ${mirror.minX - 1000}`);
 
-    // A board with no `githubProject` grows no mirror at all, so the slot the mirror would
-    // have had is free and the block takes it.
-    const noMirror = terminalOrigin(bounds, null);
-    check('with no mirror the block takes the mirror\'s own slot',
-          noMirror.x === bounds.minX - TERMINAL_GAP - TERMINAL_SIZE.width,
-          `${JSON.stringify(noMirror)} for content starting at ${bounds.minX}`);
-    check('level with the content\'s top', noMirror.y === bounds.minY, String(noMirror.y));
-    check('and it is the same call with the mirror left out, not a second rule',
-          terminalOrigin(bounds).x === noMirror.x,
-          `${terminalOrigin(bounds).x} vs ${noMirror.x}`);
+    // One required argument — the documentation — and a size behind a default. The mirror
+    // used to be the second, and taking it away is what makes this one rule rather than a
+    // board-with-a-project rule and a board-without-one rule that had to agree.
+    check('the mirror is no argument to this any more, so there is one rule and not two',
+          terminalOrigin.length === 1, `${terminalOrigin.length} required parameters`);
 
     check('an empty board still gets a finite origin', Number.isFinite(terminalOrigin(null).x));
-    check('an empty board that already has a mirror is measured against it',
-          terminalOrigin(null, mirror).x === mirror.minX - TERMINAL_GAP - TERMINAL_SIZE.width,
-          String(terminalOrigin(null, mirror).x));
+
+    // ── What the documentation has to give up for the region ──
+    //
+    // A displacement rather than a position, so a merge asks the same question with a
+    // smaller region and gets the board back exactly — the round trip the second
+    // observation on #200 asked for.
+    const oneBlock = { minX: origin.x, minY: origin.y,
+                       maxX: origin.x + TERMINAL_SIZE.width, maxY: origin.y + TERMINAL_SIZE.height };
+    check('a region already one gap clear asks the documentation for nothing',
+          documentationClearance(oneBlock, bounds.minX) === 0,
+          String(documentationClearance(oneBlock, bounds.minX)));
+
+    // A detach steps the new block one block-width and 40 further right.
+    const twoBlocks = { ...oneBlock, maxX: oneBlock.maxX + 40 + TERMINAL_SIZE.width };
+    const room = documentationClearance(twoBlocks, bounds.minX);
+    check('a second block asks for exactly the room it took',
+          room === TERMINAL_SIZE.width + 40, `${room} for a block ${TERMINAL_SIZE.width} wide`);
+    check('and the documentation then stands one gap clear of the whole region',
+          bounds.minX + room - twoBlocks.maxX === TERMINAL_GAP,
+          `${bounds.minX + room - twoBlocks.maxX} rather than ${TERMINAL_GAP}`);
+
+    const three = { ...oneBlock, maxX: oneBlock.maxX + 2 * (40 + TERMINAL_SIZE.width) };
+    check('a third is measured against the region, not against one more block',
+          documentationClearance(three, bounds.minX) === 2 * (TERMINAL_SIZE.width + 40),
+          String(documentationClearance(three, bounds.minX)));
+    check('and merging back to one asks for nothing again, which is the round trip',
+          documentationClearance(oneBlock, bounds.minX) === 0,
+          String(documentationClearance(oneBlock, bounds.minX)));
+    check('a board with no block at all leaves the documentation where it was authored',
+          documentationClearance(null, bounds.minX) === 0,
+          String(documentationClearance(null, bounds.minX)));
+    check('and nothing here ever pulls the content leftward onto a block',
+          documentationClearance({ ...oneBlock, maxX: oneBlock.maxX - 5000 }, bounds.minX) === 0,
+          String(documentationClearance({ ...oneBlock, maxX: oneBlock.maxX - 5000 }, bounds.minX)));
 
     const element = terminalBlockElement(origin, TERMINAL_SIZE);
     check('the block is marked derived', element.customData?.kind === TERMINAL_KIND,

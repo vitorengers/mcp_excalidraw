@@ -92,7 +92,8 @@ if (!existsSync(frontend)) {
 
 const terminalPath = join(repoRoot, 'dist', 'core', 'terminal-block.js');
 const typesPath = join(repoRoot, 'dist', 'core', 'project-board-types.js');
-for (const path of [terminalPath, typesPath]) {
+const layoutPath = join(repoRoot, 'dist', 'core', 'project-board-layout.js');
+for (const path of [terminalPath, typesPath, layoutPath]) {
   if (!existsSync(path)) {
     console.error(`  FAIL  the compiled server exists — ${path} not found`);
     console.error('        (run ./node_modules/.bin/tsc first)');
@@ -103,10 +104,17 @@ for (const path of [terminalPath, typesPath]) {
 // Read rather than retyped: the separation this whole check is about is these two numbers,
 // and a copy of them here would be a second definition to drift from the one under test.
 const { TERMINAL_KIND, TERMINAL_GAP, TERMINAL_SIZE } = await import(pathToFileURL(terminalPath).href);
+const { MIRROR_GAP } = await import(pathToFileURL(layoutPath).href);
 const NOTES = await import(pathToFileURL(typesPath).href);
 
-/** What `terminalOrigin` puts between the block's left edge and the mirror's. */
-const SEPARATION = TERMINAL_GAP + TERMINAL_SIZE.width;
+/**
+ * What stands between the two regions' near edges.
+ *
+ * Since #200 the canvas reads mirror | terminals | documentation, so the mirror is the
+ * outermost region and its **right** edge is what the block is placed one gap from. Read out
+ * of the module rather than retyped: the separation this check is about is that number.
+ */
+const SEPARATION = MIRROR_GAP;
 
 let failures = 0;
 const check = (name, condition, detail = '') => {
@@ -322,9 +330,6 @@ const PROBE = `(() => {
   return {
     mirror: box(mirrorParts),
     terminal: box(terminalParts),
-    // The block placed before any mirror was drawn still carries this; while it does, it is
-    // waiting to be moved and is not yet where it belongs.
-    awaiting: terminalParts.some((e) => (e.customData || {}).awaitingMirror === true),
     columns: mirrorParts
       .filter((e) => (e.customData || {}).role === 'section')
       .map((e) => ({ col: (e.customData || {}).sectionOptionId, x: e.x }))
@@ -357,12 +362,18 @@ const columnIds = (scene) => scene.columns.map((column) => column.col);
 /** Where the region started, so every later phase is measured against one number. */
 let placed = null;
 
+/**
+ * The region has not moved — asked of the edge it pins, which since #200 is the **right**
+ * one. That is the edge the block is placed from, so it is the edge that has to hold still;
+ * a column added on GitHub grows the region leftward, into canvas nobody is using, and its
+ * left edge moving is the growth rather than a drift. `MirrorAnchor` has the whole argument.
+ */
 const stillThere = (scene, what) => {
-  check(`${what}: the region is where it was first drawn, ${at(placed)}`,
+  check(`${what}: the region's pinned edge is where it was first drawn, ${at(placed)}`,
         scene.mirror
-        && Math.abs(scene.mirror.minX - placed.minX) < 1
+        && Math.abs(scene.mirror.maxX - placed.maxX) < 1
         && Math.abs(scene.mirror.minY - placed.minY) < 1,
-        `it is at ${at(scene.mirror)}, ${Math.round(scene.mirror.minX - placed.minX)} across `
+        `it is at ${at(scene.mirror)}, ${Math.round(scene.mirror.maxX - placed.maxX)} across `
         + `and ${Math.round(scene.mirror.minY - placed.minY)} down from where it was put`);
   check(`${what}: the region and the block do not overlap`,
         !intersects(scene.mirror, scene.terminal),
@@ -394,28 +405,29 @@ try {
 
   console.log('1. the two are placed side by side, at the separation the block is anchored by');
 
-  // The block after the mirror rather than before it, so this phase measures a placement
-  // rather than a race: `newTerminalBlock` reads the region off the scene when there is one.
+  // The block after the mirror rather than before it, so this phase measures a settled
+  // arrangement rather than a race: since #200 the block is placed from the documentation and
+  // the *region* steps aside for it, which takes a poll on a board that had none.
   await pressKey('KeyT', 't', 1, 84);
   let scene = await waitFor(async () => {
     const now = await evaluate(PROBE);
-    return now.terminal && !now.awaiting ? now : null;
+    return now.terminal && now.mirror && now.mirror.maxX <= now.terminal.minX + 1 ? now : null;
   }, 'the terminal block to be placed', 200);
   await shot('01-side-by-side');
 
   check('the board has a mirror and a block on it, and nothing else',
         scene.mirror && scene.terminal && scene.stray.length === 0,
         JSON.stringify({ mirror: scene.mirror, terminal: scene.terminal, stray: scene.stray }));
-  check(`the block's left edge is ${SEPARATION} left of the region's, which is what places it`,
-        Math.abs((scene.mirror.minX - scene.terminal.minX) - SEPARATION) < 1,
-        `the separation is ${Math.round(scene.mirror.minX - scene.terminal.minX)}`);
+  check(`the region's right edge is ${SEPARATION} left of the block's, which is what places it`,
+        Math.abs((scene.terminal.minX - scene.mirror.maxX) - SEPARATION) < 1,
+        `the separation is ${Math.round(scene.terminal.minX - scene.mirror.maxX)}`);
   check('and its top is level with the region\'s top',
         Math.abs(scene.mirror.minY - scene.terminal.minY) < 1,
         `mirror at y ${scene.mirror.minY}, block at y ${scene.terminal.minY}`);
   check('so they do not overlap', !intersects(scene.mirror, scene.terminal),
         `mirror ${JSON.stringify(scene.mirror)} over terminal ${JSON.stringify(scene.terminal)}`);
 
-  placed = { minX: scene.mirror.minX, minY: scene.mirror.minY };
+  placed = { minX: scene.mirror.minX, maxX: scene.mirror.maxX, minY: scene.mirror.minY };
   const firstColumns = columnIds(scene);
 
   // ─── 2. Ten polls, and one of them the real twenty seconds ────
@@ -448,9 +460,9 @@ try {
           === JSON.stringify([NOTES.NOTES_OPTION_ID, TODO.id, DOING.id, DONE.id]),
         JSON.stringify(columnIds(scene)));
   stillThere(scene, 'with a wider region');
-  check('the region grew to the right, into the gap, rather than leftward onto the block',
-        scene.title && scene.title.x + scene.title.w > placed.minX + SEPARATION - TERMINAL_GAP - 1,
-        JSON.stringify(scene.title));
+  check('the region grew leftward, into the empty canvas, rather than rightward onto the block',
+        scene.mirror.minX < placed.minX - 1 && scene.mirror.maxX <= scene.terminal.minX,
+        JSON.stringify({ mirror: scene.mirror, wasAt: placed, title: scene.title }));
 
   // ─── 4. A shape dropped inside the region ────────────────────
 
@@ -498,7 +510,7 @@ try {
   check('and this one has a tab to come back to', await clickTab('Drift Check'));
   scene = await waitFor(async () => {
     const now = await evaluate(PROBE);
-    return now.mirror && now.terminal && !now.awaiting ? now : null;
+    return now.mirror && now.terminal ? now : null;
   }, 'the board to come back with both regions on it', 200);
   await refresh();
   scene = await evaluate(PROBE);

@@ -496,30 +496,30 @@ try {
         || Math.abs(scene.blocks[0].y - scene.blocks[1].y) > 40,
         JSON.stringify(scene.blocks.map((b) => [b.x, b.y])));
 
-  // Which side, and not only "some other place". The region is anchored to the far left —
-  // `terminalOrigin` puts the first block one gap left of the mirror, because the left is
-  // the edge the board does not grow into (#96). A detach that went right would author a
-  // block back into the direction that move emptied, and on a board with a mirror the very
-  // first one lands on top of it. "Not overlapping the source" passes for that, which is
-  // how it went unnoticed, so the side itself is what is asserted here.
+  // Which side, and not only "some other place". Since #200 the canvas reads
+  // mirror | terminals | documentation and the region grows **rightward**, into the
+  // documentation — which is why the reorder came with the push: `documentationClearance`
+  // moves the board's own content out of the way by exactly the room the new block took.
+  // "Not overlapping the source" passes for either side, which is how the direction went
+  // unnoticed once already, so the side itself is what is asserted here.
   const fromBlock = scene.blocks.find((block) => block.sessions.includes(first));
   const awayBlock = scene.blocks.find((block) => block.sessions.includes(second));
   const geometry = JSON.stringify({ from: fromBlock, away: awayBlock, authored: scene.authored });
-  check('the detached block is entirely left of the one it came out of',
-        Boolean(fromBlock) && Boolean(awayBlock) && awayBlock.x + awayBlock.w <= fromBlock.x,
+  check('the detached block is entirely right of the one it came out of',
+        Boolean(fromBlock) && Boolean(awayBlock) && awayBlock.x >= fromBlock.x + fromBlock.w,
         geometry);
   check('and keeps its size and its top edge',
         Boolean(fromBlock) && Boolean(awayBlock)
         && awayBlock.w === fromBlock.w && awayBlock.h === fromBlock.h
         && awayBlock.y === fromBlock.y,
         geometry);
-  // The board's own content stands in for the mirror here: it is the region the source block
-  // was anchored one gap to the left of, and going right is what lands the detached block on
-  // top of it. No `githubProject` is configured for this run, so there is no mirror to use.
+  // The documentation is what the region grew into, and it gave way rather than being drawn
+  // over. No `githubProject` is configured for this run, so the mirror is dormant and these
+  // are the only two regions on the board.
   const authoredLeft = Math.min(...scene.authored.map((element) => element.x));
-  check('and clear of the region the source was anchored beside',
+  check('and the documentation stepped aside for it, one gap clear of the region',
         Boolean(awayBlock) && Number.isFinite(authoredLeft)
-        && awayBlock.x + awayBlock.w <= authoredLeft,
+        && Math.abs(authoredLeft - (awayBlock.x + awayBlock.w) - 120) < 1,
         geometry);
   check('both shells are still running', (await sessions()).length === 2,
         JSON.stringify((await sessions()).map((one) => one.id)));

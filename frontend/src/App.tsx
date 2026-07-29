@@ -42,7 +42,8 @@ import {
   terminalBlockData,
   terminalBlockElement,
   terminalGrid,
-  terminalOrigin
+  terminalOrigin,
+  documentationClearance
 } from '../../src/core/terminal-block'
 import type { Bounds } from '../../src/core/terminal-block'
 import { terminalAdvance, terminalFontReady, terminalLineBox } from './terminal-metrics'
@@ -219,22 +220,6 @@ const TERMINAL_HOTKEY_CODE = 'KeyT';
 const TERMINAL_RESIZE_DEBOUNCE_MS = 400;
 
 /**
- * The mark on a terminal block that was placed before the mirror had been drawn.
- *
- * The block is anchored to the mirror's left edge, and a session opens well before the first
- * poll comes back: `POST /api/terminal` spawns a shell, `GET /api/project-board` spawns a
- * `gh`. So on a board that has a project, the block is placed against a mirror that is not
- * there yet, lands in the slot the mirror is about to take, and — being placed once and never
- * re-anchored — stays under it.
- *
- * This is what lets `renderMirror` move it out of the way exactly once. The mark comes off
- * with the move, so no later poll ever touches the block again and the reader's own dragging
- * is safe. A block already dragged is left alone even on that one pass: it is only rescued
- * while it is still standing where it was put.
- */
-const TERMINAL_AWAITING_MIRROR = 'awaitingMirror';
-
-/**
  * How long to wait before putting an erased block back.
  *
  * Not immediately: the erase arrives as a scene change, and re-placing the block inside the
@@ -318,6 +303,56 @@ const writeTerminalGeometry = (workspace: string, rect: TerminalRect): void => {
     );
   } catch (error) {
     console.warn('Failed to save the terminal geometry to localStorage:', error);
+  }
+};
+
+/**
+ * How far right the documentation currently stands from where its board authored it.
+ *
+ * Kept because the page cannot work it out again by looking. The shift is a real element
+ * move — it has to be, or it would not survive the reload the definition of done names — and
+ * once it has been written the pushed board and the board at rest are the same picture: the
+ * first block sits exactly one gap left of the documentation in both, because that is where
+ * `terminalOrigin` puts it. Geometry therefore cannot say which of the two a scene is, and a
+ * page that guessed would either push twice or never put it back.
+ *
+ * So the number is written down, per board, beside the terminal's own rect and for the same
+ * reason (#154): the door out of a page is a reload, and this has to be on the other side of
+ * it. The shift is always synced along with the move that caused it, so what the store holds
+ * and what this says are one answer rather than two.
+ *
+ * A board whose key is missing — another browser, a cleared profile — reads zero, which says
+ * "what you can see is where the board authored it". That is the safe direction: it pushes
+ * from wherever the content stands rather than from a home it cannot know, and the worst it
+ * costs is a documentation that stays where the last session's shells left it.
+ */
+const DOCUMENTATION_SHIFT_STORAGE_KEY = 'excalidraw-documentation-shift';
+
+const readDocumentationShift = (workspace: string): number => {
+  try {
+    const raw = window.localStorage?.getItem(DOCUMENTATION_SHIFT_STORAGE_KEY);
+    const stored = raw ? (JSON.parse(raw) ?? {})[workspace] : null;
+    // Validated rather than trusted, like the rect beside it: a key anybody can edit, and a
+    // `NaN` here would move every authored shape on the board to nowhere.
+    return typeof stored === 'number' && Number.isFinite(stored) && stored >= 0 ? stored : 0;
+  } catch (error) {
+    console.warn('Failed to read the documentation shift from localStorage:', error);
+    return 0;
+  }
+};
+
+/** Remember one board's shift, leaving every other board's alone. */
+const writeDocumentationShift = (workspace: string, shift: number): void => {
+  try {
+    const raw = window.localStorage?.getItem(DOCUMENTATION_SHIFT_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const stored = parsed && typeof parsed === 'object' ? parsed : {};
+    window.localStorage?.setItem(
+      DOCUMENTATION_SHIFT_STORAGE_KEY,
+      JSON.stringify({ ...stored, [workspace]: shift })
+    );
+  } catch (error) {
+    console.warn('Failed to save the documentation shift to localStorage:', error);
   }
 };
 
@@ -440,6 +475,45 @@ const boundsOf = (elements: readonly { isDeleted?: boolean }[]): Bounds | null =
  */
 const isDraftBlock = (element: { customData?: CustomData; containerId?: string | null }): boolean =>
   customDataOf(element).projectBoardDraft === true && !element.containerId;
+
+/**
+ * The board's own documentation: the region the other two are placed from, and the one #200
+ * makes the canvas move.
+ *
+ * Everything on the canvas that is neither derived nor standing inside the mirror. The
+ * drafts are the part worth naming: they are authored — a real issue block, the reader's
+ * until the issue exists — but they are laid out by `layoutMirror` into the notes column,
+ * which puts them a whole mirror-width to the left of everything else here. Counted as
+ * documentation they would drag its left edge out there with them, and both the block's
+ * anchor and the room it asks for would be measured against a column of the mirror.
+ *
+ * A label goes with whatever it is bound to, which is the rule the sync and the export
+ * already state: a text element carries no mark of its own, so on its own terms one bound to
+ * a terminal block or to a draft looks authored.
+ */
+const documentationElements = <T extends {
+  id: string; isDeleted?: boolean; customData?: CustomData; containerId?: string | null
+}>(scene: readonly T[]): T[] => {
+  const alive = scene.filter((element) => !element.isDeleted);
+  const apart = new Set(
+    alive.filter((element) => isDerivedElement(element) || isDraftBlock(element))
+      .map((element) => element.id)
+  );
+  return alive.filter((element) => !apart.has(element.id)
+    && !(element.containerId && apart.has(element.containerId)));
+};
+
+/** The box a set of plain rectangles covers, without asking Excalidraw about rotation. */
+const boxOf = (elements: readonly { x: number; y: number; width: number; height: number }[]):
+Bounds | null => {
+  if (elements.length === 0) return null;
+  return {
+    minX: Math.min(...elements.map((element) => element.x)),
+    minY: Math.min(...elements.map((element) => element.y)),
+    maxX: Math.max(...elements.map((element) => element.x + element.width)),
+    maxY: Math.max(...elements.map((element) => element.y + element.height)),
+  };
+};
 
 /**
  * The shape whose label is being typed into, if any.
@@ -2141,29 +2215,19 @@ function App(): JSX.Element {
     const own = scene.filter((element) => !element.isDeleted && !isMirrorElement(element))
     const drafts = own.filter(isDraftBlock)
 
-    // A block placed before this board landed is standing in the slot the mirror is about to
-    // take — read here rather than beside the rescue below, because where the region goes
-    // depends on which blocks are already where they belong and which are not.
-    const marked = own.filter((element) => isTerminalElement(element)
-      && customDataOf(element)[TERMINAL_AWAITING_MIRROR] === true)
-    const strandedIds = new Set(marked.map((element) => element.id))
-    // The blocks that are already anchored, which is the only kind this region may be placed
-    // from: a stranded one is standing at a guess it is about to be moved off.
-    const anchoredTerminal = boundsOf(
-      own.filter((element) => isTerminalElement(element) && !strandedIds.has(element.id))
-    )
+    // The terminal region, which since #200 is what this region is placed from: the canvas
+    // reads mirror | terminals | documentation, so the blocks are the neighbour one step in.
+    const terminalRegion = boundsOf(own.filter(isTerminalElement))
     // The region as it is currently drawn, so a shape standing inside it is not mistaken for
     // something the region can be measured against (#188). None on the pass that draws it
     // first, which is right — there is no inside yet to be in.
     const drawn = boundsOf(scene.filter((element) => !element.isDeleted && isMirrorElement(element)))
 
-    // The terminal is left out of the measurement for the reason the drafts are: it is
-    // placed *from* this region's own left edge, so measuring against it would walk the
-    // mirror left onto the block, and the block left again, on every pass. Since #96 the
-    // two sit side by side on the same side of the content, which makes this load bearing
-    // rather than merely tidy. A title bound to the block goes with the block — that is
-    // the rule the other two doors already state, and `mirrorAnchors` is where all of it
-    // is now said once, so a check can ask it without a browser.
+    // The terminal is left out of the *content* measurement because it is handed in on its
+    // own, above: counted twice it would be measured as content as well and drag the answer a
+    // block-width further out. A title bound to the block goes with the block — that is the
+    // rule the other two doors already state, and `mirrorAnchors` is where all of it is now
+    // said once, so a check can ask it without a browser.
     const anchors = mirrorAnchors(own, drawn)
 
     // The notes column is drawn too, and it is as wide as the rest, so the width the first
@@ -2176,17 +2240,28 @@ function App(): JSX.Element {
         return { minX, minY }
       })()
       : null
-    // The block is what a board with nothing else on it is measured from — its right edge
-    // plus the gap is where `terminalOrigin` put the block from, read back the other way. See
-    // `resolveMirrorOrigin`; it is the inverse of the placement, so it is a fixed point rather
-    // than the second derivation that would walk the two apart.
+    // The blocks are what this region is measured from, one gap left of their left edge. See
+    // `resolveMirrorOrigin`; it is one step of the chain the documentation starts rather than
+    // a second derivation of the same number, so the two cannot walk apart.
     const workspaceId = activeWorkspaceRef.current
+    // A remembered answer that the blocks are now standing in was measured against a board
+    // that no longer exists — the region was placed from the content while there was no block
+    // to see, and the first one opened lands in the slot it took. Dropped here rather than
+    // repaired somewhere else, so the re-measurement is this pass's and there is one place
+    // that decides where the region goes. It cannot fire twice: the answer it settles on is a
+    // gap clear of the blocks.
+    const stranded = Boolean(drawn && terminalRegion
+      && drawn.minX < terminalRegion.maxX && terminalRegion.minX < drawn.maxX
+      && drawn.minY < terminalRegion.maxY && terminalRegion.minY < drawn.maxY)
+    if (stranded) mirrorOriginsRef.current.delete(workspaceId)
     const { origin, settled } = resolveMirrorOrigin(
-      mirrorOriginsRef.current.get(workspaceId), bounds, width, anchoredTerminal
+      stranded ? null : mirrorOriginsRef.current.get(workspaceId), bounds, width, terminalRegion
     )
-    // Only a measured origin is remembered. A poll that ran before the scene arrived would
-    // otherwise pin the region where an empty canvas put it for the rest of the session.
-    if (settled) mirrorOriginsRef.current.set(workspaceId, origin)
+    // Only a measured origin is remembered, and it is remembered by the edge it pins — the
+    // right one since #200, so a column added on GitHub grows the region into the empty
+    // canvas beyond it rather than onto the blocks. A poll that ran before the scene arrived
+    // pins nothing, or the region would stay where an empty canvas put it for the session.
+    if (settled) mirrorOriginsRef.current.set(workspaceId, { right: origin.x + width, y: origin.y })
 
     // The blocks the `+` dropped hold the top of their column, newest first, and the
     // mirrored cards start below them. Both halves of that arithmetic come from
@@ -2222,37 +2297,15 @@ function App(): JSX.Element {
     // what makes happen.
     const frozen = editingDraftId(api)
 
-    // A terminal block placed before this board landed is standing in the slot the mirror is
-    // about to take — the no-mirror fallback, chosen when there was no mirror to see. Move it
-    // out of the way, once, and take the mark off with it: a block is placed once and never
-    // re-anchored, and this pass is the one exception, not a second cadence.
-    //
-    // Only while it is still exactly where it was put. A reader who dragged it in the seconds
-    // before the first poll has said where it goes, and that outranks the arithmetic — as has
-    // a block detached beside another, or restored at a geometry it remembers, neither of
-    // which is ever at this origin.
-    const placedAt = marked.length > 0
-      ? terminalOrigin(boundsOf(own.filter((element) => !isTerminalElement(element))), null)
-      : null
-    const rescue = placedAt
-      ? terminalOrigin(null, { minX: origin.x, minY: origin.y,
-                               maxX: origin.x + layout.bounds.width,
-                               maxY: origin.y + layout.bounds.height })
-      : null
-
+    // Nothing here moves a block any more. It used to: while the block was placed from the
+    // mirror, one opened before the first board landed had guessed at the mirror's slot and
+    // had to be moved out of it once the region arrived (#124's `awaitingMirror`). Since #200
+    // the block is placed from the documentation, which is on the canvas before any poll, so
+    // there is no guess to correct — and it is the *region* that gives way when the two meet,
+    // which `stranded` above does by re-measuring rather than by moving anything of the
+    // reader's.
     const nextOwn = own.map((element) => {
-      if (isTerminalElement(element)) {
-        // The mark comes off whether or not the block moved, so this can never fire twice.
-        if (!strandedIds.has(element.id)) return element
-        const { [TERMINAL_AWAITING_MIRROR]: _placedBlind, ...rest } = customDataOf(element)
-        const moved = rescue && placedAt
-          && element.x === placedAt.x && element.y === placedAt.y
-          ? rescue
-          : {}
-        // Excalidraw reconciles by version, so a shape whose only change is its `customData`
-        // and whose version stands still is one it may keep as it was.
-        return { ...element, ...moved, version: (element.version ?? 1) + 1, customData: rest }
-      }
+      if (isTerminalElement(element)) return element
       if (frozen && (element.id === frozen || element.containerId === frozen)) return element
       const slot = placed.get(element.containerId ?? '') ?? placed.get(element.id)
       if (!slot) return element
@@ -2281,10 +2334,8 @@ function App(): JSX.Element {
 
     // `frozen` is part of the signature because it changes what gets written: the pass that
     // left a block alone must not let the one after the editor closed, which puts it back
-    // in its slot, be skipped as "nothing moved". A pending rescue is in it for the same
-    // reason — the mirror itself may be identical to the last pass, and the terminal still
-    // has to be moved out from under it.
-    const signature = JSON.stringify([layout.elements, written, frozen, [...strandedIds], rescue])
+    // in its slot, be skipped as "nothing moved".
+    const signature = JSON.stringify([layout.elements, written, frozen])
     if (signature === projectBoardRef.current.signature
         && scene.some((element) => isMirrorElement(element))) {
       // Nothing moved. Redrawing anyway would fight the reader's selection every poll.
@@ -2851,6 +2902,23 @@ function App(): JSX.Element {
   /** The rect last written to `localStorage`, so a pan does not rewrite the same one. */
   const terminalStoredGeometryRef = useRef<string>('')
 
+  /**
+   * How far right each board's documentation currently stands from where it was authored.
+   *
+   * Page state over the stored number, and keyed by board for the reason everything else
+   * about a terminal is: a board switched away from and back has not moved its content, and
+   * a shift dropped on the way out would be a push applied twice on the way back in.
+   */
+  const documentationShiftRef = useRef<Map<string, number>>(new Map())
+
+  const documentationShiftOf = (workspace: string): number => {
+    const held = documentationShiftRef.current.get(workspace)
+    if (held !== undefined) return held
+    const stored = readDocumentationShift(workspace)
+    documentationShiftRef.current.set(workspace, stored)
+    return stored
+  }
+
   /** Remember this board's block rect across the doors the refs above do not survive. */
   const rememberTerminalGeometry = (rect: TerminalRect): void => {
     const workspace = activeWorkspaceRef.current
@@ -2897,7 +2965,24 @@ function App(): JSX.Element {
    */
   const commitTerminalLayout = (
     layout: Map<string, { sessions: string[]; active: string }>,
-    added: Record<string, unknown>[] = []
+    added: Record<string, unknown>[] = [],
+    /**
+     * Whether this commit may move the documentation.
+     *
+     * Off by default, and that default is the decision. Every arrangement of the blocks
+     * comes through here, and most of them are not the tool deciding how much room the
+     * region takes: a board switched to puts its blocks back at the rects the reader left
+     * them at, an erased block is restored at its own, a tab is switched. Content that
+     * stepped aside for any of those would be the board rearranging itself whenever anybody
+     * looked at it, and a block the reader has dragged is theirs — the canvas does not run
+     * away from it.
+     *
+     * The two gestures the observation on #200 names are the two that turn it on: `⧉`
+     * splits, which grows the region by a block, and `⇥` merges, which gives that block
+     * back. Both are the tool choosing the geometry, and they are exactly the pair the round
+     * trip is between.
+     */
+    settle = false
   ): void => {
     const api = excalidrawAPIRef.current
     if (!api) return
@@ -2966,6 +3051,47 @@ function App(): JSX.Element {
       })
 
     if (!changed) return
+
+    /**
+     * The documentation steps aside for the region, and comes back when the region gives
+     * the room up. This is #200's other half, and the half with no precedent: nothing in
+     * this project had moved authored content before.
+     *
+     * It is here, in the one funnel every arrangement of the blocks already comes through,
+     * because every gesture that changes how much room the region takes is one of these —
+     * a detach adds a block one block-width and 40 further right, `⇥` drops one, a shell
+     * that exits drops one, a restore puts one back. Written as "where the documentation
+     * belongs given the region as it now stands" rather than as a nudge per gesture: the
+     * absolute answer is what makes the round trip exact, and the second observation on
+     * #200 asked for exactly that — a merge has to put the board back where it was, not
+     * near it, or opening and closing shells walks the board right by the rounding.
+     *
+     * `natural` is where the board authored the documentation, which is where it is now
+     * less however far this has already pushed it. It has to be remembered rather than
+     * looked at: a pushed board and a board at rest are the same picture, because in both
+     * the leftmost block sits exactly one gap left of the content.
+     */
+    const workspace = activeWorkspaceRef.current
+    const applied = documentationShiftOf(workspace)
+    const blocks = [...next, ...added] as unknown as ExcalidrawElement[]
+    const region = boxOf(blocks.filter((element) => isTerminalElement(element)))
+    const documentation = documentationElements(next as unknown as ExcalidrawElement[])
+    const standing = settle ? boxOf(documentation) : null
+    const wanted = standing ? documentationClearance(region, standing.minX - applied) : applied
+    const shift = wanted - applied
+    const moving = new Set(shift === 0 ? [] : documentation.map((element) => element.id))
+    const placed = moving.size === 0 ? next : next.map((element) => (
+      moving.has(element.id)
+        // Excalidraw reconciles by version and so does the store: a shape that moved with
+        // its version standing still is one both of them may keep where it was.
+        ? { ...element, x: element.x + shift, version: (element.version ?? 1) + 1 }
+        : element
+    ))
+    if (shift !== 0) {
+      documentationShiftRef.current.set(workspace, wanted)
+      writeDocumentationShift(workspace, wanted)
+    }
+
     // The tombstones go back in **around** the conversion rather than through it.
     // `convertToExcalidrawElements` rebuilds each element from a skeleton and has no
     // `isDeleted` to rebuild from, so anything deleted that is handed to it comes back
@@ -2978,12 +3104,21 @@ function App(): JSX.Element {
     applySceneUpdateWithoutAutoSync(api, {
       elements: [
         ...convertElementsPreservingImageProps(
-          [...next, ...added] as unknown as Partial<ExcalidrawElement>[]
+          [...placed, ...added] as unknown as Partial<ExcalidrawElement>[]
         ),
         ...tombstones
       ] as ExcalidrawElement[],
       captureUpdate: CaptureUpdateAction.NEVER
     })
+
+    // A moved documentation is authored data, so the store is told about it now rather than
+    // whenever the reader next touches the board. Not an optimisation and not tidiness: the
+    // shift above is remembered as a number, and a number that says "pushed" over a store
+    // that still holds the board at rest is what a reload would read back and push again.
+    // The two have to be one answer. Held off only across a board switch, which is the one
+    // window where the scene on screen and the board this would write to are not the same
+    // board — the arrangement is re-settled on the way in anyway.
+    if (shift !== 0 && !autoSyncHoldRef.current) void flushAutoSync()
   }
 
   /** What each block holds right now, read off the scene. */
@@ -3003,12 +3138,12 @@ function App(): JSX.Element {
    * A block for sessions that have nowhere to be.
    *
    * Three placements, and they answer different questions. `beside` is a detach — the new
-   * block goes to the **left** of the one the tab came out of, the way the region grows.
+   * block goes to the **right** of the one the tab came out of, the way the region grows.
    * `at` is a **restore**: the block was
    * erased and putting it back means putting it *back*, at the size and position the reader
-   * had it, because a restore that re-anchored it past the mirror would answer an accidental
-   * erase by also undoing a drag. Neither is where a terminal *goes*, which is the last case:
-   * one gap left of the mirror, or of the content on a board that has no mirror.
+   * had it, because a restore that re-anchored it would answer an accidental erase by also
+   * undoing a drag. Neither is where a terminal *goes*, which is the last case: one gap left
+   * of the documentation, whether or not the board draws a mirror further out.
    */
   const newTerminalBlock = (
     api: ExcalidrawImperativeAPI,
@@ -3020,30 +3155,20 @@ function App(): JSX.Element {
   ): Record<string, unknown> => {
     const scene = api.getSceneElementsIncludingDeleted().filter((element) => !element.isDeleted)
 
-    // The mirror is what the block clears when the board has one, and its left edge is read
-    // from the shapes themselves rather than recomputed: `renderMirror` is the authority on
-    // where the region went, and two derivations of one number is how they come to disagree.
-    const mirror = boundsOf(scene.filter(isMirrorElement))
-
-    // No mirror drawn *yet* is not the same as a board that has none, and from here the two
-    // are indistinguishable: the poll that draws it spawns a `gh` and takes seconds, while a
-    // session opens on a `POST` that spawns a shell. So a block placed while there is none to
-    // see is marked, and `renderMirror` moves it out of the mirror's slot on the first board
-    // that lands — once, and only if it is still standing at the origin below.
-    const blind = mirror ? {} : { [TERMINAL_AWAITING_MIRROR]: true }
-
     const beside = where.beside
     if (beside) {
       return terminalBlockElement(
-        // Left of the block it came out of, and always left: the region grows that way. The
-        // block was moved to the far left in #96 precisely because the board grows down and
-        // right, so a detach that went right would author a block back into the direction
-        // that move emptied — and from the anchored origin, one gap left of the mirror, the
-        // very first one would land on top of the mirror. Unconditional rather than
-        // whichever side happens to be free, so the reader can predict where it appears.
-        // Where it goes from there is their business — it is an ordinary shape and the
-        // canvas moves it. See `terminalOrigin` in `src/core/terminal-block.ts`.
-        { x: beside.x - beside.width - 40, y: beside.y },
+        // Right of the block it came out of, and always right: since #200 the region grows
+        // that way. It went left until then, because #96 had put the block on the far left
+        // precisely so it would not stand where the board grows — a detach that went right
+        // would have authored a block back into the direction that move emptied, and from the
+        // anchored origin one gap left of the mirror the very first one landed on top of the
+        // mirror. The order reversed, and with it both halves of that: the mirror is now
+        // further out, and the documentation this grows into is moved aside by
+        // `settleDocumentation` rather than drawn over. Unconditional rather than whichever
+        // side happens to be free, so the reader can predict where it appears (#124). Where it
+        // goes from there is their business — it is an ordinary shape and the canvas moves it.
+        { x: beside.x + beside.width + 40, y: beside.y },
         { width: beside.width, height: beside.height },
         { sessions, active: sessions[0] ?? '' }
       )
@@ -3052,11 +3177,7 @@ function App(): JSX.Element {
       return terminalBlockElement(
         { x: where.at.x, y: where.at.y },
         { width: where.at.width, height: where.at.height },
-        // Marked, because the geometry being restored may itself have been chosen blind — a
-        // block erased in the seconds before the first poll is put back in the mirror's slot.
-        // It costs nothing when it was not: the move is refused for any block that is not at
-        // that origin, and the mark comes off either way.
-        { sessions, active: sessions[0] ?? '', ...blind }
+        { sessions, active: sessions[0] ?? '' }
       )
     }
 
@@ -3074,11 +3195,11 @@ function App(): JSX.Element {
     // restoring the size into the anchor's slot would put a block the reader had dragged
     // aside back in front of the content, at its own size.
     //
-    // No `blind` mark, unlike the restore above. The mark exists to move a block that landed
-    // in the mirror's slot because there was no mirror yet to measure against, and a
-    // remembered rect did not land by that arithmetic. If the mirror has since grown wider
-    // the block may now overlap it — accepted, for the reason `at` gives about a restore:
-    // re-anchoring is how a reload comes to undo a drag, and the reader can move it.
+    // A rect remembered from before #200 turned the canvas round is left exactly as it is,
+    // rather than migrated. It is a position the reader chose, and re-anchoring it is how a
+    // reload comes to undo a drag — the reason `at` gives about a restore. Where it lands is
+    // no longer a collision anybody has to live with either: the mirror re-measures around a
+    // block standing in it, and the documentation steps aside from one standing in *it*.
     const remembered = readTerminalGeometry(activeWorkspaceRef.current)
     if (remembered) {
       return terminalBlockElement(
@@ -3088,14 +3209,15 @@ function App(): JSX.Element {
       )
     }
 
-    // What this board authored, which is neither the mirror nor a terminal block. Only used
-    // when there is no mirror to measure against.
+    // What this board authored, which is neither the mirror nor a terminal block — the
+    // documentation, and since #200 the only region the block is placed from. There is no
+    // "no mirror drawn yet" case left to guess at: the content is on the canvas before the
+    // poll that spawns a `gh` has come back, so the answer is the same either way.
     const bounds = boundsOf(scene.filter((element) => !isDerivedElement(element)))
 
-    return terminalBlockElement(terminalOrigin(bounds, mirror), TERMINAL_SIZE, {
+    return terminalBlockElement(terminalOrigin(bounds), TERMINAL_SIZE, {
       sessions,
-      active: sessions[0] ?? '',
-      ...blind
+      active: sessions[0] ?? ''
     })
   }
 
@@ -3362,7 +3484,7 @@ function App(): JSX.Element {
 
     entry.sessions = entry.sessions.filter((id) => id !== sessionId)
     if (entry.active === sessionId) entry.active = entry.sessions[0] ?? ''
-    commitTerminalLayout(layout, [newTerminalBlock(api, [sessionId], { beside: source })])
+    commitTerminalLayout(layout, [newTerminalBlock(api, [sessionId], { beside: source })], true)
   }
 
   /**
@@ -3396,7 +3518,7 @@ function App(): JSX.Element {
     into.sessions = [...into.sessions, ...moving]
     if (!into.active) into.active = into.sessions[0] ?? ''
     layout.set(source.id, { sessions: [], active: '' })
-    commitTerminalLayout(layout)
+    commitTerminalLayout(layout, [], true)
   }
 
   /** Keystrokes waiting to be sent, per session, and which queues are already sending. */
