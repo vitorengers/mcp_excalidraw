@@ -34,6 +34,7 @@ import { writePidFile, removePidFile } from './core/pidfile.js';
 import {
   addWorkspace,
   loadWorkspaces,
+  reorderWorkspaces,
   readWorkspaceConfig,
   writeWorkspaceConfig,
   Workspace
@@ -1202,6 +1203,31 @@ app.post('/api/workspaces', async (req: Request, res: Response) => {
     res.status(201).json({ success: true, workspace: result.workspace, workspaces: result.workspaces });
   } catch (error) {
     logger.error('Failed to add a workspace:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/**
+ * The order the tabs are in.
+ *
+ * Above `/api/workspaces/:id/config` only for readability — the two cannot collide, one
+ * being two segments after `/api/workspaces` and the other one. The whole list every time
+ * rather than "move this one to position n": a permutation is checked against what the
+ * registry holds in a single comparison, while an index is a guess about a list the caller
+ * may have been looking at some seconds ago.
+ */
+app.put('/api/workspaces/order', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'The order of the projects is written')) return;
+
+  try {
+    const result = await reorderWorkspaces(process.env.EXCALIDRAW_WORKSPACES, req.body?.ids);
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, error: result.error });
+    }
+    logger.info(`Workspace order set: ${result.workspaces.map((workspace) => workspace.id).join(', ')}`);
+    res.json({ success: true, workspaces: result.workspaces });
+  } catch (error) {
+    logger.error('Failed to reorder the workspaces:', error);
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 });

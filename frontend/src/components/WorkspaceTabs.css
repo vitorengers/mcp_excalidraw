@@ -75,6 +75,28 @@
   font-weight: 600;
 }
 
+/*
+ * Reordering.
+ *
+ * The insertion marker is an inset `box-shadow` rather than a border, because a border on a
+ * tab that is 1px-bordered already would move every tab beside it by that pixel as the
+ * pointer travels — the strip would twitch under the drag it is meant to be guiding.
+ */
+/* The tab keeps `pointer`, because clicking it is still what it mostly does. */
+.workspace-tab--carried,
+.workspace-tab--carried .workspace-tab__select {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+
+.workspace-tab--drop-before {
+  box-shadow: inset calc(2px * var(--workspace-tab-scale)) 0 0 0 var(--color-primary, #6965db);
+}
+
+.workspace-tab--drop-after {
+  box-shadow: inset calc(-2px * var(--workspace-tab-scale)) 0 0 0 var(--color-primary, #6965db);
+}
+
 /* A workspace whose config failed to load is still listed — it just says so. */
 .workspace-tab--broken .workspace-tab__name {
   text-decoration: underline dotted;

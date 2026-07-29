@@ -12,8 +12,23 @@
  * records a browser check that read a stale `dist/frontend` and believed it. So the
  * questions here are the ones only a browser can answer. Is the `+` on the strip when the
  * strip is otherwise empty? Does clicking it open the dialog? Does completing it add a tab
- * and switch to it, with no reload? And does the settings dialog on a tab write a name
- * that the strip then shows?
+ * and switch to it, with no reload? Does the settings dialog on a tab write a name that the
+ * strip then shows? And — since #196 — does the strip actually *reorder*, by drag and by the
+ * keyboard alone, with the new order still there after a reload?
+ *
+ * The reorder half is here rather than in `check-workspace-reorder.mjs` for the reason the
+ * rest of this file exists: that one proves the route permutes somebody else's registry
+ * carefully, and a route nothing on screen can reach is half a feature. Tab order also
+ * decides which board a cold start opens — `resolveInitialWorkspace` falls back to
+ * `list[0].id` — so an order that looked right and was never written down would be a default
+ * that changed back on the next reload.
+ *
+ * The chord is pressed as a **real key event** through the DevTools input pipeline, and the
+ * tab it lands on is reached by pressing Tab from the top of the page, because "reachable
+ * from the keyboard alone" is the one claim a `.focus()` in a script cannot make. The drag is
+ * dispatched as real `DragEvent`s carrying one `DataTransfer` across the sequence: headless
+ * Chrome will not synthesise an HTML5 drag from mouse movement, so this is as close to the
+ * gesture as the protocol goes — which is why the keyboard path is the one that presses keys.
  *
  * Chrome is driven over the DevTools protocol through `ws`, which the server already
  * depends on. Self-contained otherwise: throwaway registry and project directories, its
@@ -81,9 +96,14 @@ const slash = (value) => String(value).replace(/\\/g, '/');
 const workDir = mkdtempSync(join(tmpdir(), 'check-workspace-tabs-'));
 const projectsDir = join(workDir, 'projects');
 const firstDir = join(projectsDir, 'first-project');
+// Reordering needs something to reorder. Three, not two, so that a "move" cannot pass by
+// swapping the only pair there is — with three, moving the last to the front and then one
+// step right are two different orders, and a strip that merely reversed would fail the second.
+const secondDir = join(projectsDir, 'second-project');
+const thirdDir = join(projectsDir, 'third-project');
 const profileDir = join(workDir, 'chrome-profile');
 const shotDir = argOf('--shots') ?? join(workDir, 'shots');
-for (const dir of [firstDir, profileDir, shotDir]) mkdirSync(dir, { recursive: true });
+for (const dir of [firstDir, secondDir, thirdDir, profileDir, shotDir]) mkdirSync(dir, { recursive: true });
 
 const registryPath = join(workDir, 'workspaces.json');
 writeFileSync(registryPath, JSON.stringify({ workspaces: [] }, null, 2), 'utf8');
@@ -192,6 +212,101 @@ const strip = () => evaluate(`(() => {
 
 const dialogOpen = (selector) => evaluate(`Boolean(document.querySelector(${JSON.stringify(selector)}))`);
 
+/** The names on the strip, left to right — which is the thing being reordered. */
+const names = () => evaluate(
+  `[...document.querySelectorAll('.workspace-tab__name')].map((label) => label.textContent.trim())`);
+
+/** The ids in the registry file, in file order. The strip's order has to be this one. */
+const fileOrder = () => JSON.parse(readFileSync(registryPath, 'utf8'))
+  .workspaces.map((entry) => entry.id);
+
+/** What `GET /api/workspaces` says, asked from the page rather than from Node. */
+const servedOrder = () => evaluate(
+  `fetch('/api/workspaces').then((r) => r.json()).then((r) => (r.workspaces ?? []).map((w) => w.id))`);
+
+/**
+ * Add a project through the `+`, the path this file has already proved works.
+ *
+ * The submit is disabled until the field has a path in it, so the click waits for the button
+ * rather than for the typing: a click on a disabled button is silently nothing, and the case
+ * that failed would be the one three steps later.
+ */
+async function addProject(dir) {
+  await click('.workspace-tabs__add');
+  // The listing has to land *before* anything is typed: opening a folder is also how one is
+  // chosen, so `browse()` writes the field — including the `browse('')` the dialog runs on
+  // mount, which arrives a moment later and puts the field back to the roots. Typing first
+  // and waiting afterwards is a race the field loses.
+  await waitFor(() => dialogOpen('.workspace-dialog__entry'), `the directory listing for ${dir}`);
+  await type('.workspace-dialog__path', slash(dir));
+  await waitFor(
+    () => evaluate(`document.querySelector('.workspace-dialog__submit')?.disabled === false`),
+    `the add dialog to accept the path for ${dir}`);
+  await click('.workspace-dialog__submit');
+  // Polled by hand rather than through `waitFor`, which swallows what it catches: a refusal
+  // is shown *in* the dialog, so the dialog staying open is the symptom and the text in it is
+  // the reason. Timing out without reading it would report the symptom alone.
+  for (let attempt = 0; attempt < 120; attempt++) {
+    if (!(await dialogOpen('.workspace-dialog'))) return;
+    const said = await evaluate(`document.querySelector('.workspace-dialog__error')?.textContent ?? null`);
+    if (said) throw new Error(`the board refused ${dir}: ${said}`);
+    await sleep(250);
+  }
+  throw new Error(`timed out waiting for the add dialog to close for ${dir}`);
+}
+
+// ─── Real key presses ─────────────────────────────────────────
+
+/** CDP's modifier bits. Alt is 1 and Meta 4; neither is wanted here. */
+const CTRL = 2;
+const SHIFT = 8;
+
+async function press(key, { code = key, keyCode, modifiers = 0 } = {}) {
+  const common = { key, code, modifiers, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode };
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...common });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', ...common });
+}
+
+/** Which tab, if any, the caret is on — by name, so it survives the strip being reordered. */
+const focusedTab = () => evaluate(`(() => {
+  const active = document.activeElement;
+  if (!active || !active.classList.contains('workspace-tab__select')) return null;
+  return active.querySelector('.workspace-tab__name')?.textContent?.trim() ?? null;
+})()`);
+
+/**
+ * One HTML5 drag, as three events sharing one `DataTransfer`.
+ *
+ * Split across awaits on purpose: `dragstart` sets React state that `dragover` and `drop`
+ * both read, and firing all three in one turn would test a component that never re-rendered.
+ */
+async function drag(fromIndex, toIndex) {
+  const started = await evaluate(`(() => {
+    const tabs = [...document.querySelectorAll('.workspace-tab')];
+    const from = tabs[${fromIndex}], to = tabs[${toIndex}];
+    if (!from || !to) return false;
+    const transfer = new DataTransfer();
+    window.__drag = {
+      from, to,
+      fire: (element, type) => element.dispatchEvent(
+        new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer })),
+    };
+    window.__drag.fire(from, 'dragstart');
+    return true;
+  })()`);
+  if (!started) return false;
+  await sleep(120);
+  await evaluate(`window.__drag.fire(window.__drag.to, 'dragover')`);
+  await sleep(120);
+  // Mid-gesture, which is the only moment the carried tab and the insertion marker are both
+  // on screen. Compiling is not working, and neither is passing: this is the frame a person
+  // has to be able to read.
+  await shot('09-mid-drag');
+  await evaluate(`window.__drag.fire(window.__drag.to, 'drop')`);
+  await evaluate(`window.__drag.fire(window.__drag.from, 'dragend')`);
+  return true;
+}
+
 try {
   await waitFor(async () => (await fetch(`${BASE}/health`)).ok, 'the canvas server');
 
@@ -274,13 +389,26 @@ try {
   console.log('\n4. the tab carries a settings surface, and it writes the project config');
   check('the settings control is reachable', await click('.workspace-tab__config'));
   const settings = await waitFor(() => dialogOpen('.workspace-config'), 'the project settings dialog');
-  await shot('05-settings');
   check('the settings dialog is on screen', settings);
+  // The dialog is on screen before its `GET .../config` lands — it opens saying "Reading
+  // board.config.json…" and renders the form when the answer arrives. Waiting for the shell
+  // and typing straight away therefore types into nothing, silently: `type()` returns false
+  // and no case reads it, so the save that follows sends an empty edit and the strip never
+  // takes the new name. It was the *dialog* that was being waited for; it is the *form* that
+  // has to be there.
+  await waitFor(() => dialogOpen('.workspace-config__field[data-field="name"]'),
+                'the settings form to be filled in from disk');
+  await shot('05-settings');
   await type('.workspace-config__field[data-field="name"]', 'First Project');
   await type('.workspace-config__field[data-field="repo"]', 'vitorengers/first');
   await type('.workspace-config__field[data-field="projectTodoColumn"]', 'Ready');
   await type('.workspace-config__field[data-field="agents.implement.model"]', 'claude-opus-5');
   await shot('06-settings-filled');
+  // Asserted rather than assumed: `type()` on a field that is not there returns false, and a
+  // save of nothing looks exactly like a save that worked until the strip fails to rename.
+  check('the form actually took what was typed',
+        (await evaluate(`document.querySelector('.workspace-config__field[data-field="name"]')?.value ?? null`))
+          === 'First Project');
   check('the settings can be saved', await click('.workspace-config__save'));
 
   const renamed = await waitFor(async () => {
@@ -300,6 +428,92 @@ try {
         onDisk.projectTodoColumn === 'Ready', JSON.stringify(onDisk));
   check('and the per-project agent model the observation asked for',
         onDisk.agents?.implement?.model === 'claude-opus-5', JSON.stringify(onDisk.agents));
+
+  console.log('\n5. two more projects, so there is an order to have');
+  await addProject(secondDir);
+  await addProject(thirdDir);
+  const three = await waitFor(async () => {
+    const listing = await names();
+    return listing.length === 3 ? listing : null;
+  }, 'three tabs on the strip');
+  await shot('08-three-tabs');
+  check('the strip has all three, in the order they were added',
+        JSON.stringify(three) === JSON.stringify(['First Project', 'second-project', 'third-project']),
+        JSON.stringify(three));
+  check('and the registry agrees',
+        JSON.stringify(fileOrder()) === JSON.stringify(['first-project', 'second-project', 'third-project']),
+        JSON.stringify(fileOrder()));
+
+  console.log('\n6. dragging a tab reorders the strip, and the registry follows');
+  check('the drag started on a tab that is there', await drag(2, 0));
+  const dragged = await waitFor(async () => {
+    const listing = await names();
+    return listing[0] === 'third-project' ? listing : null;
+  }, 'the dragged tab to arrive at the front');
+  await shot('09b-dropped');
+  check('the tab that was dragged is now first',
+        JSON.stringify(dragged) === JSON.stringify(['third-project', 'First Project', 'second-project']),
+        JSON.stringify(dragged));
+  const draggedOnDisk = await waitFor(
+    async () => (fileOrder()[0] === 'third-project' ? fileOrder() : null),
+    'the registry to be written');
+  check('and the registry was written, not just the screen',
+        JSON.stringify(draggedOnDisk) === JSON.stringify(['third-project', 'first-project', 'second-project']),
+        JSON.stringify(draggedOnDisk));
+  check('GET /api/workspaces answers in the new order',
+        JSON.stringify(await servedOrder())
+          === JSON.stringify(['third-project', 'first-project', 'second-project']),
+        JSON.stringify(await servedOrder()));
+  check('nothing reloaded to get there',
+        (await evaluate('window.__noReloadSentinel')) === 'still here');
+
+  console.log('\n7. and it is reachable from the keyboard alone');
+  // From the top of the page, by pressing Tab — not by a `.focus()` in a script, which would
+  // prove the handler and say nothing about whether anyone can reach it.
+  await evaluate('document.activeElement?.blur?.(); window.focus()');
+  let presses = 0;
+  let onTab = null;
+  while (presses < 15 && !onTab) {
+    await press('Tab', { keyCode: 9 });
+    presses++;
+    onTab = await focusedTab();
+  }
+  check('Tab from the top of the page reaches a tab', Boolean(onTab), `${presses} press(es), focus on ${onTab}`);
+  check('and it is the first one, which is the one that was just dragged there',
+        onTab === 'third-project', String(onTab));
+
+  await press('ArrowRight', { keyCode: 39, modifiers: CTRL | SHIFT });
+  const moved = await waitFor(async () => {
+    const listing = await names();
+    return listing[0] === 'First Project' ? listing : null;
+  }, 'the focused tab to move one to the right');
+  await shot('10-keyboard-moved');
+  check('Ctrl+Shift+Right moves the focused tab one place right',
+        JSON.stringify(moved) === JSON.stringify(['First Project', 'third-project', 'second-project']),
+        JSON.stringify(moved));
+  check('focus stayed on the tab that moved, so a second press carries it further',
+        (await focusedTab()) === 'third-project', String(await focusedTab()));
+  const keyedOnDisk = await waitFor(
+    async () => (fileOrder()[1] === 'third-project' ? fileOrder() : null),
+    'the registry to be written after the chord');
+  check('and the keyboard wrote the registry too, not only the drag',
+        JSON.stringify(keyedOnDisk) === JSON.stringify(['first-project', 'third-project', 'second-project']),
+        JSON.stringify(keyedOnDisk));
+
+  console.log('\n8. the order is still there after a reload');
+  await send('Page.reload', { ignoreCache: false });
+  await waitFor(async () => {
+    const listing = await names();
+    return listing.length === 3 ? listing : null;
+  }, 'the strip after the reload');
+  const reloaded = await names();
+  await shot('11-after-reload');
+  check('the strip comes back in the order it was left in',
+        JSON.stringify(reloaded) === JSON.stringify(['First Project', 'third-project', 'second-project']),
+        JSON.stringify(reloaded));
+  check('the page really did reload',
+        (await evaluate('window.__noReloadSentinel ?? null')) === null,
+        'the sentinel survived, so nothing reloaded and this case proves nothing');
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);
