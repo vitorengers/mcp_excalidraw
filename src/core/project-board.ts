@@ -44,8 +44,31 @@ export const DEFAULT_STATUS_FIELD = 'Status';
  */
 export const DEFAULT_CARD_LIMIT = 12;
 
-/** One page of items. The project held 14 when this was written; 100 is headroom. */
+/** One page of items. 100 is the most GitHub will return in a single `items` connection. */
 const ITEM_PAGE_SIZE = 100;
+
+/**
+ * How many pages one read will follow before it stops and says so.
+ *
+ * A ceiling rather than "until GitHub runs out", because this read happens on a poll: the
+ * canvas re-reads every 20 seconds and the queue reads again on top of that, so an
+ * unbounded loop against a project that kept growing would turn one board into an
+ * indefinite number of `gh` calls per tick. Twenty pages is 2000 items — an order of
+ * magnitude past the project that found this — and hitting it is reported on the canvas
+ * rather than swallowed, which is the part that was missing when 100 was the ceiling.
+ */
+const MAX_ITEM_PAGES = 20;
+
+/**
+ * What a cursor may contain.
+ *
+ * GitHub's cursors are opaque base64 and this reader has to hand one back on a command
+ * line that a WSL workspace runs through `bash -lc` — the same argument the login and the
+ * field name already earn a pattern for. Matched rather than escaped, for the reason at
+ * `parseProjectUrl`: a guard you can read beats one you have to trust. A cursor that does
+ * not match stops the paging instead of being interpolated, and the board says it is short.
+ */
+const CURSOR = /^[A-Za-z0-9+/=_-]{1,200}$/;
 
 export interface ProjectRef {
   ownerType: 'user' | 'organization';
@@ -81,21 +104,26 @@ const NODE_ID = /^[A-Za-z0-9_-]{1,200}$/;
 /**
  * The query, on one line.
  *
- * One call, not three: the project id and the field id are needed to write a move back,
- * the options are the columns, and the items are the cards. Newlines are left out because
+ * One query, not three: the project id and the field id are needed to write a move back,
+ * the options are the columns, and the items are the cards. It is asked once per page of
+ * items, so a long project repeats the project id and the options — cheaper than the round
+ * trips a second query would cost. Newlines are left out because
  * this whole string travels as a single command-line argument through a tokenizer and,
  * for a WSL project, a shell — and a query that cannot contain a quote or a line break
  * cannot be broken by either.
  */
 export function buildProjectQuery(ownerType: 'user' | 'organization'): string {
   return [
-    'query($login: String!, $number: Int!, $field: String!) {',
+    'query($login: String!, $number: Int!, $field: String!, $cursor: String) {',
     `owner: ${ownerType}(login: $login) {`,
     'projectV2(number: $number) {',
     'id title url',
     'field(name: $field) { ... on ProjectV2SingleSelectField { id name options { id name } } }',
-    `items(first: ${ITEM_PAGE_SIZE}) {`,
-    'pageInfo { hasNextPage }',
+    // `$cursor` is left unset on the first call and GraphQL reads an absent nullable
+    // variable as null, which `after:` takes as "from the beginning" — so the first page
+    // costs no extra argument and a project that fits on one page costs no extra call.
+    `items(first: ${ITEM_PAGE_SIZE}, after: $cursor) {`,
+    'pageInfo { hasNextPage endCursor }',
     'nodes {',
     'id',
     'fieldValueByName(name: $field) { ... on ProjectV2ItemFieldSingleSelectValue { optionId name } }',
@@ -298,19 +326,57 @@ export async function readProjectBoard(
   }
 
   const field = projectFieldFor(workspace);
-  const stdout = await runGh(
-    workspace,
+  const call =
     `api graphql -f 'query=${buildProjectQuery(ref.ownerType)}' ` +
-    `-f 'login=${ref.login}' -F 'number=${ref.number}' -f 'field=${field}'`,
-    { what: 'the project board read' }
-  );
+    `-f 'login=${ref.login}' -F 'number=${ref.number}' -f 'field=${field}'`;
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch (error) {
-    throw new Error(`Could not read the gh response: ${(error as Error).message}`);
+  // Every page's items, in the order GitHub returned them. `toBoard` is handed the lot as
+  // one answer and stays what it was: a pure function over a single payload, which is why
+  // the sort and the cap apply to the whole project rather than to each page separately.
+  const nodes: unknown[] = [];
+  let parsed: unknown = null;
+  let cursor: string | null = null;
+  let short = false;
+  let pagesRead = 0;
+
+  for (let page = 0; page < MAX_ITEM_PAGES; page++) {
+    pagesRead++;
+    const stdout = await runGh(
+      workspace,
+      cursor === null ? call : `${call} -f 'cursor=${cursor}'`,
+      { what: 'the project board read' }
+    );
+    try {
+      parsed = JSON.parse(stdout);
+    } catch (error) {
+      throw new Error(`Could not read the gh response: ${(error as Error).message}`);
+    }
+
+    // No items at all is not this loop's to diagnose — no project at that URL, or a field
+    // that is not a single select. `toBoard` says which, in the words it already has.
+    const items = (parsed as any)?.data?.owner?.projectV2?.items;
+    if (!items) break;
+    nodes.push(...((items.nodes ?? []) as unknown[]));
+
+    if (!items.pageInfo?.hasNextPage) { short = false; break; }
+    short = true;
+
+    const next = asString(items.pageInfo.endCursor);
+    if (!next || !CURSOR.test(next)) {
+      logger.warn(
+        'Project board: GitHub returned a cursor this reader will not put on a command line, '
+        + `so the mirror stops at ${nodes.length} items`
+      );
+      break;
+    }
+    cursor = next;
   }
+
+  // The last page read, carrying every page's items and one honest answer about whether
+  // any were left behind. `hasNextPage` stops meaning "there is another page" — every
+  // caller of `morePages` wants "cards are missing", and after paging those differ.
+  const project = (parsed as any)?.data?.owner?.projectV2;
+  if (project?.items) project.items = { pageInfo: { hasNextPage: short }, nodes };
 
   const cardLimit = options.cardLimit ?? workspace.projectCardLimit;
   const board = toBoard(parsed, {
@@ -320,8 +386,15 @@ export async function readProjectBoard(
     // Which column that is comes from the workspace, exactly as the queue reads it.
     oldestFirstColumn: todoColumn(workspace).name,
   });
+  // Two ways to end short, and the reader says which: the ceiling is a number somebody can
+  // raise, a refused cursor is not. The other half of this is on the canvas — a log line is
+  // what let the 100-item truncation run unnoticed through two issues.
   if (board.morePages) {
-    logger.warn(`Project board: more than ${ITEM_PAGE_SIZE} items; only the first page is mirrored`);
+    logger.warn(
+      pagesRead >= MAX_ITEM_PAGES
+        ? `Project board: stopped after ${MAX_ITEM_PAGES} pages (${nodes.length} items) and the project has more, so cards are missing from the mirror`
+        : `Project board: the mirror is showing ${nodes.length} items and the project has more`
+    );
   }
   // Written here rather than in `toBoard`, which knows no workspace: this is the one fact on
   // the board that comes from `board.config.json` rather than from GitHub, and the browser
@@ -471,7 +544,10 @@ export async function moveIssueToColumn(
   if (!workspace.githubProject) return null;
 
   // Read uncapped: the cap is there so a section does not draw hundreds of cards, and a
-  // card hidden behind it would read here as an issue that is not on the project.
+  // card hidden behind it would read here as an issue that is not on the project. The page
+  // size was a second cap this did not lift, and for two issues it was the one that bit —
+  // a card past item 100 was reported "not on this project" and its note never left My
+  // Notes. `readProjectBoard` follows the pages now; what is left is `MAX_ITEM_PAGES`.
   const board = await readProjectBoard(workspace, { cardLimit: 0 });
 
   const column = findColumn(board, target.name);

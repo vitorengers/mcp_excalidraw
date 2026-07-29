@@ -41,12 +41,27 @@ HTTP client and no token to store: `gh` is already required here, already carrie
 scope from your own login, and the two traps around it — a PATH without the CLI on it, and a WSL
 project whose paths only make sense inside the distro — are already paid for.
 
-Reading is one `gh api graphql` call returning the project id, the field, its options and the
+Reading is one `gh api graphql` query returning the project id, the field, its options and the
 items, because a move needs the first three and the mirror needs the last. The query is built on
 one line: it travels as a single command-line argument through a tokenizer and, for a WSL
 workspace, through `bash -lc`, and a string that can hold neither a quote nor a line break cannot
 be broken by either. Anything interpolated into it — the owner login, the field name, every node
-id — is matched against a pattern first and refused outright otherwise.
+id, and the page cursor — is matched against a pattern first and refused outright otherwise.
+
+**One query, asked once per page.** `items` returns at most 100, so a project past a hundred items
+is read by following `pageInfo.endCursor` into `after:` until GitHub says there is no next page,
+up to a ceiling of twenty pages. The pages are one answer: they are concatenated before anything
+is sorted or capped, so which cards a section shows follows from the whole project rather than
+from where a page boundary happened to fall. A project that fits on one page costs one call — the
+cursor variable is simply left unset, and GraphQL reads an absent nullable variable as "from the
+beginning".
+
+Stopping short is not silent. `morePages` says the mirror is missing cards, whether the ceiling
+ended the read or GitHub returned a cursor that could not go on a command line, and the mirror's
+title strip says so on the canvas. That signal existed and was drawn by nothing for two issues,
+which is how a board that had quietly stopped showing its newest cards went unnoticed
+(**#206**) — the read truncated at 100 items, and with it the research run's move to Todo, the
+queue's drain, and the draft block that waits for its card to appear before it retires.
 
 Writing is `gh project item-edit --id … --project-id … --field-id … --single-select-option-id …`.
 It is retried like every other `gh` call here, which is safe because setting a single-select field
@@ -505,6 +520,14 @@ Two transitions, both written by this server, both `moveIssueToColumn`:
 
 Both show up in the mirror on the next poll.
 
+**Both are looked up in a board that has been read, so both are only as complete as that read.**
+Neither move names an item id — they find the card by its issue URL — so a card the read did not
+reach is a card that cannot be moved, and `moveIssueToColumn` says "is not on this project" about
+an issue that plainly is. That is what stranded #199 and #200: the read stopped at 100 items, the
+research run's move to Todo was a no-op, and the draft block in `My Notes` never saw a card to
+retire against. Paging is what makes the guarantees above hold on a project of any size the
+ceiling admits; past the ceiling they hold for what was read, and the mirror says it is short.
+
 **The server writes them, not the agent.** The observations these came from named the agent,
 because the agent is what the click starts, but nothing requires the write to come from that
 process. An agent that dies early would leave the card where the failure is invisible, and the
@@ -612,8 +635,10 @@ and [terminal.md](terminal.md) is why.
 
 ## What it does not do yet
 
-- **Only the first page of items**, 100 of them, is mirrored. Beyond that the server logs a
-  warning rather than paginating.
+- **2000 items**, twenty pages of a hundred, is what one read follows. A ceiling rather than
+  "until GitHub runs out" because the read is on a poll — every 20 seconds, and again for the
+  queue — so an unbounded loop would turn one board into an indefinite number of `gh` calls per
+  tick. Past it the mirror's own title says how many it drew and that the project has more.
 - **A card shows its number, its title, its column and whether an agent is on it.** Labels,
   assignee and the issue's own open/closed state each cost a wider query.
 - **Cards from other repositories, and pull requests, are read-only.** They render; they do not

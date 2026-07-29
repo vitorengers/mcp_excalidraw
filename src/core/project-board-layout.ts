@@ -503,7 +503,35 @@ export function layoutBoard(
   const placements: DraftPlacement[] = [];
 
   const width = boardWidth(board.sections.length);
-  const headerTop = origin.y + TITLE_HEIGHT + COLUMN_GAP;
+
+  /**
+   * A mirror that is missing cards says so on its own strip.
+   *
+   * `morePages` reached the browser for two issues and nothing read it, so the only sign
+   * that the board had stopped showing the newest items was a line in the server log — and
+   * the canvas went on looking like the whole project. It is on the title rather than on a
+   * column because what is missing is not any one column's: the read ended, wherever those
+   * cards were going to land. The count is what it *did* draw, so the sentence stays true
+   * whichever ceiling ended it.
+   *
+   * **On a line of its own**, and the strip grows to hold it. Appended to the title it was
+   * one 55-character line, which the estimate in `text-layout.ts` says fits a two-column
+   * mirror and the browser does not: Excalidraw re-measured it wider, kept it on one line
+   * because that is what it was given, and clipped both ends of it. Two short lines are
+   * inside what either measurement admits — and this was only visible in a browser.
+   */
+  const mirrored = board.sections.reduce(
+    (total, section) => total + section.cards.length + section.hidden, 0
+  );
+  const titleText = board.morePages
+    ? `${board.projectTitle} — ${board.fieldName}\nfirst ${mirrored} items, the project has more`
+    : `${board.projectTitle} — ${board.fieldName}`;
+  const titleHeight = Math.max(
+    TITLE_HEIGHT,
+    layoutLabel(titleText, width, HEADER_FONT_SIZE).containerHeight
+  );
+
+  const headerTop = origin.y + titleHeight + COLUMN_GAP;
   const cardsTop = headerTop + HEADER_HEIGHT + CARD_GAP;
 
   const title = rectangle({
@@ -511,8 +539,8 @@ export function layoutBoard(
     x: origin.x,
     y: origin.y,
     width,
-    height: TITLE_HEIGHT,
-    strokeColor: '#495057',
+    height: titleHeight,
+    strokeColor: board.morePages ? '#e03131' : '#495057',
     backgroundColor: '#f1f3f5',
     locked: true,
     link: board.projectUrl || null,
@@ -522,9 +550,10 @@ export function layoutBoard(
       // Selecting the strip explains the region, the way every other block on the board
       // explains itself. `check-board-docs.mjs` resolves this key to docs/project-board.md.
       docKey: MIRROR_DOC_KEY,
+      ...(board.morePages ? { truncated: true } : {}),
     },
   });
-  elements.push(title, label(title, `${board.projectTitle} — ${board.fieldName}`, HEADER_FONT_SIZE, '#343a40'));
+  elements.push(title, label(title, titleText, HEADER_FONT_SIZE, board.morePages ? '#c92a2a' : '#343a40'));
 
   let bottom = cardsTop;
 

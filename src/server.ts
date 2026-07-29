@@ -3006,7 +3006,8 @@ async function todoColumnRefusal(workspace: Workspace, issueUrl: string): Promis
   if (!workspace.githubProject) return null;
 
   // Uncapped: the cap decides what is *drawn*, and a card hidden behind it would read here as
-  // an issue that is not on the project at all.
+  // an issue that is not on the project at all. `readProjectBoard` follows every page of items
+  // for the same reason — the page size used to be a second cap this one did not lift.
   const board = await readProjectBoard(workspace, { cardLimit: 0 });
   const target = todoColumn(workspace);
   const found = board.sections
