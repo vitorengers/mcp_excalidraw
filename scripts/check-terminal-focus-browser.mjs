@@ -641,10 +641,11 @@ try {
 
   console.log('\n6. the block is still a block: the header selects it and a corner resizes it');
   // Further out than the rest of the file, and for a reason about the window rather than
-  // about the code: since #144 a fresh block is 1140 × 720, and at 0.8 its bottom-right
-  // corner plus the 180 × 120 this case drags it by lands past the bottom of a 1500 × 950
-  // window. A press dispatched outside the viewport is not a press on the handle.
-  scene = await placeBoard(0.5);
+  // about the code: a fresh block is the default grid in scene units — a thousand of them tall
+  // since #199 made it 30 rows of 18px text — and at 0.8 its bottom-right corner plus the
+  // 180 × 120 this case drags it by lands past the bottom of the window. A press dispatched
+  // outside the viewport is not a press on the handle.
+  scene = await placeBoard(0.4);
   {
     const header = { x: scene.card.header.left + 6, y: scene.card.header.top + scene.card.header.height - 2 };
     await click(header.x, header.y);
@@ -655,7 +656,11 @@ try {
     const [gridBefore] = (await (await api('/api/terminal')).json())?.sessions ?? [];
     const before = { w: scene.block.w, h: scene.block.h };
     const corner = toViewport(scene, scene.block.x + scene.block.w, scene.block.y + scene.block.h);
-    await drag(corner, { x: corner.x + 180, y: corner.y + 120 });
+    // A few pixels *outside* the corner rather than exactly on it: the handle is a square
+    // centred there, so both land on it, but the point exactly on the corner is also the card's own
+    // last pixel, and which of the two takes the press is a rounding — one the block size decides,
+    // and #199 changed the block size. See check-terminal-geometry-browser.
+    await drag({ x: corner.x + 5, y: corner.y + 5 }, { x: corner.x + 185, y: corner.y + 125 });
     scene = await evaluate(PROBE);
     await shot('05-resized');
     check('dragging its corner still resizes it',

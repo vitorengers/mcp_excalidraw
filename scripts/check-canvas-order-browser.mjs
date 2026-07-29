@@ -93,7 +93,8 @@ for (const path of [terminalPath, layoutPath]) {
 
 // Read rather than retyped: the two gaps are what the order is measured by, and a copy of
 // them here would be a second definition to drift from the one under test.
-const { TERMINAL_KIND, TERMINAL_GAP, TERMINAL_SIZE } = await import(pathToFileURL(terminalPath).href);
+const { TERMINAL_KIND, TERMINAL_GAP, TERMINAL_GRID, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, terminalSizeFor } =
+  await import(pathToFileURL(terminalPath).href);
 const { MIRROR_GAP } = await import(pathToFileURL(layoutPath).href);
 
 let failures = 0;
@@ -630,9 +631,20 @@ try {
   check('the block is one gap left of the content, in the slot the mirror would have had',
         Math.abs((scene.docs.minX - scene.terminal.maxX) - TERMINAL_GAP) < 1,
         `the gap is ${Math.round(scene.docs.minX - scene.terminal.maxX)}`);
-  check('at the size a fresh block is drawn at',
-        Math.abs(scene.terminal.maxX - scene.terminal.minX - TERMINAL_SIZE.width) < 1,
-        `${scene.terminal.maxX - scene.terminal.minX} wide`);
+  // Derived rather than named: since #199 the default is 125 × 30 cells, and what that is in
+  // scene units depends on the cell this page measured. Same arithmetic the page ran, off the
+  // same measurement — the grid itself is `check-terminal-default-grid-browser.mjs`'s question.
+  const cell = await evaluate(`(() => {
+    const ctx = document.createElement('canvas').getContext('2d');
+    ctx.font = '${TERMINAL_FONT_SIZE}px ' + ${JSON.stringify(TERMINAL_FONT_FAMILY)};
+    const metrics = ctx.measureText('W');
+    return { advance: metrics.width,
+             lineBox: metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent };
+  })()`);
+  const fresh = terminalSizeFor(TERMINAL_GRID, TERMINAL_FONT_SIZE, cell.lineBox, cell.advance);
+  check(`at the size a fresh block is drawn at, ${TERMINAL_GRID.cols} columns of this page's cell`,
+        Math.abs(scene.terminal.maxX - scene.terminal.minX - fresh.width) < 1,
+        `${scene.terminal.maxX - scene.terminal.minX} wide, wanted ${fresh.width}`);
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);

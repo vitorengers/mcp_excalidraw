@@ -33,10 +33,14 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+// The size the reader starts at, read rather than retyped: it moved from 13 to 18 in #199 and
+// every number this file steps to is that size plus or minus a count of presses.
+const { TERMINAL_FONT_SIZE } = await import(pathToFileURL(join(repoRoot, 'dist', 'core', 'terminal-block.js')).href);
 
 const argOf = (name) => {
   const index = process.argv.indexOf(name);
@@ -415,7 +419,8 @@ try {
   let scene = await evaluate(PROBE);
   await shot('01-default');
   check('there are two of them', scene.card.steps === 2, String(scene.card.steps));
-  check('with the current size between them', scene.card.readout === '13', String(scene.card.readout));
+  check('with the current size between them',
+        scene.card.readout === String(TERMINAL_FONT_SIZE), String(scene.card.readout));
   check('the overlay is still transparent to the pointer', scene.card.pointer.card === 'none',
         scene.card.pointer.card);
   check('and so is the header around them', scene.card.pointer.header === 'none',
@@ -436,7 +441,8 @@ try {
   const before = { fontSize: scene.card.fontSize, cols: base.cols, rows: base.rows };
   for (let press = 0; press < 4; press++) await step(1);
   scene = await evaluate(PROBE);
-  check('the readout moved with the clicks', scene.card.readout === '17', String(scene.card.readout));
+  check('the readout moved with the clicks',
+        scene.card.readout === String(TERMINAL_FONT_SIZE + 4), String(scene.card.readout));
   check('and the text really is bigger', scene.card.fontSize > before.fontSize + 2,
         `${before.fontSize} → ${scene.card.fontSize}`);
 
@@ -457,7 +463,8 @@ try {
   console.log('\n3. and a click on - is the other way');
   for (let press = 0; press < 8; press++) await step(-1);
   scene = await evaluate(PROBE);
-  check('the readout came back down', scene.card.readout === '9', String(scene.card.readout));
+  check('the readout came back down',
+        scene.card.readout === String(TERMINAL_FONT_SIZE - 4), String(scene.card.readout));
   const smaller = await waitFor(async () => {
     const now = await session();
     return now && now.cols > before.cols ? now : null;
@@ -529,8 +536,10 @@ try {
   // and the block moves instead of growing: the case then fails on floating point rather
   // than on anything the code did. Round numbers, chosen here, convert back exactly. Fitting
   // also leaves the corner hard against the bottom of the window, with no room to drag it.
+  // 0.5 rather than the 0.8 it was: since #199 a fresh block is 30 rows of 18px text, a
+  // thousand scene units tall, and at 0.8 its bottom-right corner sat below a 950-tall window.
   {
-    const zoom = 0.8;
+    const zoom = 0.5;
     await evaluate(`window.__terminalCheckApi.updateScene({ appState: { scrollX: ${300 / zoom - scene.block.x}, scrollY: ${(150 - scene.view.offsetTop) / zoom - scene.block.y}, zoom: { value: ${zoom} } } })`);
     await sleep(400);
     scene = await evaluate(PROBE);
@@ -543,13 +552,13 @@ try {
   check('clicking the header through the overlay still selects it',
         scene.selected.includes(scene.block.id), JSON.stringify(scene.selected));
 
-  // Two pixels inside the corner, not exactly on it. The handle is centred on the vertex, so
-  // both land on it — but the vertex itself is the boundary, and converting it back to scene
-  // coordinates lands a hair *outside* the shape when the block sits at a negative x, which
-  // is where it lives since #96. Excalidraw then reads the press as a drag of the shape and
-  // the block moves instead of growing, which is a case failing on floating point.
+  // A few pixels *outside* the corner, not exactly on it. The handle is a square centred on
+  // the vertex, so both land on it — but the vertex itself is a boundary three things meet at:
+  // the shape, the selection's south edge, and the card's own last pixel. Which one takes the
+  // press is a rounding, and the rounding is decided by the block's size in scene units, which
+  // #199 changed. Exactly on it, the block moved or grew downward only.
   const corner = toViewport(scene, scene.block.x + scene.block.w, scene.block.y + scene.block.h);
-  await drag(corner, { x: corner.x + 200, y: corner.y + 140 });
+  await drag({ x: corner.x + 5, y: corner.y + 5 }, { x: corner.x + 205, y: corner.y + 145 });
   scene = await evaluate(PROBE);
   await shot('05-resized');
   check('and its corner still resizes it', scene.block.w > held.w + 50 && scene.block.h > held.h + 30,
@@ -569,7 +578,13 @@ try {
   scene = await evaluate(PROBE);
   await shot('06-reloaded');
   check('the reader\'s size came back', scene.card.readout === '24', String(scene.card.readout));
-  check('and the block is drawing at it', scene.card.fontSize > 20, String(scene.card.fontSize));
+  // Against the board's zoom rather than against a floor. The card is drawn at the reader's
+  // size *times* the zoom, and the zoom after a reload is whatever fitting the block produced
+  // — which moved when #199 made the block a third bigger, so a bare `> 20` was asking about
+  // the fit rather than about the size coming back.
+  check('and the block is drawing at it',
+        Math.abs(scene.card.fontSize - 24 * scene.view.zoom) < 1.5,
+        `${scene.card.fontSize}px at zoom ${scene.view.zoom}`);
 
   // A viewing preference, not a fact about the project: the block is stripped at both
   // doors, so a size that had reached `customData` would be dropped on the way to the store.

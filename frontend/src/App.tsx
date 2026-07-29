@@ -36,13 +36,14 @@ import type { ProjectBoard } from '../../src/core/project-board-types'
 import { TerminalPanel } from './components/TerminalPanel'
 import {
   TERMINAL_FONT_SIZE,
+  TERMINAL_GRID,
   TERMINAL_KIND,
-  TERMINAL_SIZE,
   clampTerminalFont,
   terminalBlockData,
   terminalBlockElement,
   terminalGrid,
   terminalOrigin,
+  terminalSizeFor,
   documentationClearance
 } from '../../src/core/terminal-block'
 import type { Bounds } from '../../src/core/terminal-block'
@@ -3215,7 +3216,23 @@ function App(): JSX.Element {
     // poll that spawns a `gh` has come back, so the answer is the same either way.
     const bounds = boundsOf(scene.filter((element) => !isDerivedElement(element)))
 
-    return terminalBlockElement(terminalOrigin(bounds), TERMINAL_SIZE, {
+    // The one placement that chooses a size, and since #199 it chooses a **grid** and lets
+    // the size fall out of it: `TERMINAL_GRID` cells against the cell this browser measured.
+    // A rectangle cannot pin a grid — the fallback stack advances five per cent wider than
+    // Comic Shanns, which is seven columns of a default block — so a constant here would be
+    // 125 columns on one machine and 132 on another.
+    //
+    // At the font the reader is on rather than at the default, so "a fresh terminal is
+    // 125 × 30" stays true after they have pressed `+`: the promise is about the screen, and
+    // a block sized for 18px text would hand a reader at 24 a little over ninety columns.
+    //
+    // Passed to `terminalOrigin` as well as to the element. The origin is measured from the
+    // block's right edge — one gap left of the documentation — so a derived size given to one
+    // and not the other is a block that hangs into the content by however much the two differ.
+    const font = terminalFontRef.current
+    const size = terminalSizeFor(TERMINAL_GRID, font, terminalLineBox(font), terminalAdvance(font))
+
+    return terminalBlockElement(terminalOrigin(bounds, size), size, {
       sessions,
       active: sessions[0] ?? ''
     })
@@ -3314,6 +3331,24 @@ function App(): JSX.Element {
 
     commitTerminalLayout(layout, added)
 
+    // The mirror is placed from this region, so a block appearing where there was none is a
+    // measurement that region has not been given yet. `resolveMirrorOrigin` answers an empty
+    // anchor set with a content-independent fallback and deliberately does not remember it —
+    // so it re-decides on every pass, and left alone the next pass is the twenty-second poll.
+    // That is the drift #188 is about, seen from the other side, and #199 turned it from a
+    // race into the usual case: waiting for the terminal's face before deriving the first
+    // block's size puts the block *after* the mirror's first draw rather than before it.
+    //
+    // Only when a block was actually added, and harmless when the region was already settled:
+    // a remembered origin is pinned by its right edge and this pass re-reads the same one.
+    if (added.length > 0) {
+      const board = projectBoardRef.current.board
+      if (board) {
+        projectBoardRef.current = { ...projectBoardRef.current, signature: '' }
+        renderMirror(board)
+      }
+    }
+
     if (options.scroll) {
       const placed = terminalBlocksOf(api)
       if (placed.length > 0) {
@@ -3347,9 +3382,19 @@ function App(): JSX.Element {
    */
   const adoptTerminalSessions = async (workspace: string): Promise<void> => {
     try {
+      // Started beside the request rather than before it, and waited for after: this is the
+      // door the *first* block of a page comes through, and since #199 that block is sized
+      // from the cell the browser measures. Excalidraw registers the code face without
+      // loading it — `terminalFontReady` is the whole note on that — so a block placed a beat
+      // early measures the fallback stack and lands 132 columns wide where 125 was asked for.
+      // Nothing else waits on this: the grid a block *reports* is re-measured whenever it is
+      // reported, and there is already a mount effect that reports it again once the face
+      // lands. It is the rectangle, placed once and then left alone, that cannot be revised.
+      const face = terminalFontReady()
       const response = await fetch(apiUrl('/api/terminal'))
       if (!response.ok) return
       const body = await response.json().catch(() => ({}))
+      await face
 
       terminalLimitRef.current = Number(body?.limit) || 0
       setTerminalLimit(terminalLimitRef.current)

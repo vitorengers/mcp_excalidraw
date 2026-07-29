@@ -81,8 +81,6 @@ const check = (name, condition, detail = '') => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** What a block is drawn at when nobody has resized it. See check-terminal-size-browser. */
-const DEFAULT_SIZE = { width: 1140, height: 720 };
 /** Where the reader drags Alpha's block, and how small they make it. Nothing like a default. */
 const DRAGGED = { x: 2400, y: 1600, width: 700, height: 420 };
 /** Longer than TERMINAL_RESTORE_DELAY_MS (250 ms), with room for the reconcile behind it. */
@@ -323,10 +321,14 @@ try {
   check('and it is not standing where the reader dragged Alpha\'s',
         !at(probe.blocks[0], DRAGGED),
         `Beta's block is at ${show(probe.blocks[0])}, which is where Alpha's was dragged to`);
+  // Against Alpha's block as it was *before* the drag rather than against a constant: since
+  // #199 the default is a grid, and what rectangle 125 × 30 comes to depends on the cell this
+  // page measured. The two boards are the same page, so they are the same rectangle — which is
+  // the question here anyway, "did this board get a fresh one".
   check('it is a block placed for this board, at the size a fresh one gets',
-        near(probe.blocks[0].width, DEFAULT_SIZE.width, 4)
-        && near(probe.blocks[0].height, DEFAULT_SIZE.height, 4),
-        show(probe.blocks[0]));
+        near(probe.blocks[0].width, alphaBlock.width, 4)
+        && near(probe.blocks[0].height, alphaBlock.height, 4),
+        `${show(probe.blocks[0])}, against Alpha's fresh ${alphaBlock.width}×${alphaBlock.height}`);
 
   const betaSessions = await sessionsOf(BETA);
   check('Beta has one shell of its own', betaSessions.length === 1,

@@ -21,7 +21,7 @@
  *   that column that are not the paper behind them.
  * - **Geometry**, for whether the strip cost the shell anything it was told it had. The screen
  *   xterm drew is `cols × cell` wide, and it has to end at or before the strip begins; the
- *   painted last column of a ruler exactly `cols` wide has to as well, at 8, 13 and 24 — the
+ *   painted last column of a ruler exactly `cols` wide has to as well, at 8, 18 and 24 — the
  *   three sizes `check-terminal-rows-browser.mjs` sweeps, and for its reason: a strip scaled by
  *   the font is a strip that can be right at one end of the range and wrong at the other.
  *
@@ -523,8 +523,9 @@ const stripOf = (scene) => {
  * area by its wrapper, and the canvas area starts a little under 140px down the page — so a
  * block whose top lands at 120 has its header strip hidden, and the `−` and `+` on it are
  * coordinates a click passes straight through to the toolbar. The font sweep below then presses
- * nothing at all, for as many attempts as it is given. 180 puts the whole 720-tall block on a
- * 950-tall window with the header where it is drawn.
+ * nothing at all, for as many attempts as it is given. 180 puts the whole block on the window
+ * with the header where it is drawn — and the window grew with the block when #199 made the
+ * default 30 rows of 18px text, a thousand scene units tall rather than 720.
  */
 const BLOCK_AT = { x: 60, y: 180 };
 
@@ -610,7 +611,7 @@ try {
     '--no-default-browser-check',
     '--disable-gpu',
     // Deliberately no --hide-scrollbars: see the note at the top of this file.
-    '--window-size=1500,950',
+    '--window-size=1500,1320',
     BASE,
   ], { stdio: 'ignore' }));
 
@@ -629,7 +630,7 @@ try {
         `${scene.card.box.width.toFixed(0)}×${scene.card.box.height.toFixed(0)}`);
 
   console.log('\n1. the strip is a term of the grid, not room taken from the last column');
-  let base = await settled(13);
+  let base = await settled(18);
   scene = base.scene;
   check('the card names a strip for the bar', reserveOf(scene) >= 8 && reserveOf(scene) <= 24,
         `--terminal-scrollbar is ${JSON.stringify(scene.card.reserve)}`);
@@ -670,15 +671,15 @@ try {
   // ─── The column the strip must not have taken ────────────────
   //
   // At the three sizes `check-terminal-rows-browser.mjs` sweeps, and for its reason: the strip
-  // is scaled by the font, so a reservation that is right at 13 can be a column short at 8 and
+  // is scaled by the font, so a reservation that is right at 18 can be a column short at 8 and
   // a column wasted at 24. The ruler is the painted answer — the geometry above says the screen
   // *box* ends before the strip, this says the last character in it was drawn there.
   //
   // Before the transcript below, deliberately. A font step re-grids the block, and re-gridding
   // a block with four screenfuls behind it is xterm reflowing the whole buffer at a new width:
-  // slower, and a thing this case is not about. The sweep ends back at 13, which is where the
+  // slower, and a thing this case is not about. The sweep ends back at 18, which is where the
   // scrollback cases want it.
-  for (const [index, size] of [13, 8, 24].entries()) {
+  for (const [index, size] of [18, 8, 24].entries()) {
     console.log(`\n${3 + index}. the rightmost column the shell was told about, at ${size}px`);
     await placeBoard();
     await stepTo(size);
@@ -715,8 +716,8 @@ try {
   // Back to the default first: the sweep above left the block at 24, and the strip is what the
   // rest of this file is about rather than the font it was last set to.
   await placeBoard();
-  await stepTo(13);
-  base = await settled(13);
+  await stepTo(18);
+  base = await settled(18);
   scene = await placeBoard();
   await click(scene.card.body.x, scene.card.body.y);
   await waitFor(async () => /xterm/.test((await evaluate(PROBE)).focused), 'the keyboard to reach the shell');
@@ -775,9 +776,19 @@ try {
   }
   {
     // Down to the bottom of the scrollback first, so the next wheel is one the emulator has
-    // no use for — which is the one the board is owed.
+    // no use for — which is the one the board is owed. Wheeled until the rows stop changing
+    // rather than a fixed count of notches: how many it takes depends on how many rows the
+    // block holds and how far up the thumb drag above left the reader, and #199 changed the
+    // first of those. Ten notches was enough for a 28-row block and is not for a 30-row one,
+    // and coming up short reads as the canvas refusing a wheel it never got.
     scene = await evaluate(PROBE);
-    await wheel(scene.card.body.x, scene.card.body.y, 120, 10);
+    let atBottom = '';
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const now = (await evaluate(PROBE)).card.rows;
+      if (now === atBottom) break;
+      atBottom = now;
+      await wheel(scene.card.body.x, scene.card.body.y, 120, 5);
+    }
     scene = await placeBoard();
     const view = { scrollX: scene.view.scrollX, scrollY: scene.view.scrollY, zoom: scene.view.zoom };
     await wheel(scene.card.body.x, scene.card.body.y, 120, 2);
