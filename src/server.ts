@@ -4304,11 +4304,21 @@ app.get('/health', (req: Request, res: Response) => {
     // `ensureCanvasRunning` inherits whatever environment its caller held, and an MCP server
     // started by an editor holds no `EXCALIDRAW_*` at all — so a stand-in binds the board's
     // port with no registry, no terminal and no agents, and answers everything above exactly
-    // as the board it replaced did. Telling the two apart took three more requests. These two
+    // as the board it replaced did. Telling the two apart took three more requests. These
     // fields are the difference, and they are read from the same expressions the routes
     // themselves are gated on, so they cannot drift from what the instance actually does.
     workspaces: process.env.EXCALIDRAW_WORKSPACES ? 'configured' : 'none',
-    terminal: Boolean(TERMINAL_SETTING)
+    terminal: Boolean(TERMINAL_SETTING),
+    // The agents fail the most quietly of the three: the routes answer, the blocks draw, the
+    // buttons are there, and pressing one does nothing. **Two booleans, never one** — the
+    // variables are separate so that turning on issue blocks cannot quietly turn on repository
+    // writes, and a single flag here would hide the very asymmetry that split exists for.
+    // Whether they are set, never what they are: these are somebody's command lines, with
+    // paths and flags in them, and this route is unauthenticated on loopback.
+    agents: {
+      issue: ISSUE_AGENT_CONFIGURED,
+      implement: IMPLEMENT_AGENT_CONFIGURED
+    }
   });
 });
 

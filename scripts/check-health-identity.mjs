@@ -109,6 +109,9 @@ if (bare.health) {
     bare.health.workspaces === 'none', `workspaces was ${JSON.stringify(bare.health.workspaces)}`);
   check('/health says it has no terminal',
     bare.health.terminal === false, `terminal was ${JSON.stringify(bare.health.terminal)}`);
+  check('/health says neither agent is configured',
+    bare.health.agents?.issue === false && bare.health.agents?.implement === false,
+    `agents was ${JSON.stringify(bare.health.agents)}`);
 }
 
 // ─── A canvas configured the way a board is ───────────────────
@@ -118,9 +121,13 @@ console.log('\nA canvas configured the way a board is');
 const registry = join(workDir, 'registry.json');
 writeFileSync(registry, JSON.stringify({ workspaces: [] }), 'utf8');
 
+// The agent values are never run here and never read back — only whether they are set is
+// reported, so anything non-empty exercises the same expression the routes are gated on.
 const board = await startCanvas({
   EXCALIDRAW_WORKSPACES: registry,
   EXCALIDRAW_TERMINAL: '1',
+  EXCALIDRAW_ISSUE_AGENT: 'agent-that-is-never-run --research',
+  EXCALIDRAW_IMPLEMENT_AGENT: 'agent-that-is-never-run --implement',
 });
 check('it answers /health at all', board.health !== null);
 
@@ -131,6 +138,33 @@ if (board.health) {
     board.health.workspaces === 'configured', `workspaces was ${JSON.stringify(board.health.workspaces)}`);
   check('/health says it has a terminal',
     board.health.terminal === true, `terminal was ${JSON.stringify(board.health.terminal)}`);
+  check('/health says both agents are configured',
+    board.health.agents?.issue === true && board.health.agents?.implement === true,
+    `agents was ${JSON.stringify(board.health.agents)}`);
+  check('and never reports the command lines themselves',
+    !JSON.stringify(board.health).includes('agent-that-is-never-run'),
+    'a command line leaked into /health');
+}
+
+// ─── The asymmetry a single boolean would lose ────────────────
+
+console.log('\nOne agent on and the other off');
+
+// The two variables are separate on purpose: sharing one command would mean that turning on
+// issue blocks quietly turned on repository writes. A single `agents: true` would hide exactly
+// that, so the split has to survive into what /health says.
+const researchOnly = await startCanvas({
+  EXCALIDRAW_WORKSPACES: registry,
+  EXCALIDRAW_ISSUE_AGENT: 'agent-that-is-never-run --research',
+});
+
+if (researchOnly.health) {
+  check('the issue agent reads as on',
+    researchOnly.health.agents?.issue === true,
+    `agents was ${JSON.stringify(researchOnly.health.agents)}`);
+  check('and the implement agent, separately, as off',
+    researchOnly.health.agents?.implement === false,
+    `agents was ${JSON.stringify(researchOnly.health.agents)}`);
 }
 
 // ─── The two are distinguishable, which is the whole point ────
