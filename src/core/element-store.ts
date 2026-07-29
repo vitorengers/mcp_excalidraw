@@ -16,9 +16,64 @@ import { elements as defaultElements, ServerElement } from '../types.js';
 /** Store used when a request names no workspace. Keeps single-board setups working. */
 export const DEFAULT_WORKSPACE_ID = 'default';
 
+/** Told which workspace changed, every time one does. */
+type StoreListener = (workspaceId: string) => void;
+
+let storeListener: StoreListener | null = null;
+
+/**
+ * Watch every store for changes, from one place.
+ *
+ * The alternative was a call at each write, and there are around a dozen of them —
+ * the element routes, the batch, the sync reconciliation, the issue and implement
+ * writers, the seed. A listener that is missed at one of those is a change that is
+ * silently never saved, which is the failure this exists to end (#225), so the
+ * notification is the store's own rather than each caller's to remember.
+ */
+export function onElementStoreChanged(listener: StoreListener | null): void {
+  storeListener = listener;
+}
+
+/**
+ * A store that says when it changed.
+ *
+ * Only the three mutating methods are overridden, because they are the whole of the
+ * surface: a `ServerElement` is replaced rather than edited in place everywhere in this
+ * codebase — `store.set(id, { ...existing, … })` — which is what makes watching the Map
+ * enough.
+ */
+class WatchedElementStore extends Map<string, ServerElement> {
+  constructor(private readonly workspaceId: string) {
+    super();
+  }
+
+  private changed(): void {
+    storeListener?.(this.workspaceId);
+  }
+
+  override set(id: string, element: ServerElement): this {
+    super.set(id, element);
+    this.changed();
+    return this;
+  }
+
+  override delete(id: string): boolean {
+    const removed = super.delete(id);
+    if (removed) this.changed();
+    return removed;
+  }
+
+  override clear(): void {
+    super.clear();
+    this.changed();
+  }
+}
+
 const stores = new Map<string, Map<string, ServerElement>>([
   // The default store is the Map exported from types.ts, so anything still importing
-  // it directly — the CLI, for one — keeps operating on the same data.
+  // it directly — the CLI, for one — keeps operating on the same data. It is therefore
+  // the one store that is not watched; `isWatchedStore` is how a caller finds that out
+  // rather than discovering it as silence.
   [DEFAULT_WORKSPACE_ID, defaultElements],
 ]);
 
@@ -27,10 +82,15 @@ export function elementsFor(workspaceId: string | undefined | null): Map<string,
   const id = normalizeWorkspaceId(workspaceId);
   let store = stores.get(id);
   if (!store) {
-    store = new Map<string, ServerElement>();
+    store = new WatchedElementStore(id);
     stores.set(id, store);
   }
   return store;
+}
+
+/** Whether a workspace's store reports its own changes. False for the default store alone. */
+export function isWatchedStore(workspaceId: string | undefined | null): boolean {
+  return elementsFor(workspaceId) instanceof WatchedElementStore;
 }
 
 /**
