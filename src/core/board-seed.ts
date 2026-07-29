@@ -52,7 +52,9 @@ export interface BoardScene {
 }
 
 /**
- * One element as it may be seeded: verbatim, minus any claim that something is running.
+ * One element as it may be seeded: verbatim, minus any claim that something is running,
+ * and — for a block — drawn in the palette this code has rather than the one it was
+ * exported in.
  *
  * Returns the element untouched when it claims nothing, which is every shape on a board
  * that has never had an issue block on it.
@@ -65,7 +67,10 @@ export function seedableElement(element: ServerElement): ServerElement {
   let appearance: Partial<ServerElement> = {};
 
   if (next.issueState === 'running') {
-    const { issueState, issueError, ...rest } = next;
+    // The instants go with the state they describe. A seeded block whose run was dropped
+    // would otherwise carry the moment that run started, and a clock is only ever read
+    // against a `running` block — so keeping them is keeping a claim nothing can settle.
+    const { issueState, issueError, issueStartedAt, issueEndedAt, ...rest } = next;
     // A block that already produced an issue is `created`, whatever the stuck state said —
     // dropping the state outright would send it back to offering a run the POST route then
     // refuses. The look goes back with the state, or a created block would keep wearing the
@@ -81,7 +86,19 @@ export function seedableElement(element: ServerElement): ServerElement {
     next = withoutRun;
   }
 
-  if (next === custom) return element;
+  // A block's look is the server's, drawn from its state (`docs/issue-block.md`), and a
+  // saved board is the one place a look can arrive from outside this process. So the block
+  // is repainted from the mapping as it is read: a board exported before the palette moved
+  // would otherwise come back in the old hue and stay there, nothing else on the way in
+  // ever writing a block's colours again. Only a block — repainting anything else on a
+  // saved scene would be the seed redecorating somebody's drawing.
+  if (next.kind === 'issue') {
+    appearance = issueBlockAppearance(next.issueState as string | undefined);
+  }
+
+  const asFields = element as unknown as Record<string, unknown>;
+  const repainted = Object.entries(appearance).some(([field, value]) => asFields[field] !== value);
+  if (next === custom && !repainted) return element;
   return { ...element, ...appearance, customData: next };
 }
 

@@ -199,6 +199,18 @@ them to prove nothing keys on a string.
 A card that cannot be moved keeps its grey fill instead. "Not this board's to rearrange" outranks
 which column it happens to be sitting in.
 
+**And the rule reaches the blocks in the notes column, which are the one population it used to
+miss.** A block takes its colours from its stage rather than from a column, and everywhere else
+the two populations sit apart — but the notes column stacks them under one header, and a yellow
+block under a blue bar read as a mistake (#195). The block's first stage is now that header's own
+stroke and that column's own tint, `#1971c2` on `#e7f5ff`, with the stage still carried by the
+outline and by one step down the ramp (`docs/issue-block.md`). The mirror still paints no drafts
+— the layout only *places* them, geometry and nothing else — so this is a constant in
+`src/core/issue-appearance.ts` rather than a column being consulted, and
+`check-notes-block-hue.mjs` reads the header's stroke out of the layout to hold the two together.
+A block becoming a card therefore becomes a visible move between hues: a created issue is dropped
+into Todo, which is the next column and the next stroke along.
+
 The outline is a second, independent fact: **whether an agent is on it.**
 
 | Outline | Means |

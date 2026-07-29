@@ -128,7 +128,8 @@ async function dropBlock(y, observation, customData = {}) {
     method: 'POST',
     body: JSON.stringify({
       type: 'rectangle', x: 100, y, width: 400, height: 120,
-      strokeColor: '#f08c00', backgroundColor: '#fff9db', strokeStyle: 'dashed',
+      // The first stage, as the library ships it: the notes column's hue since #195.
+      strokeColor: '#1971c2', backgroundColor: '#e7f5ff', strokeStyle: 'dashed',
       customData: {
         kind: 'issue', projectBoardDraft: true,
         sectionOptionId: 'canvas:notes', draftCreatedAt: 1785164170251,
@@ -218,7 +219,7 @@ try {
         afterTheSync?.customData?.issueTitle === ISSUE_TITLE,
         `title=${afterTheSync?.customData?.issueTitle}`);
   check('the block is still drawn as one with an issue behind it',
-        afterTheSync?.strokeStyle === 'solid' && afterTheSync?.strokeColor === '#e67700',
+        afterTheSync?.strokeStyle === 'solid' && afterTheSync?.strokeColor === '#1864ab',
         `strokeStyle=${afterTheSync?.strokeStyle} strokeColor=${afterTheSync?.strokeColor}`);
   // The other half. A merge that answered #118 by ignoring the browser would break the
   // thing the sync exists for.

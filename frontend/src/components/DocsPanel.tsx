@@ -34,6 +34,13 @@ export interface IssueTarget {
   issueTitle?: string | null
   /** The text that produced the issue, preserved when the label was retitled. */
   observation?: string | null
+  /**
+   * When the research run started and stopped, ISO. Kept on the element for the reason the
+   * implement pair below is: a block has to read correctly with nothing selected and no
+   * network, and a clock ticking on the server would rewrite the shape once a second.
+   */
+  issueStartedAt?: string | null
+  issueEndedAt?: string | null
   /** Files attached as reference material for the run, by id in the server's file store. */
   images?: string[]
   /** Set once an agent has been asked to implement the issue. */
@@ -231,6 +238,28 @@ const NO_IMPLEMENT: ImplementView = {
   state: null, url: null, error: null, startedAt: null, endedAt: null, usage: null
 }
 
+/**
+ * The three things any run has to show for itself: when it began, when it stopped, what it
+ * spent.
+ *
+ * Named apart from `ImplementView` because there are three runs on this panel now — the
+ * implementation, the investigation that produced the issue, and the one that rewrites it —
+ * and they agree about nothing except this. What they disagree about is where the parts come
+ * from: an implementation keeps all three on one record, while a research run keeps the
+ * instants on the element and the figures on a record, so the panel assembles them.
+ */
+type RunView = Pick<ImplementView, 'startedAt' | 'endedAt' | 'usage'>
+
+/** Nothing known about a run yet, which is what every selection starts from. */
+const NO_RUN: RunView = { startedAt: null, endedAt: null, usage: null }
+
+/** A research run as `GET /api/issue-block/:id/run` and `GET /api/issue/recreate` hand it over. */
+const runView = (record: Record<string, unknown> | null | undefined): RunView => ({
+  startedAt: (record?.startedAt as string) ?? null,
+  endedAt: (record?.endedAt as string) ?? null,
+  usage: (record?.usage as ImplementView['usage']) ?? null
+})
+
 /** An implementation record as the server hands it over, in the shape the panel wants. */
 const implementView = (record: Record<string, unknown> | null | undefined): ImplementView => ({
   state: (record?.state as ImplementView['state']) ?? null,
@@ -288,6 +317,11 @@ const RunClock: React.FC<{ startedAt: string; endedAt: string | null }> = ({ sta
 /**
  * The run's progress: how long it has taken, and what it has spent when it says.
  *
+ * One renderer for all three runs on this panel rather than one each. They are shown in
+ * different places and started by different buttons, but *what* is worth saying about a run in
+ * flight is the same question with the same answer, and a second copy of this would be a
+ * second answer to it — reading `28.4k out` beside one run and `28400 output` beside the next.
+ *
  * The tokens are absent far more often than not — they arrive only when the board's
  * configured agent command already asks for a machine-readable stream — so the layout has
  * to read properly with the clock alone.
@@ -299,16 +333,16 @@ const RunClock: React.FC<{ startedAt: string; endedAt: string | null }> = ({ sta
  * Absent when the agent never broke it down, which is not the same as a run that thought
  * for nothing.
  */
-const RunProgress: React.FC<{ implement: ImplementView }> = ({ implement }) => {
-  if (!implement.startedAt) return null
-  const thinking = implement.usage?.thinkingTokens
+const RunProgress: React.FC<{ run: RunView }> = ({ run }) => {
+  if (!run.startedAt) return null
+  const thinking = run.usage?.thinkingTokens
   return (
     <p className="element-docs__progress">
-      <RunClock startedAt={implement.startedAt} endedAt={implement.endedAt} />
-      {implement.usage && (
+      <RunClock startedAt={run.startedAt} endedAt={run.endedAt} />
+      {run.usage && (
         <span className="element-docs__tokens">
-          {' · '}{formatTokens(implement.usage.inputTokens)} in
-          {' · '}{formatTokens(implement.usage.outputTokens)} out
+          {' · '}{formatTokens(run.usage.inputTokens)} in
+          {' · '}{formatTokens(run.usage.outputTokens)} out
           {typeof thinking === 'number' && (
             <span
               className="element-docs__thinking"
@@ -415,6 +449,25 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   const [recreateSending, setRecreateSending] = useState(false)
   const [recreateState, setRecreateState] = useState<PanelRunState>(null)
   const [recreateError, setRecreateError] = useState<string | null>(null)
+  /** The clock and the totals of the rewrite, off the same record its state comes from. */
+  const [recreateRun, setRecreateRun] = useState<RunView>(NO_RUN)
+  /**
+   * What the block's own research run has spent.
+   *
+   * Only the figures are read here. The two instants are on the element and arrive over the
+   * socket, so the clock is already right before this lands — which is what keeps a block
+   * readable with no network, and what stops the poll being the thing the clock depends on.
+   */
+  const [issueRun, setIssueRun] = useState<RunView>(NO_RUN)
+  /**
+   * Whether the research run was still going the last time this looked.
+   *
+   * The same reason `wasRunning` exists for the implementation: the ending arrives over the
+   * socket as an element update carrying the state and not the figures, so a run that settles
+   * under the reader's eyes needs one last read to replace whatever total was polled while it
+   * was still going.
+   */
+  const wasResearching = useRef(false)
   /**
    * Whether the run being watched is one this panel started.
    *
@@ -599,6 +652,12 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
     setRecreateState(null)
     setRecreateError(null)
     wasRecreating.current = false
+    // Both sets of figures belong to the run they were spent on, and the polls above are one
+    // tick behind a selection that changed — so they are cleared rather than carried, or the
+    // next block would open showing what the last one spent.
+    setRecreateRun(NO_RUN)
+    setIssueRun(NO_RUN)
+    wasResearching.current = false
   }
 
   // A refusal belongs to the block it was refused for, and to the state it was refused in.
@@ -680,6 +739,47 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   }, [issueUrl, implement.state, workspace])
 
   /**
+   * What the block's research run is spending, while it spends it.
+   *
+   * Polled rather than pushed, and only the figures are polled. They cannot ride on the
+   * element: a total that changes throughout a run would bump the shape's `version` and
+   * broadcast an update every time it moved, which is the churn the clock beside it is
+   * careful to avoid. So the server keeps them on a record and the panel asks — a read of
+   * memory, with no `gh` behind it.
+   *
+   * The last read is the one that matters and is why the record outlives the run: the ending
+   * arrives over the socket as an element update, carrying the state and not the figures, so
+   * without it the panel would keep whichever total it happened to poll while the run was
+   * still going.
+   */
+  useEffect(() => {
+    const blockId = issue?.id
+    if (!blockId || !issueState) return
+
+    let cancelled = false
+    const read = (): void => {
+      fetch(`/api/issue-block/${encodeURIComponent(blockId)}/run?workspace=${encodeURIComponent(workspace)}`)
+        .then((response) => response.json())
+        .then((body) => {
+          if (cancelled || !body?.success) return
+          setIssueRun(runView(body.run))
+        })
+        .catch(() => undefined)
+    }
+
+    if (issueState !== 'running') {
+      if (wasResearching.current) read()
+      wasResearching.current = false
+      return () => { cancelled = true }
+    }
+
+    wasResearching.current = true
+    read()
+    const timer = setInterval(read, 4000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [issue?.id, issueState, workspace])
+
+  /**
    * Whether the issue is being researched again, and what that run left behind.
    *
    * Polled rather than pushed, for the reason the implement record is: a mirrored card has no
@@ -700,10 +800,13 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
         .then((response) => response.json())
         .then((body) => {
           if (cancelled || !body?.success) return
-          const record = (body.recreate ?? null) as { state?: string; error?: string | null } | null
+          const record = (body.recreate ?? null) as Record<string, unknown> | null
           const state = (record?.state as PanelRunState) ?? null
           setRecreateState(state === 'done' && !wasRecreating.current ? null : state)
-          setRecreateError(state === 'failed' ? (record?.error ?? 'The run failed.') : null)
+          setRecreateError(
+            state === 'failed' ? ((record?.error as string) ?? 'The run failed.') : null
+          )
+          setRecreateRun(runView(record))
         })
         .catch(() => undefined)
     }
@@ -828,7 +931,7 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
 
                 {/* The clock belongs to a finished run as much as to a live one: "it took
                     forty minutes" is the answer to the same question, asked afterwards. */}
-                {implement.state !== null && <RunProgress implement={implement} />}
+                {implement.state !== null && <RunProgress run={implement} />}
 
                 {implement.state === 'running' && (
                   <>
@@ -1066,6 +1169,11 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                     The issue was rewritten. Its number, its card and its comments are unchanged.
                   </p>
                 )}
+                {/* Under whichever sentence applies, because the sentence says what is
+                    happening and this says how far in. A rewrite keeps both instants on its
+                    record, so the total stays on screen once it is over rather than
+                    disappearing at the moment it is worth reading. */}
+                {recreateState !== null && <RunProgress run={recreateRun} />}
                 {recreateError && <p className="element-docs__error">{recreateError}</p>}
               </div>
 
@@ -1120,6 +1228,18 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                 Researching the repository and drafting the issue. This takes minutes, and
                 there is no time limit on the run.
               </p>
+              {/* The number that sentence was missing. Assembled from two sources on purpose:
+                  the instants come off the element, so the clock is right on the first frame
+                  and with no network, and only the totals wait for the poll — a figure that
+                  moves throughout a run cannot live on a shape without rewriting it every
+                  time it moves. */}
+              <RunProgress
+                run={{
+                  startedAt: issue.issueStartedAt ?? issueRun.startedAt,
+                  endedAt: issue.issueEndedAt ?? issueRun.endedAt,
+                  usage: issueRun.usage
+                }}
+              />
               {/* Without a ceiling, nothing else ever clears this state — and the create
                   control is hidden while it holds, so a lost run would kill the block for
                   good. The server refuses while a run is genuinely in flight, so this is a
