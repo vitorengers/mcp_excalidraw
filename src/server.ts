@@ -105,11 +105,25 @@ import {
   workspaceIdFrom,
   normalizeWorkspaceId,
   activeWorkspaceIds,
+  onElementStoreChanged,
   DEFAULT_WORKSPACE_ID
 } from './core/element-store.js';
+import {
+  boardStateFile,
+  flushBoardStateSaves,
+  persistBoardFor,
+  readBoardState,
+  scheduleBoardStateSave,
+  SavedBoard
+} from './core/board-state.js';
 
 // Load environment variables
 dotenv.config();
+
+// Every write to every store reaches the save half through here, rather than each of the
+// dozen writers remembering to. Nothing is written until a board has been registered as worth
+// saving, which only `seedBoards` does, so importing this module still saves nothing.
+onElementStoreChanged(scheduleBoardStateSave);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2557,11 +2571,86 @@ async function recoverInterruptedRuns(): Promise<void> {
   }
 }
 
+/** A project's tracked board file, read, or nothing — with when it was last written. */
+async function readBoardFile(
+  workspaceId: string,
+  boardFile: string
+): Promise<{ scene: BoardScene; modifiedAt: number } | null> {
+  try {
+    const [raw, stats] = await Promise.all([
+      fs.readFile(boardFile, 'utf-8'),
+      fs.stat(boardFile)
+    ]);
+    const scene = parseBoardScene(raw);
+    if (!scene.elements.length) {
+      logger.warn(`Board for "${workspaceId}" at ${boardFile} has no elements to load.`);
+      return null;
+    }
+    return { scene, modifiedAt: stats.mtimeMs };
+  } catch (error) {
+    const reason = (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? 'there is no such file'
+      : (error as Error).message;
+    logger.warn(`Board for "${workspaceId}" not loaded from ${boardFile}: ${reason}`);
+    return null;
+  }
+}
+
 /**
- * Put one registered board's saved scene into its store.
+ * The scene a board comes back with, out of the two places it may have been kept.
  *
- * Opt-in: a project that declares no `board` is left empty, which is the only way a board
- * that is genuinely meant to start blank can stay blank.
+ * The state this process saved last (`core/board-state.ts`) is the newer of the two by
+ * definition — it is written a second after every change — so it is what the board comes
+ * back as. Unless the tracked board file has been written *since*, which is what a pull, a
+ * merge or a fresh export looks like from here: then the file is the base, because somebody
+ * deliberately changed it, and the elements only this process ever knew about are put back on
+ * top so that a draft with no copy anywhere else is not the price of updating the board.
+ *
+ * Sorted by `index` when both contributed. Excalidraw treats fractional indices as valid only
+ * while they increase along the array, and an array that reads as broken has its indices
+ * regenerated from the array order — which is how twenty labels once ended up underneath the
+ * cards they label (`scripts/export-board.mjs`).
+ */
+function chooseSeed(
+  workspaceId: string,
+  boardFile: string | null,
+  saved: SavedBoard | null,
+  fromFile: { scene: BoardScene; modifiedAt: number } | null
+): { scene: BoardScene; from: string } | null {
+  if (saved && (!fromFile || saved.savedAt >= fromFile.modifiedAt)) {
+    return { scene: saved.scene, from: saved.file };
+  }
+  if (!fromFile) return null;
+  if (!saved) return { scene: fromFile.scene, from: String(boardFile) };
+
+  const known = new Set(fromFile.scene.elements.map((element) => element.id));
+  const only = saved.scene.elements.filter((element) => !known.has(element.id));
+  const indexOf = (element: ServerElement): string => {
+    const index = (element as unknown as { index?: unknown }).index;
+    return typeof index === 'string' ? index : '';
+  };
+  const elements = [...fromFile.scene.elements, ...only]
+    .sort((left, right) => (indexOf(left) < indexOf(right) ? -1 : indexOf(left) > indexOf(right) ? 1 : 0));
+
+  logger.info(
+    `${boardFile} is newer than ${saved.file} for "${workspaceId}", so it is the board; `
+    + `${only.length} element(s) only this process had were kept from the saved state.`
+  );
+  return {
+    scene: { elements, files: { ...saved.scene.files, ...fromFile.scene.files } },
+    from: `${boardFile} (+ ${only.length} from ${saved.file})`
+  };
+}
+
+/**
+ * Put one registered board's saved scene into its store, and say it is worth saving from now
+ * on.
+ *
+ * Opt-in as far as the *tracked* file goes: a project that declares no `board` still grows no
+ * file anywhere near itself, which is the only way a board that is genuinely meant to start
+ * blank can stay blank. What it does gain is the state this process keeps of it — outside
+ * every project, in the canvas's own state directory — because a draft on a board that
+ * declares no file has even fewer places to survive than one on a board that does.
  *
  * Seeded by the *normalised* id. `elementsFor` normalises its argument and the registry
  * does not, so the raw id would reach the same store — but `broadcast` compares against
@@ -2569,32 +2658,30 @@ async function recoverInterruptedRuns(): Promise<void> {
  * would be seeded correctly and told to nobody.
  */
 async function seedBoardFromFile(workspace: Workspace): Promise<void> {
-  if (workspace.error || !workspace.boardFile) return;
+  if (workspace.error) return;
 
   const workspaceId = normalizeWorkspaceId(workspace.id);
   const store = elementsFor(workspaceId);
   if (store.size) {
     // Empty at startup, which is when this runs. Said out loud rather than assumed, because
     // the one thing this must never do is land on top of a board somebody is working on.
-    logger.warn(`Not loading ${workspace.boardFile}: "${workspaceId}" already holds ${store.size} element(s).`);
+    logger.warn(`Not loading a saved board: "${workspaceId}" already holds ${store.size} element(s).`);
     return;
   }
 
-  let scene: BoardScene;
-  try {
-    scene = parseBoardScene(await fs.readFile(workspace.boardFile, 'utf-8'));
-  } catch (error) {
-    const reason = (error as NodeJS.ErrnoException).code === 'ENOENT'
-      ? 'there is no such file'
-      : (error as Error).message;
-    logger.warn(`Board for "${workspaceId}" not loaded from ${workspace.boardFile}: ${reason}`);
-    return;
-  }
+  const [saved, fromFile] = await Promise.all([
+    readBoardState(workspaceId),
+    workspace.boardFile ? readBoardFile(workspaceId, workspace.boardFile) : Promise.resolve(null)
+  ]);
 
-  if (!scene.elements.length) {
-    logger.warn(`Board for "${workspaceId}" at ${workspace.boardFile} has no elements to load.`);
-    return;
-  }
+  // After the read and before the first write, so a board that could not be read is still
+  // saved from now on — and so that a failed read can never be written over what it failed
+  // to read before anybody has seen it.
+  persistBoardFor(workspaceId);
+
+  const chosen = chooseSeed(workspaceId, workspace.boardFile, saved, fromFile);
+  if (!chosen) return;
+  const scene = chosen.scene;
 
   for (const element of scene.elements) store.set(element.id, element);
   // Content-addressed and process-wide, so a file already held is the same file.
@@ -2605,7 +2692,7 @@ async function seedBoardFromFile(workspace: Workspace): Promise<void> {
   // until something else made it refetch.
   broadcast({ type: 'elements_batch_created', elements: scene.elements } as BatchCreatedMessage, workspaceId);
 
-  logger.info(`Loaded ${scene.elements.length} element(s) into "${workspaceId}" from ${workspace.boardFile}`);
+  logger.info(`Loaded ${scene.elements.length} element(s) into "${workspaceId}" from ${chosen.from}`);
 }
 
 /**
@@ -4593,6 +4680,11 @@ async function startServer(): Promise<void> {
 
   const shutdown = (signal: NodeJS.Signals): void => {
     logger.info(`Received ${signal}, shutting down canvas server`);
+    // Whatever the debounce still owes, written now. Not the whole of the save half — a
+    // process that is killed outright never gets here, which is why the debounce is a second
+    // rather than a minute — but a shutdown that discarded the last edit would be the same
+    // loss #225 is about, arriving through the one door that could have been closed politely.
+    flushBoardStateSaves();
     if (ownsPidFile) removePidFile(PORT);
     server.close(() => process.exit(0));
     // Force-exit if open sockets keep the server from closing promptly
@@ -4601,6 +4693,7 @@ async function startServer(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('exit', () => {
+    flushBoardStateSaves();
     if (ownsPidFile) removePidFile(PORT);
   });
 }
