@@ -31,6 +31,13 @@ export default defineConfig({
         target: 'http://127.0.0.1:3000',
         changeOrigin: true,
       },
+      // `EXCALIDRAW_ASSET_PATH` in `frontend/index.html` sends the canvas fonts here, and in
+      // dev this server owns `/assets`. Only the fonts go across: everything else under
+      // `/assets` in dev is Vite's own, and the canvas server has never heard of it.
+      '/assets/fonts': {
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true,
+      },
     },
   },
 })

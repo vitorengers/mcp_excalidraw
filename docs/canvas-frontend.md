@@ -133,6 +133,51 @@ while a tab is open without them being wiped on the next tick.
 The active workspace id rides along on every call, from a ref rather than from React state:
 switching tabs while a request is in flight otherwise lands the answer in the wrong store.
 
+## The scene waits for its fonts
+
+Excalidraw does not keep the `width` a text element was authored with. Every element this app
+puts on the canvas goes through `convertToExcalidrawElements`, whose `text` branch calls
+`newTextElement`, and that discards the incoming width and re-measures the string with a
+`CanvasRenderingContext2D` — in whatever font the browser has at that instant. On a cold profile
+that instant is before any webfont has arrived, so the width recorded is the *fallback* font's,
+which is narrower. When Excalifont lands, `Fonts.onLoaded` invalidates the shape cache and
+repaints, but it never re-measures: the glyphs are now wider than the width the element is
+clipped to, and the tail of every label is cut. Nothing later fixes it — these are authored
+elements, and nothing redraws them (#234).
+
+So `canvas-fonts.ts` holds the scene until the fonts it is written in can be measured, and
+`handleWebSocketMessage` and `loadExistingElements` — the two ways a board first reaches the
+canvas — await it before converting anything. The wait is per family and per character: only the
+`woff2` subsets the incoming text actually needs are asked for, which matters because Excalifont
+alone is split across seven files by `unicodeRange` and `Especificação` is not in the same one as
+`Especificacao`. It gives up after six seconds and draws anyway; a label a character short is
+worth having, a canvas that never appears is not.
+
+**`document.fonts.check` is not what it waits on, and cannot be.** For a family nothing has
+registered it answers `true` — the system font substituted for it is by definition already
+loaded — so on the one load where the answer matters, before Excalidraw has added its
+`FontFace`s, it says yes to every font in the world. What is used instead is the `FontFace`
+objects themselves plus a measurement: a family being substituted measures exactly the same as a
+family that does not exist, and a real load moves that number.
+
+This is a different clipping from the one the mirror shows on first paint. A mirror label is
+*derived*, so the next 20-second poll redraws and re-measures it with the font in place and it
+settles by itself. An authored element has nothing that would.
+
+**The fonts come from this server, not from a CDN.** `frontend/index.html` sets
+`window.EXCALIDRAW_ASSET_PATH = '/assets/'`, which is the mount `src/server.ts` already had over
+`node_modules/@excalidraw/excalidraw/dist/prod/fonts`. Without it Excalidraw's
+`ExcalidrawFontFace.createUrls` has one source and it is
+`https://esm.sh/@excalidraw/excalidraw@<version>/dist/prod/` — which is why `GET /fonts/…woff2`
+against this server answered 404 while the `FontFace` still reached `loaded`: the file was never
+coming from here. A board on a machine with no internet could not draw its own font at all. The
+CDN stays on as the second `src()` of every face, so a build missing that directory degrades to
+what it did before rather than losing the font. In dev, `vite.config.js` proxies `/assets/fonts`
+across to the canvas server for the same reason.
+
+`scripts/check-canvas-fonts-browser.mjs` drives a cold Chrome over all of it, with `esm.sh`
+blocked in one scenario and every `woff2` held back 2.5 s in the other.
+
 ## Verification needs a real browser
 
 Three defects here compiled cleanly and did not work: a panel that never opened, a race in tab

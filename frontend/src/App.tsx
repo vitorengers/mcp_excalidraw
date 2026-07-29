@@ -11,6 +11,7 @@ import {
 } from '@excalidraw/excalidraw'
 import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
 import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/mermaidConverter'
+import { canvasFontsReady } from './canvas-fonts'
 import { CollapsibleTarget, CommentPosted, IssueTarget } from './components/DocsPanel'
 import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
 import type { Rect } from '../../src/core/anchored-placement'
@@ -4703,6 +4704,9 @@ function App(): JSX.Element {
       const result: ApiResponse = await response.json()
 
       if (result.success && result.elements && result.elements.length > 0) {
+        // The socket's own path waits in `handleWebSocketMessage`; this one is the other way a
+        // board first reaches the canvas, and measures the same way (#234).
+        await canvasFontsReady(result.elements)
         const cleanedElements = result.elements.map(cleanElementForExcalidraw)
         const convertedElements = convertElementsPreservingImageProps(cleanedElements)
         if (excalidrawAPI) {
@@ -4896,6 +4900,18 @@ function App(): JSX.Element {
   }
 
   const handleWebSocketMessage = async (data: WebSocketMessage): Promise<void> => {
+    if (!excalidrawAPIRef.current) {
+      return
+    }
+
+    // Before anything is converted, because converting is what measures. Every path below ends
+    // in `convertElementsPreservingImageProps`, and `newTextElement` inside it records the
+    // width the browser measures *now* — the fallback font's, on a cold profile, kept for good
+    // (#234). One `await` at the top of the funnel rather than at each of them: the messages
+    // still arrive in order, because each handler suspends at the same point and resumes in
+    // the order it suspended.
+    await canvasFontsReady(data.elements ?? (data.element ? [data.element] : null))
+
     const excalidrawAPI = excalidrawAPIRef.current
     if (!excalidrawAPI) {
       return
