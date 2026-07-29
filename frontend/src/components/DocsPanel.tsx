@@ -186,7 +186,7 @@ export interface DocsPanelBodyProps {
    * call because it is the same run — one parameter rather than a second handler, so the two
    * cannot drift into disagreeing about which issue is being worked on.
    */
-  onImplementIssue?: (issue: IssueTarget, resume?: boolean) => Promise<string | null>
+  onImplementIssue?: (issue: IssueTarget, resume?: boolean, interactive?: boolean) => Promise<string | null>
   /** Clears a `running` state whose agent is gone. Does not stop a live run. */
   onResetImplement?: (issue: IssueTarget) => Promise<string | null>
   /** The same, for the run that researches the issue. Neither run has a time limit. */
@@ -878,11 +878,12 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
    * Written through to what is remembered as well, or the next selection would paint the
    * record from before the click and offer to start the run a second time.
    *
-   * One function for both controls: what differs between resuming and starting over is a
-   * flag the server reads, and everything the panel does about it — the optimistic state,
-   * the cache, the failure — is identical.
+   * One function for all three controls: what differs between resuming, starting over and
+   * asking for a tab to answer is a flag the server reads, and everything the panel does
+   * about it — the optimistic state, the cache, the failure — is identical. A board that can
+   * only refuse the third one with a 409 needs that failure to land where the other two do.
    */
-  const startRun = async (resume: boolean): Promise<void> => {
+  const startRun = async (resume: boolean, interactive = false): Promise<void> => {
     if (!issue || !onImplementIssue) return
 
     const started: ImplementView = {
@@ -890,7 +891,7 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
     }
     setImplement(started)
     if (issueUrl) rememberImplement(workspace, issueUrl, started)
-    const error = await onImplementIssue(issue, resume)
+    const error = await onImplementIssue(issue, resume, interactive)
     if (error) {
       const failed: ImplementView = { ...NO_IMPLEMENT, state: 'failed', error }
       setImplement(failed)
@@ -1063,6 +1064,27 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                       onClick={() => startRun(false)}
                     >
                       Implement / Fix
+                    </button>
+                  )}
+
+                  {/* The same run, in a tab that is something to answer rather than something
+                      to watch — #220. It was the shape of `EXCALIDRAW_IMPLEMENT_AGENT` and a
+                      server restart, which is a setting nobody reading the board could find,
+                      and it has now been asked for twice.
+
+                      Beside "Implement / Fix" rather than instead of it, because the trade is
+                      real and belongs to whoever is clicking: an interactive run does not end
+                      by itself and the token figures go silent, so the queue wants the
+                      headless one. Offered wherever the ordinary run is, and last, so the
+                      button under the pointer is still the one it always was. */}
+                  {offersImplement({ githubState, implementState: implement.state }) && onImplementIssue && (
+                    <button
+                      type="button"
+                      className="element-docs__collapse element-docs__action"
+                      title="The same run, in a terminal tab you can type into: the prompt goes to the agent as an argument instead of down its stdin, so it starts its own interface. It will not end by itself — close the tab when it is done — and it reports no token counts."
+                      onClick={() => startRun(false, true)}
+                    >
+                      Implement, and let me answer
                     </button>
                   )}
                 </div>

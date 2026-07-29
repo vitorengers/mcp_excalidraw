@@ -279,10 +279,34 @@ const TerminalScreen: React.FC<{
   output: string
   ended: string | null
   theme: TerminalTheme
+  /**
+   * Whether this session's output arrives with no carriage returns in it.
+   *
+   * True for a session on pipes, and that is the whole of the rule. A pipe is not a terminal
+   * and carries no output translation: a program writes `\n`, `\n` is what comes out, and
+   * xterm's default `convertEol: false` moves the cursor down a row and leaves the column
+   * exactly where it was — so line two starts where line one ended, line three where line two
+   * ended, and the transcript walks diagonally off the right edge. That is #220, seen in an
+   * agent tab because a `-p` run is deliberately on pipes, but it is every pipe-mode session's:
+   * a machine with no `@lydell/node-pty` binary, or a board started with
+   * `EXCALIDRAW_TERMINAL_PTY=0`, staircases every `ls` the same way.
+   *
+   * A pseudoterminal does the translation itself, which is why a pty tab never showed it and
+   * why this is keyed to the mode rather than turned on for everyone. The one thing
+   * `convertEol` also rewrites is a bare LF meant as "down one row, same column" by a program
+   * repainting a screen — and on pipes no such program runs, since `stdin.isTTY` is false and
+   * a full-screen program takes its non-interactive path there. That is this repository's own
+   * reason for preferring a PTY, and keying the option to the mode keeps the argument true.
+   *
+   * Here rather than in the renderer, because the renderer is one producer of many and its
+   * bytes are read by the raw tap, `extractGithubUrl` and `UsageMeter` — #219 exists to keep
+   * those unchanged. Nothing on the server sees a different byte for this.
+   */
+  convertEol: boolean
   onData: (data: string) => void
   registerFocus: (focus: (() => void) | null) => void
   isBoardHotkey: (event: KeyboardEvent) => boolean
-}> = ({ active, fontSize, cols, rows, output, ended, theme, onData, registerFocus, isBoardHotkey }) => {
+}> = ({ active, fontSize, cols, rows, output, ended, theme, convertEol, onData, registerFocus, isBoardHotkey }) => {
   const hostRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   /** How much of `output` has been handed to the emulator, so a redraw is a delta. */
@@ -310,6 +334,9 @@ const TerminalScreen: React.FC<{
       cols,
       rows,
       cursorBlink: true,
+      // Named at construction as well as pushed below, so the first chunk of a session that
+      // opened before this block did is drawn straight too. See the prop.
+      convertEol,
       // The theme this block is *opened* in. It is pushed again below whenever the board's
       // changes — this effect must not depend on it, or a toggle would rebuild the emulator.
       theme: terminalXtermTheme(theme)
@@ -405,6 +432,17 @@ const TerminalScreen: React.FC<{
     // pushed by the effects below; rebuilding on either would lose the screen it is drawing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Before the transcript is written, and that ordering is the point: a session's mode arrives
+  // on the same poll its scrollback does, so this effect and the one below fire in the same
+  // commit, and the one that decides where a line lands has to run first. Pushed rather than
+  // only named above because a tab whose status has not landed yet is drawn before it has a
+  // mode to key on — and it never changes afterwards, so this settles once and stays.
+  useEffect(() => {
+    const terminal = terminalRef.current
+    if (!terminal) return
+    terminal.options.convertEol = convertEol
+  }, [convertEol])
 
   // The delta, not the whole thing: an emulator is a screen being written to, so handing it
   // the transcript again on every chunk would print the session over itself. A transcript
@@ -759,6 +797,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             output={tab.output}
             ended={tab.ended}
             theme={theme}
+            // One emulator per session and every one of them kept alive, so this is per tab:
+            // the pipe-mode tab beside a pty one is the only one told to translate.
+            convertEol={tab.status?.mode === 'pipe'}
             onData={(data) => { if (!tab.status?.readOnly) onInput(tab.id, data) }}
             // Asked whatever the tab's stdin is. A read-only session drops keystrokes, but
             // the four board keys were never the session's to drop — they navigate the
