@@ -17,8 +17,10 @@ export const AUTHORED_ZOOM = 1
  * `scrollToContent({ fitToViewport: true })` fits **both** axes — it takes
  * `min(canvasWidth / contentWidth, canvasHeight / contentHeight)` — so on a tall, narrow
  * board the height decides, and the wider the display the more of it is thrown away. This
- * board is 1130 x 2732: against a maximised 2560 x 1440 display the width fit is 2.27 and the
- * height fit is 0.48, and the fit took 0.48.
+ * board was a 1130 x 2732 column when #185 was reported: against a maximised 2560 x 1440
+ * display the width fit was 2.27 and the height fit 0.48, and the fit took 0.48. (It is
+ * 2324 x 1978 since #217 put its two sections side by side, which spends width against the
+ * floor below rather than height — still 1 on that display, and checked there.)
  *
  * So the height is no longer allowed to shrink the board past the size it was written at.
  * A board taller than the viewport is **scrolled**, not squeezed.
