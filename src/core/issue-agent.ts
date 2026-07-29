@@ -314,6 +314,46 @@ export function runsHeadless(agentCommand: string): boolean {
 }
 
 /**
+ * The same command line with the flags that make it headless taken off it.
+ *
+ * This is how the board offers an interactive tab for one run without the operator editing
+ * `EXCALIDRAW_IMPLEMENT_AGENT` and restarting the server — #220's comment, and the second
+ * time it has been asked for (#174 was the first, answered with documentation). The shape of
+ * the command still decides the *default*; what changes is that the reader can say "not this
+ * one" at the moment they start it.
+ *
+ * **It only ever removes**, and that asymmetry is deliberate. Adding `-p` to a command that
+ * does not have it would leave the run with no `--output-format stream-json` to read token
+ * counts from and no way to invent one — a board writing flags into a command line it does
+ * not own is the rewrite `agent-usage.ts` refuses to make, and `runsHeadless` exists because
+ * of it. So a command that is already interactive comes back unchanged, and the queue keeps
+ * the headless one it is configured with.
+ *
+ * **More than `-p` comes off, because `-p` does not travel alone.** `--output-format`,
+ * `--input-format` and `--include-partial-messages` are documented by `claude --help` as
+ * *"only works with --print"*, so a command left carrying one of them after `--print` went
+ * would be refused by the CLI rather than started. Removing exactly those is the same reading
+ * of the same command line that `runsHeadless` and `streamsUsage` already do — three flags
+ * whose whole meaning is "this run prints and exits". Nothing else is touched: a `--model`,
+ * an `--add-dir` or anything else the operator wrote survives untouched, and a command that
+ * is not Claude Code loses nothing it did not spell that way.
+ *
+ * Matched as whole arguments, like `runsHeadless`: `--print-mode` is not `--print`, and a
+ * path with `-p` inside it is not a flag. An option's value goes with it in either spelling,
+ * `--output-format json` and `--output-format=json`, because a value left behind would become
+ * the prompt.
+ */
+export function withoutPrintFlags(agentCommand: string): string {
+  // Each pattern eats the whitespace in front of the flag it removes, so what is left needs
+  // no tidying up — which matters, because tidying up a command line means touching the parts
+  // that were not the point. A quoted path with two spaces in it comes back with two spaces.
+  return agentCommand
+    .replace(/(?:^|\s)(?:--output-format|--input-format)(?:=\S+|\s+\S+)(?=\s|$)/g, '')
+    .replace(/(?:^|\s)(?:-p|--print|--include-partial-messages)(?=\s|$)/g, '')
+    .trim();
+}
+
+/**
  * The same text with the terminal's own instructions taken out of it.
  *
  * A run on pipes prints what it means. A run on a pseudoterminal prints a *screen*: colours,

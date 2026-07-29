@@ -372,6 +372,13 @@ try {
   check('Implement / Fix is offered', untouched.buttons.includes('Implement / Fix'),
         JSON.stringify(untouched.buttons));
   check('Resume is not', !untouched.buttons.includes('Resume'), JSON.stringify(untouched.buttons));
+  // #220: the other way to start the same run — in a tab that is something to answer rather
+  // than something to watch. Beside "Implement / Fix" and never instead of it, which is the
+  // same rule this check already holds Resume to, and for the same reason: two controls that
+  // start different runs must not be one control that changes meaning with the state.
+  check('and the interactive run is offered beside the ordinary one',
+        untouched.buttons.includes('Implement, and let me answer'),
+        JSON.stringify(untouched.buttons));
 
   console.log('\n4. clicking Resume continues that attempt rather than starting another');
   await clear();

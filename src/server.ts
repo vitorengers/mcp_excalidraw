@@ -42,7 +42,8 @@ import {
 import { BoardScene, parseBoardScene } from './core/board-seed.js';
 import { listDirectories } from './core/directory-browse.js';
 import {
-  AgentCommands, AgentHost, agentCommandFor, runIssueAgent, runReviseAgent, runsHeadless
+  AgentCommands, AgentHost, agentCommandFor, runIssueAgent, runReviseAgent, runsHeadless,
+  withoutPrintFlags
 } from './core/issue-agent.js';
 import { AgentUsage } from './core/agent-usage.js';
 import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
@@ -2049,7 +2050,7 @@ interface ImplementAnswer {
 async function beginImplement(
   workspaceId: string,
   issueUrl: string,
-  options: { resume?: boolean } = {}
+  options: { resume?: boolean; interactive?: boolean } = {}
 ): Promise<ImplementAnswer> {
   if (!isIssueUrl(issueUrl)) {
     return { status: 400, body: { success: false, error: `Not a GitHub issue URL: ${issueUrl}` } };
@@ -2087,6 +2088,13 @@ async function beginImplement(
         implementUrl: existing.url
       }
     };
+  }
+
+  // Before the slot is claimed, because this refusal has nothing to undo: the board either
+  // has an interactive tab to give or it has not, and neither answer depends on the run.
+  const interactiveRefusal = options.interactive ? await interactiveTabRefusal(workspaceId) : null;
+  if (interactiveRefusal) {
+    return { status: 409, body: { success: false, error: interactiveRefusal } };
   }
 
   // A board that can start runs faster than a machine can finish them needs a budget, and a
@@ -2173,6 +2181,53 @@ async function beginImplement(
 }
 
 /**
+ * Why this board cannot give a run an interactive tab, or null when it can.
+ *
+ * **This is the one place a missing tab stops a run**, and it is deliberate. Everywhere else
+ * a tab is offered and never required — `implementTerminalHost` returns null and the run
+ * happens in a private child exactly as it did before the terminal existed, because a 409
+ * from the cap must never be what stops an implementation from starting. Here the reader
+ * asked for the tab. Falling back would hand them a run with its print flags removed and no
+ * interface to draw with them: no screen, no token counts, and nothing to type into — worse
+ * than the run they would have got by not asking. A refusal that says which of the three is
+ * missing is the honest answer, and the click that produced it can simply be made again
+ * without the ask.
+ *
+ * A 409 rather than a 400, like the cap: a conflict with what this board *is*, not a request
+ * that was malformed.
+ */
+/**
+ * The command line this run is spawned with, which is the operator's unless the reader asked.
+ *
+ * Named rather than written inline so the "unless" is one expression: a run nobody asked
+ * anything about must spawn the string in `EXCALIDRAW_IMPLEMENT_AGENT` byte for byte, and
+ * that is the rule every other feature that touches this command already keeps.
+ */
+function interactiveCommand(agentCommand: string, interactive?: boolean): string {
+  return interactive ? withoutPrintFlags(agentCommand) : agentCommand;
+}
+
+async function interactiveTabRefusal(workspaceId: string): Promise<string | null> {
+  if (!terminalAvailable()) {
+    return 'An interactive run needs a terminal tab to run in, and the terminal is off on '
+      + 'this board. Set EXCALIDRAW_TERMINAL to turn it on, or start the run without asking '
+      + 'for a tab to answer.';
+  }
+  if (!await loadPty()) {
+    return 'An interactive run needs a pseudoterminal, and this board has none — either no '
+      + '@lydell/node-pty binary for this platform, or EXCALIDRAW_TERMINAL_PTY=0. On pipes '
+      + 'there is no interface to draw and nothing to type into, so the terminal tab would '
+      + 'be the same read-only screen an ordinary run gets.';
+  }
+  if (terminalSessionsFor(workspaceId).size >= TERMINAL_SESSION_LIMIT) {
+    return `An interactive run needs one of this board's ${TERMINAL_SESSION_LIMIT} terminal `
+      + 'tabs, and all of them are in use. Close one first, or start the run without asking '
+      + 'for a tab to answer.';
+  }
+  return null;
+}
+
+/**
  * The run itself, once the slot is claimed and the workspace is known to be usable.
  *
  * Split from the guards above so that starting a run and *answering* a request are two
@@ -2182,7 +2237,7 @@ async function beginImplement(
 async function runImplementation(
   workspace: Workspace,
   issueUrl: string,
-  options: { resume?: boolean } = {}
+  options: { resume?: boolean; interactive?: boolean } = {}
 ): Promise<void> {
   const workspaceId = workspace.id;
 
@@ -2223,7 +2278,18 @@ async function runImplementation(
     const result = await runImplementAgent(workspace, issueUrl, {
       // Resolved here rather than handed down: `beginImplement` has already refused a
       // workspace with no command for its environment, so by this line there is one.
-      agentCommand: agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS) as string,
+      //
+      // And this is the whole of what a per-run "interactive" changes. Everything downstream
+      // already reads the shape of the command rather than a second setting — `runsHeadless`
+      // decides whether the tab gets a pseudoterminal, `buildAgentCommand` decides whether
+      // the prompt goes to stdin or travels as the last argument, `streamsUsage` decides
+      // whether there are token counts to read — so taking the print flags off is the same
+      // request the operator makes by leaving them out of `EXCALIDRAW_IMPLEMENT_AGENT`, made
+      // once instead of forever. `withoutPrintFlags` only ever removes; a command with no
+      // print flags in it comes back byte for byte.
+      agentCommand: interactiveCommand(
+        agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS) as string, options.interactive
+      ),
       notFoundVariable: 'EXCALIDRAW_IMPLEMENT_AGENT_WSL',
       worktree,
       resuming,
@@ -2603,7 +2669,10 @@ app.post('/api/issue-block/:id/implement', async (req: Request, res: Response) =
     return res.status(400).json({ success: false, error: 'This block has no issue to implement.' });
   }
 
-  const answer = await beginImplement(workspaceId, issueUrl, { resume: req.body?.resume === true });
+  const answer = await beginImplement(workspaceId, issueUrl, {
+    resume: req.body?.resume === true,
+    interactive: req.body?.interactive === true
+  });
   res.status(answer.status).json(answer.body);
 });
 
@@ -2616,6 +2685,14 @@ app.post('/api/issue-block/:id/implement', async (req: Request, res: Response) =
  * `resume: true` continues an interrupted attempt instead of starting one. A flag on the
  * existing route rather than a route of its own, because it is one run either way: what
  * changes is a paragraph of the prompt, and every guard around it is the same.
+ *
+ * `interactive: true` asks for the tab to be one the reader can answer, and is a flag here
+ * for the same reason: it is the same run, in the same worktree, with the same prompt. What
+ * it changes is the command line — the print flags come off it, so everything downstream
+ * that already reads the command's *shape* gives the run a pseudoterminal, hands it the
+ * prompt as an argument and leaves stdin to the reader. This is #220's comment: the choice
+ * between the two shapes was the operator's command line and a server restart, and it is now
+ * also a click. The queue never asks for it — an interactive run does not end by itself.
  */
 app.post('/api/implement', async (req: Request, res: Response) => {
   if (implementingRefused(res)) return;
@@ -2626,7 +2703,8 @@ app.post('/api/implement', async (req: Request, res: Response) => {
   }
 
   const answer = await beginImplement(workspaceIdFrom(req), issueUrl, {
-    resume: req.body?.resume === true
+    resume: req.body?.resume === true,
+    interactive: req.body?.interactive === true
   });
   res.status(answer.status).json(answer.body);
 });

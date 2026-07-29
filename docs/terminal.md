@@ -111,7 +111,7 @@ EXCALIDRAW_TERMINAL_PTY=0
 forces the pipe. It exists so the fallback can be exercised on a machine where the binary *is*
 present, which is how `scripts/check-terminal-pty.mjs` covers it.
 
-Three things follow from the mode, and they are the whole of the difference:
+Four things follow from the mode, and they are the whole of the difference:
 
 - **The default shell is spelled differently.** `powershell.exe -NoLogo -NoProfile -Command -`
   reads commands from stdin, and PowerShell *refuses that outright* when stdin is a terminal —
@@ -126,6 +126,16 @@ Three things follow from the mode, and they are the whole of the difference:
   the shell is told *and* what the emulator draws, so the two cannot disagree. With no PTY there
   is still no `TIOCSWINSZ` to send, and the number is kept for what it was always good for — the
   block a second viewer draws.
+- **A pipe carries no output translation, so the emulator supplies it.** A pseudoterminal turns
+  the `\n` a program writes into `\r\n`; a pipe hands it on exactly as it was, and a bare line
+  feed moves xterm's cursor down a row and leaves the column where it was. Every line then starts
+  where the last one ended and the transcript walks diagonally off the right edge — #220, seen in
+  an agent tab because a `-p` run is deliberately on pipes, but every pipe-mode session's. So the
+  block sets xterm's `convertEol` for a session whose `mode` is `pipe`, and only for one:
+  translating on a PTY would rewrite a bare LF that a repainting program meant as "down one row,
+  same column". The server's bytes are untouched, which is the property #219 exists to protect —
+  the raw tap, `extractGithubUrl` and `UsageMeter` all read them.
+  `scripts/check-agent-stream-render-browser.mjs` reads the columns back off the emulator.
 
 **Streaming is unchanged and is still the point.** A command that prints, pauses and prints
 again arrives as two messages while the process is still alive, and `scripts/check-terminal.mjs`
@@ -150,12 +160,37 @@ difference — `TerminalSessionOptions` in `src/core/terminal-session.ts`:
   keeps its number, and its owner is null;
 - **an `input`**, the prompt, and **an `interactive`** that says how it is delivered.
 
-### Two kinds of agent tab, decided by the operator's own command line
+### Two kinds of agent tab, decided by the operator's own command line — or by the click
 
 `EXCALIDRAW_IMPLEMENT_AGENT` is read for its *shape*, exactly the way `streamsUsage()` reads it
 for `--output-format stream-json`. Nothing is appended to it, there is no second variable, and
 nothing here assumes the command is Claude Code — `runsHeadless()` in `src/core/issue-agent.ts`
 looks for one thing, `-p` or `--print` as a whole argument.
+
+**The shape decides the default; the board can say "not this one".** The panel of an issue that
+has not been started offers **Implement, and let me answer** beside **Implement / Fix**, and
+`POST /api/implement` takes `interactive: true` for it. That was #220's comment, and the second
+time it had been asked for — #174 was the first, and both had been answered with documentation
+about a variable and a server restart, which is a setting nobody reading the board could find.
+
+It works by *removing*, never adding. `withoutPrintFlags()` takes `-p` and `--print` off, and
+with them `--output-format`, `--input-format` and `--include-partial-messages`, which
+`claude --help` documents as working only with `--print` and which the CLI would refuse the
+moment the print flag went. Everything else the operator wrote — a `--model`, an `--add-dir` —
+survives untouched, and a command with no print flags in it comes back byte for byte. Nothing
+downstream learns a new setting: `runsHeadless` still decides the pseudoterminal,
+`buildAgentCommand` still decides how the prompt travels, `streamsUsage` still decides whether
+there are token counts. The asymmetry is deliberate — a board cannot invent
+`--output-format stream-json` for a command it does not own, so it cannot make an interactive
+command headless, and the queue keeps the one it is configured with.
+
+**And it refuses rather than degrades.** This is the one place a missing tab stops a run. With
+the terminal off, with no PTY binding, with `EXCALIDRAW_TERMINAL_PTY=0` or with all eight tabs
+taken, `interactive: true` is a **409** that says which of the three is missing, and no run
+starts — a reader who asked for something to type into and silently got a private child with its
+print flags stripped would have no interface, no token counts and nothing to answer, which is
+worse than the run they would have got by not asking. The same click without the ask still works.
+`scripts/check-implement-interactive-choice.mjs` holds both halves.
 
 **With `-p`, everything is what it was.** The prompt is written to stdin and stdin is ended, and
 that is why such a session is on pipes — a measurement rather than a preference. A
@@ -195,7 +230,7 @@ having in front of you:
   watching, and a TUI returns to its own prompt rather than exiting, so such a run holds its
   block in `running` and one of the eight tab slots until somebody ends it or
   `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` fires. An interactive command is for attended work; the
-  queue wants `-p`.
+  queue wants `-p`, and never asks for `interactive: true`.
 - **the token figures go silent.** `--output-format` only works with `--print`, so an
   interactive command cannot ask for the stream `UsageMeter` reads. A real trade, not a bug.
 
@@ -207,7 +242,8 @@ reports `terminal: null` for it. A 409 from the cap must never be what stops an 
 from starting. The interactive path falls back the same way and for a reason of its own: with no
 PTY there is no interface to draw either, since `stdin.isTTY` is false on pipes and a full-screen
 program takes its non-interactive path there, so a command without `-p` on a machine with no
-binding is run exactly as a headless one is.
+binding is run exactly as a headless one is. A run that *asked* for the interactive tab is the
+one exception, and it is refused rather than fallen back — see above.
 
 **A headless run settles the way it always did.** The process inside the tab is the process that
 ran before, in the same checkout, reading the same prompt on stdin; the exit code and the

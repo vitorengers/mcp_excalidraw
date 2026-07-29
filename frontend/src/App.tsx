@@ -1289,7 +1289,8 @@ function App(): JSX.Element {
    */
   const implementIssueFromBlock = async (
     target: IssueTarget,
-    resume = false
+    resume = false,
+    interactive = false
   ): Promise<string | null> => {
     if (!target.issueUrl) return 'This block has no issue to implement yet.'
 
@@ -1308,7 +1309,13 @@ function App(): JSX.Element {
       const response = await fetch(apiUrl('/api/implement'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: target.issueUrl, ...(resume ? { resume: true } : {}) })
+        // Both flags are omitted rather than sent false, so a run nobody asked anything
+        // about is the request this board has always sent.
+        body: JSON.stringify({
+          url: target.issueUrl,
+          ...(resume ? { resume: true } : {}),
+          ...(interactive ? { interactive: true } : {})
+        })
       })
       if (!response.ok) {
         const body = await response.json().catch(() => ({}))
