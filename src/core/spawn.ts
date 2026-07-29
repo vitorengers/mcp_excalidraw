@@ -116,10 +116,17 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (isCanvasHealth(await healthOrNull(400))) {
+    const health = await healthOrNull(400);
+    if (isCanvasHealth(health)) {
       markCanvasIdentityVerified();
+      // Name it when it is a scratch canvas. That is the ordinary case for a CLI command and
+      // not a fault, but this same path once replaced somebody's configured board after a
+      // terminal killed it, and the only thing that said so was a field nobody had reason to
+      // read. A line here costs nothing and is read by whoever is confused later.
+      const bare = (health as { workspaces?: string } | null)?.workspaces === 'none';
       process.stderr.write(
         `Canvas server running at ${EXPRESS_SERVER_URL} — open it in a browser for screenshots and mermaid conversion.\n`
+        + (bare ? 'This one has no workspace registry and no terminal: a scratch canvas, not a configured board.\n' : '')
       );
       return { url: EXPRESS_SERVER_URL, spawned: true };
     }

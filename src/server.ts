@@ -4299,7 +4299,16 @@ app.get('/health', (req: Request, res: Response) => {
     // identifies as this service AND self-reports its pid — never a pid
     // from a stale pidfile or an unrelated app squatting on the port.
     service: 'mcp-excalidraw-canvas',
-    pid: process.pid
+    pid: process.pid,
+    // What kind of canvas this is, which `status` cannot say. A server auto-started by
+    // `ensureCanvasRunning` inherits whatever environment its caller held, and an MCP server
+    // started by an editor holds no `EXCALIDRAW_*` at all — so a stand-in binds the board's
+    // port with no registry, no terminal and no agents, and answers everything above exactly
+    // as the board it replaced did. Telling the two apart took three more requests. These two
+    // fields are the difference, and they are read from the same expressions the routes
+    // themselves are gated on, so they cannot drift from what the instance actually does.
+    workspaces: process.env.EXCALIDRAW_WORKSPACES ? 'configured' : 'none',
+    terminal: Boolean(TERMINAL_SETTING)
   });
 });
 
