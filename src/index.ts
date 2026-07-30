@@ -52,7 +52,7 @@ import {
 import { buildSceneFile, importScene } from './core/scene-io.js';
 import { wrapSceneAsObsidianMd } from './core/obsidian-md.js';
 import { describeScene } from './core/describe.js';
-import { exportToExcalidrawUrl } from './core/share-url.js';
+import { exportToExcalidrawUrl, shareUploadNotice } from './core/share-url.js';
 import { DIAGRAM_DESIGN_GUIDE } from './core/design-guide.js';
 
 // In-memory storage for scene state
@@ -1203,7 +1203,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         return {
           content: [{
             type: 'text',
-            text: `Diagram exported to excalidraw.com!\n\nShareable URL: ${shareUrl}\n\nAnyone with this link can view and edit the diagram.`
+            text: shareUploadNotice(shareUrl)
           }]
         };
       }

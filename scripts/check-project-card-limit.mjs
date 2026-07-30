@@ -145,7 +145,7 @@ const CASES = [
 writeFileSync(registryPath, JSON.stringify({
   workspaces: [
     // The real project, read through the real loader: the file this issue edits.
-    { id: 'board-tool', path: repoRoot.replace(/\\/g, '/') },
+    { id: 'this-repo', path: repoRoot.replace(/\\/g, '/') },
     ...CASES.map((one) => ({
       id: one.id,
       path: workspaceDir(one.id, one.config).replace(/\\/g, '/'),
@@ -187,13 +187,13 @@ try {
   check('board.config.json carries projectCardLimit', 'projectCardLimit' in config,
         `keys: ${Object.keys(config).join(', ')}`);
   check('and it is 8', config.projectCardLimit === 8, `got ${JSON.stringify(config.projectCardLimit)}`);
-  check('the loader reads it back off disk', byId('board-tool').projectCardLimit === 8,
-        `got ${JSON.stringify(byId('board-tool').projectCardLimit)}`);
+  check('the loader reads it back off disk', byId('this-repo').projectCardLimit === 8,
+        `got ${JSON.stringify(byId('this-repo').projectCardLimit)}`);
   check('which is not the documented default, or the setting would prove nothing',
         DEFAULT_CARD_LIMIT !== 8, `DEFAULT_CARD_LIMIT=${DEFAULT_CARD_LIMIT}`);
 
   console.log('\n2. so the column this board draws is eight cards deep');
-  const board = await readProjectBoard(byId('board-tool'));
+  const board = await readProjectBoard(byId('this-repo'));
   const done = findColumn(board, 'Done');
   check('Done draws 8', done?.cards.length === 8, `drew ${done?.cards.length}`);
   check('and counts the rest as hidden, rather than dropping them',
@@ -229,11 +229,11 @@ try {
   }
 
   console.log('\n5. an explicit cardLimit still wins, which is how the queue reads uncapped');
-  const uncapped = findColumn(await readProjectBoard(byId('board-tool'), { cardLimit: 0 }), 'Done');
+  const uncapped = findColumn(await readProjectBoard(byId('this-repo'), { cardLimit: 0 }), 'Done');
   check('cardLimit 0 lifts the configured 8', uncapped?.cards.length === DONE_ITEMS,
         `drew ${uncapped?.cards.length}`);
   check('and nothing is reported hidden', uncapped?.hidden === 0, `hidden=${uncapped?.hidden}`);
-  const three = findColumn(await readProjectBoard(byId('board-tool'), { cardLimit: 3 }), 'Done');
+  const three = findColumn(await readProjectBoard(byId('this-repo'), { cardLimit: 3 }), 'Done');
   check('a caller asking for 3 gets 3, over the file\'s 8', three?.cards.length === 3,
         `drew ${three?.cards.length}`);
 } catch (error) {

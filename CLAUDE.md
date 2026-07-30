@@ -34,17 +34,22 @@ A `scripts/check-*.mjs`, and it is run **against the old code first**, to prove 
 defect before the fix goes in. The ordering is the point: a check written after the fix tends to
 describe the fix rather than the defect, and passes for the wrong reason.
 
-Checks are plain Node scripts with no test framework. The self-contained ones build a throwaway
-workspace, start their own canvas server on a free port and kill it —
-`scripts/check-implement-parallel.mjs` is the fullest example. The older ones take
-`--url http://127.0.0.1:3838` and run against a server started separately, which must be a
-separate, empty instance rather than the board you are using.
+Checks are plain Node scripts with no test framework, and **every one of them runs with no
+arguments**: it builds its own throwaway workspace and stubs, starts its own canvas server on a
+port the kernel just handed out, and kills it. `scripts/check-implement-parallel.mjs` is the
+fullest example, and `scripts/check-no-external-server.mjs` is what holds the rule. A check that
+needed a server somebody else had started, with the right stubs, in a convention written down
+only in prose, was a check nobody could run.
 
-**3737 and 3838 are two different servers, and both numbers are right.** 3737 is the board — the
-port the operator starts it on, because 3000 cannot work on this machine
-([docs/trap-port-3000.md](docs/trap-port-3000.md)). 3838 is the throwaway instance the older
-checks talk to, empty on purpose so a check cannot pass or fail on the contents of somebody's
-board. [docs/running.md](docs/running.md) is the run procedure, and
+`--url http://127.0.0.1:3737` survives on the older ones as an explicit override, for pointing a
+check at the board you are looking at while debugging. It is never the default, and the
+environment gets no vote at all — a run with no `--url` starts its own server whatever is set.
+Those cases write to the board they are pointed at, so it is a debugging move rather than a way
+to run the suite.
+
+**3737 is the board**, the port the operator starts it on, because 3000 cannot work on this
+machine ([docs/trap-port-3000.md](docs/trap-port-3000.md)).
+[docs/running.md](docs/running.md) is the run procedure, and
 [docs/index.md](docs/index.md) indexes everything else.
 
 ## Every change updates both halves of the board

@@ -84,9 +84,8 @@ the port goes to whatever auto-starts first.
 ## The environment
 
 `PORT` and `HOST` decide where it listens. **`PORT=3737`** on the development machine — 3000 is
-unusable there. The throwaway instances the self-contained checks start choose their own free
-port; the older `--url` family of checks expects one started by hand on **3838**, which is
-deliberately a different, empty server rather than the board you are working on.
+unusable there. The checks never use either: each starts its own instance on a port the kernel
+just handed out, and neither `PORT` nor anything else in the environment reaches it.
 
 Everything else is `EXCALIDRAW_*`, and all twenty-one are optional. Unset means the feature is
 off, not degraded.
@@ -164,7 +163,19 @@ because a host path there can only produce `command not found`. Set
   `EXCALIDRAW_BOARD_STATE` says. That is what comes back at the next start, unless the project's
   `board` file has been written since. Nothing is written into any project.
 - Into the *tracked* board file, nothing is saved back: `scripts/export-board.mjs` is how
-  `docs/board.excalidraw` is written, and it is a commit like any other.
+  `docs/board.excalidraw` is written, and it is a commit like any other. Both flags are
+  required — the script has no default board:
+
+  ```
+  node scripts/export-board.mjs --url http://127.0.0.1:3737 --workspace board-tool \
+                                --out docs/board.excalidraw
+  ```
+
+  `--url` is the port *this* board was started on (`PORT`, 3737 here — not one of the
+  throwaway instances a check starts, which are gone by the time you could point at them),
+  and `--workspace` is the board being exported.
+  Run with either flag missing it exits 2 and writes nothing, because a request that guesses
+  its own source is one absent flag away from committing whatever else was listening.
 
 ## Verifying a change
 
@@ -234,11 +245,11 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 82 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 86 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 67 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
-| `repo` | the full history, and this repository's own board | anywhere with a full clone | 4 | no |
+| `repo` | the full history, and this repository's own board | anywhere with a full clone | 5 | no |
 
 The gate is `fast` plus `browser`. `repo` is off it because it cannot be satisfied from a
 contributor's fork — `check-board-map.mjs` reads `docs/board.excalidraw` and the merge history

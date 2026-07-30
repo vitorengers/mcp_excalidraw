@@ -9,7 +9,20 @@
  * which change on every export and turn a no-op into a full-file diff. Strip those, sort by
  * id, and the diff shows only what actually moved.
  *
- * Usage: node scripts/export-board.mjs --workspace board-tool --out docs/board.excalidraw
+ * `--url` and `--workspace` are required, and deliberately have no defaults. They used to
+ * name the operator's live board — the port it runs on, and the workspace this repository's
+ * own board lives in — which meant the one script that writes a tracked file would, run with
+ * no arguments in any checkout at all, fetch whatever answered on that port and write it over
+ * `docs/board.excalidraw`. There is nothing in that request that says which board came back,
+ * so an absent flag was one step from committing somebody else's. `--out` keeps its default:
+ * getting the destination wrong is visible in `git status`, and getting the source wrong is
+ * not.
+ *
+ * Usage: node scripts/export-board.mjs --url http://127.0.0.1:<port> --workspace board-tool \
+ *                                      --out docs/board.excalidraw
+ *
+ * The port is whichever one the board was started on — `docs/running.md` has the invocation
+ * for this repository's own board.
  */
 
 import { writeFileSync } from 'node:fs';
@@ -19,8 +32,18 @@ function arg(name, fallback) {
   return index !== -1 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
 }
 
-const BASE = arg('url', process.env.EXPRESS_SERVER_URL || 'http://127.0.0.1:3737');
-const WORKSPACE = arg('workspace', 'board-tool');
+const USAGE = 'usage: node scripts/export-board.mjs --url <server> --workspace <id> [--out <file>]';
+
+function required(name, description) {
+  const value = arg(name, null);
+  if (value) return value;
+  console.error(`Missing --${name}: ${description}.`);
+  console.error(USAGE);
+  process.exit(2);
+}
+
+const BASE = required('url', 'the server to read the board from, port and all');
+const WORKSPACE = required('workspace', 'the workspace whose board is being exported');
 const OUT = arg('out', 'docs/board.excalidraw');
 
 /** Server bookkeeping. None of it is Excalidraw's, and all of it churns. */
@@ -40,7 +63,18 @@ const VOLATILE = ['syncedAt', 'source', 'syncTimestamp', 'createdAt', 'updatedAt
  */
 const DERIVED_KINDS = new Set(['project-board', 'terminal']);
 
-const response = await fetch(`${BASE}/api/elements?workspace=${encodeURIComponent(WORKSPACE)}`);
+// A server that is not there is an ordinary thing to get wrong — the board has to be running
+// and it has to be the one meant — so it is reported rather than thrown. An unhandled
+// rejection here reads as a defect in the script and buries the one line that matters.
+const url = `${BASE}/api/elements?workspace=${encodeURIComponent(WORKSPACE)}`;
+let response;
+try {
+  response = await fetch(url);
+} catch (error) {
+  console.error(`GET ${url} failed: ${error?.message ?? error}`);
+  console.error('Is the board running, and is --url the port it was started on?');
+  process.exit(1);
+}
 if (!response.ok) {
   console.error(`GET /api/elements -> HTTP ${response.status}`);
   process.exit(1);

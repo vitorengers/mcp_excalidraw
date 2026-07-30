@@ -85,7 +85,8 @@ check('no check takes a second port by adding to the first', derivedPorts.length
 console.log('\nWhere the ports come from instead');
 
 const listeners = [...sources].filter(([, source]) =>
-  /spawn\(process\.execPath/.test(source) || /startCanvas\(/.test(source) || /\.listen\(/.test(source));
+  /spawn\(process\.execPath/.test(source) || /startCanvas\(/.test(source)
+  || /openCanvas\(/.test(source) || /\.listen\(/.test(source));
 const withoutHelper = listeners
   .filter(([, source]) => !/from '\.\/lib\/free-port\.mjs'/.test(source)
     && !/from '\.\/lib\/spawn-canvas\.mjs'/.test(source))
