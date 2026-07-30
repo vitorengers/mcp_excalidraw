@@ -84,9 +84,8 @@ the port goes to whatever auto-starts first.
 ## The environment
 
 `PORT` and `HOST` decide where it listens. **`PORT=3737`** on the development machine — 3000 is
-unusable there. The throwaway instances the self-contained checks start choose their own free
-port; the older `--url` family of checks expects one started by hand on **3838**, which is
-deliberately a different, empty server rather than the board you are working on.
+unusable there. The checks never use either: each starts its own instance on a port the kernel
+just handed out, and neither `PORT` nor anything else in the environment reaches it.
 
 Everything else is `EXCALIDRAW_*`, and all twenty-one are optional. Unset means the feature is
 off, not degraded.
