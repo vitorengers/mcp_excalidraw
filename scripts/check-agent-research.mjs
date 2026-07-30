@@ -21,6 +21,8 @@
  * composition path, so a change that builds the prompt differently is covered too.
  *
  * Usage: node scripts/check-agent-research.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

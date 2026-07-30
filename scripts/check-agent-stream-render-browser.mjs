@@ -42,6 +42,8 @@
  * loads the built frontend, so a fix that is only in the source is a fix this cannot see.
  *
  * Usage: node scripts/check-agent-stream-render-browser.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';

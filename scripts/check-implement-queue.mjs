@@ -27,6 +27,8 @@
  * nothing runs a real coding agent. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-implement-queue.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn } from 'node:child_process';

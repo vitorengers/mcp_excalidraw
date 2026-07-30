@@ -22,6 +22,8 @@
  * stdin, through the real composition path.
  *
  * Usage: node scripts/check-agent-delegation.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

@@ -26,6 +26,8 @@
  * first — it reads the compiled modules.
  *
  * Usage: node scripts/check-issue-cache.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn } from 'node:child_process';

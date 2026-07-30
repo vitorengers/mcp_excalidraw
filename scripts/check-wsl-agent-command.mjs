@@ -32,6 +32,8 @@
  * Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-wsl-agent-command.mjs
+ *
+ * Tier: wsl
  */
 
 import { spawnSync } from 'node:child_process';

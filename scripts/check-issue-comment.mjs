@@ -23,6 +23,8 @@
  * browser — this project has shipped three UI defects that compiled perfectly.
  *
  * Usage: node scripts/check-issue-comment.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn, spawnSync } from 'node:child_process';

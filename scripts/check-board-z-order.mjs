@@ -27,6 +27,8 @@
  * Offline: it reads the board file, not a running server.
  *
  * Usage: node scripts/check-board-z-order.mjs [--board docs/board.excalidraw]
+ *
+ * Tier: fast
  */
 
 import { readFileSync } from 'node:fs';

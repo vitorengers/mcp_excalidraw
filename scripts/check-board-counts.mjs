@@ -29,6 +29,8 @@
  * first.
  *
  * Usage: node scripts/check-board-counts.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync } from 'node:fs';

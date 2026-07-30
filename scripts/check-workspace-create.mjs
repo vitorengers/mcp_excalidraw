@@ -26,6 +26,8 @@
  * `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-workspace-create.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn } from 'node:child_process';

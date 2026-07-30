@@ -36,6 +36,8 @@
  * Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-worktree-branch-held.mjs
+ *
+ * Tier: fast
  */
 
 import { spawnSync } from 'node:child_process';

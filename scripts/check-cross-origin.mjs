@@ -16,6 +16,8 @@
  *
  * The positive browser case — the real board still loads and its socket reaches Connected —
  * is check-board-landing-browser.mjs; a wrong allowlist leaves a blank canvas that compiles.
+ *
+ * Tier: fast
  */
 
 import { spawn } from 'node:child_process';

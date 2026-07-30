@@ -23,6 +23,8 @@
  * first.
  *
  * Usage: node scripts/check-mirror-unreadable.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync } from 'node:fs';

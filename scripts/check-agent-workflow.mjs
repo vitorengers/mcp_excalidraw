@@ -32,6 +32,8 @@
  * `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-agent-workflow.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

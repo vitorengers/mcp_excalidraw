@@ -29,6 +29,8 @@
  * here talks to the board, to GitHub or to the network. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-restart-route.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn } from 'node:child_process';

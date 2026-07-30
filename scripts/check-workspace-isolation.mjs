@@ -14,6 +14,8 @@
  *
  * Usage: node scripts/check-workspace-isolation.mjs [--url http://127.0.0.1:3000]
  * Expects an empty canvas.
+ *
+ * Tier: fast
  */
 
 import WebSocket from 'ws';

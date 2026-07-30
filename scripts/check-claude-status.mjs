@@ -39,6 +39,8 @@
  * `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-claude-status.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn } from 'node:child_process';

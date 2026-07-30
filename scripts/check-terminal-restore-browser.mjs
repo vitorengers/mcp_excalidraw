@@ -22,6 +22,8 @@
  * frontend.
  *
  * Usage: node scripts/check-terminal-restore-browser.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';
