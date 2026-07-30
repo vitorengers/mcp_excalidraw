@@ -44,6 +44,8 @@
  * first.
  *
  * Usage: node scripts/check-board-notes-column.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync } from 'node:fs';

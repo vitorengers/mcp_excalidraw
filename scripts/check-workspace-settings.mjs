@@ -32,6 +32,8 @@
  * on free ports. Nothing here talks to GitHub. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-workspace-settings.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn } from 'node:child_process';

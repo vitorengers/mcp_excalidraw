@@ -14,6 +14,8 @@
  *  2. the issue agent's prompt tells the agent which language to write the issue in.
  *
  * Usage: node scripts/check-english-only.mjs
+ *
+ * Tier: repo
  */
 
 import { execFileSync } from 'node:child_process';

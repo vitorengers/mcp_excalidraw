@@ -9,6 +9,8 @@
  *
  * Runs the compiled modules directly — no server required.
  * Usage: node scripts/check-workspaces.mjs
+ *
+ * Tier: fast
  */
 
 import fs from 'fs/promises';

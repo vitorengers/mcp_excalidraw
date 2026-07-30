@@ -28,6 +28,8 @@
  * Offline and self-contained.
  *
  * Usage: node scripts/check-docs-encoding.mjs
+ *
+ * Tier: fast
  */
 
 import { execFileSync } from 'node:child_process';

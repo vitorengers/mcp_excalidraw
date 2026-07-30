@@ -15,6 +15,8 @@
  * prints an issue URL — the point is the endpoint's behaviour, not a real agent run.
  *
  * Usage: node scripts/check-issue-block.mjs [--url http://127.0.0.1:3000] [--disabled]
+ *
+ * Tier: fast
  */
 
 const urlArg = process.argv.indexOf('--url');

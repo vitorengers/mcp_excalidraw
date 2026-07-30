@@ -11,6 +11,8 @@
  * compiled module.
  *
  * Usage: node scripts/check-anchored-placement.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync } from 'node:fs';

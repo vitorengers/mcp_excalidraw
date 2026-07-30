@@ -17,6 +17,8 @@
  * it is given. Nothing here talks to GitHub. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-issue-timeout.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn, spawnSync } from 'node:child_process';

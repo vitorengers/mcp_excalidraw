@@ -15,6 +15,8 @@
  * first.
  *
  * Usage: node scripts/check-board-drafts.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync } from 'node:fs';

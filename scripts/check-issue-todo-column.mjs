@@ -25,6 +25,8 @@
  * real coding agent, and nothing needs a browser. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-issue-todo-column.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn } from 'node:child_process';

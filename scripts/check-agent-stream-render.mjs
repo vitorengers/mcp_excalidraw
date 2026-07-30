@@ -24,6 +24,8 @@
  * network, no board. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-agent-stream-render.mjs
+ *
+ * Tier: fast
  */
 
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';

@@ -26,6 +26,8 @@
  * first.
  *
  * Usage: node scripts/check-workspace-reorder.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn } from 'node:child_process';

@@ -10,6 +10,8 @@
  * Offline: it reads the board file, not a running server.
  *
  * Usage: node scripts/check-board-docs.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';

@@ -24,6 +24,8 @@
  * Offline and self-contained.
  *
  * Usage: node scripts/check-docs-index.mjs
+ *
+ * Tier: repo
  */
 
 import { execFileSync } from 'node:child_process';

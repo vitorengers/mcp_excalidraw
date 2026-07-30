@@ -49,6 +49,8 @@
  * `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-agent-stream-render-colour.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync } from 'node:fs';

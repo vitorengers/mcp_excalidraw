@@ -32,6 +32,8 @@
  * reason; it is run by hand, on Windows, when the chord is in question.
  *
  * Usage: node scripts/check-alt-arrow-accelerator.mjs [--chrome <path>] [--keep]
+ *
+ * Tier: windows
  */
 
 import { spawn, spawnSync } from 'node:child_process';

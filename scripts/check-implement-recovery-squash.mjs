@@ -23,6 +23,8 @@
  * Run `./node_modules/.bin/tsc` first — it reads the compiled module.
  *
  * Usage: node scripts/check-implement-recovery-squash.mjs
+ *
+ * Tier: fast
  */
 
 import { spawnSync } from 'node:child_process';

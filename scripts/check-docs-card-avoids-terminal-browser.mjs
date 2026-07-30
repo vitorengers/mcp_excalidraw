@@ -31,6 +31,8 @@
  * build` first — it loads the built frontend.
  *
  * Usage: node scripts/check-docs-card-avoids-terminal-browser.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';

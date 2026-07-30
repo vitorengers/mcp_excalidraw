@@ -34,6 +34,8 @@
  * first — it loads the built frontend.
  *
  * Usage: node scripts/check-terminal-default-grid-browser.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';

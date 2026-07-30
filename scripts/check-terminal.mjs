@@ -22,6 +22,8 @@
  * Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-terminal.mjs
+ *
+ * Tier: wsl
  */
 
 import { spawn, spawnSync } from 'node:child_process';

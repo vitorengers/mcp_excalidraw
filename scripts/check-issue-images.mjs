@@ -18,6 +18,8 @@
  * Run `./node_modules/.bin/tsc` first — this reads the compiled modules.
  *
  * Usage: node scripts/check-issue-images.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn } from 'node:child_process';

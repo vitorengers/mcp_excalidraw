@@ -8,6 +8,8 @@
  * These cases pin the round-trip down.
  *
  * Usage: node scripts/check-link-customdata.mjs [--url http://127.0.0.1:3000]
+ *
+ * Tier: fast
  */
 
 const urlArg = process.argv.indexOf('--url');

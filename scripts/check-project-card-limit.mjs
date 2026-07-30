@@ -18,6 +18,8 @@
  * Run `./node_modules/.bin/tsc` first — it reads the compiled modules.
  *
  * Usage: node scripts/check-project-card-limit.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

@@ -8,6 +8,8 @@
  *
  * Usage: node scripts/check-sync-reconcile.mjs [--url http://127.0.0.1:3000]
  * Requires a running canvas server. Exits non-zero on the first failed case.
+ *
+ * Tier: fast
  */
 
 const urlArg = process.argv.indexOf('--url');

@@ -18,6 +18,8 @@
  * browser, no GitHub. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-mirror-card-link.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync } from 'node:fs';

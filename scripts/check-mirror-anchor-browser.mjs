@@ -31,6 +31,8 @@
  * It waits out real twenty-second polls, so it takes about a minute and a half.
  *
  * Usage: node scripts/check-mirror-anchor-browser.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';
