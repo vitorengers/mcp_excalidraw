@@ -18,7 +18,7 @@
  * keeps the mirror out of the export and out of the autosync: these elements are derived
  * from GitHub and rebuilt from it, never restored from a file.
  */
-import { layoutLabel } from './text-layout.js';
+import { layoutLabel, wrap } from './text-layout.js';
 import {
   BoardSection,
   ProjectBoard,
@@ -837,6 +837,101 @@ export function layoutMirror(
       : { ...draft, sectionOptionId: NOTES_OPTION_ID }
   ));
   return layoutBoard({ ...board, sections }, origin, { ...options, drafts });
+}
+
+/**
+ * How wide the strip a failed read draws is, in columns.
+ *
+ * Three rather than one, and the reason is the sentence it has to hold. What the canvas is
+ * given here is `gh`'s own stderr — `bash: line 1: C:\Program Files\GitHub CLI\gh.exe:
+ * command not found` is sixty-two characters — and `text-layout.ts` is an estimate that #206
+ * already caught being optimistic at two columns: a fifty-five character line fitted by the
+ * estimate and was clipped by the browser. Three columns puts a message of that length inside
+ * what either measurement admits, and it is the width a mirror of any real project has
+ * anyway, so the strip stands where the region it is standing in for would.
+ */
+export const UNREADABLE_COLUMNS = 3;
+
+/** How wide that strip is, in scene units. The caller anchors the region by this. */
+export const UNREADABLE_WIDTH = boardWidth(UNREADABLE_COLUMNS);
+
+/**
+ * The longest reason the strip will draw, so a stack trace cannot make a strip of it.
+ *
+ * `gh.ts` already keeps the last 300 characters of `gh`'s stderr, which is the sentence this
+ * is for; the ceiling is here for every other way a read can fail.
+ */
+const REASON_LIMIT = 300;
+
+/**
+ * How much of the strip's width the reason is allowed to wrap against.
+ *
+ * Not all of it, and this is #206's lesson taken one step further rather than a margin picked
+ * for looks. `text-layout.ts` is an estimate that over-states a character's width on purpose,
+ * and it is still optimistic for this font: laid out against the full width, `gh`'s
+ * sixty-two-character sentence came back on **one line** and the browser drew it clipped at
+ * both ends — the tell that separates genuine overflow from the first-paint narrowing that
+ * corrects itself. Wrapping against three fifths puts every line inside what either
+ * measurement admits, which is the same answer #206 reached by writing the `\n` by hand.
+ */
+const REASON_WRAP = 0.6;
+
+
+/**
+ * The strip a board draws when its project could not be read at all.
+ *
+ * A mirror whose read fails used to draw nothing and say nothing, and on a board where
+ * nothing had ever been drawn that is indistinguishable from a board with no `githubProject`
+ * — #252 lost a mirror to a restart that way, and the only trace anywhere was a line in the
+ * server's log file. The server was never the quiet part: `GET /api/project-board` answers
+ * 502 with `gh`'s own message in it. The canvas threw it away.
+ *
+ * A strip rather than a toast, and #206's `morePages` strip is the precedent: what is wrong
+ * here lasts as long as the failure does, so the sign has to last with it. A toast has come
+ * and gone ten seconds later and leaves the canvas indistinguishable again, which is the
+ * complaint; and it would need a rule of its own to keep a twenty-second poll from raising it
+ * a hundred and eighty times an hour, where redrawing the same strip is simply idempotent.
+ *
+ * There is no `ProjectBoard` behind it — that is what failed — so it carries no link, no
+ * columns and no count, and it is a fixed width instead of the project's. Everything else is
+ * the mirror's: `customData.kind`, which is what keeps it out of the autosync and out of the
+ * export, `docKey`, so selecting it opens the document that explains the region, and `locked`,
+ * so it cannot be dragged off to somewhere it no longer means anything.
+ */
+export function layoutUnreadable(
+  reason: string,
+  origin: { x: number; y: number }
+): MirrorElement[] {
+  const said = reason.trim().replace(/\s+/g, ' ').slice(0, REASON_LIMIT)
+    || 'the read failed and gave no reason';
+  const lines = wrap(said, UNREADABLE_WIDTH * REASON_WRAP, HEADER_FONT_SIZE);
+  const text = ['Project board could not be read', ...lines].join('\n');
+  const height = Math.max(
+    TITLE_HEIGHT,
+    layoutLabel(text, UNREADABLE_WIDTH, HEADER_FONT_SIZE).containerHeight
+  );
+
+  const strip = rectangle({
+    id: 'pb-unreadable',
+    x: origin.x,
+    y: origin.y,
+    width: UNREADABLE_WIDTH,
+    height,
+    strokeColor: '#e03131',
+    backgroundColor: '#fff5f5',
+    locked: true,
+    link: null,
+    customData: {
+      kind: MIRROR_KIND,
+      role: 'title',
+      docKey: MIRROR_DOC_KEY,
+      // What tells this strip from the one a board that *was* read draws, for anything
+      // asking the scene rather than reading the words.
+      unreadable: true,
+    },
+  });
+
+  return [strip, label(strip, text, HEADER_FONT_SIZE, '#c92a2a')];
 }
 
 /** Which column a point falls in, or null when it falls between or beyond them. */
