@@ -73,3 +73,6 @@ jobs:
 
       - name: Check development artifacts are in English
         run: node scripts/check-english-only.mjs
+
+      - name: Check tracked line endings and file modes
+        run: node scripts/check-tracked-file-modes.mjs
