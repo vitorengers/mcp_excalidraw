@@ -12,6 +12,28 @@ export type WorkspaceEnvironment =
   | { kind: 'native' }
   | { kind: 'wsl'; distro: string };
 
+/**
+ * Why a WSL-backed project cannot be used on this machine, or null when it can.
+ *
+ * `wsl` is a Windows environment and nothing else: every command built for one is
+ * `wsl.exe` with a distro after it — `buildAgentCommand`, the worktree's own `git`, the
+ * `gh` the project board mirror polls with. Off Windows there is no such binary, so a
+ * board that resolved a `wsl` workspace anyway answered `spawn wsl.exe ENOENT` to every
+ * one of them, naming a program the reader has never heard of and never installed.
+ *
+ * The platform is a parameter with a default rather than a read of `process.platform`
+ * inside the caller, so a check can ask what a mac would be told without being a mac.
+ *
+ * If a remote or container backend is ever wanted for mac and Linux, it is a new
+ * `WorkspaceEnvironment` kind — `{ kind: 'ssh' }`, `{ kind: 'container' }` — with a
+ * command builder of its own, not `wsl` renamed. The three share the shape and share
+ * neither the path translation nor the `--exec bash -lc` quoting.
+ */
+export function wslUnsupportedHere(platform: NodeJS.Platform = process.platform): string | null {
+  if (platform === 'win32') return null;
+  return `WSL-backed projects are Windows-only; this board is running on ${platform}`;
+}
+
 export interface ResolvedPath {
   /** The path as given, only cleaned up. */
   input: string;
