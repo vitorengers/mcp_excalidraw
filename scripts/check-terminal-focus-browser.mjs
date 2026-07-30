@@ -20,9 +20,12 @@
  * - **is the shape still a shape?** A corner drag has to resize it after the terminal has
  *   had the pointer, and the new size has to reach the server as `cols` × `rows`.
  * - **and is the wheel used rather than swallowed?** The scrollback takes it while there is
- *   scrollback to show; the canvas takes it once there is not. And since #162 that is asked
- *   of each axis on its own: a touchpad pan carries both, and the emulator has no use for
- *   the horizontal one, so it goes to the board even while the vertical one does not.
+ *   any scrollback at all — at the ends of it as much as in the middle, which is #256 — and
+ *   the canvas takes it over a block that has none. And since #162 that is asked of each
+ *   axis on its own: a touchpad pan carries both, and the emulator has no use for the
+ *   horizontal one, so it goes to the board even while the vertical one does not.
+ *   `check-terminal-wheel-edge-browser.mjs` is where the ends are asked of both of the
+ *   block's views; what is here is the pair that frames them.
  *
  * Chrome is driven over the DevTools protocol through `ws`, which the server already
  * depends on. Self-contained otherwise: it builds a throwaway workspace, starts its own
@@ -345,6 +348,12 @@ const PROBE = `(() => {
     bodyPointerEvents: body ? getComputedStyle(body).pointerEvents : null,
     headerPointerEvents: header ? getComputedStyle(header).pointerEvents : null,
     grid: (card.querySelector('.terminal-card__grid') || {}).textContent || '',
+    // What the emulator's own viewport has left to scroll, in pixels, which is what decides
+    // who owns a vertical wheel since #256. Zero is a screen with nothing behind it.
+    scrollback: (() => {
+      const viewport = card.querySelector('.xterm-viewport');
+      return viewport ? viewport.scrollHeight - viewport.clientHeight : 0;
+    })(),
     selectionRects: card.querySelectorAll('.xterm-selection div').length,
     screen: (card.querySelector('.xterm-rows') || {}).textContent || '',
     // xterm marks a live mouse protocol with a class on its own root rather than on the
@@ -678,22 +687,46 @@ try {
 
   console.log('\n7. the wheel over the body is used, not swallowed');
   scene = await placeBoard();
+
+  {
+    // Before the sixty lines, and that ordering is #256. The block has printed a prompt and
+    // a handful of answers into a screen far taller than either, so there is nothing behind
+    // it for a wheel to bring back — and *that* is the case #112 answered when it gave the
+    // board every wheel the terminal could not use. What #256 narrowed is the other
+    // situation the same sentence used to cover: a scrollback the reader has reached the end
+    // of, which is not the same as no scrollback and no longer answered the same way.
+    check('the block has nothing behind its screen yet', scene.card.scrollback <= 2,
+          `${scene.card.scrollback}px, grid ${scene.card.grid}`);
+    const view = { scrollX: scene.view.scrollX, scrollY: scene.view.scrollY, zoom: scene.view.zoom };
+    await wheel(scene.card.body.x, scene.card.body.y, 120, 2);
+    const after = (await evaluate(PROBE)).view;
+    check('so a wheel over it reaches the canvas',
+          Math.abs(after.scrollY - view.scrollY) > 1 || Math.abs(after.scrollX - view.scrollX) > 1
+          || Math.abs(after.zoom - view.zoom) > 0.001,
+          `${JSON.stringify(view)} → ${JSON.stringify(after)}`);
+  }
+
+  scene = await placeBoard();
   await click(scene.card.body.x, scene.card.body.y);
   await run(MANY_LINES);
   await waitFor(async () => String((await evaluate(PROBE)).card.screen).includes('line 60'),
                 'the shell to print sixty lines', 80);
   await sleep(500);
-  scene = await evaluate(PROBE);
+  scene = await placeBoard();
 
   {
-    // Down first, with the screen already at the bottom of its scrollback: there is nothing
-    // there for the emulator to show, so the board is what should answer.
+    // And with sixty lines behind it, the same wheel at the same place is the terminal's,
+    // even parked at the bottom where the emulator has nothing to show for it. This case
+    // used to assert the opposite; it is the one the reader in #256 met.
+    // `check-terminal-wheel-edge-browser.mjs` asks both ends of both views.
+    check('the sixty lines gave it a scrollback', scene.card.scrollback > 50,
+          `${scene.card.scrollback}px`);
     const view = { scrollX: scene.view.scrollX, scrollY: scene.view.scrollY, zoom: scene.view.zoom };
     await wheel(scene.card.body.x, scene.card.body.y, 120, 2);
     const after = (await evaluate(PROBE)).view;
-    check('a wheel the scrollback has no use for reaches the canvas',
-          Math.abs(after.scrollY - view.scrollY) > 1 || Math.abs(after.scrollX - view.scrollX) > 1
-          || Math.abs(after.zoom - view.zoom) > 0.001,
+    check('a wheel at the bottom of a scrollback stays with the terminal',
+          Math.abs(after.scrollY - view.scrollY) < 1 && Math.abs(after.scrollX - view.scrollX) < 1
+          && Math.abs(after.zoom - view.zoom) < 0.001,
           `${JSON.stringify(view)} → ${JSON.stringify(after)}`);
   }
 
