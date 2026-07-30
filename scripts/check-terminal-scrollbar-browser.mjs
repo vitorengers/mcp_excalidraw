@@ -28,8 +28,11 @@
  * And the two things a scrollbar must not become. It is a **viewer**: dragging the thumb moves
  * the reader through the transcript the server already holds, and the server's own `scrollback`
  * is byte-identical across the drag. And it must not have taken the wheel away — the wheel
- * still scrolls the scrollback, and a wheel the scrollback cannot use still reaches the canvas,
- * which is #112 and #162 and the two things a block sitting on a board owes the board.
+ * still scrolls the scrollback, and the sideways half of one still reaches the canvas, which is
+ * #112 and #162 and the two things a block sitting on a board owes the board. Since #256 the
+ * *vertical* half is the terminal's for as long as there is a scrollback to scroll, ends
+ * included, and a block wearing a bar always has one — so what is asked at the bottom of it
+ * here is that the board stayed still.
  *
  * **No `--hide-scrollbars`.** Every other browser check here passes that flag and none of them
  * care; this one is about a scrollbar, and under that flag Chrome draws none and the whole file
@@ -775,12 +778,19 @@ try {
           `${JSON.stringify(before.view)} → ${JSON.stringify(scene.view)}`);
   }
   {
-    // Down to the bottom of the scrollback first, so the next wheel is one the emulator has
-    // no use for — which is the one the board is owed. Wheeled until the rows stop changing
-    // rather than a fixed count of notches: how many it takes depends on how many rows the
-    // block holds and how far up the thumb drag above left the reader, and #199 changed the
-    // first of those. Ten notches was enough for a 28-row block and is not for a 30-row one,
-    // and coming up short reads as the canvas refusing a wheel it never got.
+    // Down to the bottom of the scrollback first, which is where a reader who has caught up
+    // with a run is sitting. Wheeled until the rows stop changing rather than a fixed count
+    // of notches: how many it takes depends on how many rows the block holds and how far up
+    // the thumb drag above left the reader, and #199 changed the first of those. Ten notches
+    // was enough for a 28-row block and is not for a 30-row one.
+    //
+    // **This case used to assert the opposite, and #256 is why it does not.** The wheel that
+    // reaches the canvas is the one over a block with *no* scrollback — which a block with a
+    // bar on it is not, that bar being drawn precisely because there is one. Reaching the end
+    // of what there is was read as the same thing, and the reader who had scrolled up to
+    // read something watched the canvas pan away instead of stopping. `#112`'s promise is
+    // unchanged and asserted where it applies:
+    // `check-terminal-focus-browser.mjs` step 7 and `check-terminal-wheel-edge-browser.mjs`.
     scene = await evaluate(PROBE);
     let atBottom = '';
     for (let attempt = 0; attempt < 20; attempt++) {
@@ -793,10 +803,10 @@ try {
     const view = { scrollX: scene.view.scrollX, scrollY: scene.view.scrollY, zoom: scene.view.zoom };
     await wheel(scene.card.body.x, scene.card.body.y, 120, 2);
     const after = (await evaluate(PROBE)).view;
-    await shot('07-wheel-to-canvas');
-    check('and a wheel it has no use for still reaches the canvas',
-          Math.abs(after.scrollY - view.scrollY) > 1 || Math.abs(after.scrollX - view.scrollX) > 1
-          || Math.abs(after.zoom - view.zoom) > 0.001,
+    await shot('07-wheel-at-the-bottom');
+    check('and a wheel at the bottom of it stays with the terminal, board unmoved',
+          Math.abs(after.scrollY - view.scrollY) < 1 && Math.abs(after.scrollX - view.scrollX) < 1
+          && Math.abs(after.zoom - view.zoom) < 0.001,
           `${JSON.stringify(view)} → ${JSON.stringify(after)}`);
   }
 } catch (error) {

@@ -1283,9 +1283,32 @@ interrupt again; **Ctrl+V pastes what the clipboard is offering** — text into 
 a screenshot as the `\x16` that lets the program go and fetch it, which is the rule
 [below](#a-paste-is-decided-by-what-the-clipboard-is-offering); the wheel scrolls the
 scrollback, and so does the bar along the right of the screen; and Alt+click moves the shell's
-cursor along the line it is editing. A wheel the scrollback cannot use — the screen is at the
-bottom, or there is none — is handed to the canvas instead of dropped, so panning and zooming
-still work over a block.
+cursor along the line it is editing. A wheel the terminal has **nothing** to scroll with — no
+scrollback behind the screen at all, or a rendered transcript that fits inside the block — is
+handed to the canvas instead of dropped, so panning and zooming still work over a block.
+
+**Nothing to scroll is not the same as the end of what there is**, and reading them as one
+sentence is what #256 reported: a reader scrolling an Implement / Fix run reached the top of it,
+kept wheeling, and the canvas panned out from under the block they were reading. Both of the
+block's views did it, by two different routes. The emulator asked the *event* — xterm's
+`_bubbleScroll` calls `preventDefault` only while its viewport still has room in the wheel's
+direction, so at either end it declines and the overlay reads that as "the emulator had no use
+for this"; the document view computed the same boundary by hand. So the question moved onto the
+box: `terminalHasScrollToGive` measures the scroller under the pointer — `.xterm-viewport` for a
+screen, the transcript itself for a run — and **while there is anything there, the vertical
+wheel is the terminal's**, at its ends as much as in its middle.
+
+That is the stricter of the two answers, and it is a choice rather than a derivation. A gesture
+latch would let a *second* wheel after a pause pan the board, the way `overscroll-behavior:
+contain` never chains; this does not. The reader who wants to pan has the header and the rest of
+the canvas, and the reader who does not want to lose their place has no other way of saying so.
+It is also why the rule is re-asked per event rather than held for the gesture: a scrollback does
+not appear or vanish between two notches, so a latch would buy nothing that is not already true.
+The gesture lock below is for the *axis*, which a single event genuinely cannot settle.
+
+The three exceptions are unchanged. Ctrl, Meta and Shift stay whole, so a block with a deep
+scrollback is still somewhere the board can be zoomed from; the horizontal axis is the board's
+under #162 and #198; and a program holding the pointer is still sent the wheel as an escape.
 
 **The wheel is answered one axis at a time**, which is #162 and what a touchpad made
 visible. A pan carries both deltas in the same event, and the emulator has a use for exactly
@@ -1358,7 +1381,9 @@ border, since a browser snaps a border to whole device pixels and a chip that gr
 `scripts/check-terminal-focus-browser.mjs` is the check for who owns the pointer — it clicks
 the middle of the screen and types, drags the header and the body and compares what moved,
 turns the wheel both ways and sideways, and drags a corner afterwards to say the shape is
-still a shape.
+still a shape. `scripts/check-terminal-wheel-edge-browser.mjs` is the check for the *ends* of
+the scroll, and it needs four tabs to ask it: an emulator with a deep scrollback and one with
+none, a rendered transcript taller than the block and one that fits inside it.
 `scripts/check-terminal-size-browser.mjs` is the check for the sizes, and it measures the
 render rather than the file: it reads the block the board placed off the scene, measures each
 control against itself with `--terminal-tab-scale` forced back to 1, and asks for the bottom
@@ -1886,19 +1911,33 @@ it. A board returned to puts its block back where it was left.
   viewer. The rightmost column the shell was told about drawn in full and clear of the strip, at
   8, 13 and 24, with a ruler exactly `cols` wide — the geometry says the screen box ends before
   the strip, the ruler says the last character in it was painted there. And the wheel unchanged:
-  one it can use still scrolls the scrollback, one it cannot still reaches the canvas. It is the
+  one the scrollback can use still scrolls it, and one turned at the bottom of it still leaves
+  the board where it was, a block wearing a bar being one that has a scrollback. It is the
   one browser check here that does **not** pass `--hide-scrollbars`, which would otherwise let
   every case in it pass by measuring nothing.
 - `scripts/check-terminal-focus-browser.mjs` — who owns the pointer where, in Chrome. A click
   in the middle of the screen focusing the shell and a command typed straight after it running;
   a drag on the header moving the block and a drag on the screen selecting text and *not*
   moving it; Ctrl+C copying that selection and, with nothing selected, still interrupting; the
-  wheel scrolling the scrollback and, when there is none left to scroll, reaching the canvas;
+  wheel reaching the canvas over a block with no scrollback at all and staying with the
+  terminal once there is one, which is the pair #256 separated;
   the sideways half of a wheel reaching the canvas *while* the vertical half is being used —
   by the scrollback, and by a program holding the pointer, which the check puts into that
   state by writing `1006` and `1000` into the emulator's own parser; the header still a target
   at a zoom that shrinks everything else; and the corner still resizing the block, with the
   new size reaching the server.
+- `scripts/check-terminal-wheel-edge-browser.mjs` — who owns the wheel at the **ends** of a
+  terminal's scroll, in Chrome, and the case the file above frames rather than asks. Four
+  sessions, so each case has a tab genuinely in the state it names: an emulator with two
+  hundred lines behind it and one with three, a folded transcript of eighty tool calls and one
+  of a single call that fits inside the block. Parked at the bottom and wheeled down, and
+  parked at the top and wheeled up, the board's `scrollX`, `scrollY` and `zoom` are unmoved for
+  both of the block's views — while the notches in between still scroll the terminal, so
+  nothing was bought by swallowing them. And the three the change does not touch: the block
+  with nothing behind it still pans the board, Ctrl and the wheel still zoom over a deep
+  scrollback, and the sideways axis is still the board's. It runs its sessions on pipes
+  (`EXCALIDRAW_TERMINAL_PTY=0`), because the fold marks are OSC sequences and a pseudoconsole
+  re-renders what passes through it — which is also why an agent tab is on pipes to begin with.
 - `scripts/check-terminal-hotkey-browser.mjs` — who owns the *keyboard*, in Chrome, and the
   sibling of the file above. Each of Alt+B, Alt+T, Alt+P and Alt+G moving the viewport with
   real keystrokes into a focused emulator, read off `scrollX`/`scrollY` rather than off a
