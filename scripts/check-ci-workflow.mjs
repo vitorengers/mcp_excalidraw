@@ -1,0 +1,579 @@
+#!/usr/bin/env node
+/**
+ * Checks that no workflow publishes anything from a pull request, and that none of them binds
+ * host port 3000.
+ *
+ * `docker.yml` triggered on `pull_request` with `push: true` on both build jobs. A pull request
+ * from a fork gets a read-only `GITHUB_TOKEN` whatever the `permissions:` block asks for, so the
+ * push 403s, and `test-docker-images` — which `needs:` both — never runs: every outside
+ * contribution arrived with two red jobs it had no way to fix. A pull request from a branch in
+ * this repository was worse. It succeeded, and published an unreviewed `pr-N` tag of the head
+ * commit to a public registry on every push to the branch.
+ *
+ * The rule is about reachability, not about grep. `push: true` written under a step that cannot
+ * run on a pull request is fine; `push: ${{ github.event_name != 'pull_request' }}` is fine; a
+ * bare `push: true` in a job the `pull_request` trigger reaches is not. So this parses the
+ * workflows, walks `on:` → job `if:`/`needs:` → step `if:`, and evaluates what `push:` comes out
+ * as under a simulated `pull_request` event.
+ *
+ * The evaluator is deliberately three-valued and biased against the workflow: an expression it
+ * cannot decide counts as *reachable* and as *pushing*. A safety check that gives an unfamiliar
+ * expression the benefit of the doubt is a safety check that stops working the first time
+ * somebody writes something clever.
+ *
+ * `docker/login-action` is held to the same reachability rule. The registry login is the one step
+ * whose behaviour on a fork pull request the issue could not confirm — whether it fails there or
+ * only the push after it does — and a step that never runs answers the question by not asking it.
+ *
+ * Host port 3000 is separate and applies to every workflow. 3000 is the port this project has
+ * already paid for twice ([docs/trap-port-3000.md](../docs/trap-port-3000.md)); a runner is a
+ * shared machine and the container health test has no reason to want a fixed one. The container
+ * side may still be 3000 — that is the port the image `EXPOSE`s — so only the host half of a
+ * `-p` spec is read.
+ *
+ * If `.github/workflows/docker.yml` is gone, the docker-specific cases are satisfied by its
+ * absence and say so: the issue this check was written for offered deleting the workflow as the
+ * other acceptable answer, and a check that fails on the answer it allowed is a check that forces
+ * one hand.
+ *
+ * Section 0 runs the parser and the reachability walk over inline fixtures, including a workflow
+ * that does publish from a pull request, so the analysis is known to catch one after the real
+ * workflow stops being an example of the defect.
+ *
+ * Offline and self-contained: it reads `.github/workflows/*.yml`. No server, no browser, no
+ * network, no Docker.
+ *
+ * Usage: node scripts/check-ci-workflow.mjs
+ *
+ * Tier: fast
+ */
+
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+const workflowDir = join(repoRoot, '.github', 'workflows');
+
+let failures = 0;
+
+function check(name, condition, detail = '') {
+  if (condition) console.log(`  ok    ${name}`);
+  else { failures++; console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`); }
+}
+
+// ─── A YAML subset, enough for a workflow ─────────────────────
+//
+// No parser ships with this repository and a workflow does not need one: mappings, block
+// sequences, flow sequences, block scalars and comments cover every line in `.github/workflows`.
+// Anything outside that is left as the text it was written as rather than guessed at.
+
+/** `#` starts a comment only outside quotes and only after whitespace or at the start. */
+function stripComment(line) {
+  let out = '';
+  let quote = null;
+  for (let index = 0; index < line.length; index++) {
+    const here = line[index];
+    if (quote) {
+      out += here;
+      if (here === quote) quote = null;
+      continue;
+    }
+    if (here === '"' || here === "'") { quote = here; out += here; continue; }
+    if (here === '#' && (index === 0 || /\s/.test(line[index - 1]))) break;
+    out += here;
+  }
+  return out;
+}
+
+/** The offset of the `:` that separates a key from its value, or -1. Quotes are respected. */
+function keyBreak(text) {
+  let quote = null;
+  for (let index = 0; index < text.length; index++) {
+    const here = text[index];
+    if (quote) { if (here === quote) quote = null; continue; }
+    if (here === '"' || here === "'") { quote = here; continue; }
+    if (here === ':' && (index + 1 === text.length || /\s/.test(text[index + 1]))) return index;
+  }
+  return -1;
+}
+
+function scalar(text) {
+  const trimmed = text.trim();
+  if (trimmed === 'true') return true;
+  if (trimmed === 'false') return false;
+  if (/^\[.*\]$/.test(trimmed)) {
+    const inner = trimmed.slice(1, -1).trim();
+    return inner === '' ? [] : inner.split(',').map((part) => scalar(part));
+  }
+  if (/^'.*'$/.test(trimmed) || /^".*"$/.test(trimmed)) return trimmed.slice(1, -1);
+  return trimmed;
+}
+
+function parseYaml(text) {
+  const lines = text.split(/\r?\n/);
+  let cursor = 0;
+
+  const content = (n) => stripComment(lines[n] ?? '');
+  const isBlank = (n) => content(n).trim() === '';
+  const indentOf = (n) => { const line = content(n); return line.length - line.trimStart().length; };
+  const skipBlank = () => { while (cursor < lines.length && isBlank(cursor)) cursor++; };
+
+  function parseBlock(indent) {
+    skipBlank();
+    if (cursor >= lines.length || indentOf(cursor) < indent) return null;
+    const trimmed = content(cursor).trim();
+    if (trimmed === '-' || trimmed.startsWith('- ')) return parseSequence(indentOf(cursor));
+    return parseMapping(indentOf(cursor));
+  }
+
+  function parseMapping(indent) {
+    const map = {};
+    for (;;) {
+      skipBlank();
+      if (cursor >= lines.length || indentOf(cursor) < indent) break;
+      const trimmed = content(cursor).trim();
+      if (indentOf(cursor) > indent || trimmed.startsWith('- ')) { cursor++; continue; }
+      const split = keyBreak(trimmed);
+      if (split === -1) { cursor++; continue; }
+      const key = scalar(trimmed.slice(0, split));
+      const rest = trimmed.slice(split + 1).trim();
+      cursor++;
+      map[key] = parseValue(rest, indent);
+    }
+    return map;
+  }
+
+  function parseSequence(indent) {
+    const list = [];
+    for (;;) {
+      skipBlank();
+      if (cursor >= lines.length || indentOf(cursor) !== indent) break;
+      const trimmed = content(cursor).trim();
+      if (trimmed !== '-' && !trimmed.startsWith('- ')) break;
+      const rest = trimmed.slice(1).trim();
+      if (rest === '') { cursor++; list.push(parseBlock(indent + 1)); continue; }
+      if (keyBreak(rest) !== -1) {
+        // Re-indent the item's first key so the rest of the item is an ordinary mapping.
+        lines[cursor] = ' '.repeat(indent + 2) + rest;
+        list.push(parseMapping(indent + 2));
+      } else {
+        cursor++;
+        list.push(scalar(rest));
+      }
+    }
+    return list;
+  }
+
+  function parseBlockScalar(indent) {
+    const out = [];
+    while (cursor < lines.length) {
+      const raw = lines[cursor];
+      if (raw.trim() === '') { out.push(''); cursor++; continue; }
+      if (raw.length - raw.trimStart().length <= indent) break;
+      out.push(raw);
+      cursor++;
+    }
+    while (out.length && out[out.length - 1] === '') out.pop();
+    return out.join('\n');
+  }
+
+  function parseValue(rest, indent) {
+    if (/^[|>][+-]?\d*$/.test(rest)) return parseBlockScalar(indent);
+    if (rest !== '') return scalar(rest);
+    skipBlank();
+    if (cursor >= lines.length) return null;
+    const childIndent = indentOf(cursor);
+    if (childIndent < indent) return null;
+    if (childIndent === indent) {
+      const trimmed = content(cursor).trim();
+      // A sequence is allowed to sit at its key's own indentation.
+      return trimmed === '-' || trimmed.startsWith('- ') ? parseSequence(indent) : null;
+    }
+    return parseBlock(childIndent);
+  }
+
+  return parseBlock(0) ?? {};
+}
+
+// ─── What an `if:` comes out as, for one event ────────────────
+//
+// Three-valued on purpose. `null` is "this evaluator does not know", and every caller reads it
+// as the dangerous answer.
+
+function tokenize(source) {
+  const tokens = [];
+  let index = 0;
+  while (index < source.length) {
+    const here = source[index];
+    if (/\s/.test(here)) { index++; continue; }
+    if (here === "'" || here === '"') {
+      const end = source.indexOf(here, index + 1);
+      if (end === -1) return null;
+      tokens.push({ kind: 'string', value: source.slice(index + 1, end) });
+      index = end + 1;
+      continue;
+    }
+    const two = source.slice(index, index + 2);
+    if (two === '==' || two === '!=' || two === '&&' || two === '||') {
+      tokens.push({ kind: two });
+      index += 2;
+      continue;
+    }
+    if (here === '(' || here === ')' || here === '!') { tokens.push({ kind: here }); index++; continue; }
+    const word = /^[A-Za-z0-9_.[\]-]+/.exec(source.slice(index));
+    if (!word) return null;
+    tokens.push({ kind: 'word', value: word[0] });
+    index += word[0].length;
+    continue;
+  }
+  return tokens;
+}
+
+const AND = (left, right) => (left === false || right === false ? false
+  : left === true && right === true ? true : null);
+const OR = (left, right) => (left === true || right === true ? true
+  : left === false && right === false ? false : null);
+
+/**
+ * `undefined` for an operand this evaluator has no value for, which is not the same as `null`:
+ * an unknown operand only poisons the comparison it is in.
+ */
+function operandValue(token, context) {
+  if (token.kind === 'string') return token.value;
+  if (token.kind !== 'word') return undefined;
+  if (token.value === 'true') return true;
+  if (token.value === 'false') return false;
+  if (token.value === 'github.event_name') return context.eventName;
+  if (token.value === 'github.ref_type') return context.refType;
+  return undefined;
+}
+
+function evaluate(source, context) {
+  const tokens = tokenize(source);
+  if (!tokens || tokens.length === 0) return null;
+  let at = 0;
+  const peek = () => tokens[at];
+
+  function parsePrimary() {
+    const token = peek();
+    if (!token) return null;
+    if (token.kind === '!') { at++; const inner = parsePrimary(); return inner === null ? null : !inner; }
+    if (token.kind === '(') {
+      at++;
+      const inner = parseOr();
+      if (peek() && peek().kind === ')') at++;
+      return inner;
+    }
+    at++;
+    const left = operandValue(token, context);
+    const next = peek();
+    if (next && (next.kind === '==' || next.kind === '!=')) {
+      at++;
+      const rightToken = peek();
+      if (!rightToken) return null;
+      at++;
+      const right = operandValue(rightToken, context);
+      if (left === undefined || right === undefined) return null;
+      return next.kind === '==' ? left === right : left !== right;
+    }
+    if (left === true || left === false) return left;
+    return null;
+  }
+
+  function parseAnd() {
+    let value = parsePrimary();
+    while (peek() && peek().kind === '&&') { at++; value = AND(value, parsePrimary()); }
+    return value;
+  }
+
+  function parseOr() {
+    let value = parseAnd();
+    while (peek() && peek().kind === '||') { at++; value = OR(value, parseAnd()); }
+    return value;
+  }
+
+  const result = parseOr();
+  return at === tokens.length ? result : null;
+}
+
+/** `${{ … }}` is optional in an `if:` and mandatory anywhere else; both forms arrive here. */
+const unwrap = (text) => {
+  const trimmed = String(text).trim();
+  const match = /^\$\{\{(.*)\}\}$/s.exec(trimmed);
+  return match ? match[1].trim() : trimmed;
+};
+
+/** A missing `if:` runs; an `if:` this evaluator cannot read is assumed to run. */
+const allows = (condition, context) =>
+  condition === undefined || condition === null ? true : evaluate(unwrap(condition), context) !== false;
+
+function triggersOn(workflow, eventName) {
+  const on = workflow.on;
+  if (on === undefined || on === null) return false;
+  if (typeof on === 'string') return on === eventName;
+  if (Array.isArray(on)) return on.includes(eventName);
+  return Object.prototype.hasOwnProperty.call(on, eventName);
+}
+
+/** Every step that can run for this event, with the job it belongs to. */
+function reachableSteps(workflow, context) {
+  if (!triggersOn(workflow, context.eventName)) return [];
+  const jobs = workflow.jobs ?? {};
+  const reachableJob = (id, seen = new Set()) => {
+    const job = jobs[id];
+    if (!job || seen.has(id)) return false;
+    seen.add(id);
+    if (!allows(job.if, context)) return false;
+    const needs = job.needs === undefined ? [] : [].concat(job.needs);
+    return needs.every((parent) => reachableJob(parent, seen));
+  };
+  const out = [];
+  for (const [id, job] of Object.entries(jobs)) {
+    if (!reachableJob(id)) continue;
+    for (const step of job.steps ?? []) {
+      if (step && allows(step.if, context)) out.push({ job: id, step });
+    }
+  }
+  return out;
+}
+
+/** What `with.push` comes out as. Missing is the action's own default of false. */
+function publishes(step, context) {
+  const value = step.with?.push;
+  if (value === undefined) return false;
+  if (typeof value === 'boolean') return value;
+  return evaluate(unwrap(value), context) !== false;
+}
+
+const usesAction = (step, name) => typeof step.uses === 'string' && step.uses.split('@')[0] === name;
+
+const PULL_REQUEST = { eventName: 'pull_request' };
+const PUSH = { eventName: 'push' };
+
+/** Every `run:` script in a workflow, whatever its reachability — a bind is a bind. */
+function runScripts(workflow) {
+  const out = [];
+  for (const [id, job] of Object.entries(workflow.jobs ?? {})) {
+    for (const step of job?.steps ?? []) {
+      if (step && typeof step.run === 'string') out.push({ job: id, text: step.run });
+    }
+  }
+  return out;
+}
+
+/**
+ * Host ports in a `-p`/`--publish` spec. `-p 3000:3000` is host 3000; `-p 127.0.0.1::3000` and
+ * `-p 3000` are the container port with an ephemeral host port, and neither binds one.
+ */
+function publishedHostPorts(script) {
+  const ports = [];
+  const spec = /(?:^|\s)(?:-p|--publish(?:=|\s+))\s*"?([0-9.:]+)"?/g;
+  for (const [, value] of script.matchAll(spec)) {
+    const parts = value.split(':');
+    if (parts.length < 2) continue;            // `-p 3000` — container port only
+    const host = parts[parts.length - 2];
+    if (host !== '') ports.push(host);
+  }
+  return ports;
+}
+
+// ─── 0. The analysis catches a workflow that does it ──────────
+
+console.log('0. the reachability walk finds a publish a pull request can reach');
+
+const FIXTURE_BAD = `name: Bad
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/example/image:latest
+`;
+
+const FIXTURE_GOOD = `name: Good
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build for the test
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          push: false
+      - name: Push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+      - name: Push, said another way
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: \${{ github.event_name != 'pull_request' }}
+  gated:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/build-push-action@v5
+        with:
+          push: true
+  downstream:
+    needs: [ gated ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/build-push-action@v5
+        with:
+          push: true
+`;
+
+const bad = parseYaml(FIXTURE_BAD);
+const good = parseYaml(FIXTURE_GOOD);
+
+check('the parser reads a workflow', bad.name === 'Bad' && Object.keys(bad.jobs ?? {}).length === 1,
+      JSON.stringify(Object.keys(bad)));
+check('a bare push: true under a pull_request trigger is caught',
+      reachableSteps(bad, PULL_REQUEST).some(({ step }) => publishes(step, PULL_REQUEST)));
+check('a step if:, a job if:, a needs: chain and an expression are all read',
+      reachableSteps(good, PULL_REQUEST).every(({ step }) => !publishes(step, PULL_REQUEST)),
+      reachableSteps(good, PULL_REQUEST).filter(({ step }) => publishes(step, PULL_REQUEST))
+        .map(({ step }) => step.name ?? step.uses).join(', '));
+check('the same workflow still publishes on a push',
+      reachableSteps(good, PUSH).filter(({ step }) => publishes(step, PUSH)).length === 4,
+      `${reachableSteps(good, PUSH).filter(({ step }) => publishes(step, PUSH)).length} publishing step(s)`);
+check('an if: nobody can evaluate counts as reachable',
+      allows('steps.probe.outputs.value == 1', PULL_REQUEST));
+check('a host port is read off a -p spec, and an ephemeral one is not',
+      publishedHostPorts('docker run -p 3000:3000 a').join() === '3000'
+      && publishedHostPorts('docker run -p 127.0.0.1:8080:3000 a').join() === '8080'
+      && publishedHostPorts('docker run --publish=127.0.0.1:3000:3000 a').join() === '3000'
+      && publishedHostPorts('docker run -p 127.0.0.1::3000 a').length === 0
+      && publishedHostPorts('docker run -p 3000 a').length === 0,
+      JSON.stringify([publishedHostPorts('docker run -p 3000:3000 a'),
+                      publishedHostPorts('docker run -p 127.0.0.1:8080:3000 a'),
+                      publishedHostPorts('docker run --publish=127.0.0.1:3000:3000 a'),
+                      publishedHostPorts('docker run -p 127.0.0.1::3000 a')]));
+
+// ─── The real workflows ───────────────────────────────────────
+
+const files = existsSync(workflowDir)
+  ? readdirSync(workflowDir).filter((name) => /\.ya?ml$/.test(name)).sort()
+  : [];
+const workflows = new Map(files.map((name) => [name, parseYaml(readFileSync(join(workflowDir, name), 'utf8'))]));
+
+console.log('\n1. nothing a pull request can reach publishes anything');
+
+check(`there are workflows to inspect (${files.length} found)`, files.length > 0);
+
+const publishing = [];
+const loggingIn = [];
+for (const [name, workflow] of workflows) {
+  for (const { job, step } of reachableSteps(workflow, PULL_REQUEST)) {
+    if (usesAction(step, 'docker/build-push-action') && publishes(step, PULL_REQUEST)) {
+      publishing.push(`${name} · ${job} · ${step.name ?? step.uses}`);
+    }
+    if (usesAction(step, 'docker/login-action')) {
+      loggingIn.push(`${name} · ${job} · ${step.name ?? step.uses}`);
+    }
+  }
+}
+
+check('no docker/build-push-action step reachable on a pull_request has push: true',
+      publishing.length === 0, publishing.join('; '));
+check('no docker/login-action step is reachable on a pull_request either',
+      loggingIn.length === 0,
+      `${loggingIn.join('; ')} — a fork's token is read-only, and a step that never runs cannot 403`);
+
+console.log('\n2. no workflow asks the runner for host port 3000');
+
+const bound = [];
+const named = [];
+for (const [name, workflow] of workflows) {
+  for (const { job, text } of runScripts(workflow)) {
+    for (const host of publishedHostPorts(text)) {
+      if (host === '3000') bound.push(`${name} · ${job} · -p ${host}:…`);
+    }
+    for (const [hit] of text.matchAll(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):3000\b/g)) {
+      named.push(`${name} · ${job} · ${hit}`);
+    }
+  }
+}
+
+check('no run: step publishes a container on host port 3000', bound.length === 0,
+      `${bound.join('; ')} — see docs/trap-port-3000.md`);
+check('no run: step reaches for a service on host port 3000', named.length === 0, named.join('; '));
+
+console.log('\n3. the docker workflow proves the images build on a pull request');
+
+const docker = workflows.get('docker.yml');
+
+if (!docker) {
+  console.log('  note  .github/workflows/docker.yml is gone — this fork publishes no images,');
+  console.log('        which is the other answer the issue allowed. Nothing left to hold.');
+} else {
+  const jobs = docker.jobs ?? {};
+  const test = jobs['test-docker-images'];
+  check('docker.yml still has a test-docker-images job', Boolean(test),
+        `jobs: ${Object.keys(jobs).join(', ')}`);
+
+  const reachableOnPr = new Set(reachableSteps(docker, PULL_REQUEST).map(({ job }) => job));
+  check('test-docker-images runs on a pull request', reachableOnPr.has('test-docker-images'),
+        `jobs a pull request reaches: ${[...reachableOnPr].join(', ') || 'none'}`);
+
+  const testSteps = (test?.steps ?? []).filter((step) => typeof step?.run === 'string');
+  const pulls = testSteps.filter(({ run }) => /\bdocker\s+(image\s+)?pull\b/.test(run));
+  check('it does not docker pull a remote tag', pulls.length === 0,
+        pulls.map(({ name }) => name ?? '(unnamed step)').join('; '));
+  check('it loads the image the build job made instead',
+        testSteps.some(({ run }) => /\bdocker\s+(image\s+)?load\b/.test(run)),
+        'nothing in the job loads a local image, so it has nothing to test');
+
+  const builds = reachableSteps(docker, PULL_REQUEST)
+    .filter(({ step }) => usesAction(step, 'docker/build-push-action'));
+  check('both images are still built on a pull request', builds.length >= 2,
+        `${builds.length} build step(s) a pull request reaches`);
+  const notLoaded = builds.filter(({ step }) => step.with?.load !== true && !step.with?.outputs);
+  check('each of those builds keeps its image', notLoaded.length === 0,
+        `${notLoaded.map(({ job }) => job).join(', ')} — built with neither load: true nor outputs:`);
+
+  console.log('\n4. and still publishes them from main and from a tag');
+
+  const onPush = reachableSteps(docker, PUSH)
+    .filter(({ step }) => usesAction(step, 'docker/build-push-action') && publishes(step, PUSH));
+  check('a push still reaches a build-push-action step with push: true', onPush.length >= 2,
+        `${onPush.length} publishing step(s) — the trigger split must not have dropped the push`);
+  check('a push still logs in to the registry',
+        reachableSteps(docker, PUSH).some(({ step }) => usesAction(step, 'docker/login-action')));
+
+  const on = docker.on ?? {};
+  check('docker.yml still triggers on a pull request', triggersOn(docker, 'pull_request'));
+  check('docker.yml still triggers on a push to main and on a version tag',
+        [].concat(on.push?.branches ?? []).includes('main')
+        && [].concat(on.push?.tags ?? []).some((tag) => /^v/.test(String(tag))),
+        JSON.stringify(on.push ?? null));
+}
+
+console.log('');
+if (failures) {
+  console.error(`${failures} case(s) failed`);
+  process.exit(1);
+}
+console.log('All checks passed');

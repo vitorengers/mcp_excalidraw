@@ -515,7 +515,9 @@ Docker canvas server:
 docker run -d -p 3000:3000 --name mcp-excalidraw-canvas ghcr.io/yctimlin/mcp_excalidraw-canvas:latest
 ```
 
-Both images above are the upstream project's published ones; this fork builds and pushes none of its own. The MCP server image is `ghcr.io/yctimlin/mcp_excalidraw:latest` (stdio; point `EXPRESS_SERVER_URL` at the canvas container).
+Both images above are the upstream project's published ones. The MCP server image is `ghcr.io/yctimlin/mcp_excalidraw:latest` (stdio; point `EXPRESS_SERVER_URL` at the canvas container).
+
+This fork publishes its own to `ghcr.io/vitorengers/mcp_excalidraw` and `ghcr.io/vitorengers/mcp_excalidraw-canvas`, but only from `main` and from a `v*.*.*` tag. A pull request builds both images and publishes neither — see [`.github/workflows/docker.yml`](.github/workflows/docker.yml).
 
 ## Testing
 
