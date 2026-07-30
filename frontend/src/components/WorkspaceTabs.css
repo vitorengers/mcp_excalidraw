@@ -28,9 +28,29 @@
   align-items: center;
   padding: calc(6px * var(--workspace-tab-scale)) calc(8px * var(--workspace-tab-scale)) 0;
   overflow-x: auto;
-  background: var(--island-bg-color, #fff);
-  border-bottom: 1px solid var(--color-gray-30, #ced4da);
-  flex: 0 0 auto;
+  /*
+   * The left-hand group of `.header`, since #261 — not a strip of its own above it.
+   *
+   * So no background and no bottom border: the bar it is now part of brings both, and a
+   * second border under half the row was a line that stopped in the middle of it. The strip
+   * still ends exactly where the bar does (`align-items: flex-end` there, no bottom padding
+   * here), which is what keeps the tabs open onto the bar's own edge.
+   *
+   * It takes the width the controls do not, down to nothing, and reaches the rest of its
+   * tabs by scrolling — `min-width: 0` because a flex item's default floor is its content,
+   * and without it three projects would push the controls off the row instead.
+   *
+   * The `0` basis is what makes that ordering exact, and it was arrived at the hard way.
+   * Flexbox shares a shortfall out in proportion to each item's shrink factor *times its
+   * width*, so with a content basis the strip could take 99.99% of it and still leave the
+   * controls a hundredth of a pixel short — which is a whole button wrapped onto a second
+   * row, because a group whose width is exactly the sum of its buttons wraps on any deficit
+   * at all. With a basis of 0 the strip contributes nothing to that sum: it asks for no
+   * width, takes whatever the controls leave, and scrolls inside it.
+   */
+  background: transparent;
+  flex: 1 1 0;
+  min-width: 0;
   /* Positioned only so that the strip is on a layer at all: it was `static`, so a card drawn
      over the canvas outranked it whatever number that card carried. The ladder is named on
      `.app` in `frontend/index.html`. #153. */

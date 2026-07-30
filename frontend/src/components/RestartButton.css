@@ -1,0 +1,97 @@
+/*
+ * The restart control, in the merged bar.
+ *
+ * Coloured from the tokens `frontend/index.html` declares on `.app[data-theme=…]`, the same
+ * way every other overlay on this board is, so the confirmation follows the canvas into dark
+ * mode instead of being a light card over a dark board.
+ *
+ * The button itself is styled by `.controls button` — it is one of the controls and it should
+ * be the size of the ones beside it. Everything here is about the two things that hang off it,
+ * and both hang: a confirmation that pushed the row aside as it opened, or a sentence that
+ * widened it as it arrived, would move the buttons the reader is aiming at.
+ */
+.restart-server {
+  position: relative;
+  display: inline-flex;
+}
+
+.restart-server__confirm {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: var(--board-z-dialog, 50);
+  width: 26rem;
+  max-width: 90vw;
+  padding: 14px 16px;
+  border: 1px solid var(--color-gray-30, #d6d6d6);
+  border-radius: 8px;
+  background: var(--island-bg-color, #fff);
+  color: var(--text-primary-color, #1b1b1f);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.restart-server__lede {
+  margin: 0 0 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.restart-server__costs {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.restart-server__costs li {
+  margin-bottom: 4px;
+}
+
+.restart-server__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/*
+ * The two buttons in the card are the card's size, not the bar's.
+ *
+ * `.controls button` reaches in here — this is inside `.controls` — and a 21px `Cancel` in a
+ * 13px card reads as the card belonging to something else.
+ */
+.restart-server__actions button {
+  font-size: 13px;
+  padding: 7px 14px;
+  border-radius: 4px;
+}
+
+.restart-server__note {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  margin: 0;
+  max-width: 24rem;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--color-gray-70, #5c5c5c);
+  text-align: right;
+  pointer-events: none;
+}
+
+/*
+ * A failed restart is a board that may be down, so it is not quiet text.
+ *
+ * `#b02a26` on white is 6.0:1 and `--color-danger` in the dark theme is a light red on the
+ * dark island, so each theme keeps the warning readable on its own background rather than on
+ * the other one inverted.
+ */
+.restart-server__note--failed {
+  color: #b02a26;
+  font-weight: 600;
+}
+
+.app[data-theme="dark"] .restart-server__note--failed {
+  color: var(--color-danger, #ffa8a5);
+}

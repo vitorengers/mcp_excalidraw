@@ -5,19 +5,59 @@
 
 ## What it adds on top of Excalidraw
 
-- **Workspace tabs** (`WorkspaceTabs.tsx`) — driven by `GET /api/workspaces`
+- **The bar** — one row of chrome above the canvas: the project tabs
+  (`WorkspaceTabs.tsx`, driven by `GET /api/workspaces`) on the left, the controls on the right
 - **The documentation panel** — `DocsPanel.tsx` holds what it shows, `AnchoredDocsPanel.tsx`
   where it sits; the Docs block card covers both
 - **The collapsible image and issue blocks**, both hung off `customData`
 - **The terminal** (`TerminalPanel.tsx`) — a shell the server owns on a PTY, drawn by xterm.js
   as an overlay over a block on the right of the board; the Terminal card has it
 - **Autosync** back into the active workspace's store
-- **Hide Menus** — a header button that takes Excalidraw's own chrome off the board
+- **Hide Menus** — a button on the bar that takes Excalidraw's own chrome off the board
+- **Restart Server** — the same bar, `POST /api/restart`, behind a confirmation that names
+  what a restart costs
 
 Everything project-specific lives in `customData`, never in a parallel data structure. That is
 the whole reason the blocks survive a round-trip through Excalidraw: the library preserves
 `customData` it does not understand, so a shape stays a docs block or an issue block through
 every edit, undo and re-render.
+
+## The bar
+
+One row, `.header`, and the project tabs are its left-hand group rather than a second strip
+above it (#261). It was two full-width bands, which cost the canvas about 50px of height for a
+row that was mostly empty on both.
+
+- **The tabs flex and scroll.** `.workspace-tabs` has `flex: 1 1 0` and `min-width: 0`, so it
+  asks for no width of its own and takes whatever the controls leave, reaching the rest of its
+  projects by scrolling sideways. A board with more projects than the row can show scrolls the
+  strip; the `+` that adds one is at the end of it.
+- **The controls never scroll.** They keep their natural width and wrap onto a second line only
+  when the window is narrower than they are.
+- **Two type scales, on purpose.** The tabs keep the 2.5x #110 and #144 measured for them; the
+  controls are on `--board-controls-scale: 1.25` — 17.5px, up from 14px. Full parity was
+  measured and rejected: at 2.5 the controls alone are over 1900px and the row could never hold
+  the tabs as well. Both scales are single multipliers, in `WorkspaceTabs.css` and in
+  `frontend/index.html`'s style block.
+- **No registry means no tabs, not no bar.** `WorkspaceTabs` renders nothing without one, and
+  the connection pill, Sync to Backend, Clear Canvas and Restart Server are still there.
+- **There is no page title on it.** `<h1>Excalidraw Canvas</h1>` said the same four words on
+  every board of every project; the tabs beside it say which board this is. The name is still
+  in `<title>`, where a browser tab reads it.
+
+`scripts/check-merged-bar-browser.mjs` measures all of it in a real browser, in both themes.
+
+## Restarting the server from the board
+
+`Restart Server`, at the right-hand end of the bar, opens a confirmation naming what a restart
+costs — terminal sessions close, implementations in flight become `interrupted` and are
+re-derived from git, the boards themselves survive, and the page reconnects on its own. Then it
+posts to `/api/restart` and waits for a **different pid** to answer `/health`, which is the only
+thing that distinguishes a server that restarted from one that never went.
+
+The button is disabled when the page is not on loopback, because the route is refused there.
+The server side of it — and why a supervisor outside the process tree is the only way to do
+this — is in [rest-api.md](rest-api.md) and `src/core/restart-supervisor.ts`.
 
 ## Hiding Excalidraw's own menus
 

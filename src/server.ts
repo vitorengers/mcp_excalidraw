@@ -30,7 +30,8 @@ import {
 import { z } from 'zod';
 import WebSocket from 'ws';
 import { isMainModule } from './core/entry.js';
-import { writePidFile, removePidFile } from './core/pidfile.js';
+import { writePidFile, removePidFile, restartLogPath } from './core/pidfile.js';
+import { spawnRestartSupervisor, type CanvasIdentity } from './core/restart-supervisor.js';
 import {
   addWorkspace,
   loadWorkspaces,
@@ -4463,25 +4464,23 @@ app.get('/', (req: Request, res: Response) => {
   });
 });
 
-// Health check endpoint
-app.get('/health', (req: Request, res: Response) => {
-  res.json({
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    elements_count: totalElementCount(),
-    websocket_clients: clients.size,
-    // Identity for `stop`: it must only ever signal a process that both
-    // identifies as this service AND self-reports its pid — never a pid
-    // from a stale pidfile or an unrelated app squatting on the port.
-    service: 'mcp-excalidraw-canvas',
-    pid: process.pid,
-    // What kind of canvas this is, which `status` cannot say. A server auto-started by
-    // `ensureCanvasRunning` inherits whatever environment its caller held, and an MCP server
-    // started by an editor holds no `EXCALIDRAW_*` at all — so a stand-in binds the board's
-    // port with no registry, no terminal and no agents, and answers everything above exactly
-    // as the board it replaced did. Telling the two apart took three more requests. These
-    // fields are the difference, and they are read from the same expressions the routes
-    // themselves are gated on, so they cannot drift from what the instance actually does.
+/**
+ * What kind of canvas this is, which `status` cannot say.
+ *
+ * A server auto-started by `ensureCanvasRunning` inherits whatever environment its caller
+ * held, and an MCP server started by an editor holds no `EXCALIDRAW_*` at all — so a stand-in
+ * binds the board's port with no registry, no terminal and no agents, and answers everything
+ * `/health` says above these fields exactly as the board it replaced did. Telling the two
+ * apart took three more requests. These fields are the difference, and they are read from the
+ * same expressions the routes themselves are gated on, so they cannot drift from what the
+ * instance actually does.
+ *
+ * One function rather than an object literal in `/health`, because the restart supervisor
+ * checks the replacement against exactly this: what it must find is what this instance is,
+ * not a second list that can quietly stop matching.
+ */
+function canvasIdentity(): CanvasIdentity {
+  return {
     workspaces: process.env.EXCALIDRAW_WORKSPACES ? 'configured' : 'none',
     terminal: Boolean(TERMINAL_SETTING),
     // The agents fail the most quietly of the three: the routes answer, the blocks draw, the
@@ -4494,7 +4493,97 @@ app.get('/health', (req: Request, res: Response) => {
       issue: ISSUE_AGENT_CONFIGURED,
       implement: IMPLEMENT_AGENT_CONFIGURED
     }
+  };
+}
+
+// Health check endpoint
+app.get('/health', (req: Request, res: Response) => {
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    elements_count: totalElementCount(),
+    websocket_clients: clients.size,
+    // Identity for `stop`: it must only ever signal a process that both
+    // identifies as this service AND self-reports its pid — never a pid
+    // from a stale pidfile or an unrelated app squatting on the port.
+    service: 'mcp-excalidraw-canvas',
+    pid: process.pid,
+    ...canvasIdentity()
   });
+});
+
+/**
+ * Restart this server, from somewhere that is not inside it.
+ *
+ * The board could not restart its own server, and the improvised answer sawed off the branch
+ * it sat on: a terminal block is a child of the server, so killing the server killed the shell
+ * running the kill, and the replacement came from whatever auto-started first — a stand-in
+ * with none of the board's environment, holding the port and answering `status: healthy`.
+ *
+ * So this route does exactly two things: it hands a **supervisor** the identity the
+ * replacement has to have, and then it leaves. Everything after that happens in a process
+ * outside this one's tree (`src/core/restart-supervisor.ts`), which is the only place it can
+ * happen from.
+ *
+ * The answer goes out before the exit — the button on the board is waiting for it, and a
+ * restart that closed the socket without replying would be indistinguishable from a crash.
+ *
+ * Loopback-guarded like every other route that acts on this machine rather than reading a
+ * project: restarting is an operator's action on the operator's own computer.
+ */
+app.post('/api/restart', (_req: Request, res: Response) => {
+  if (offLoopback(res, 'The canvas server is restarted')) return;
+
+  const log = restartLogPath(PORT);
+  let supervisor: number | null = null;
+  try {
+    supervisor = spawnRestartSupervisor({
+      port: PORT,
+      host: HOST,
+      oldPid: process.pid,
+      expect: canvasIdentity(),
+      log
+    });
+  } catch (error) {
+    logger.error('Failed to start the restart supervisor:', error);
+    return res.status(500).json({ success: false, error: (error as Error).message });
+  }
+
+  // Nothing has been killed yet, so a supervisor that did not start is simply a restart that
+  // did not happen — reported, with the board still up.
+  if (supervisor === null) {
+    logger.error('The restart supervisor was spawned but reported no pid; the server stays up.');
+    return res.status(500).json({
+      success: false,
+      error: 'Could not start the process that would bring the server back up; nothing was stopped.'
+    });
+  }
+
+  // warn rather than info: on this machine the console is warn and above, and a process about
+  // to exit on purpose should say so where somebody watching the server can see it.
+  logger.warn(`Restart requested: supervisor ${supervisor} will replace pid ${process.pid}. Log: ${log}`);
+
+  res.json({
+    success: true,
+    pid: process.pid,
+    supervisor,
+    log,
+    // What the board's confirmation already told the reader, repeated where a script can read
+    // it: terminal sessions and in-memory run state do not survive; the canvas does.
+    costs: ['terminal-sessions', 'in-flight-implementations']
+  });
+
+  // Once, whichever comes first: `finish` is the response actually on the wire, and the timer
+  // is there because a client that hangs up must not leave the server half-restarted with a
+  // supervisor already waiting for it to go.
+  let left = false;
+  const leave = (): void => {
+    if (left) return;
+    left = true;
+    setTimeout(() => process.exit(0), 100).unref();
+  };
+  res.on('finish', leave);
+  setTimeout(leave, 2000).unref();
 });
 
 /**

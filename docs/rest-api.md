@@ -1,6 +1,6 @@
 # REST API
 
-`src/server.ts`. 55 routes, and the only surface that is workspace-aware — everything the
+`src/server.ts`. 56 routes, and the only surface that is workspace-aware — everything the
 browser does, and everything this board was built with, goes through here.
 
 The table below is the whole set, one row per route. It used to be a summary of thirty, under a
@@ -119,8 +119,32 @@ loopback only, and capped per board.
 | `GET /api/snapshots/:name` | Restore one |
 | `GET /` | The built frontend |
 | `GET /health` | Liveness, plus the `pid` of whatever is actually answering |
+| `POST /api/restart` | Replace this server with a new one on the same port (loopback only) |
 | `GET /api/sync/status` | What the store and the connected browsers currently hold |
 | `GET /api/claude-status` | What each Claude Code environment on this machine has spent (loopback only) — [claude-status.md](claude-status.md) |
+
+### `POST /api/restart`
+
+A server cannot restart itself: whatever runs the kill dies with the kill, and the port then
+goes to whatever auto-starts first. That has happened here — a terminal block was asked to
+restart the board, and an MCP server attached to an editor supplied the replacement, holding
+none of the board's environment (see [running.md](running.md) and
+`scripts/check-health-identity.mjs`).
+
+So the route does two things and then leaves. It hands a **supervisor** — a detached process
+outside this one's tree, `src/core/restart-supervisor.ts`, carrying `{ ...process.env }` — the
+identity the replacement must have, and answers before it exits so the board knows the request
+was taken. The supervisor waits for the old pid to go, waits for the port to actually free (a
+server that cannot bind exits quietly, [trap-stale-server.md](trap-stale-server.md)), starts
+`node dist/server.js`, and then verifies `/health` reports the *new* pid **and** the same
+`workspaces`, `terminal` and `agents` the old one had — never `status: healthy` alone, which is
+exactly what the stand-in said. It writes what happened to `restart-<port>.log` beside the
+pidfile, because the process that asked is deliberately gone by then.
+
+It restarts the build that is on disk. It does not run a build.
+
+`scripts/check-restart-route.mjs` starts a configured server, restarts it through the route and
+asserts all of that, including the 403 off loopback.
 
 ## Three things worth knowing
 

@@ -57,6 +57,7 @@ import { terminalAdvance, terminalFontReady, terminalLineBox } from './terminal-
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
 import { ClaudeStatusHud } from './components/ClaudeStatusHud'
+import { RestartButton } from './components/RestartButton'
 import type { ClaudeEnvironmentStatus } from './components/ClaudeStatusHud'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
@@ -5956,16 +5957,6 @@ function App(): JSX.Element {
     // stylesheet in `index.html` reads, and both have to be readable from *above* the
     // Excalidraw subtree — the rules that hide its menus select down into it from here.
     <div className="app" data-theme={theme} data-chrome={chromeHidden ? 'hidden' : 'visible'}>
-      <WorkspaceTabs
-        workspaces={workspaces}
-        activeId={activeWorkspace}
-        configured={workspacesConfigured}
-        onSelect={switchWorkspace}
-        onAdd={() => setWorkspaceDialog('add')}
-        onConfigure={() => setWorkspaceDialog('config')}
-        onReorder={reorderWorkspaces}
-      />
-
       {workspaceDialog === 'add' && (
         <AddWorkspaceDialog
           onClose={() => setWorkspaceDialog(null)}
@@ -5983,9 +5974,30 @@ function App(): JSX.Element {
         />
       )}
 
-      {/* Header */}
+      {/*
+        One bar, since #261: the boards on the left, what you can do to this one on the right.
+
+        The `<h1>Excalidraw Canvas</h1>` that used to open the row is gone, and it is the thing
+        that had to give. It said the same four words on every board of every project, while
+        the tabs beside it say which board this is — a constant title next to the variable one
+        is the least informative use of a row that now has to hold both. The document still has
+        its name in `<title>`, where a browser tab reads it.
+
+        The tab strip renders nothing at all when no registry is configured, and that has to
+        mean *no tabs*, not *no bar*: a single-board setup still needs the connection pill, Sync
+        to Backend and Clear Canvas, which is why the strip is a child of the header rather
+        than the header being a branch of the strip.
+      */}
       <div className="header">
-        <h1>Excalidraw Canvas</h1>
+        <WorkspaceTabs
+          workspaces={workspaces}
+          activeId={activeWorkspace}
+          configured={workspacesConfigured}
+          onSelect={switchWorkspace}
+          onAdd={() => setWorkspaceDialog('add')}
+          onConfigure={() => setWorkspaceDialog('config')}
+          onReorder={reorderWorkspaces}
+        />
         <div className="controls">
           {/*
             Three states, not two. A socket that has never been up is *connecting*, and
@@ -6046,6 +6058,14 @@ function App(): JSX.Element {
           </button>
 
           <button className="btn-secondary" onClick={clearCanvas}>Clear Canvas</button>
+
+          {/*
+            The one control here that acts on the server rather than on the canvas, so it sits
+            at the end of the row where the destructive things already are. It is
+            loopback-guarded on the server and disabled off it, and everything it costs is on
+            the confirmation it opens.
+          */}
+          <RestartButton />
 
           {/*
             Last in `.controls`, which is the header's right-hand group — so this is the
