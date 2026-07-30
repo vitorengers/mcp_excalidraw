@@ -13,6 +13,7 @@ import {
   resolveInWorkspace,
   ResolvedPath,
   WorkspaceEnvironment,
+  wslUnsupportedHere,
 } from './workspace-paths.js';
 
 /**
@@ -306,6 +307,17 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
     agents: { issue: NO_AGENT_SETTINGS, implement: NO_AGENT_SETTINGS },
     error: null,
   };
+
+  // Before the config is looked for, because off Windows there is nowhere to look: `hostPath`
+  // falls back to the inner POSIX path, so the honest answer — no `wsl.exe` on this machine —
+  // would otherwise arrive as `No board.config.json at /home/me/proj`, which reads as a
+  // missing file rather than as a project this board cannot reach at all. The tab is broken
+  // either way; this is the difference between a reason and a symptom.
+  const unsupported = resolved.environment.kind === 'wsl' ? wslUnsupportedHere() : null;
+  if (unsupported) {
+    logger.warn(`Workspace "${id}" is unusable — ${unsupported}`);
+    return { ...base, error: unsupported };
+  }
 
   const configPath = resolveInWorkspace(resolved, WORKSPACE_CONFIG_FILENAME);
   if (!configPath) {
@@ -643,6 +655,21 @@ export async function addWorkspace(
     ? request.distro.trim()
     : undefined;
   const resolved = resolveWorkspacePath(given, distro);
+
+  // First of the guards, and before the registry is even read: a project this board could
+  // never run is not a project it should write down. Both spellings are refused — the
+  // `distro` field and a `\\wsl.localhost\…` path, which needs no field to resolve as WSL —
+  // because the tab that entry produced would come up broken with this same sentence on it.
+  if (distro || resolved.environment.kind === 'wsl') {
+    const unsupported = wslUnsupportedHere();
+    if (unsupported) {
+      return {
+        ok: false,
+        status: 400,
+        error: `${unsupported}. Nothing was written to the registry.`,
+      };
+    }
+  }
 
   const read = await readRegistry(registryPath);
   if (!read.ok) return read;
