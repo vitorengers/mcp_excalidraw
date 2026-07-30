@@ -17,7 +17,9 @@ import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
 import type { Rect } from '../../src/core/anchored-placement'
 import { resolvePanelTarget } from '../../src/core/panel-target'
 import type { PanelElement } from '../../src/core/panel-target'
-import { describeIgnoredClaims, resolveBoardSectionHotkeys } from '../../src/core/board-sections'
+import {
+  describeIgnoredClaims, firstBoardSection, resolveBoardSectionHotkeys
+} from '../../src/core/board-sections'
 import type { BoardSectionElement } from '../../src/core/board-sections'
 import {
   describeIgnoredSubsectionClaims, resolveBoardSubsections, stepBetweenSubsections
@@ -2133,6 +2135,40 @@ function App(): JSX.Element {
   }
 
   /**
+   * What a board that has never been seen is opened on.
+   *
+   * It used to be *everything on the canvas*, and #245 is the bill for that. A fit takes the
+   * width of what it is given, and what it was given is the whole scene: this repository's
+   * board is a 1320-wide mirror, a ~1282-wide terminal block and 2324 of documentation, two
+   * gaps apart — over 5,000 units against the ~2,544 a maximised 2560 display gives, so the
+   * landing was 0.4 and the 13px card body was drawn at 5px. Canvas glyphs have no hinting,
+   * so that reads as blurry rather than as small, and there is no resolution to raise:
+   * Excalidraw already rasterises every element cache at `devicePixelRatio x zoom`. The zoom
+   * was the whole of it, and this was the only path that chose one for the reader.
+   *
+   * So the board is asked what it is about. A **section** is a board's own statement of that
+   * — the same shape `Alt+P` and `Alt+G` reach — and the first one in reading order is where
+   * a board switch lands, at the size it was written at rather than at whatever number makes
+   * its furniture fit beside it. Below 100% this board is a map, not a document; the region
+   * keys are how it is read, and `docs/board-sections.md` says so.
+   *
+   * A board that declares no section is landed on its **own drawing**: the mirror is rebuilt
+   * from GitHub and the terminal block lives as long as its shell, and neither is content the
+   * reader switched boards to look at. That is smaller than the whole scene and never larger,
+   * so it can only improve the number. Everything, finally, for a board that is nothing but
+   * furniture — a fit of no elements is not a landing at all.
+   */
+  const landingTarget = (
+    elements: readonly ExcalidrawElement[]
+  ): readonly ExcalidrawElement[] => {
+    const section = firstBoardSection(elements as unknown as BoardSectionElement[])
+    const drawn = section ? elements.find((element) => element.id === section.id) : undefined
+    if (drawn) return [drawn]
+    const own = elements.filter((element) => !isDerivedElement(element))
+    return own.length > 0 ? own : elements
+  }
+
+  /**
    * Put a board back where it was, or show it its own drawing if it has never been seen.
    *
    * `fitToViewport` on that first visit rather than a plain centring: the zoom is inherited
@@ -2150,7 +2186,7 @@ function App(): JSX.Element {
     }
     const elements = api.getSceneElements()
     if (elements.length === 0) return
-    fitLegibly(api, elements as unknown as ExcalidrawElement[], false)
+    fitLegibly(api, landingTarget(elements as unknown as ExcalidrawElement[]), false)
   }
 
   /** The new board is on screen (or never will be): let autosync go again. */
