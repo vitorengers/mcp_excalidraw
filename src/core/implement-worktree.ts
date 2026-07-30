@@ -22,7 +22,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
-import { AgentDirectory } from './issue-agent.js';
+import { AgentDirectory, agentEnv } from './issue-agent.js';
 import { Workspace } from './workspaces.js';
 
 export interface ImplementWorktree extends AgentDirectory {
@@ -33,18 +33,52 @@ interface CommandResult {
   ok: boolean;
   stdout: string;
   stderr: string;
+  /**
+   * The process never started, rather than having started and refused.
+   *
+   * `ok: false` covers both, and they are not the same thing at all: git exiting non-zero is
+   * git's answer to the question, while a failed spawn means nothing looked at the repository.
+   * Every caller that could not tell them apart guessed, and guessed the same way — that the
+   * workspace must not be a repository.
+   */
+  spawnFailed?: true;
 }
 
+/**
+ * Every git call this module makes, run with the environment the rest of the board's children get.
+ *
+ * `agentEnv()` is what the agents and the terminal are handed, and worktree git was the one
+ * child of this server that was handed nothing — so on a machine whose git is somewhere the
+ * server's own inherited PATH does not mention (Homebrew's prefix, under a launcher that gives
+ * a process `/usr/bin:/bin:/usr/sbin:/sbin`) the agents could run git and this could not.
+ * A repaired PATH in three of four places is a PATH nobody can reason about.
+ */
 function exec(command: string, args: string[], cwd?: string): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, windowsHide: true });
+    const child = spawn(command, args, { cwd, env: agentEnv(), windowsHide: true });
     let stdout = '';
     let stderr = '';
     child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
     child.stderr?.on('data', (chunk) => { stderr += chunk.toString(); });
-    child.on('error', (error) => resolve({ ok: false, stdout, stderr: error.message }));
+    child.on('error', (error) => resolve({ ok: false, stdout, stderr: error.message, spawnFailed: true }));
     child.on('close', (code) => resolve({ ok: code === 0, stdout: stdout.trim(), stderr: stderr.trim() }));
   });
+}
+
+/**
+ * What a run is told when git never started, which is never "there is no repository here".
+ *
+ * Raised rather than logged, and raised by both callers below: this module exists because two
+ * issues once cut branches in one working tree, and a run that cannot make a worktree and
+ * continues anyway is that failure again, with nobody watching. Refusing costs one run; not
+ * refusing costs whatever the agent does to the project checkout.
+ *
+ * The spawn's own message is carried through because it is the part that differs — `spawn git
+ * ENOENT` from a missing git, something else entirely from a permission or a wsl.exe that is
+ * not installed — and the sentence around it is the part a reader can act on.
+ */
+function gitCouldNotStart(result: CommandResult): Error {
+  return new Error(`git could not be started (${result.stderr}) — install git or put it on PATH`);
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -332,6 +366,10 @@ async function linkDependencies(workspace: Workspace, worktree: AgentDirectory):
  * Returns null when the workspace is not a git repository — a project can be a board
  * without being a repository, and the old behaviour of running in the project directory is
  * the right answer for it. Isolation is what a repository buys; nothing else changes.
+ *
+ * Throws when git could not be started, which is the same `ok: false` and a different fact.
+ * Read as "not a repository" it turned a missing git into a run with no isolation at all, in
+ * the project's own checkout — the one outcome this module was written to make impossible.
  */
 export async function ensureWorktree(
   workspace: Workspace,
@@ -339,6 +377,7 @@ export async function ensureWorktree(
 ): Promise<ImplementWorktree | null> {
   const at = workspaceDirectory(workspace);
   const inside = await git(workspace, at, ['rev-parse', '--is-inside-work-tree']);
+  if (inside.spawnFailed) throw gitCouldNotStart(inside);
   if (!inside.ok || inside.stdout.trim() !== 'true') {
     logger.warn(`Workspace "${workspace.id}" is not a git repository, so this run is not isolated`);
     return null;
@@ -501,10 +540,17 @@ async function workIsInBase(
  *
  * A clean checkout with nothing ahead of the base is not reported, and that is the right
  * answer rather than a gap: there is nothing in it to resume.
+ *
+ * Git that could not be started throws, for the same reason and to a different reader. The
+ * empty list means "nothing was left behind", and answering it when nothing was *looked at*
+ * is the one lie this feature cannot afford: the whole of it is a promise that work an
+ * interrupted run left will be offered back, and it is offered exactly once, at startup.
+ * The caller there logs what it is told and carries on with the rest of the boards.
  */
 export async function worktreesHoldingWork(workspace: Workspace): Promise<HeldWorktree[]> {
   const at = workspaceDirectory(workspace);
   const inside = await git(workspace, at, ['rev-parse', '--is-inside-work-tree']);
+  if (inside.spawnFailed) throw gitCouldNotStart(inside);
   if (!inside.ok || inside.stdout.trim() !== 'true') return [];
 
   const listed = await git(workspace, at, ['worktree', 'list', '--porcelain']);
