@@ -14,10 +14,36 @@ import { Workspace } from './workspaces.js';
 import { agentPath, buildAgentCommand } from './issue-agent.js';
 
 /**
- * The `gh` invocation. Overridable so a check script can answer without a real GitHub
- * account behind it.
+ * The `gh` invocation for one workspace. Overridable so a check script can answer without
+ * a real GitHub account behind it.
+ *
+ * **Per workspace, because a command is a path and a path does not cross into a distro.**
+ * `EXCALIDRAW_GH_COMMAND` is read on a machine where the CLI is not on `PATH`, so its value
+ * is an absolute host path — and a WSL workspace runs its command line through `bash -lc`,
+ * where `C:\Program Files\GitHub CLI\gh.exe` is not a file that can exist. Read once for the
+ * whole server, that variable took the mirror off every distro-backed board the moment it
+ * was set, and took the issue panel, a dragged card and both of a run's moves with it (#252).
+ * `agentCommandFor` settles the same question for the agents; this is the half that was
+ * missed.
+ *
+ * **The WSL half does not fall back to the host override**, which is where this parts company
+ * with `agentCommandFor`. There the fallback is what keeps a bare `claude -p …` working in
+ * both environments, and an unset command means the feature is off entirely — so falling back
+ * is the difference between working and disabled. Here an unset override means "the CLI is on
+ * `PATH`", which each environment answers for itself, and `gh` is the answer that is right in
+ * both. Falling back to the host's path is not a weaker guess than `gh`; it is the defect, and
+ * it can only ever produce `command not found`.
+ *
+ * Read at call time rather than at import, so a workspace resolves against the environment
+ * the server is actually holding. Every check that stubs `gh` sets the variable before the
+ * server starts, which is earlier either way.
  */
-export const GH_COMMAND = process.env.EXCALIDRAW_GH_COMMAND || 'gh';
+export function ghCommandFor(workspace: Workspace): string {
+  if (workspace.environment.kind === 'wsl') {
+    return process.env.EXCALIDRAW_GH_COMMAND_WSL?.trim() || 'gh';
+  }
+  return process.env.EXCALIDRAW_GH_COMMAND?.trim() || 'gh';
+}
 
 /**
  * How many times to run `gh` before giving up, and how long to wait between tries.
@@ -53,7 +79,7 @@ export interface RunGhOptions {
 /**
  * Run one `gh` command line and return its stdout.
  *
- * `commandLine` is appended to `GH_COMMAND` and must already be shell-safe: a WSL
+ * `commandLine` is appended to the workspace's `gh` and must already be shell-safe: a WSL
  * workspace runs it through `bash -lc`, so anything interpolated into it has to be
  * validated by the caller rather than escaped here. Every caller in this project
  * interpolates only ids matched against a pattern first.
@@ -87,7 +113,10 @@ export async function runGh(
 
 function runOnce(workspace: Workspace, commandLine: string, options: RunGhOptions): Promise<string> {
   const timeoutMs = options.timeoutMs ?? 30_000;
-  const { command, args, cwd } = buildAgentCommand(workspace, `${GH_COMMAND} ${commandLine}`);
+  const { command, args, cwd } = buildAgentCommand(
+    workspace,
+    `${ghCommandFor(workspace)} ${commandLine}`
+  );
 
   logger.info(`Running ${options.what} for workspace "${workspace.id}"`);
 

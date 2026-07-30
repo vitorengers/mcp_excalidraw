@@ -76,7 +76,8 @@ not degraded.
 | `EXCALIDRAW_IMPLEMENT_CONCURRENCY` | `4` | Runs at once. `0` is no cap, `1` serialises. Each one is a whole coding agent building on this machine |
 | `EXCALIDRAW_IMPLEMENT_QUEUE_MS` | `30000` | How often a workspace with its queue on looks for a free slot. The timer does not exist until a queue is turned on |
 | `EXCALIDRAW_ISSUE_MEMO_MS` | `30000` | How long one `gh` read of an issue is reused. `0` turns the memo off |
-| `EXCALIDRAW_GH_COMMAND` | `gh` | The GitHub CLI, when it is not on `PATH` — [trap-gh-path.md](trap-gh-path.md) |
+| `EXCALIDRAW_GH_COMMAND` | `gh` | The GitHub CLI on **this machine**, when it is not on `PATH` — [trap-gh-path.md](trap-gh-path.md) |
+| `EXCALIDRAW_GH_COMMAND_WSL` | `gh` | The same, inside a **WSL-backed** project's distro. Unlike the agents' `_WSL` pair this does **not** fall back to the host value: a host path is exactly what cannot run there |
 | `EXCALIDRAW_CLAUDE_STATUS` | unset | The directory your Claude Code status line command writes its usage files into. Unset means `GET /api/claude-status` answers 404 and the header shows nothing — [claude-status.md](claude-status.md) |
 | `EXCALIDRAW_TERMINAL` | unset | `1` for the default shell, or a command line of your own. Unset means the terminal routes answer 404 — [terminal.md](terminal.md) |
 | `EXCALIDRAW_TERMINAL_PTY` | unset | `0` forces the pipe instead of a real pty, for a machine with no prebuilt binary |
@@ -109,6 +110,13 @@ as the distro names it:
 
 That the command is granted by the environment rather than by the project is the same rule as
 above, and the reason a WSL project cannot simply declare its own in `board.config.json`.
+
+**And `gh` is resolved per project for the same reason** — `EXCALIDRAW_GH_COMMAND` is the host's
+CLI and nothing else. Where the distro has `gh` on its own `PATH`, which is the usual case,
+there is nothing to set: a WSL project falls back to the bare `gh` rather than to the host path,
+because a host path there can only produce `command not found`. Set
+`EXCALIDRAW_GH_COMMAND_WSL` where it does not. See
+[trap-gh-path.md](trap-gh-path.md#it-is-two-machines-and-two-binaries).
 
 ## What a running board looks like
 

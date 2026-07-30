@@ -305,7 +305,10 @@ a card has to read correctly with nothing selected and with no network.
 
 That route shells out to `gh issue view --json` and carries the same loopback guard as the run
 route — reading is not writing, but it still spawns a process holding your `gh` credentials.
-`EXCALIDRAW_GH_COMMAND` overrides the binary so `scripts/check-issue-detail.mjs` can stub it.
+`EXCALIDRAW_GH_COMMAND` overrides the binary so `scripts/check-issue-detail.mjs` can stub it —
+and `ghCommandFor` resolves it per workspace, because this route builds its own command line
+rather than going through `runGh` and was therefore the second place a host path reached a
+distro ([trap-gh-path.md](trap-gh-path.md#it-is-two-machines-and-two-binaries)).
 
 The query asks for `stateReason` and `closedByPullRequestsReferences` as well as the body and the
 comments, so that a closed issue can say **what** closed it. "Closed" and "closed by a pull
