@@ -1246,6 +1246,7 @@ readline in `bash` — because the two disagree in ways no amount of reading set
 | `Option+Delete` | `ESC d` | macOS only. xterm sent `ESC[3;3~`, which neither editor binds |
 | `Cmd+Left` / `Cmd+Right` | `ESC[H` / `ESC[F` | `^A` is `SelectAll` in PSReadLine and `^E` prints as `^E`; both editors answer these |
 | `Cmd+Backspace` | `^U` on a Mac, `ESC[1;5H` off one | the one row with no single answer — see below |
+| `Shift+Enter` | `ESC CR` | a line break rather than a submit. The two encodings that say it exactly, `ESC[13;2u` and `ESC[27;2;13~`, have to be asked for first — see below |
 
 `Cmd+Backspace` is "delete to the start of the line", and no sequence does it in both: `^U` is
 readline's `unix-line-discard` and ZLE's `kill-whole-line`, and PSReadLine has no binding for it
@@ -1259,12 +1260,61 @@ whitespace and PSReadLine's `BackwardKillWord` by a punctuation set, so `foo/bar
 one press under `bash` and three under PowerShell. The alternative was a sequence that works in
 one shell and types `^H` into the reader's command line in the other, which is not a choice.
 
-Three shapes are turned down before the table is consulted at all. Anything with `Shift`, because
-`Shift+Ctrl+Left` grows a selection in a text box and a shell has none. Anything with more than
-one of `Ctrl`, `Alt` and `Meta`, because `Ctrl+Alt` is how AltGr arrives on several layouts and
-that is somebody typing a `@`. And `Alt` off a Mac, because there it is a third-level shift
-rather than `Option`, and xterm's own `Alt+Left` is already the word motion the table would send
-— claiming it would be taking a key for no change.
+Three shapes are turned down before the table is consulted at all. **`Shift` on anything but
+`Enter`** — the rule was "anything with `Shift`" until #238, for a reason about *selection-growing*
+chords: `Shift+Ctrl+Left` grows a selection in a text box and a shell has none, so xterm's
+`ESC[1;6D` is the honest answer and stays. `Shift+Enter` grows no selection and was never what that
+reason was about, so the reason keeps its rule and the one chord it does not cover comes out from
+under it. Anything with more than one of `Ctrl`, `Alt` and `Meta`, because `Ctrl+Alt` is how AltGr
+arrives on several layouts and that is somebody typing a `@` — `Shift+Enter` carries *none* of the
+three, so that count refused it as well and it is asked before the count is taken. And `Alt` off a
+Mac, because there it is a third-level shift rather than `Option`, and xterm's own `Alt+Left` is
+already the word motion the table would send — claiming it would be taking a key for no change.
+
+### Shift+Enter is a line break, and at a prompt it is nothing
+
+`Enter` submits, and so did `Shift+Enter`: xterm's `case 13` reads only `altKey`, so both were the
+same bare `CR` and every program behind the block read them as one keystroke. #238 is a reader
+asking for a line break and getting a submit — the same shape as #186, an xterm.js default nobody
+had looked at, and underneath it something older still. Legacy terminal encoding has no room for a
+modifier on `Enter` at all; microsoft/terminal#530 is the same defect one layer down, in Windows
+Terminal. Which is why Claude Code's own documentation lists `Shift+Enter` as working per emulator
+rather than universally.
+
+**`Alt+Enter` has been sending `ESC CR` all along**, out of that same xterm branch — undocumented
+here until now, under a chord nobody reaches for. It still does, and it is byte for byte what
+`Shift+Enter` now sends.
+
+`ESC CR` rather than either extended-key encoding, and that is the whole of the choice. `ESC[13;2u`
+(CSI u) and `ESC[27;2;13~` (xterm's `modifyOtherKeys`) say `Shift+Enter` exactly, where a legacy
+byte cannot — but a program that has not asked for the protocol prints them as literal characters,
+and xterm.js exposes no way to know whether it has: ghostty-org/ghostty#7780 is exactly that,
+Claude Code with `[27;2;13~` drawn across the screen. `ESC CR` needs no negotiation of any kind,
+and it is what Claude Code's `/terminal-setup` writes into VS Code, Cursor, Alacritty and Zed —
+Claude Code being the program this block exists to run.
+
+**And it is not a line break at a bare prompt, in either line editor.** Measured rather than
+reasoned about, the way every other row here was:
+
+- **PSReadLine over ConPTY does nothing whatsoever with it.** A half-written line is repainted
+  unchanged; a bare prompt answers with not one byte. Nothing is inserted, nothing is run, nothing
+  is cleared. PSReadLine does bind `Shift+Enter` — to `AddLine`, which is the line break being
+  asked for — but ConPTY has no plain byte that carries the `Shift`, so nothing reaches it.
+- **readline in `bash` rings the bell and leaves the line alone.** `ESC CR` is `meta-CR`, which
+  readline leaves unbound, and an unbound sequence is a `BEL` and no more. Again nothing inserted,
+  run or cleared.
+
+So `Shift+Enter` at a prompt does nothing, where it used to submit whatever was on the line. That
+is the trade, and it is a plain improvement rather than a wash: the chord is for the program
+running *in* the shell, and there is no editor it does the wrong thing in — which is why this row
+is not keyboard-conditional the way `Cmd+Backspace` is.
+
+Reaching PSReadLine's own `Shift+Enter` binding, `AddLine`, would mean `win32-input-mode`: ConPTY
+has no plain byte that carries the `Shift`, so no sequence at all gets there. That is a much larger
+piece of work and it is not this. **`Ctrl+J` is the answer that needs nothing**, in Claude Code and
+in every terminal, and so is a trailing `\` before `Enter`; both are documented by Claude Code
+itself and neither is affected by anything here. They stay the fallback for a reader whose
+keyboard, tmux or emulator swallows `Shift+Enter` on the way in.
 
 `scripts/check-terminal-keys-browser.mjs` is the check, and it needs two instruments because
 there are two questions. **What the page sends** is real keystrokes into a focused emulator with

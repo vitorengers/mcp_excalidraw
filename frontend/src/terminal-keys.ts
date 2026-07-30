@@ -30,6 +30,8 @@
  * | the start / end of a line | `ESC[H`/`F` | `^A` is `SelectAll` in PSReadLine, `^E` prints    |
  * | delete to the line start  | see below   | no sequence does it in both — the one place       |
  * |                           |             | this table has to ask which keyboard is in front  |
+ * | a line break, not a submit| `ESC CR`    | a bare `CR` is Enter, and legacy encoding has no  |
+ * |                           |             | room for the `Shift`; `ESC[13;2u` needs asking    |
  *
  * `^W` costs one thing worth writing down: readline's `unix-word-rubout` is delimited by
  * whitespace and PSReadLine's `BackwardKillWord` by a punctuation set, so `foo/bar-baz` goes
@@ -61,6 +63,32 @@ const MAC_KILL_WORD_RIGHT = '\x1bd'
 /** Line ends. */
 const LINE_START = '\x1b[H'
 const LINE_END = '\x1b[F'
+
+/**
+ * A line break in the running program's input, rather than a submission — `Shift+Enter`.
+ *
+ * xterm's `case 13` reads only `altKey`, so `Shift+Enter` and `Enter` were the same bare `CR`
+ * and every program behind the block read them as one keystroke: #238 is a reader asking for
+ * a line break and getting a submit. `Alt+Enter` has been sending `ESC CR` here all along, by
+ * that same branch, undocumented and under the wrong chord.
+ *
+ * `ESC CR` rather than either extended-key encoding, and that is the whole of the choice.
+ * `ESC[13;2u` (CSI u) and `ESC[27;2;13~` (xterm's `modifyOtherKeys`) can tell `Shift+Enter`
+ * from `Enter` where a legacy byte cannot — but a program that has not asked for the protocol
+ * prints them as literal characters, and xterm.js exposes no way to know whether it has
+ * (ghostty-org/ghostty#7780 is exactly that, `[27;2;13~` drawn across the screen). `ESC CR`
+ * needs no negotiation of any kind, and it is what Claude Code's own `/terminal-setup` writes
+ * into VS Code, Cursor, Alacritty and Zed — Claude Code being the program this block exists
+ * to run.
+ *
+ * **Measured at a bare prompt in both line editors**, because at a prompt this is not a line
+ * break at all: PSReadLine over ConPTY does nothing with it whatsoever — the line is neither
+ * run nor cleared — and readline rings the bell and leaves the line alone. Neither inserts
+ * anything, so `Shift+Enter` at a prompt is a no-op rather than the accidental submit it was.
+ * That is why this row is not keyboard-conditional the way `Cmd+Backspace` is: there is no
+ * editor it does the wrong thing in.
+ */
+const LINE_BREAK = '\x1b\r'
 
 /**
  * Delete to the start of the line, which is the one row with two answers.
@@ -103,17 +131,28 @@ export function macKeyboard(): boolean {
  *
  * Three shapes are turned down before the table is consulted at all:
  *
- * - **anything with `Shift`.** `Shift+Ctrl+Left` selects a word in a text box, and a shell
- *   has no selection to grow — xterm's `ESC[1;6D` is the honest answer and stays.
+ * - **`Shift` on anything but `Enter`.** The rule used to be "anything with `Shift`", for a
+ *   reason about *selection-growing* chords: `Shift+Ctrl+Left` selects a word in a text box
+ *   and a shell has no selection to grow, so xterm's `ESC[1;6D` is the honest answer and
+ *   stays. `Shift+Enter` grows no selection — it was never what that reason was about, and
+ *   #238 is what the over-wide rule cost. So the reason keeps its rule and the one chord it
+ *   does not cover comes out from under it.
  * - **anything with more than one of `Ctrl`, `Alt` and `Meta`.** `Ctrl+Alt` is how AltGr
  *   arrives on several layouts, and that is somebody typing a `@`. `TerminalPanel.tsx`
  *   already turns on that distinction and this keeps the two answers the same one.
+ *   `Shift+Enter` carries *none* of the three, so this guard refused it too and it is asked
+ *   before the count is taken.
  * - **`Alt` off a Mac.** There it is a third-level shift rather than `Option`, and xterm's
  *   own mapping of `Alt+Left` is already the word motion this table would send. Taking it
  *   would be claiming a key for no change.
  */
 export function terminalEditingChord(event: EditingKeyChord, isMac: boolean): string | null {
-  if (event.shiftKey) return null
+  // `Enter` and not `NumpadEnter`: the keypad key is a separate `code`, and claiming a chord
+  // nobody asked about is how the rule above got too wide in the first place.
+  if (event.shiftKey) {
+    const bare = !event.ctrlKey && !event.altKey && !event.metaKey
+    return bare && event.code === 'Enter' ? LINE_BREAK : null
+  }
   const claimed = Number(event.ctrlKey) + Number(event.altKey) + Number(event.metaKey)
   if (claimed !== 1) return null
   if (event.altKey && !isMac) return null
