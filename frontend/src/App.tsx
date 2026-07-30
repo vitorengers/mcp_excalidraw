@@ -2475,6 +2475,27 @@ function App(): JSX.Element {
       ] as ExcalidrawElement[],
       captureUpdate: CaptureUpdateAction.NEVER
     })
+
+    // Excalidraw measures bound text when the element lands and keeps that number, so a label
+    // that arrives before the handwriting font does is stored narrow and then drawn with the
+    // real font and clipped to the stored width — a character or two off each end. That is a
+    // standing trap on this board, and what makes it self-correcting for the mirror is the
+    // poll: the board changes, the region is drawn again, the text is measured again. This
+    // strip has the opposite property. The failure it reports is usually the *same* failure
+    // every twenty seconds, so the signature above skips every redraw and the clipped
+    // measurement is the one that stays — measured in a browser at 467 against a sentence the
+    // page makes 510 wide.
+    //
+    // So the first pass after the fonts arrive draws it once more. It cannot loop: by then
+    // `status` is `loaded`. The signature has to be dropped or that redraw is the one thing
+    // this function is built to skip, and a board that came back meanwhile keeps its own.
+    if (document.fonts && document.fonts.status !== 'loaded') {
+      void document.fonts.ready.then(() => {
+        if (projectBoardRef.current.board) return
+        projectBoardRef.current = { ...projectBoardRef.current, signature: '' }
+        renderUnreadable(reason)
+      })
+    }
   }
 
   /**

@@ -18,7 +18,7 @@
  * keeps the mirror out of the export and out of the autosync: these elements are derived
  * from GitHub and rebuilt from it, never restored from a file.
  */
-import { layoutLabel } from './text-layout.js';
+import { layoutLabel, wrap } from './text-layout.js';
 import {
   BoardSection,
   ProjectBoard,
@@ -864,6 +864,20 @@ export const UNREADABLE_WIDTH = boardWidth(UNREADABLE_COLUMNS);
 const REASON_LIMIT = 300;
 
 /**
+ * How much of the strip's width the reason is allowed to wrap against.
+ *
+ * Not all of it, and this is #206's lesson taken one step further rather than a margin picked
+ * for looks. `text-layout.ts` is an estimate that over-states a character's width on purpose,
+ * and it is still optimistic for this font: laid out against the full width, `gh`'s
+ * sixty-two-character sentence came back on **one line** and the browser drew it clipped at
+ * both ends — the tell that separates genuine overflow from the first-paint narrowing that
+ * corrects itself. Wrapping against three fifths puts every line inside what either
+ * measurement admits, which is the same answer #206 reached by writing the `\n` by hand.
+ */
+const REASON_WRAP = 0.6;
+
+
+/**
  * The strip a board draws when its project could not be read at all.
  *
  * A mirror whose read fails used to draw nothing and say nothing, and on a board where
@@ -888,8 +902,10 @@ export function layoutUnreadable(
   reason: string,
   origin: { x: number; y: number }
 ): MirrorElement[] {
-  const said = reason.trim().replace(/\s+/g, ' ').slice(0, REASON_LIMIT);
-  const text = `Project board could not be read\n${said || 'the read failed and gave no reason'}`;
+  const said = reason.trim().replace(/\s+/g, ' ').slice(0, REASON_LIMIT)
+    || 'the read failed and gave no reason';
+  const lines = wrap(said, UNREADABLE_WIDTH * REASON_WRAP, HEADER_FONT_SIZE);
+  const text = ['Project board could not be read', ...lines].join('\n');
   const height = Math.max(
     TITLE_HEIGHT,
     layoutLabel(text, UNREADABLE_WIDTH, HEADER_FONT_SIZE).containerHeight

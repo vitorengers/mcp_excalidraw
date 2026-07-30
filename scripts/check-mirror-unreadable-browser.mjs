@@ -305,6 +305,11 @@ const PROBE = `(() => {
     const label = elements.find((element) => element.containerId === id);
     return label ? label.text : '';
   };
+  const labelOf = (id) => {
+    const label = elements.find((element) => element.containerId === id);
+    return label ? { x: label.x, y: label.y, w: label.width, h: label.height,
+                     size: label.fontSize, family: label.fontFamily } : null;
+  };
   const out = { strip: null, title: null, columns: [], cards: [], mirror: 0, authored: 0 };
   for (const element of elements) {
     const custom = element.customData || {};
@@ -312,15 +317,32 @@ const PROBE = `(() => {
     else if (!element.containerId) out.authored++;
     if (custom.kind !== 'project-board') continue;
     const box = { id: element.id, x: element.x, y: element.y, w: element.width, h: element.height };
-    if (custom.role === 'title' && custom.unreadable === true) out.strip = { ...box, text: text(element.id), stroke: element.strokeColor, locked: element.locked };
+    if (custom.role === 'title' && custom.unreadable === true) out.strip = { ...box, text: text(element.id), label: labelOf(element.id), stroke: element.strokeColor, locked: element.locked };
     else if (custom.role === 'title') out.title = { ...box, text: text(element.id) };
     else if (custom.role === 'section') out.columns.push({ ...box, col: custom.sectionOptionId });
     else if (custom.role === 'card') out.cards.push({ ...box, itemId: custom.itemId });
   }
   out.columns.sort((a, b) => a.x - b.x);
   out.cards.sort((a, b) => a.x - b.x || a.y - b.y);
+  const state = api.getAppState();
+  out.view = { scrollX: state.scrollX, scrollY: state.scrollY, zoom: state.zoom.value,
+               offsetLeft: state.offsetLeft, offsetTop: state.offsetTop,
+               width: state.width, height: state.height };
   return out;
 })()`;
+
+async function pressKey(code, key, modifiers = 0, windowsVirtualKeyCode = undefined) {
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', code, key, modifiers, windowsVirtualKeyCode });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', code, key, modifiers, windowsVirtualKeyCode });
+  await sleep(150);
+}
+
+/** Whether a box's middle is somewhere a reader can actually see it. */
+const onScreen = (scene, box) => {
+  const x = (box.x + box.w / 2 + scene.view.scrollX) * scene.view.zoom + scene.view.offsetLeft;
+  const y = (box.y + box.h / 2 + scene.view.scrollY) * scene.view.zoom + scene.view.offsetTop;
+  return x > 0 && x < scene.view.width && y > 0 && y < scene.view.height;
+};
 
 /** Where the board's own content sits: one shape, well to the right of the region. */
 const CONTENT = { x: 0, y: -150, width: 600, height: 400 };
@@ -354,13 +376,19 @@ try {
 
   console.log('1. a cold board whose read fails says so, and says why');
 
-  const cold = await waitFor(async () => {
-    const scene = await evaluate(PROBE);
-    return scene.strip ? scene : null;
-  }, 'the strip a failed read draws');
+  await waitFor(async () => (await evaluate(PROBE)).strip, 'the strip a failed read draws');
+  // The region sits well to the left of the board's own content, so the strip is drawn where
+  // a reader would look for the mirror rather than where they happen to be looking. `Alt+B`
+  // is the way back to it, and it is the way back to this too — a sign nothing reaches is
+  // not much better than the silence it replaces.
+  await pressKey('KeyB', 'b', 1, 66);
+  await sleep(1200);
+  const cold = await evaluate(PROBE);
   await shot('01-cold-failure');
 
   check('a strip is drawn where the mirror would have been', Boolean(cold.strip));
+  check('and Alt+B brings it into view, the way it reaches the region itself',
+        cold.strip && onScreen(cold, cold.strip), JSON.stringify(cold.view));
   check('it carries gh\'s own sentence rather than "could not read"',
         String(cold.strip.text).replace(/\n/g, ' ').includes(GH_MISSING),
         JSON.stringify(cold.strip.text));
@@ -374,6 +402,45 @@ try {
   check('its right edge is one gap left of the board\'s own left edge',
         Math.abs((cold.strip.x + cold.strip.w) - (CONTENT.x - layout.MIRROR_GAP)) < 1,
         JSON.stringify(cold.strip));
+  check('the sentence is wrapped rather than left on one line to be clipped',
+        String(cold.strip.text).split('\n').length >= 3,
+        JSON.stringify(cold.strip.text));
+
+  // A second failing poll, because the reader is looking at this for as long as it is wrong.
+  // Nothing may move: the signature the mirror keeps is what makes an unchanged failure cost
+  // no scene write at all, and a strip that flickered every twenty seconds would be its own
+  // defect. The shot is taken here rather than on the first paint — a label measured before
+  // the handwriting font has loaded is drawn narrow and settles afterwards, which is a
+  // standing trap on this board and not what this is meant to be showing.
+  await nextPoll('the same failure again');
+  const again = await evaluate(PROBE);
+  await shot('01b-cold-failure-settled');
+  check('a second failing poll leaves the strip exactly where it was',
+        JSON.stringify(again.strip) === JSON.stringify(cold.strip),
+        JSON.stringify(again.strip));
+
+  /**
+   * The label, as the page settled it, against what the page says the same text measures.
+   *
+   * The one thing a scene reader cannot see is a clip: the element carries the whole sentence
+   * whatever gets drawn, so `strip.text` is green on a strip whose ends are cut off. Excalidraw
+   * draws bound text to the width the element carries, so the honest question is whether that
+   * width is at least what the browser makes of the text with the fonts in — measured here, in
+   * the page, because the estimate in `text-layout.ts` is the thing under suspicion.
+   */
+  const measured = await evaluate(`(() => {
+    const api = window.__unreadableCheckApi;
+    const label = api.getSceneElements().find((element) => element.containerId === ${JSON.stringify(cold.strip.id)});
+    if (!label) return null;
+    const canvas = document.createElement('canvas').getContext('2d');
+    const family = getComputedStyle(document.body).getPropertyValue('--font-family-handdrawn')
+      || 'Excalifont, Virgil, Segoe UI Emoji';
+    canvas.font = label.fontSize + 'px ' + family;
+    const widest = Math.max(...String(label.text).split('\\n').map((line) => canvas.measureText(line).width));
+    return { width: label.width, widest, font: canvas.font, ready: document.fonts.status };
+  })()`);
+  check('the label is at least as wide as the browser makes of its own text',
+        measured && measured.width + 0.5 >= measured.widest, JSON.stringify(measured));
 
   // ─── 2. it is derived, so the store never sees it ───────────
 

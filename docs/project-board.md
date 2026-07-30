@@ -129,6 +129,16 @@ the export, the `docKey` that opens this document when it is selected, and `lock
 be dragged somewhere it no longer means anything. `customData.unreadable` is what tells it from
 the strip of a board that *was* read.
 
+**The strip is drawn again once the fonts have arrived, and that is not decoration.** Excalidraw
+measures bound text when the element lands and keeps the number, so a label drawn before the
+handwriting font has loaded is stored narrow and then painted with the real font and clipped to
+the stored width. For the mirror that corrects itself, because the board changes and the region is
+drawn again; this strip has the opposite property — the failure it reports is usually the *same*
+failure every twenty seconds, so the signature skips every redraw and the clipped measurement is
+the one that stays. Measured in a browser: the label was 467 wide against a sentence the page makes
+510 of, and `bash: … command not found` lost a character off each end. So `document.fonts.ready`
+buys exactly one more pass.
+
 404 is untouched and still means something else entirely: the board has no project, so the region
 is cleared rather than explained.
 
