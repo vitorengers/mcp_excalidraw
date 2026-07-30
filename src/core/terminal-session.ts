@@ -19,11 +19,12 @@
  * `docs/terminal.md` records what each mode costs.
  */
 import { spawn, spawnSync, ChildProcess } from 'child_process';
-import { existsSync, statSync } from 'fs';
-import { delimiter, isAbsolute, join } from 'path';
+import { existsSync } from 'fs';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
-import { AgentDirectory, agentEnv, buildAgentCommand } from './issue-agent.js';
+// `resolveExecutable` moved to `issue-agent.ts` — `agentPath()` asks it the same question
+// there, and one PATH lookup shared is one that cannot drift from the terminal's.
+import { AgentDirectory, agentEnv, buildAgentCommand, resolveExecutable } from './issue-agent.js';
 import { streamsUsage } from './agent-usage.js';
 import { AgentStreamRenderer } from './agent-stream-render.js';
 
@@ -145,6 +146,14 @@ export async function loadPty(): Promise<PtyModule | null> {
  * "'-' was specified as the argument to -Command, but standard input has not been
  * redirected" — printing its usage and exiting. Handed a real console it wants to be the
  * console's shell, which is also what makes it echo, edit lines and colour its own prompt.
+ *
+ * Everywhere else it is the reader's own login shell, and that is `posixLoginShell` below.
+ * A POSIX shell needs no second spelling: handed three pipes it reads its commands from
+ * stdin already, so both modes get the same string.
+ *
+ * The WSL branch is the one place a POSIX board still gets `bash` outright, and it is not an
+ * oversight: the command is run through `wsl.exe` into a distro, where the `$SHELL` this
+ * process can see is the *host's* and describes a machine the shell will never run on.
  */
 export function defaultShellCommand(workspace: Workspace, mode: TerminalMode = 'pipe'): string {
   if (workspace.environment.kind === 'wsl') return 'bash';
@@ -153,7 +162,37 @@ export function defaultShellCommand(workspace: Workspace, mode: TerminalMode = '
       ? 'powershell.exe -NoLogo -NoProfile'
       : 'powershell.exe -NoLogo -NoProfile -Command -';
   }
-  return 'bash';
+  return posixLoginShell();
+}
+
+/**
+ * The shell a POSIX machine says its owner uses, or the best absolute path there is.
+ *
+ * This used to be the literal string `bash`, decided on a machine whose only non-Windows
+ * case is a WSL Ubuntu whose login shell really is bash. It is wrong twice over anywhere
+ * else. On macOS the login shell has been zsh since Catalina and `/bin/bash` is Apple's 3.2
+ * from 2007, so a reader opening the headline feature got a shell with none of their rc
+ * files, aliases or prompt. On a minimal Debian, an Alpine, or a container image carrying
+ * only dash or ash, `bash` is not on `PATH` at all and the session dies in the spawn.
+ *
+ * `$SHELL` is what a login sets to the shell that machine's owner chose, so it is read
+ * first — and only when it is **absolute**, because a bare name is exactly the thing being
+ * fixed and a relative one would be resolved against a working directory that has nothing to
+ * do with it. `startsWith('/')` rather than `isAbsolute`, so the question stays "is this a
+ * POSIX path" on whichever platform is asking: `path.isAbsolute` answers for the host's
+ * spelling, and this branch is about the other one.
+ *
+ * Unset — a daemon, a container, a cron — falls back to `/bin/bash` where it is there and
+ * `/bin/sh` where it is not. That is the open question the issue named, decided both ways
+ * round: `/bin/bash` is the closest match to what this returned before, so a machine that
+ * had it keeps the shell it had, and `/bin/sh` is the only one POSIX guarantees, so a
+ * machine that has no bash gets a shell rather than a spawn error. Either way the answer is
+ * a path rather than a name, which is what the failure above was.
+ */
+function posixLoginShell(shell: string | undefined = process.env.SHELL): string {
+  const named = (shell ?? '').trim();
+  if (named.startsWith('/')) return named;
+  return existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh';
 }
 
 /**
@@ -196,38 +235,6 @@ export function buildTerminalCommand(
   prompt?: string | null
 ): { command: string; args: string[]; cwd: string | undefined } {
   return buildAgentCommand(workspace, shellCommand, directory, prompt);
-}
-
-/**
- * The command as an absolute path, or as it was given.
- *
- * `child_process.spawn` searches `PATH` for a bare command name; the PTY binding does not,
- * and on Windows it reports the failure as `File not found:` with nothing after the colon,
- * which says neither what was missing nor that a lookup was expected. So the lookup happens
- * here, against the same `PATH` the shell is about to be handed rather than this process's
- * own — `EXCALIDRAW_TERMINAL=node ...` has to find the same `node` in both modes.
- *
- * Falling back to the original spelling is deliberate: a command that cannot be resolved
- * should fail in the spawn, with the spawn's own message, rather than here.
- */
-export function resolveExecutable(command: string, path: string): string {
-  const runnable = (candidate: string): boolean => {
-    try { return existsSync(candidate) && statSync(candidate).isFile(); } catch { return false; }
-  };
-  // Already a path of some kind, so there is nothing to look up.
-  if (command.includes('/') || command.includes('\\') || isAbsolute(command)) return command;
-
-  const extensions = process.platform === 'win32'
-    ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
-    : [];
-  for (const directory of path.split(delimiter).filter(Boolean)) {
-    const base = join(directory, command);
-    if (runnable(base)) return base;
-    for (const extension of extensions) {
-      if (runnable(base + extension)) return base + extension;
-    }
-  }
-  return command;
 }
 
 /**
