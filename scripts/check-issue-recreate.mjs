@@ -328,7 +328,7 @@ function startCanvas(thisPort, host, { agent = true } = {}) {
   if (agent) env.EXCALIDRAW_ISSUE_AGENT = `node "${agentStub.replace(/\\/g, '/')}"`;
 
   const child = spawnCanvas({
-    env: env,
+    env,
   }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });

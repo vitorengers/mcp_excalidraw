@@ -151,7 +151,7 @@ function startCanvas(port, { withImplementAgent = true } = {}) {
   if (withImplementAgent) env.EXCALIDRAW_IMPLEMENT_AGENT = `node "${agentStub.replace(/\\/g, '/')}" -p`;
 
   const child = spawnCanvas({
-    env: env,
+    env,
   }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });

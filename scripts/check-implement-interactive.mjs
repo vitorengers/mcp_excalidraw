@@ -195,7 +195,7 @@ function startCanvas(port, agentCommand) {
   // allowed to answer the question for this check — which is why nothing here inherits it.
 
   const child = spawnCanvas({
-    env: env,
+    env,
   }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });

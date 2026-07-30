@@ -174,7 +174,7 @@ function startCanvas(port, extraEnv = {}) {
   Object.assign(env, extraEnv);
 
   const child = spawnCanvas({
-    env: env,
+    env,
   }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });

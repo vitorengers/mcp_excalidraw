@@ -175,7 +175,7 @@ function startCanvas(port, { host = '127.0.0.1', implement = true, issue = true 
   if (implement) env.EXCALIDRAW_IMPLEMENT_AGENT = IMPLEMENT_COMMAND;
 
   const child = spawnCanvas({
-    env: env,
+    env,
   }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });

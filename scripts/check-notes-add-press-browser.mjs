@@ -228,7 +228,7 @@ function startServer(port, registry, extra = {}) {
     STUB_GH_FIXTURE: fixturePath,
   }, extra);
   const server = startCanvas({
-    env: env,
+    env,
   }).child;
   children.push(server);
   server.stdout.on('data', (chunk) => { serverLog += chunk; });

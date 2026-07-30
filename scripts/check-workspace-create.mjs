@@ -101,7 +101,7 @@ function startCanvas(port, { host = '127.0.0.1', registry = registryPath } = {})
   if (registry) env.EXCALIDRAW_WORKSPACES = registry;
 
   const child = spawnCanvas({
-    env: env,
+    env,
   }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });

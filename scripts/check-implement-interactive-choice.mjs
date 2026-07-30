@@ -219,7 +219,7 @@ function startCanvas(port, extraEnv) {
   // it, and why a value of `undefined` above leaves it unset rather than setting the string.
 
   const child = spawnCanvas({
-    env: env,
+    env,
   }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
