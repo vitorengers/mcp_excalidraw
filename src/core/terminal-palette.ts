@@ -357,6 +357,142 @@ export function terminalXtermTheme(theme: TerminalTheme): Record<string, string>
 }
 
 /**
+ * ## Writing in one of the sixteen, rather than in a colour
+ *
+ * Everything above answers "what is slot N painted as". What follows answers the other
+ * direction: a program on this surface wants to *say* something — this line is a file being
+ * read, that one is a tool that failed — and the only spelling of that which survives a theme
+ * toggle is the slot number. `\u001b[36m` is resolved by whichever palette the reader is in;
+ * `\u001b[38;2;14;124;134m` is the light palette's cyan printed into a dark card, where it was
+ * never checked and does not clear the floor. So the escapes below are **SGR 30-37 and 90-97
+ * only**, and that single restriction is what makes both themes fall out of one map rather
+ * than be maintained twice.
+ *
+ * Nothing here writes bold or dim either, and both are deliberate. `drawBoldTextInBrightColors`
+ * is xterm's default and is not turned off, so **bold plus a colour is not an independent axis**
+ * — it is the bright member of the same pair, and on the dark palette those pairs were swapped
+ * in #159, so bold would mean "lighter" on one card and "darker" on the other. **Dim** is worse:
+ * xterm draws it by blending the glyph toward the background, which is exactly the 3:1 floor
+ * every one of the sixteen was moved to clear, halved. The palette already owns a dim ink that
+ * clears it — `brightBlack`, the comment grey in both themes — so "dim" here means that slot.
+ */
+
+/** One of the sixteen, by the name `TerminalAnsi` gives it. */
+export type TerminalSlot = keyof TerminalAnsi;
+
+/** The number a program spells a slot with as a foreground: 30-37, then 90-97. */
+const SLOT_SGR: Record<TerminalSlot, number> = {
+  black: 30, red: 31, green: 32, yellow: 33, blue: 34, magenta: 35, cyan: 36, white: 37,
+  brightBlack: 90, brightRed: 91, brightGreen: 92, brightYellow: 93,
+  brightBlue: 94, brightMagenta: 95, brightCyan: 96, brightWhite: 97,
+};
+
+/** Back to whatever the reader's palette calls the default. */
+export const ANSI_RESET = '\u001b[0m';
+
+/** Turning one of the sixteen on, without turning it off again. */
+export function slotEscape(slot: TerminalSlot): string {
+  return `\u001b[${SLOT_SGR[slot]}m`;
+}
+
+/**
+ * One run of text in one slot, closed.
+ *
+ * Closed rather than left open on purpose: a transcript is appended to for the life of a run,
+ * and a sequence that is never reset paints every line after it — which is how a tool's own
+ * stray colour used to be the only colour in the block.
+ */
+export function inSlot(slot: TerminalSlot, text: string): string {
+  return text ? `${slotEscape(slot)}${text}${ANSI_RESET}` : text;
+}
+
+/**
+ * What kind of thing an agent's tool call *is*.
+ *
+ * A category rather than a list of tools, because the names arrive from the agent's stream and
+ * the set is open: an MCP server contributes tools nobody here has heard of, spelled
+ * `mcp__server__tool`. A colour per name would be a table that is wrong the first time somebody
+ * connects a server; a colour per kind is a rule that answers for names it has never seen.
+ *
+ * The kinds are the ones a reader watching a run is actually telling apart — is it *looking*,
+ * is it *changing something*, is it *running something*, is it *going out to the network*, is
+ * it *handing the work to something else* — and `other` is the honest answer for everything
+ * else, which is why it is the ink rather than a sixth hue. Colour here is added information,
+ * and inventing a category for a tool we cannot place would be adding the wrong information.
+ */
+export type AgentAction = 'inspection' | 'mutation' | 'execution' | 'network' | 'delegation' | 'other';
+
+/**
+ * A kind, and the slot it is drawn in.
+ *
+ * Five hues and the ink. `green` is also what a finished run closes in, and that is a
+ * coincidence worth keeping rather than designing away: a `Bash` line and a `the run finished`
+ * line are both "something ran", and the block reads as one thing.
+ */
+export const AGENT_ACTION_SLOT: Record<AgentAction, TerminalSlot> = {
+  inspection: 'cyan',
+  mutation: 'yellow',
+  execution: 'green',
+  network: 'blue',
+  delegation: 'magenta',
+  other: 'brightWhite',
+};
+
+/**
+ * The rest of a transcript's vocabulary, which is not a tool call.
+ *
+ * `argument` and `aside` are the same dim ink for the same reason — both are beside the point
+ * of the line they are on — and they are named apart because they are two decisions and only
+ * one of them is likely to be revisited.
+ */
+export const AGENT_INK = {
+  /** What is inside the parens: the path, the command, the query. */
+  argument: 'brightBlack',
+  /** The gutter, the continuation indent, the `… N more lines` tail, the thinking marker. */
+  aside: 'brightBlack',
+  /** A run that finished. */
+  success: 'green',
+  /** A run that reported an error, and a tool result carrying `is_error`. */
+  failure: 'red',
+} as const satisfies Record<string, TerminalSlot>;
+
+/**
+ * The tools each kind is spelled with — the ones this board's agents actually call.
+ *
+ * Deliberately short. Anything not here is `other`, and a name that turns out to matter is one
+ * line to add; a list that tries to be exhaustive is a list that goes stale silently.
+ */
+const ACTION_TOOLS: Record<Exclude<AgentAction, 'other'>, readonly string[]> = {
+  inspection: ['read', 'glob', 'grep', 'ls', 'notebookread', 'todoread'],
+  mutation: ['write', 'edit', 'multiedit', 'notebookedit', 'todowrite'],
+  execution: ['bash', 'powershell', 'bashoutput', 'killbash', 'killshell'],
+  network: ['webfetch', 'websearch'],
+  delegation: ['agent', 'task', 'skill', 'workflow'],
+};
+
+/**
+ * What kind of thing a tool is, by its name.
+ *
+ * An `mcp__…` tool is `delegation`: whatever it does, it is another program doing it, which is
+ * the same thing a sub-agent is from the point of view of somebody watching this run. It is
+ * also the one open-ended shape in the stream, so leaving it to `other` would have left the
+ * commonest unrecognised name uncoloured.
+ */
+export function agentAction(toolName: string): AgentAction {
+  const name = toolName.trim().toLowerCase();
+  if (name.startsWith('mcp__')) return 'delegation';
+  for (const [action, tools] of Object.entries(ACTION_TOOLS)) {
+    if (tools.includes(name)) return action as AgentAction;
+  }
+  return 'other';
+}
+
+/** The slot a tool's name is drawn in. */
+export function agentToolSlot(toolName: string): TerminalSlot {
+  return AGENT_ACTION_SLOT[agentAction(toolName)];
+}
+
+/**
  * The same palette as custom properties, for the half of the frame a stylesheet draws.
  *
  * Written onto the card's own root by `TerminalPanel.tsx` rather than onto `:root`, so a

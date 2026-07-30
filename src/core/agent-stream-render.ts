@@ -32,7 +32,23 @@
  * The event vocabulary below was read off a real capture rather than assumed: `system`,
  * `assistant` carrying `text`, `thinking` or `tool_use`, `user` carrying `tool_result`,
  * `rate_limit_event`, and a final `result`.
+ *
+ * ## Colour, and why it is spelled as slot numbers
+ *
+ * Until #242 this file wrote no SGR sequence at all, so a `Write`, a `Bash`, a thinking marker,
+ * a failed tool result and a successful one were the one grey xterm falls back to. The only
+ * colour that ever reached the block came in *through* a tool's own output, which `renderResult`
+ * passes through verbatim — an accident, and the tell that none was being written.
+ *
+ * What it writes now is `terminal-palette.ts`'s semantic map, and nothing but the sixteen named
+ * slots. The reason is the two themes: this board's terminal has a palette per theme and xterm
+ * is re-themed on a toggle, so `[36m` is cyan-on-paper for one reader and cyan-on-night for
+ * the other, both of them checked to clear 3:1 on their own surface. A `38;2;r;g;b` would be one
+ * of those two hexes printed into both cards, and wrong in one. See the note at the bottom of
+ * `terminal-palette.ts` for why bold and dim are not used either.
  */
+
+import { AGENT_INK, agentToolSlot, ANSI_RESET, inSlot, type TerminalSlot } from './terminal-palette.js';
 
 /** How much of a tool's output is worth putting in a block somebody is watching. */
 const RESULT_LINES = 6;
@@ -45,6 +61,15 @@ interface ContentBlock {
   name?: string;
   input?: Record<string, unknown>;
   content?: unknown;
+  /**
+   * Whether the tool answered with a failure.
+   *
+   * Declared here since #242. It was always on the wire — the API puts it on a `tool_result`
+   * and Claude Code streams the block through unchanged — and dropping it meant a tool that
+   * failed was drawn exactly like one that worked, which is the single most useful thing colour
+   * can say in a block somebody is watching to see whether a run is going wrong.
+   */
+  is_error?: boolean;
 }
 
 interface StreamEvent {
@@ -87,18 +112,34 @@ function resultText(content: unknown): string {
   return '';
 }
 
-/** A tool's answer, trimmed to what a watcher can take in, and marked as an answer. */
-function renderResult(content: unknown): string {
+/**
+ * A tool's answer, trimmed to what a watcher can take in, and marked as an answer.
+ *
+ * The gutter and the indent are always the renderer's own ink; the *text* is the tool's, and
+ * whether it is repainted depends on `failed`. On the way through, a tool that colours its own
+ * output keeps that colour — the green `built in 12.93s` in #242's screenshot is a real thing a
+ * real tool said about itself, and swallowing it to impose a house style would be a loss. On a
+ * failure the text is repainted anyway: `<tool_use_error>…` carries no colour of its own, and
+ * red across the whole block is the point.
+ *
+ * The block is closed with a reset because the tool's own colour may not be: a sequence left
+ * open would paint the prose after it, which is meant to be plain ink.
+ */
+function renderResult(content: unknown, failed: boolean): string {
+  const gutter: TerminalSlot = failed ? AGENT_INK.failure : AGENT_INK.aside;
+  const body = (line: string): string => (failed ? inSlot(AGENT_INK.failure, line) : line);
+
   const text = resultText(content).trim();
-  if (!text) return '  ⎿  (no output)\n';
+  if (!text) return `${inSlot(gutter, '  ⎿  (no output)')}\n`;
 
   const clipped = text.length > RESULT_CHARS ? `${text.slice(0, RESULT_CHARS)}…` : text;
   const lines = clipped.split('\n');
   const shown = lines.slice(0, RESULT_LINES);
   const rest = lines.length - shown.length;
 
-  return shown.map((line, index) => (index === 0 ? `  ⎿  ${line}` : `     ${line}`)).join('\n')
-    + (rest > 0 ? `\n     … ${rest} more line${rest === 1 ? '' : 's'}` : '')
+  return shown.map((line, index) => inSlot(gutter, index === 0 ? '  ⎿  ' : '     ') + body(line)).join('\n')
+    + (rest > 0 ? `\n${inSlot(AGENT_INK.aside, `     … ${rest} more line${rest === 1 ? '' : 's'}`)}` : '')
+    + ANSI_RESET
     + '\n';
 }
 
@@ -115,11 +156,16 @@ function renderEvent(event: StreamEvent): string {
         } else if (block?.type === 'thinking') {
           // Marked, never printed. It is the agent's private reasoning, it is long, and a
           // block somebody is watching to see what the run is *doing* is the wrong place
-          // for it — but silence would read as a stall.
-          out += '✻ thinking…\n';
+          // for it — but silence would read as a stall. Dim for the same reason: it says the
+          // run is alive, not what it is doing.
+          out += `${inSlot(AGENT_INK.aside, '✻ thinking…')}\n`;
         } else if (block?.type === 'tool_use') {
+          const name = block.name ?? 'tool';
           const summary = summariseInput(block.input);
-          out += `⏺ ${block.name ?? 'tool'}(${summary})\n`;
+          // Two runs, not one: the name says what kind of thing is happening and carries the
+          // category's colour, the argument says which file or command and steps back into the
+          // dim ink so a column of tool calls reads as a column of verbs.
+          out += `${inSlot(agentToolSlot(name), `⏺ ${name}`)}${inSlot(AGENT_INK.argument, `(${summary})`)}\n`;
         }
       }
       return out;
@@ -129,13 +175,17 @@ function renderEvent(event: StreamEvent): string {
       if (!Array.isArray(content)) return '';
       let out = '';
       for (const block of content) {
-        if (block?.type === 'tool_result') out += renderResult(block.content);
+        if (block?.type === 'tool_result') out += renderResult(block.content, block.is_error === true);
       }
       return out;
     }
     case 'result': {
       const turns = typeof event.num_turns === 'number' ? `, ${event.num_turns} turn${event.num_turns === 1 ? '' : 's'}` : '';
-      return `\n⏺ ${event.is_error ? 'the run reported an error' : 'the run finished'}${turns}\n`;
+      // Until #242 these two differed only in their wording, at the end of a transcript
+      // somebody is scrolled away from.
+      const slot = event.is_error ? AGENT_INK.failure : AGENT_INK.success;
+      const said = event.is_error ? 'the run reported an error' : 'the run finished';
+      return `\n${inSlot(slot, `⏺ ${said}${turns}`)}\n`;
     }
     // `system` is the startup banner and `rate_limit_event` is bookkeeping. Neither says
     // anything about the work, and both would arrive before the first line of it.
