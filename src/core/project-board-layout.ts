@@ -208,8 +208,13 @@ export interface LayoutOptions {
    * The mirror is rebuilt from GitHub on every poll, so anything written onto a mirrored
    * element is gone by the next one; this is the same reasoning that keeps implement state
    * against the issue URL rather than in `customData`.
+   *
+   * `stalled` is the server's own answer about the last pass — on, and it could not start
+   * what it was switched on to start. One boolean rather than the reason itself, because the
+   * shape has room for a difference in weight and not for a sentence; the sentence is said
+   * once, as a toast, by whoever noticed the change.
    */
-  queue?: { sectionOptionId: string; enabled: boolean };
+  queue?: { sectionOptionId: string; enabled: boolean; stalled?: boolean };
 }
 
 /**
@@ -648,8 +653,17 @@ export function layoutBoard(
     // On is the column's own stroke filled in solid with a heavier outline, off is white with
     // a thin one — a difference in weight and in fill, legible in a screenshot and to anyone
     // who cannot tell the hues apart.
+    //
+    // A third appearance, and for the same reason a second one was needed: a queue that is on
+    // and starting nothing drew exactly like a queue that is on and idle, so the toggle said
+    // "somebody switched this on" and nothing at all about whether it was working (#263). On
+    // and stalled is the solid one with its outline broken — the mirror already reads a dashed
+    // outline as "not settled" on a card whose run is in flight, and a broken outline on a
+    // button that is meant to be turning round is the same sentence. Why it stalled does not
+    // fit in twenty-eight pixels; that arrives as a toast, and through `GET /api/implement`.
     if (options.queue && section.optionId === options.queue.sectionOptionId) {
       const on = options.queue.enabled;
+      const stalled = on && options.queue.stalled === true;
       const toggle = rectangle({
         id: 'pb-queue',
         x: x + COLUMN_WIDTH - ADD_SIZE - 8,
@@ -659,6 +673,7 @@ export function layoutBoard(
         strokeColor: stroke,
         backgroundColor: on ? stroke : '#ffffff',
         strokeWidth: on ? 2 : 1,
+        strokeStyle: stalled ? 'dashed' : 'solid',
         locked: false,
         customData: {
           kind: MIRROR_KIND,
@@ -667,6 +682,7 @@ export function layoutBoard(
           // Carried so a reader — or a check — can ask the shape what it is showing without
           // inferring it from a colour. It is drawn from this, never read back into it.
           queueEnabled: on,
+          queueStalled: stalled,
         },
       });
       elements.push(toggle, label(toggle, QUEUE_GLYPH, HEADER_FONT_SIZE, on ? '#ffffff' : stroke));

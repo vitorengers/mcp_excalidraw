@@ -148,6 +148,17 @@ interface ApiResponse {
 interface ImplementQueueState {
   enabled: boolean;
   column: string;
+  /**
+   * On, and the last pass could not start what it was switched on to start.
+   *
+   * The one bit the toggle draws. The reason itself is a sentence the server composed — the
+   * cap and who is holding it, a column that is not on the project, a board that could not be
+   * read — and it is said as a toast rather than drawn, because a button twenty-eight pixels
+   * across has room for a broken outline and not for a paragraph.
+   */
+  stalled: boolean;
+  /** Why, in words the reader can act on. Empty when the queue has no pass to report. */
+  reason: string;
 }
 
 type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';
@@ -1722,6 +1733,16 @@ function App(): JSX.Element {
   }
   const lastSelectedIdRef = useRef<string | null>(null)
 
+  /**
+   * The stall sentence this board has already said, so it says each one once.
+   *
+   * A stalled queue stalls on a timer: the poll finds the same reason every twenty seconds,
+   * and a toast per poll would be the board shouting the same thing at somebody who read it
+   * the first time. Cleared when the reason changes or the queue drains again, so the next
+   * stall — or the same one after a recovery — is announced afresh.
+   */
+  const announcedStallRef = useRef<string>('')
+
   // Sync state management
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle')
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null)
@@ -2544,7 +2565,13 @@ function App(): JSX.Element {
       implementing: projectBoardRef.current.implementing,
       drafts: drafts.map(draftBlockOf),
       ...(queue && queueColumn
-        ? { queue: { sectionOptionId: queueColumn.optionId, enabled: queue.enabled } }
+        ? {
+          queue: {
+            sectionOptionId: queueColumn.optionId,
+            enabled: queue.enabled,
+            stalled: queue.stalled
+          }
+        }
         : {})
     })
     const placed = new Map(layout.drafts.map((placement) => [placement.id, placement]))
@@ -2733,7 +2760,12 @@ function App(): JSX.Element {
       // all, and the toggle is then not drawn — the same answer a board gets before the first
       // read comes back.
       const queue = body?.queue && typeof body.queue.enabled === 'boolean'
-        ? { enabled: body.queue.enabled === true, column: String(body.queue.column ?? '') }
+        ? {
+          enabled: body.queue.enabled === true,
+          column: String(body.queue.column ?? ''),
+          stalled: body.queue.stalled === true,
+          reason: String(body.queue.lastPass?.detail ?? '')
+        }
         : null
       return {
         implementing: Object.fromEntries(
@@ -2748,6 +2780,28 @@ function App(): JSX.Element {
       // stops redrawing because this request failed is worse than both.
       return { implementing: {}, queue: null }
     }
+  }
+
+  /**
+   * Say, once, that the queue is on and getting nowhere.
+   *
+   * The toggle's broken outline is what a reader sees at a glance and it cannot carry the
+   * reason — which is the half that matters, because every stall has a different thing to do
+   * about it: four slots held by runs that will never end, a column renamed on GitHub, a `gh`
+   * that has stopped answering. The server composes the sentence; this decides when it is
+   * worth interrupting for, which is when it changes.
+   */
+  const announceQueueStall = (
+    api: ExcalidrawImperativeAPI,
+    queue: ImplementQueueState | null
+  ): void => {
+    if (!queue?.enabled || !queue.stalled || !queue.reason) {
+      announcedStallRef.current = ''
+      return
+    }
+    if (announcedStallRef.current === queue.reason) return
+    announcedStallRef.current = queue.reason
+    sayOnCanvas(api, `The implementation queue is on and starting nothing. ${queue.reason}`)
   }
 
   /**
@@ -2785,9 +2839,17 @@ function App(): JSX.Element {
       }
       projectBoardRef.current = {
         ...projectBoardRef.current,
-        queue: { enabled: body.queue.enabled === true, column: String(body.queue.column ?? '') },
+        queue: {
+          enabled: body.queue.enabled === true,
+          column: String(body.queue.column ?? ''),
+          stalled: body.queue.stalled === true,
+          reason: String(body.queue.lastPass?.detail ?? '')
+        },
         signature: ''
       }
+      // A queue just switched has no pass behind it yet, so nothing said before the click
+      // describes what it is doing now.
+      announcedStallRef.current = ''
       const board = projectBoardRef.current.board
       if (board) renderMirror(board)
     } catch (error) {
@@ -2829,6 +2891,7 @@ function App(): JSX.Element {
       const { implementing, queue } = await readImplementRecords()
       if (activeWorkspaceRef.current !== workspace) return
       projectBoardRef.current = { ...projectBoardRef.current, implementing, queue }
+      announceQueueStall(api, queue)
       // Asked again, because the guard at the top of this function was read before a `gh`
       // call and two more requests. The reader who started typing inside those seconds is
       // the reader this poll would otherwise redraw over — the twenty-second version of the

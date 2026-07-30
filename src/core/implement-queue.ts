@@ -33,6 +33,74 @@ export function queueEnabled(workspaceId: string): boolean {
 export function setQueueEnabled(workspaceId: string, on: boolean): void {
   if (on) enabled.add(workspaceId);
   else enabled.delete(workspaceId);
+  // Whichever way it was flipped, whatever the last pass ran into belongs to the queue that
+  // was on before it. A switch that came back on carrying "the cap was full" would be
+  // describing a state nobody has looked at since, and a switch that is off is not stalled —
+  // it is off, which the toggle already says.
+  passes.delete(workspaceId);
+}
+
+/**
+ * Why the last pass over a workspace started nothing.
+ *
+ * A queue that is on and cannot start anything looked exactly like a queue that is on and
+ * idle — from the board, from the console and from the API — and the difference is the whole
+ * of #263. `dispatchQueue` gives up in six places and five of them are silent; a pass whose
+ * every exit is recorded is one a reader can ask about.
+ *
+ * Kept beside the switch rather than in `server.ts` because it is the same kind of fact: a
+ * per-workspace scrap of memory about a queue, of no use to anything that is not looking at
+ * one, and gone when the process is.
+ */
+export type QueuePassReason =
+  /** It started at least one run. Not a stall. */
+  | 'started'
+  /** The column held nothing this queue may start. On and idle, which is a healthy state. */
+  | 'nothing-startable'
+  /** Every slot is taken. The detail names the runs holding them. */
+  | 'cap-full'
+  /** The project has no column by the configured name, so there is nothing to drain. */
+  | 'no-column'
+  /** The workspace is gone, unusable, or has no GitHub project on it. */
+  | 'no-project'
+  /** The board read failed — `gh` unresolvable, an expired login, a GitHub outage. */
+  | 'unreadable';
+
+export interface QueuePass {
+  reason: QueuePassReason;
+  /** A sentence a reader can act on, naming whatever the reason has to name. */
+  detail: string;
+  /** When the pass ended, ISO. */
+  at: string;
+  /** How many runs it started. */
+  started: number;
+  /**
+   * Whether this is a queue that wanted to start something and could not.
+   *
+   * `nothing-startable` is deliberately not a stall: an empty column is the normal resting
+   * state of a drained board, and a board that shouted about it would be shouting always.
+   */
+  stalled: boolean;
+}
+
+const passes = new Map<string, QueuePass>();
+
+/** Whether a reason means the queue wanted to start something and could not. */
+export function reasonStalls(reason: QueuePassReason): boolean {
+  return reason !== 'started' && reason !== 'nothing-startable';
+}
+
+export function recordQueuePass(
+  workspaceId: string,
+  pass: Omit<QueuePass, 'stalled'>
+): QueuePass {
+  const recorded: QueuePass = { ...pass, stalled: reasonStalls(pass.reason) };
+  passes.set(workspaceId, recorded);
+  return recorded;
+}
+
+export function lastQueuePass(workspaceId: string): QueuePass | null {
+  return passes.get(workspaceId) ?? null;
 }
 
 /**
