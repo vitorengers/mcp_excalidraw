@@ -542,7 +542,7 @@ Four controls sit at the end of the strip:
 | `+` | one more shell in this block. Greyed out, not hidden, once the board is at the cap |
 | `×` | on each tab: end that shell, with the tree-kill semantics below, and drop the tab |
 | `⧉` | give the tab on top a **block of its own**, placed to its **right** |
-| `⇥` | put this block's tabs into the **nearest other** terminal block, and drop this block |
+| `⇤` | put this block's tabs into the **nearest other** terminal block, and drop this block |
 
 `⧉` goes right, always, and not to whichever side happens to be free. It went **left** between
 #124 and #200, and both directions are the same argument applied to a different order. While the
@@ -556,22 +556,31 @@ documentation moves aside** (`documentationClearance`). Unconditional either way
 decision and unchanged: a rule that picked the emptier side would put the block somewhere the
 reader cannot predict.
 
-`⇥` is the other end of that. Merging drops a block, the region gives the room back, and the
-documentation returns to **exactly** where it was authored — the round trip is computed from
-where the documentation would stand with no block open rather than nudged by a delta, because a
-delta applied twice a session walks the board right by its own rounding. The two gestures are the
-only ones that move the documentation: a board switched to, an erased block restored, a tab
-switched and a shell that exits all put the blocks back where they were and leave the content
-alone. A block the reader has dragged is theirs, and the canvas does not run away from it.
+`⇤` is the other end of that, and it points **left** because that is the direction the block
+travels: `⧉` puts the new block to the right, so joining it back to the strip brings it home
+leftwards. Merging drops a block, the region gives the room back, and the documentation returns
+to **exactly** where it was authored — the round trip is computed from where the documentation
+would stand with no block open rather than nudged by a delta, because a delta applied twice a
+session walks the board right by its own rounding.
 
-`⧉` and `⇥` are what "separate" and "join" turned out to mean here, and the choice was between
+**Every gesture that changes how many blocks there are moves the documentation, and no other
+gesture does.** `⧉` adds one and the content steps aside; `⇤` drops one and it comes back; a
+shell that **exits** also drops one — the `×` on a block's last tab, or a program ending on its
+own — and the content comes back for that too (#255). What is left alone is everything that
+rearranges blocks without changing how much room they need: a board switched to, an erased block
+restored, a tab switched, and above all a block the reader has **dragged**, which is theirs — the
+canvas does not run away from it. That last one is why the exit path only gives room *back* and
+can never ask for more; the full recompute stays on `⧉` and `⇤`, which are the two gestures where
+the tool, not the reader, chose the geometry.
+
+`⧉` and `⇤` are what "separate" and "join" turned out to mean here, and the choice was between
 that and split panes inside one block. A detached tab becomes an ordinary shape, so moving it,
 resizing it and putting it where you want it are all things the canvas already does; a splitter
 inside a block would have been a drag handle competing with the shape's own. The same reasoning
 picks the buttons over dragging a tab from one strip to another: dragging would mean the strip
 taking drag events across the width of the block, and the top of the card is the whole of what
 still grabs the shape (below). "Nearest" is not a guess either — the choosing *is* the drag. Put the block beside
-the one you mean and press `⇥`.
+the one you mean and press `⇤`.
 
 **Closing the last tab takes the block with it**, and `Alt+T` opens a fresh session when there
 are none. That is also the answer to something this document used to list as missing: a shell
@@ -702,12 +711,24 @@ edge it now stands on is the edge that grows.
 
 **So the documentation grows aside instead.** `documentationClearance` (in
 `src/core/terminal-block.ts`) answers how far right the board's own content has to stand to
-leave the region its room, and `commitTerminalLayout` moves it there on a split and back on a
-merge. It is a **displacement**, not a position: the caller says where the documentation would
-sit with no block open and the answer is added to that, so N splits and N merges leave the board
-exactly where it started rather than a rounding away from it. It is measured against the
-**region's** current extent rather than against the block that was just added, because a reader
-may split more than two and each detach steps the next block a block-width and 40 further right.
+leave the region its room, and `commitTerminalLayout` moves it there on a split, and back
+whenever the region loses a block — on a merge, and since #255 on a shell that exits too. It is a
+**displacement**, not a position: the caller says where the documentation would sit with no block
+open and the answer is added to that, so N splits and N merges leave the board exactly where it
+started rather than a rounding away from it. It is measured against the **region's** current
+extent rather than against the block that was just added, because a reader may split more than
+two and each detach steps the next block a block-width and 40 further right.
+
+**The exit path settles downwards only**, and that asymmetry is the whole of #255's fix. Every
+arrangement of the blocks comes through `commitTerminalLayout`, including a poll, a socket
+message and a scene replaced wholesale, and `natural` is derived from where the content currently
+stands — so a pass that recomputed the clearance in both directions would answer a reader
+dragging their block rightward by moving the board. Giving room back cannot do that, and it is
+gated on the pass having actually dropped a block, which is also what keeps a board switched to —
+where the scene arrives with no blocks and they are added back afterwards — from reading an empty
+region as "no room needed". Until then a detach whose block was closed rather than merged left
+the push applied: one block, with a slot exactly one block and both gaps wide standing between
+its right edge and the content, and it survived reloads because the displacement is written down.
 
 **The shift is a real element move, and that is a decision with a price.** The documentation is
 authored data — synced, exported, committed to `docs/board.excalidraw` — so opening a second
@@ -1225,7 +1246,7 @@ The tab chips take the pointer rather than the row they sit in, and the font but
 small as a target can be, for the reason that survived, inverted: the top of the card is the
 whole of what selects and drags the block. What #144 changed is the **size** of a chip rather
 than which part of the row takes the pointer — the strip is drawn at `--terminal-tab-scale`,
-half again as big, so the chips, their close marks and `+`, `⧉` and `⇥` are all easier to hit,
+half again as big, so the chips, their close marks and `+`, `⧉` and `⇤` are all easier to hit,
 while the row around them stays transparent and the header above them stays exactly the size it
 was. The budget #112 was defending is that header band, and the strip is not it; the trade is
 that the tab row is now taller than the header over it, which is what the observation asked
@@ -1863,7 +1884,7 @@ were not being hidden from a picker; they were never being written.
 - **Alt+T fits the block to the viewport, which puts its top edge under Excalidraw's toolbar.**
   The path in the header reads through it awkwardly. Alt+B has the same shape of problem.
 - **A tab is moved between blocks by a button, not by dragging it.** `⧉` detaches the tab on
-  top and `⇥` merges into the nearest block, so the geometry is a block drag rather than a tab
+  top and `⇤` merges into the nearest block, so the geometry is a block drag rather than a tab
   drag. Dragging a chip onto another block's strip would read better and would cost the band
   that still grabs the shape; if it is ever worth it, it is worth its own issue.
 - **The tab layout does not survive a reload.** The blocks are derived, so which session was in

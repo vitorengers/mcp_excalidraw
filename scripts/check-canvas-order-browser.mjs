@@ -10,7 +10,7 @@
  * never re-anchored, so it had to sit on the edge the board does not grow into. The
  * observation reverses the first of those decisions and pays for it with the second: the
  * terminal region now sits between the mirror and the documentation, detaches grow it
- * **rightward**, and the documentation is moved aside to make the room. `⇥` merges a block
+ * **rightward**, and the documentation is moved aside to make the room. `⇤` merges a block
  * back and the documentation comes back with it.
  *
  * So the questions here are the ones only a browser can answer, and `CLAUDE.md` is explicit
@@ -559,7 +559,7 @@ try {
 
   // ─── 3. And a merge puts it back, exactly ────────────────────
 
-  console.log('\n3. ⇥ merges the block back and the documentation comes back with it');
+  console.log('\n3. ⇤ merges the block back and the documentation comes back with it');
   await fitBlocks();
   scene = await waitFor(async () => {
     const now = await evaluate(PROBE);

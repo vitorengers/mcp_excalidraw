@@ -3274,12 +3274,24 @@ function App(): JSX.Element {
      * looked at it, and a block the reader has dragged is theirs — the canvas does not run
      * away from it.
      *
-     * The two gestures the observation on #200 names are the two that turn it on: `⧉`
-     * splits, which grows the region by a block, and `⇥` merges, which gives that block
+     * The two gestures the observation on #200 names are the two that turn it fully on: `⧉`
+     * splits, which grows the region by a block, and `⇤` merges, which gives that block
      * back. Both are the tool choosing the geometry, and they are exactly the pair the round
      * trip is between.
+     *
+     * `'shrink'` is the third answer, and it is #255. A shell that exits — the `×` on a
+     * detached block's last tab, or a program ending on its own — also drops a block, and it
+     * came through here with this off: the region shrank and the push stayed, leaving one
+     * block with a slot exactly one block and both gaps wide between it and the content. It
+     * cannot simply be `true`, because this path runs on every reconcile and `natural` is
+     * derived from where the content currently stands, so a reader dragging their block
+     * rightward would have the board run away from them. So it settles **downwards only**,
+     * and only on a pass where the tool itself dropped a block: the region can never ask for
+     * more room on this path, and a pass that added or merely rearranged blocks changes
+     * nothing. What that buys is the strand the round trip was missing — `⧉` then `×` ends
+     * where `⧉` then `⇤` ends.
      */
-    settle = false
+    settle: boolean | 'shrink' = false
   ): void => {
     const api = excalidrawAPIRef.current
     if (!api) return
@@ -3356,7 +3368,7 @@ function App(): JSX.Element {
      *
      * It is here, in the one funnel every arrangement of the blocks already comes through,
      * because every gesture that changes how much room the region takes is one of these —
-     * a detach adds a block one block-width and 40 further right, `⇥` drops one, a shell
+     * a detach adds a block one block-width and 40 further right, `⇤` drops one, a shell
      * that exits drops one, a restore puts one back. Written as "where the documentation
      * belongs given the region as it now stands" rather than as a nudge per gesture: the
      * absolute answer is what makes the round trip exact, and the second observation on
@@ -3374,7 +3386,15 @@ function App(): JSX.Element {
     const region = boxOf(blocks.filter((element) => isTerminalElement(element)))
     const documentation = documentationElements(next as unknown as ExcalidrawElement[])
     const standing = settle ? boxOf(documentation) : null
-    const wanted = standing ? documentationClearance(region, standing.minX - applied) : applied
+    const exact = standing ? documentationClearance(region, standing.minX - applied) : applied
+    // Downwards only on the reconcile path, and only where this pass dropped a block. Both
+    // halves are load-bearing: `Math.min` is what keeps a dragged block from pushing the
+    // board, and `dropped` is what keeps a board switched to — where the scene arrives with
+    // no blocks at all and they are added back — from reading an empty region as "no room
+    // needed" and pulling that board's content left. See the note on `settle`.
+    const wanted = settle === 'shrink'
+      ? (dropped.size > 0 ? Math.min(applied, exact) : applied)
+      : exact
     const shift = wanted - applied
     const moving = new Set(shift === 0 ? [] : documentation.map((element) => element.id))
     const placed = moving.size === 0 ? next : next.map((element) => (
@@ -3625,7 +3645,12 @@ function App(): JSX.Element {
       }
     }
 
-    commitTerminalLayout(layout, added)
+    // `'shrink'` rather than nothing, since #255: this is the door a shell that exits comes
+    // through, and a block dropped here shrinks the region exactly as `⇤` does. It cannot be
+    // the full settle `⇤` gets — this also runs on a poll, on a socket message and on a scene
+    // replaced, none of which are a decision about the geometry — so it may only give room
+    // back, never ask for more.
+    commitTerminalLayout(layout, added, 'shrink')
 
     // The mirror is placed from this region, so a block appearing where there was none is a
     // measurement that region has not been given yet. `resolveMirrorOrigin` answers an empty

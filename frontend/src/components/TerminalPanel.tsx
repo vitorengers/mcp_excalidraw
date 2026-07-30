@@ -1067,7 +1067,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             className="terminal-card__control terminal-card__merge"
             title="put these tabs back into the nearest other terminal block"
             onPointerDown={takes(onMerge)}
-          >⇥</span>
+          >⇤</span>
         )}
       </div>
 
