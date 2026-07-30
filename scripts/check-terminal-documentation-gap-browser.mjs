@@ -40,6 +40,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
+import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -51,28 +52,8 @@ const argOf = (name) => {
   return index >= 0 ? process.argv[index + 1] : null;
 };
 
-/** Chrome, wherever this machine keeps it. Edge speaks the same protocol. */
-function findChrome() {
-  const named = argOf('--chrome');
-  if (named) return existsSync(named) ? named : null;
-  const candidates = [
-    process.env.CHROME_PATH,
-    'C:/Program Files/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium',
-  ];
-  return candidates.find((path) => path && existsSync(path)) ?? null;
-}
-
 const chromePath = findChrome();
-if (!chromePath) {
-  console.log('SKIPPED — no Chrome or Edge found, so the browser half was not run.');
-  console.log('        Pass --chrome <path> or set CHROME_PATH to run it.');
-  process.exit(0);
-}
+if (!chromePath) skipWithoutChrome();
 
 const frontend = join(repoRoot, 'dist', 'frontend', 'index.html');
 if (!existsSync(frontend)) {

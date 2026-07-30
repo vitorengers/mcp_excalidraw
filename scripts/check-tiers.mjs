@@ -135,14 +135,21 @@ const wrongPlatform = [];
 const pretendPortable = [];
 
 /**
- * This file is the one place the evidence patterns are spelled out, so it matches all three
- * of them and needs none of what they stand for. Every other check is inferred from its
- * source; this one is held to section 1 and to reading its own banner.
+ * The checks whose tier cannot be inferred from their source, because their source is *about*
+ * the evidence rather than an instance of it. Every other check is inferred; these two are held
+ * to section 1 and to reading their own banner.
+ *
+ *   - `check-tiers.mjs` is the one place the evidence patterns are spelled out, so it matches
+ *     all three of them and needs none of what they stand for;
+ *   - `check-browser-strict.mjs` (#273) names `findChrome` and `CHROME_PATH` in order to assert
+ *     that a check which cannot find a browser exits 3 rather than 0. It runs *without* one —
+ *     that is the whole subject — so calling it `browser` would put the one check that proves
+ *     the browser gate works behind the browser gate.
  */
-const SELF = 'check-tiers.mjs';
+const SELF_DESCRIBING = ['check-tiers.mjs', 'check-browser-strict.mjs'];
 
 for (const [file, tier] of tierOf) {
-  if (file === SELF) continue;
+  if (SELF_DESCRIBING.includes(file)) continue;
   if (spawnsWsl(file) && tier !== 'wsl') wrongWsl.push(`${file} spawns wsl.exe but declares ${tier}`);
   if (!spawnsWsl(file) && tier === 'wsl') wrongWsl.push(`${file} declares wsl but never spawns wsl.exe`);
   if (wantsChrome(file) && !CHROME_TIERS.includes(tier)) {
