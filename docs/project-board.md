@@ -32,6 +32,19 @@ items were already Done when this was written, and that only grows — but a cap
 "Done" would be exactly the constant this feature is built to avoid. What is left out is counted
 in the section header and logged, never silently dropped.
 
+```json
+{ "githubProject": "https://github.com/users/you/projects/5", "projectCardLimit": 8 }
+```
+
+**This project sets 8**, and that is a setting rather than a new default: 12 stays what a config
+that says nothing gets. A full column of 12 is `48 + 44 + 12 + 12 x (52 + 12)` = 872 scene pixels
+of canvas, which #232 measured as taller than a laptop screen holds; 8 brings it to 616 and leaves
+Done as the screenful of recent history it is read as. Because the cap is per workspace, 8 is what
+every column here gets — today only Done has more than 8 cards, so only Done changes, but the day
+Todo fills it will draw 8 too. The queue is unaffected either way: it reads Todo uncapped
+(below), so a card the cap leaves out is still a card an implementation starts from.
+`scripts/check-project-card-limit.mjs` is the check for the whole path, config file to header.
+
 An item the project holds but never gave a status lands in a **No Status** section rather than
 disappearing. That section only appears when something is in it.
 

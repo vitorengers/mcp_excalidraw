@@ -717,7 +717,7 @@ slot frees, until the column runs out. The circular arrow on the Todo header is 
 What it starts and what it passes over:
 
 - the column is read **uncapped**, so the queue works from the whole of Todo rather than from the
-  twelve cards `projectCardLimit` happens to draw;
+  handful of cards `projectCardLimit` happens to draw;
 - **oldest first**, by `createdAt`, with the issue number only as a tiebreak — cards can come
   from other repositories and draft items have no number;
 - a card is skipped when it is not an issue, when the issue is closed, when it belongs to another
