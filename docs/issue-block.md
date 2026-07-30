@@ -745,8 +745,60 @@ resumed starting runs would be acting on a decision made before whatever brought
 Resuming the runs a restart *lost* is a different question, and is answered under "A run that
 lost its server".
 
-`scripts/check-implement-queue.mjs` covers the draining and
-`scripts/check-implement-queue-browser.mjs` the button.
+#### A pass that starts nothing says why
+
+A queue that is on and cannot start anything used to look exactly like a queue that is on with
+nothing to start — from the board, from the console and from `GET /api/implement` alike. That is
+what #263 reports: two cards sitting in **Todo** on a board whose toggle was drawn on, and no way
+from anywhere to find out whether the queue had passed over them, never seen them, or was stuck.
+`logger.info` reaches the log file and never the console, so five of the six ways a pass can give
+up were silent.
+
+Each pass now records how it ended, and `GET /api/implement` carries it as `queue.lastPass`:
+
+| `reason` | What it means | Stalled |
+|---|---|---|
+| `started` | It started runs. `started` says how many. | no |
+| `nothing-startable` | The column held nothing this queue may start. The resting state of a drained board. | no |
+| `cap-full` | Every slot is taken. `detail` names the runs holding them. | **yes** |
+| `no-column` | The project has no column by the configured name. | **yes** |
+| `no-project` | The workspace is gone, unusable, or has no `githubProject`. | **yes** |
+| `unreadable` | The board read failed — `gh` unresolvable, an expired login, an outage. | **yes** |
+
+`queue.stalled` is the same answer as one bit, which is what the board draws: **the toggle keeps
+its on fill and its outline breaks**. `docs/project-board.md` has the three appearances. The
+reason itself is a sentence rather than a shape, and arrives as a toast the first time it changes
+— a stall stalls on a timer, and a toast per poll would be the board repeating itself every
+twenty seconds. The server logs the same transition at `warn`, which is the level that reaches
+the console.
+
+`lastPass` is `null` until a pass has run since the switch was last flipped, and flipping it
+clears whatever the last one found: a queue that is off is not stalled, it is off.
+
+**The commonest stall is `cap-full` with nobody working.** Implementing has no timeout by design,
+so an agent that wedged — or an interactive run nobody ended (see "Interactive runs and `-p`") —
+holds its slot until somebody resets it. Four of those and the queue is on and permanently stuck,
+which is the shape #263's board was most likely in. The reset is `DELETE /api/implement`, or the
+button on the block.
+
+#### A pass that never comes back
+
+The dispatcher lets one pass per workspace run at a time, so the timer and a run settling in the
+same instant do not each spend a `gh` read to be told the same thing. That guard is a saving and
+not a correctness property — the cap is held by the claim made before `beginImplement`'s first
+`await` — but held forever it kills the queue outright: one pass that never returns, and the
+workspace is undrainable for the life of the process with the toggle still drawn on.
+
+So a pass carries the instant it started, and a later one gives up on it after four intervals
+(never under five seconds), with a `warn` saying so. Proceeding cannot double-start anything; it
+can only cost one extra `gh` read. Each pass is numbered, so the abandoned one clears its own
+entry rather than the entry of whatever replaced it.
+
+`scripts/check-implement-queue.mjs` covers the draining,
+`scripts/check-implement-queue-newcard.mjs` the card that arrives after the switch is already on
+— including the reason a stalled pass reports and the recovery from a pass that hangs —
+`scripts/check-implement-queue-browser.mjs` the button, and
+`scripts/check-implement-queue-newcard-browser.mjs` what a stalled queue looks like on screen.
 
 ### A run that lost its server
 

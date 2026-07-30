@@ -717,10 +717,29 @@ selection it arrives in *with company* is not a press at all, and it is taken ou
 selection rather than left sitting in one; [the `+`](#a-press-and-never-a-selection-left-behind)
 is where both halves of that are written down, because both buttons go through the same lines.
 
-**The two states differ in fill and in weight, not in hue.** On is the column's own stroke filled
-in solid with a heavier outline and the glyph reversed out of it; off is white with a thin one.
-Hue on this mirror already means the column and, on a failed move, an error — a third meaning
-would collide with both, and a difference only a colour carries is one some readers do not get.
+**Three states, and they differ in fill, in weight and in whether the outline is whole — not in
+hue.** Hue on this mirror already means the column and, on a failed move, an error; a fourth
+meaning would collide with both, and a difference only a colour carries is one some readers do
+not get.
+
+| The toggle | What it is saying |
+|---|---|
+| White, thin outline | Off. Nothing starts unless somebody clicks a block. |
+| The column's own stroke, filled solid, heavier outline, glyph reversed out of it | On, and the last pass did what it was switched on to do — it started runs, or the column had nothing left in it to start. |
+| The same, with the outline **broken** | On, and the last pass could start nothing. |
+
+The broken outline is #263: on drew the same whether the queue was working or walled in, so a
+board with four wedged runs holding every slot and two cards waiting in Todo looked exactly like
+a board that had finished. A dashed outline already reads on this mirror as *not settled* — it is
+what a card whose run is in flight carries — and a button meant to be going round with its
+outline broken is the same sentence.
+
+**Why it stalled is a sentence, not a shape.** Twenty-eight pixels cannot hold "all 4 slots are
+taken, by these issues", so the board says it as a **toast**, the first time the reason changes,
+and repeats it only if it changes again — a stall stalls on a timer, and a toast per poll would
+be the board saying the same thing every twenty seconds until somebody switched it off. The
+sentence is composed by the server and also available as `queue.lastPass.detail` from
+`GET /api/implement`; `docs/issue-block.md` lists the reasons.
 
 **The state is the server's and arrives with the poll.** It rides on the same `GET /api/implement`
 that brings the run marks, and is never read back off the shape: every mirrored element is thrown
@@ -728,6 +747,11 @@ away and redrawn from GitHub on each poll, so a switch that kept its state on th
 last exactly one refresh. That is the same reasoning that keeps implement state against the issue
 URL. When implementing is disabled, or the server is not on loopback, the answer carries no queue
 at all and no toggle is drawn — a button that cannot do anything is worse than no button.
+
+`scripts/check-implement-queue-browser.mjs` covers the button's two clicks and the two states a
+switch has; `scripts/check-implement-queue-newcard-browser.mjs` covers the third — a card
+arriving on GitHub while the page is open, the cap filling behind it, and the outline breaking
+with the reason said out loud.
 
 ### Todo is drawn oldest first
 
