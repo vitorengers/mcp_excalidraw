@@ -549,6 +549,24 @@ const busyOnCanvas = (api: ExcalidrawImperativeAPI): boolean => {
     || appState.newElement || appState.resizingElement);
 };
 
+/**
+ * Say something to whoever is looking at the board, and to whoever reads the log afterwards.
+ *
+ * A press on one of the mirror's buttons that cannot be served used to answer with a
+ * `console.warn` and nothing else, which is indistinguishable from a button that does not
+ * work — the reader has no console open, and the shape gives no sign either way (#244).
+ * Excalidraw's own toast is a sibling of the canvas rather than something drawn into the
+ * scene, so it says this without putting a shape on the board that would then have to be
+ * cleaned up, exported around, or synced to anybody else.
+ *
+ * Ten seconds rather than the default five: this asks the reader to go and look at a
+ * configuration file, which is not a thing to read in five.
+ */
+const sayOnCanvas = (api: ExcalidrawImperativeAPI, message: string): void => {
+  console.warn(message);
+  api.setToast({ message, closable: true, duration: 10000 });
+};
+
 /** Whether the label editor that is open belongs to an issue block. */
 const editingIssueBlock = (api: ExcalidrawImperativeAPI): boolean => {
   const editing = editingDraftId(api);
@@ -1760,6 +1778,31 @@ function App(): JSX.Element {
   }
 
   /**
+   * Which of the mirror's buttons a selected id belongs to, if it is one of them.
+   *
+   * Resolved through the container, because a press can land on the glyph rather than on the
+   * box: the `+` and the queue toggle both carry a bound text element, and Excalidraw hands
+   * back whichever of the two the pointer hit.
+   */
+  const mirrorButtonOf = (
+    scene: readonly { id: string; containerId?: string | null; customData?: CustomData }[],
+    id: string
+  ): { id: string; role: string; sectionOptionId: string } | null => {
+    const clicked = scene.find((candidate) => candidate.id === id)
+    const holder = clicked?.containerId
+      ? scene.find((candidate) => candidate.id === clicked.containerId) ?? clicked
+      : clicked
+    const custom = customDataOf(holder)
+    if (!holder || custom.kind !== MIRROR_KIND) return null
+    if (custom.role !== 'add' && custom.role !== 'queue') return null
+    return {
+      id: holder.id,
+      role: String(custom.role),
+      sectionOptionId: String(custom.sectionOptionId ?? '')
+    }
+  }
+
+  /**
    * Track which selected shape the docs panel should describe.
    *
    * onChange fires on every pointer move, so this bails out unless the selection
@@ -1767,34 +1810,64 @@ function App(): JSX.Element {
    * A multi-selection resolves to no doc: showing one shape's document while several
    * are highlighted reads as if it described all of them.
    */
-  const syncSelectedDoc = (appState: { selectedElementIds?: Record<string, boolean> } | undefined): void => {
+  const syncSelectedDoc = (appState: {
+    selectedElementIds?: Record<string, boolean>
+    selectionElement?: unknown
+    selectedElementsAreBeingDragged?: boolean
+  } | undefined): void => {
     const selectedIds = Object.keys(appState?.selectedElementIds ?? {}).filter(
       (id) => appState?.selectedElementIds?.[id]
     )
-    const selectedId = selectedIds.length === 1 ? selectedIds[0] : null
+    const scene = excalidrawAPI?.getSceneElements() ?? []
+
+    /**
+     * A press is one of the mirror's buttons selected on its own, and nothing else.
+     *
+     * The `+` and the queue toggle are shapes rather than buttons — a locked shape cannot be
+     * clicked at all, which is why both are left unlocked — so the press *is* the selection
+     * landing on one. Which means a selection can also arrive with company: the header
+     * rectangles are locked and no band catches them, but every card, every draft and both
+     * buttons are unlocked, so one rubber band across the header strip or one shift-click
+     * puts a button in a selection nobody pressed it in. That was answered by resolving the
+     * whole selection to `null` and doing nothing at all, which is #244: the button sat there
+     * showing an ordinary selection box, looking exactly like a block that had been selected.
+     */
+    const resolved = selectedIds.map((id) => ({ id, button: mirrorButtonOf(scene, id) }))
+    const pressed = resolved.filter((entry) => entry.button)
+    const press = resolved.length === 1 && pressed.length === 1 ? pressed[0]?.button ?? null : null
+    const rest = resolved.filter((entry) => !entry.button).map((entry) => entry.id)
+
+    // Not while the gesture that made the selection is still running: a band is redrawn on
+    // every pointer move and would put the button straight back, so this waits for the
+    // release and takes it out of the selection the reader ends up with. Dragging a group is
+    // left alone for the same reason — the mirror's own redraw is what puts a button carried
+    // off by one back, and that happens on the next refresh either way.
+    const settling = Boolean(appState?.selectionElement || appState?.selectedElementsAreBeingDragged)
+    const shed = pressed.length > 0 && !press && !settling
+    if (shed) {
+      excalidrawAPIRef.current?.updateScene({
+        appState: { selectedElementIds: Object.fromEntries(rest.map((id) => [id, true])) },
+        captureUpdate: CaptureUpdateAction.NEVER
+      })
+    }
+
+    // What the reader actually selected, which from here on is what the panel describes.
+    const effectiveIds = shed ? rest : selectedIds
+    const selectedId = effectiveIds.length === 1 ? effectiveIds[0] : null
 
     if (selectedId === lastSelectedIdRef.current) return
     lastSelectedIdRef.current = selectedId
 
-    // The mirror's `+` is a button drawn as a shape, so selecting it is the click. Only a
-    // fresh selection counts, which is what the early return above already guarantees —
-    // otherwise every pointer move over it would drop another block.
-    if (selectedId) {
-      const scene = excalidrawAPI?.getSceneElements() ?? []
-      const clicked = scene.find((candidate) => candidate.id === selectedId)
-      const holder = clicked?.containerId
-        ? scene.find((candidate) => candidate.id === clicked.containerId) ?? clicked
-        : clicked
-      const custom = customDataOf(holder)
-      if (custom.kind === MIRROR_KIND && custom.role === 'add') {
-        addIssueBlockToColumn(String(custom.sectionOptionId ?? ''))
+    // Only a fresh selection counts as a press, which is what the early return above already
+    // guarantees — otherwise every pointer move over the button would drop another block.
+    if (press) {
+      if (press.role === 'add') {
+        addIssueBlockToColumn(press.sectionOptionId)
         return
       }
-      // The queue toggle is the same kind of button, and the same kind of click.
-      if (custom.kind === MIRROR_KIND && custom.role === 'queue') {
-        void toggleImplementQueue()
-        return
-      }
+      // The queue toggle is the same kind of button, and the same kind of press.
+      void toggleImplementQueue()
+      return
     }
 
     // One answer for the whole panel, including "nothing at all". What this replaced was
@@ -1802,10 +1875,7 @@ function App(): JSX.Element {
     // and returned, so an issue block stayed fully open and the card kept an anchor
     // pointing at a shape nobody had selected. Every piece is now written on every pass,
     // so there is no half-cleared state to forget.
-    const sceneElements = excalidrawAPI
-      ? (excalidrawAPI.getSceneElements() as unknown as PanelElement[])
-      : []
-    const target = resolvePanelTarget(sceneElements, selectedIds)
+    const target = resolvePanelTarget(scene as unknown as PanelElement[], effectiveIds)
 
     setSelectedDoc({ key: target?.docKey ?? null, title: target?.title ?? null })
     setIssue(target?.issue ?? null)
@@ -2383,12 +2453,38 @@ function App(): JSX.Element {
         (placement.id === frozen ? { ...placement, height: 0 } : placement))
       : layout.drafts
 
+    /**
+     * A button the reader has moved, or removed, is a reason to draw the mirror again.
+     *
+     * The `+` and the queue toggle are the only two mirror shapes left unlocked — a locked
+     * shape cannot be pressed, and both are buttons — so they are the only two a drag or a
+     * `Delete` can take away from where the layout put them. `project-board-layout.ts` says a
+     * stray drag "is corrected by the next refresh", and it was not: the signature below is
+     * built from what the layout *wants*, so it matches unchanged on a board whose `+` is
+     * sitting in the middle of the canvas, and the only scene-side question asked was whether
+     * a mirror had been drawn at all. Nudged out of its header on an otherwise unchanging
+     * board, the `+` stayed out — a loose rectangle, which is the other half of what #244
+     * reports as "selecting as a block".
+     *
+     * Positions only, and only these two: everything else the mirror draws is locked and can
+     * therefore only be where the last redraw put it, so asking about it would cost a
+     * comparison per element per poll to learn nothing.
+     */
+    const strayButton = layout.elements.some((wanted) => {
+      const role = customDataOf(wanted).role
+      if (role !== 'add' && role !== 'queue') return false
+      const drawnHere = scene.find((element) => element.id === wanted.id && !element.isDeleted)
+      return !drawnHere
+        || Math.abs(drawnHere.x - wanted.x) > 0.5 || Math.abs(drawnHere.y - wanted.y) > 0.5
+    })
+
     // `frozen` is part of the signature because it changes what gets written: the pass that
     // left a block alone must not let the one after the editor closed, which puts it back
     // in its slot, be skipped as "nothing moved".
     const signature = JSON.stringify([layout.elements, written, frozen])
     if (signature === projectBoardRef.current.signature
-        && scene.some((element) => isMirrorElement(element))) {
+        && scene.some((element) => isMirrorElement(element))
+        && !strayButton) {
       // Nothing moved. Redrawing anyway would fight the reader's selection every poll.
       projectBoardRef.current = { ...projectBoardRef.current, board, columns: layout.columns }
       return
@@ -2738,14 +2834,31 @@ function App(): JSX.Element {
   const addIssueBlockToColumn = (sectionOptionId: string): void => {
     const api = excalidrawAPIRef.current
     const { board, columns } = projectBoardRef.current
-    if (!api || !board) return
+    if (!api) return
 
+    // Answered before anything that could go wrong does, which is load bearing rather than
+    // tidy — the same reasoning `toggleImplementQueue` states, and for the same reason. This
+    // button is *selected* rather than clicked, and `syncSelectedDoc` bails out when the
+    // selection has not changed, so a path that returned with the `+` still selected left it
+    // both looking like an ordinary selected block and unable to be pressed again: the second
+    // press is the same selection arriving twice, and is dropped. Every return below was such
+    // a path, and #244 is what they add up to.
+    api.updateScene({ appState: { selectedElementIds: {} }, captureUpdate: CaptureUpdateAction.NEVER })
+    lastSelectedIdRef.current = null
+
+    if (!board) return
+
+    // Nothing on the canvas for this: no column means no mirror was drawn, and the `+` is
+    // drawn by the mirror, so there is no button here to have been pressed.
     const column = columns.find((candidate) => candidate.optionId === sectionOptionId) ?? columns[0]
-    if (!column) return
+    if (!column) {
+      console.warn('The mirror has no column to drop a block into.')
+      return
+    }
 
     const template = findIssueBlockTemplate(libraryItems)
     if (!template) {
-      console.warn('The library ships no issue block, so + has nothing to drop.')
+      sayOnCanvas(api, 'The library ships no issue block, so + has nothing to drop.')
       return
     }
 
@@ -2789,7 +2902,10 @@ function App(): JSX.Element {
       column.optionId,
       Date.now()
     )
-    if (created.length === 0) return
+    if (created.length === 0) {
+      sayOnCanvas(api, 'The library ships an issue block that could not be built, so + dropped nothing.')
+      return
+    }
 
     const shapeId = created[0]?.id as string
     // Not suppressed: this block is authored, not mirrored, and has to reach the server

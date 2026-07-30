@@ -12,9 +12,16 @@
  * 2. **A selection can arrive without a click.** `selectedElementIds` is part of
  *    Excalidraw's observed app state, so undo restores it: `Ctrl+Z` deleted the block *and*
  *    put the selection back on the `+`, which read as a fresh arrival and made another
- *    block. The undo could never win. That is why a cap is not enough on its own — after an
- *    undo there is no draft left for a cap to find — and why the trigger is armed by a real
- *    pointer press.
+ *    block. The undo could never win.
+ *
+ * This file used to say the second was answered by arming the trigger with a real pointer
+ * press. **There is no such arming, and there never was** — `userInteractedRef` is the only
+ * thing on the page that knows a pointer went down, and the only thing that reads it is the
+ * autosync (#244). What answers it is Excalidraw's history: the undo restores the selection
+ * to what it was *before* the press rather than to the `+`, so nothing fires, which is what
+ * `docs/project-board.md` records and what case 1 below keeps true. The cap on unpopulated
+ * drafts is a genuinely separate guard and does not cover this case at all — after an undo
+ * there is no draft left for a cap to find.
  *
  * The cap is on *unpopulated* drafts only, so it must not get in the way of real work: an
  * observation that has been typed into is somebody's, and the `+` still owes them a fresh
