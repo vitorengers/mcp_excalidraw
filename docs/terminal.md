@@ -528,6 +528,76 @@ board's palette.
 Both halves are in `scripts/check-agent-transcript-fold.mjs`, which is a browser check because a
 fold compiles perfectly whether or not anything can be clicked on it.
 
+#### A file edit opens as a diff, and the diff is computed in the server
+
+#260, and it is the same asymmetry read one turn further on. The record a click revealed was one
+uniform `key: value` list for every tool, so an `Edit` opened as `old_string:` followed by the
+whole old text and `new_string:` followed by the whole new text — two near-identical blocks with
+nothing marking what differs, and the reader diffing them by eye. The tab beside it draws a diff,
+but **that picture is not ours**: it is the agent's own program repainting a pseudoterminal, which
+the board deliberately never parses, so there was nothing to reuse and no regression either.
+
+**`Edit`, `MultiEdit` and `Write` now get a rendering of their own** — `detailInput` in
+`src/core/agent-stream-render.ts`. An `Edit` is a line diff of `old_string` against `new_string`;
+a `MultiEdit` is the same thing once per edit, each saying which edit it is; a `Write` is its
+whole `content` added, because the old content is not in the input to be removed. The fields that
+are not the text being changed — `file_path`, `replace_all` — stay above the diff. Every other
+tool, `Bash` included, keeps the list it had, uncoloured. `NotebookEdit` is in the same `mutation`
+group and is deliberately left out: its input is a cell rather than a hunk and no capture here
+contains one, and guessing at a record nobody has seen is how a case comes out wrong the first
+time it fires.
+
+**In the server rather than in `FoldDetailView`**, and there are two reasons rather than a
+preference. The frontend is handed `input` already flattened to one string, so an `old_string`
+whose own text contains a line reading `new_string:` defeats parsing it back apart in the browser.
+And the record is capped at 8,000 characters *before* it is written into the transcript, so a diff
+computed after the cap would be a diff of a truncated file. The cap is now cut at a line boundary
+for the same reason the diff has colour at all: a cut inside an escape sequence leaves either an
+unterminated colour that paints the rest of the pane or half an escape drawn across it.
+
+The colours are #242's vocabulary and nothing new — removed in the failure slot, added in the
+success slot, context in the reader's own ink, the gutter in the dim one — written as SGR
+references to the sixteen named slots, so both themes fall out of one map. That is also what
+`paintLines` in the block resolves: the record arrives as one flat string with the escapes in it,
+and a document view has to do for itself what an emulator does. #246's two invariants hold
+unchanged: the record travels JSON-encoded inside its OSC, which escapes every byte below 0x20, so
+a diff full of escapes is still one unbroken line `trimScrollback` can find the end of, and
+`stripFoldMarks` takes the whole record away, leaving the transcript outside the fold view byte
+for byte the picture it was.
+
+**The gutter counts from 1 within the hunk**, and a removed line has no number. It cannot be the
+file's own numbering: `old_string` and `new_string` are a hunk with no idea where in the file it
+sits, and nothing else in the input says. A number that looked absolute and was not would be worse
+than one that is plainly local.
+
+#### Jump to bottom (ctrl+End)
+
+The other half of #260. The transcript follows the end of the run unless the reader has scrolled
+back to read something — and once they had, nothing on the block offered the way back. `pinnedRef`
+already held the answer, but it is a *ref*, so changing it draws nothing; a control that exists
+only while the reader is away from the end needs it as state as well. The two are kept together
+rather than one replacing the other, because the following rule still wants the ref.
+
+The control is a sticky last child of the transcript box, so it rides the bottom edge of whatever
+is on screen without being a layer over it — an absolutely positioned one would have needed a
+wrapper around the box the card lays out. It scrolls to the end **and re-pins**, which is the half
+a plain scroll would miss: the ask is to get back to where the run is being written, so the output
+that arrives afterwards is followed again.
+
+`Ctrl+End` does the same thing and is handled **inside the card**, which is #177's layer read the
+other way round: the card stops every key it has not been told is one of the board's four, and
+React's `stopPropagation` calls the native one at its own root — below `window` — so a handler
+outside the card would never be reached. Inside it, the chord is answered and stopped, which is
+what keeps it away from the board's hotkeys and Excalidraw's tool bindings. Claiming it costs
+nothing that #177 was protecting: such a session is `readOnly` by construction, so there is no
+keyboard to give up. The transcript box takes `tabIndex={0}` so a click anywhere in it is what
+makes the chord addressable — with several blocks or tabs, `Ctrl+End` is answered by the one the
+focus is in.
+
+`scripts/check-agent-transcript-diff-browser.mjs` is both halves, and it is a browser check for the
+reason the fold's was: a colour and a hit target compile perfectly whether or not the screen shows
+either.
+
 The colours are drawn by this view too, rather than lost with the emulator. #242 writes them as
 SGR references to the sixteen named slots so that the reader's own palette resolves them; an
 emulator does that for itself, and a document has to be told, so `parseFoldedTranscript` reads
@@ -1833,6 +1903,19 @@ it. A board returned to puts its block back where it was left.
   command hidden, a real pointer press on the row revealing both, a second one folding it back,
   `Bash` and `Write` alike, the state surviving a tab switch and a reload — and, for the other
   tab, `Ctrl+O` dispatched into a session and read back out of the process on the far side of it.
+- `scripts/check-agent-transcript-diff-browser.mjs` — both halves of #260. Against the renderer
+  first, with no browser: an `Edit`'s record carrying no `old_string:`/`new_string:` pair at all,
+  its lines marked removed, added and neither, written in the failure and success slots and never
+  as a hex, a `MultiEdit` the same once per edit, a `Write`'s content added, a `Bash` record
+  untouched and uncoloured, and the fold mark still one unbroken line with a diff full of escapes
+  in it. Then in Chrome, where the colours are read as **pixels** rather than as declarations —
+  the clip of a line tallied against the two palette entries, because `#d20f39` and `#3f8f24` sit
+  almost exactly the same distance from the paper and one stray pixel from the line above decides
+  a single-point sample. And the control: absent at the end of the run, on screen after a real
+  wheel, landing at the bottom on a real pointer press, following the output that arrives
+  afterwards, and `Ctrl+End` doing the same from the keyboard while a bubble-phase listener on
+  `document` sees nothing — which is what says the chord reached neither the board's hotkeys nor
+  Excalidraw's tools. Run against the old code first, 16 cases red.
 - `scripts/check-terminal-browser.mjs` — the block, in Chrome over the DevTools protocol.
   Placement, Alt+T, a command typed with real keystrokes, a corner dragged with a real pointer,
   and the store still holding none of it.
