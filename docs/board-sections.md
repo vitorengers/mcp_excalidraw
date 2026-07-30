@@ -99,6 +99,12 @@ is why they exist. `scripts/check-board-sharpness-browser.mjs` measures both hal
 backing store against `cssWidth x devicePixelRatio` at dpr 1 and 2, and the landing a switch
 makes, on a 2560-wide canvas and on a laptop one.
 
+**At 100% the remaining softness is the canvas itself**, which #267 reported and the same script
+now measures at fractional device pixel ratios as well. The editor is a DOM textarea and the
+committed string is a bitmap; the two never match, and the backing store's sub-pixel shortfall is
+too small to be what anybody is seeing. [canvas-frontend.md](canvas-frontend.md) has the
+mechanism and the numbers.
+
 ## Why the key is on the shape
 
 `Alt+B` and `Alt+T` are constants in `frontend/src/App.tsx`, and they are right to be: a mirror
