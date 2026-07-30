@@ -487,10 +487,52 @@
 
 /* Wrapped rather than clipped, and that is the difference from every other line in here. A
    transcript row is a row of a grid and runs off the right; this is the thing the reader
-   opened the fold to read, so a long command wraps and a long result scrolls with the box. */
+   opened the fold to read, so a long command wraps and a long result scrolls with the box.
+
+   Since #260 the record of a file-editing call is a diff, and its colours arrive the way every
+   other colour in this view does — as slot references the renderer wrote and `paintLines`
+   resolves against the reader's palette. So there is no rule here for "added" or "removed":
+   a hex in this file would be the light palette printed into a dark card. */
 .terminal-transcript__detail-text {
   margin: 0 0 0.3em;
   font: inherit;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* The way back to the end of the run — #260. Sticky rather than absolute, and that is what
+   makes it free: this box *is* the screen the card lays out, so an absolutely positioned
+   control would have needed a wrapper around it and a second box for the frame to size. A
+   sticky last child rides the bottom edge of whatever is on screen and costs one line of flow.
+
+   The strip it sits in takes no pointer events at all, so the transcript under it stays
+   selectable; only the button itself does. It sits inside `scrollbar-gutter: stable`, so it is
+   never under the bar. */
+.terminal-transcript__jump {
+  position: sticky;
+  bottom: 0.25em;
+  display: flex;
+  justify-content: flex-end;
+  padding-right: 0.4em;
+  pointer-events: none;
+}
+
+.terminal-transcript__jump-button {
+  pointer-events: auto;
+  font: inherit;
+  font-size: 0.9em;
+  padding: 0.1em 0.7em;
+  border: 1px solid var(--terminal-rule);
+  border-radius: 999px;
+  background: var(--terminal-chip);
+  color: var(--terminal-ink);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.terminal-transcript__jump-button:hover,
+.terminal-transcript__jump-button:focus-visible {
+  background: var(--terminal-band);
+  color: var(--terminal-band-ink);
+  outline: none;
 }

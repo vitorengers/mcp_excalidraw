@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { hasFoldMarks, parseFoldedTranscript } from '../../../src/core/agent-stream-render'
+import { detailLines, hasFoldMarks, parseFoldedTranscript } from '../../../src/core/agent-stream-render'
 import type { FoldDetail, FoldRow, FoldSegment } from '../../../src/core/agent-stream-render'
 import {
   TERMINAL_FALLBACK_FONT_FAMILY,
@@ -693,17 +693,50 @@ function foldItems(rows: FoldRow[]): (FoldItem | LineItem)[] {
   return items
 }
 
+/**
+ * A record's own text, in the ink the renderer wrote it in.
+ *
+ * The same job `paint` does for a transcript row, one line lower down: since #260 the record of
+ * a tool that changes a file is a *diff*, written as SGR references to the sixteen named slots
+ * so that removed and added resolve against whichever palette the reader is in. Printed straight
+ * into a `<pre>` those escapes are drawn as nothing and the diff loses the one thing that made
+ * it a diff.
+ *
+ * The newlines are put back between the lines rather than each line being a `<div>`: the box is
+ * `white-space: pre-wrap`, so a long line still wraps exactly as it did when this was one string.
+ */
+function paintLines(text: string, ink: Record<string, string>): React.ReactNode {
+  return detailLines(text).map((segments, line) => (
+    <React.Fragment key={line}>
+      {line > 0 ? '\n' : null}
+      {segments.map((segment, index) => (
+        <span key={index} style={segment.slot ? { color: ink[segment.slot] } : undefined}>{segment.text}</span>
+      ))}
+    </React.Fragment>
+  ))
+}
+
 /** What an opened row shows, when the record behind it is still in the scrollback. */
-const FoldDetailView: React.FC<{ detail: FoldDetail }> = ({ detail }) => (
+const FoldDetailView: React.FC<{ detail: FoldDetail; ink: Record<string, string> }> = ({ detail, ink }) => (
   <div className="terminal-transcript__detail">
     <div className="terminal-transcript__detail-label">{detail.name || 'tool'} — what was sent</div>
-    <pre className="terminal-transcript__detail-text">{detail.input || '(nothing)'}</pre>
+    <pre className="terminal-transcript__detail-text">
+      {detail.input ? paintLines(detail.input, ink) : '(nothing)'}
+    </pre>
     <div className="terminal-transcript__detail-label">what came back</div>
     <pre className="terminal-transcript__detail-text">
       {detail.result === null ? '(still running)' : (detail.result || '(no output)')}
     </pre>
   </div>
 )
+
+/**
+ * The way back to the end of a run, in the words the observation used for it.
+ *
+ * A constant because it is said twice — on the control and in its tooltip — and because the
+ * chord in the label is a promise the key handler below has to keep.
+ */
+const JUMP_LABEL = 'Jump to bottom (ctrl+End)'
 
 /**
  * One session's transcript, as a document rather than as a screen.
@@ -747,6 +780,39 @@ const TerminalTranscript: React.FC<{
   const boxRef = useRef<HTMLDivElement>(null)
   /** Whether the reader is still at the end of the run, which is where new lines arrive. */
   const pinnedRef = useRef(true)
+  /**
+   * The same answer, as state, because a control has to appear when it changes.
+   *
+   * A ref is right for the *following* rule above — it is read inside an effect and changing it
+   * must not draw anything — and it is exactly wrong for a control that exists only while the
+   * reader is away from the end. So the two are kept together rather than one replacing the
+   * other: every place that moves the view sets both, and this one is what renders.
+   */
+  const [atEnd, setAtEnd] = useState(true)
+
+  /** Whether the box is showing the end of its own content, within a rounding pixel or two. */
+  const measure = (box: HTMLDivElement): boolean =>
+    box.scrollTop + box.clientHeight >= box.scrollHeight - 2
+
+  const settle = (box: HTMLDivElement): void => {
+    const end = measure(box)
+    pinnedRef.current = end
+    setAtEnd(end)
+  }
+
+  /**
+   * Back to the end of the run, and pinned there again.
+   *
+   * Pinning is the half a plain scroll would miss: the ask is to get back to where the run is
+   * being written, so the output that arrives afterwards has to be followed too.
+   */
+  const jump = (): void => {
+    const box = boxRef.current
+    if (!box) return
+    box.scrollTop = box.scrollHeight
+    pinnedRef.current = true
+    setAtEnd(true)
+  }
 
   const toggle = (id: string): void => {
     setOpen((current) => {
@@ -761,10 +827,16 @@ const TerminalTranscript: React.FC<{
   // Follow the end of the run, unless the reader has scrolled back to read something. Same
   // rule an emulator's scrollback follows, and for the same reason: a transcript that jumped
   // to the bottom every time a line arrived would be unreadable while a run is working.
+  //
+  // The measurement afterwards is not the same thing as the `onScroll` below, and #260 is why
+  // it is here as well: opening a fold changes how tall this box's content is without any
+  // scrolling happening at all, so a reader who opened a long record above the fold would be
+  // away from the end with nothing having fired to say so.
   useEffect(() => {
     const box = boxRef.current
-    if (!box || !pinnedRef.current) return
-    box.scrollTop = box.scrollHeight
+    if (!box) return
+    if (pinnedRef.current) box.scrollTop = box.scrollHeight
+    settle(box)
   }, [output, open, active, ended])
 
   return (
@@ -776,9 +848,23 @@ const TerminalTranscript: React.FC<{
       style={{ visibility: active ? 'visible' : 'hidden', lineHeight: TERMINAL_LINE_HEIGHT }}
       data-session={sessionId}
       ref={boxRef}
-      onScroll={(event) => {
-        const box = event.currentTarget
-        pinnedRef.current = box.scrollTop + box.clientHeight >= box.scrollHeight - 2
+      // A scrolling region is a thing a keyboard should be able to reach, and here it is also
+      // what makes `Ctrl+End` addressable: a keystroke has to be *in* this box to be answered by
+      // it, and a click anywhere in the transcript is what puts it there.
+      tabIndex={0}
+      onScroll={(event) => { settle(event.currentTarget) }}
+      // `Ctrl+End`, handled here rather than anywhere above this card, and that is #177's layer
+      // read the other way round. The card stops every key it has not been told is one of the
+      // board's four, and React's `stopPropagation` calls the native one at its own root —
+      // *below* `window` — so a handler outside the card would never be reached. Inside it, the
+      // chord is answered and stopped, which is what keeps it away from the board's hotkeys and
+      // from Excalidraw's tool bindings. Claiming it costs nothing that #177 was protecting:
+      // this session is `readOnly` by construction, so there is no keyboard to give up.
+      onKeyDown={(event) => {
+        if (event.key !== 'End' || !event.ctrlKey || event.altKey || event.metaKey) return
+        event.preventDefault()
+        event.stopPropagation()
+        jump()
       }}
       // A wheel this document has no use for goes to the board, exactly as a wheel the
       // emulator's scrollback has no use for does — see `forwardWheelToCanvas`. The browser
@@ -824,7 +910,7 @@ const TerminalTranscript: React.FC<{
             <span className="terminal-transcript__head">{paint(item.head, ink)}</span>
           </div>
           {open.has(item.id) && (details[item.id]
-            ? <FoldDetailView detail={details[item.id]} />
+            ? <FoldDetailView detail={details[item.id]} ink={ink} />
             // The record has been trimmed out of the scrollback but the rows it marked are
             // still here. The clipped preview is what the block always showed, so showing it
             // is a fold that reveals less rather than a fold that reveals nothing.
@@ -832,6 +918,33 @@ const TerminalTranscript: React.FC<{
         </div>
       )))}
       {ended && <div className="terminal-transcript__line">[{ended}]</div>}
+
+      {/* The way back, and it is drawn only while there is somewhere to go back from — a
+          control that is always on screen and does nothing most of the time is one more thing
+          over the run rather than an offer.
+
+          Last in the flow and `position: sticky`, so it rides the bottom edge of whatever the
+          box is showing without being a layer over it: an absolutely positioned button would
+          have needed a wrapper around this box, and this box *is* the screen the card lays
+          out. Nothing is prevented on the row it sits in, so the transcript underneath is
+          still selectable. */}
+      {!atEnd && (
+        <div className="terminal-transcript__jump">
+          <button
+            type="button"
+            className="terminal-transcript__jump-button"
+            title={`${JUMP_LABEL} — and follow the run again from there`}
+            // `pointerdown` rather than `click`, matching every other control on this card: the
+            // overlay stops pointer events so that what it does not stop reaches the canvas, and
+            // a handler waiting for the synthesised click is reasoning about a second event.
+            onPointerDown={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              jump()
+            }}
+          >{JUMP_LABEL}</button>
+        </div>
+      )}
     </div>
   )
 }
