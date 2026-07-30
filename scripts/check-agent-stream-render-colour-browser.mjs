@@ -225,10 +225,18 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
 
 // The stub the session runs. It stays alive afterwards: a shell that exits is dropped from the
 // session map on the spot, and the block would have nothing left to draw.
+//
+// **The fold marks come off, and that is what keeps this an emulator's question.** Since #246 a
+// transcript still carrying them is one the *board* composed, and the block draws such a tab as
+// a document of collapsible rows rather than as a screen — there are no `.xterm-rows` in an
+// agent tab any more, and a folded row hides the result gutters half of this check is about.
+// What is asserted here is the renderer's colour vocabulary as an emulator resolves it, which is
+// every other pipe-mode session and the bytes themselves; that the *document* resolves the same
+// slots out of the same palette is `scripts/check-agent-transcript-fold.mjs`'s case.
 const stubPath = join(workDir, 'stub-agent.mjs');
 writeFileSync(stubPath, `#!/usr/bin/env node
-import { AgentStreamRenderer } from ${JSON.stringify(pathToFileURL(rendererModule).href)};
-process.stdout.write(new AgentStreamRenderer().feed(${JSON.stringify(STREAM)}));
+import { AgentStreamRenderer, stripFoldMarks } from ${JSON.stringify(pathToFileURL(rendererModule).href)};
+process.stdout.write(stripFoldMarks(new AgentStreamRenderer().feed(${JSON.stringify(STREAM)})));
 setInterval(() => {}, 60000);
 `, 'utf8');
 

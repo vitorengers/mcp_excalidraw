@@ -65,7 +65,7 @@ for (const built of [rendererModule, issueModule]) {
   }
 }
 
-const { AgentStreamRenderer } = await import(pathToFileURL(rendererModule).href);
+const { AgentStreamRenderer, stripFoldMarks } = await import(pathToFileURL(rendererModule).href);
 const { extractGithubUrl } = await import(pathToFileURL(issueModule).href);
 
 let failures = 0;
@@ -90,7 +90,13 @@ const SLOT_OF_CODE = new Map([
 /** Every CSI sequence in a string, as it was written. */
 const SEQUENCES = (text) => text.match(/\u001b\[[0-?]*[ -\/]*[@-~]/g) ?? [];
 /** The same text with the escapes taken out — what a reader sees. */
-const plain = (text) => text.replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '');
+// The fold marks come off first. Since #246 a tool line carries an OSC sequence with a
+// private identifier in front of it, and a detail record after it holding the tool's whole
+// input as JSON — which an emulator draws as nothing, and which contains the tool's own
+// name in text. Both matter here: a marker searched for with `indexOf` would otherwise be
+// found inside that record, ahead of the sequence that paints the row, and the answer
+// would be "plain" for every tool on the list.
+const plain = (text) => stripFoldMarks(text).replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '');
 
 /**
  * The slot a run of text was painted in, or null if nothing painted it.
@@ -100,7 +106,8 @@ const plain = (text) => text.replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '');
  * which is the answer "this is plain ink" rather than "no sequence was found"; `undefined` is
  * the marker never having been drawn at all.
  */
-function slotAt(line, marker) {
+function slotAt(markedLine, marker) {
+  const line = stripFoldMarks(markedLine);
   const at = line.indexOf(marker);
   if (at < 0) return undefined;
   let slot = null;

@@ -49,6 +49,14 @@ mkdirSync(workDir, { recursive: true });
 const { TerminalSession } = await import(
   pathToFileURL(join(repoRoot, 'dist', 'core', 'terminal-session.js')).href
 );
+// Since #246 a rendered tool line carries an invisible mark in front of it, which is how the
+// block knows which rows belong to which call and where the full detail behind them is. It is
+// an OSC sequence with a private identifier, so an emulator handed one draws nothing — every
+// assertion below is therefore about what is *drawn*, and this is what takes the marks off.
+// `check-agent-transcript-fold.mjs` is where the marks themselves are asserted.
+const { hasFoldMarks, stripFoldMarks } = await import(
+  pathToFileURL(join(repoRoot, 'dist', 'core', 'agent-stream-render.js')).href
+);
 const { extractGithubUrl } = await import(
   pathToFileURL(join(repoRoot, 'dist', 'core', 'issue-agent.js')).href
 );
@@ -112,12 +120,14 @@ const streaming = await runSession(
 //
 // The escapes come off first, and only here. Since #242 the renderer writes SGR sequences —
 // `⏺ Bash` in the execution slot, the gutter in the dim one — so a line is `ESC[32m⏺ BashESC[0m…`
-// rather than `⏺ Bash…`, and every assertion below is about *shape*: which words are on which
-// line, at what indent. `check-agent-stream-render-colour.mjs` is where the sequences
-// themselves are the subject. Stripping them in one helper keeps the two checks from having to
-// agree about a spelling neither of them is asking about.
+// rather than `⏺ Bash…`; and since #246 it writes fold marks in front of them, which is how the
+// block groups a tool call's rows and finds the detail behind them. Every assertion below is
+// about *shape*: which words are on which line, at what indent.
+// `check-agent-stream-render-colour.mjs` is where the sequences themselves are the subject, and
+// `check-agent-transcript-fold.mjs` is where the marks are. Taking both off in one helper keeps
+// the three checks from having to agree about a spelling only one of them is asking about.
 const stripEscapes = (text) => text.replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '');
-const linesOf = (text) => stripEscapes(text).split('\n').map((line) => line.trim());
+const linesOf = (text) => stripEscapes(stripFoldMarks(text)).split('\n').map((line) => line.trim());
 
 check('the session ran to the end', streaming.exited);
 check("the assistant's prose is shown as prose, on a line of its own",
@@ -135,6 +145,11 @@ check('no raw JSON envelope is left in the transcript',
   'a JSON envelope reached the block');
 check('private thinking is not printed verbatim',
   !streaming.shown.includes('a private thought'));
+check('the tool line is marked for folding, and the mark is not part of what is drawn',
+  hasFoldMarks(streaming.shown)
+  && linesOf(streaming.shown).includes('⏺ Bash(echo hi)')
+  && !stripFoldMarks(streaming.shown).includes('1338'),
+  JSON.stringify(streaming.shown.slice(0, 200)));
 
 // ─── What the tap must still receive ──────────────────────────
 
