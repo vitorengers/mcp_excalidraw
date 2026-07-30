@@ -6070,6 +6070,14 @@ function App(): JSX.Element {
                 : null
             }
             viewport={docsAnchor?.viewport ?? { width: 0, height: 0 }}
+            // The terminal panels, in the coordinates the card is placed in — the same
+            // arithmetic produced both, a few lines apart. Placement opens the card on a
+            // side clear of them where there is one, because these are on its layer and
+            // drawn after it, so an overlap covers the card rather than the terminal
+            // (#241). Suppressed panels count: one is hidden for the length of a drag and
+            // comes back where it was, and a card that moved into the space and jumped out
+            // of it again when the hand let go would be worse than one that stayed put.
+            obstacles={terminalViews.map((view) => view.rect)}
             suppressed={docsAnchor?.suppressed ?? false}
             onClose={() => setDismissedAnchorId(docsAnchorIdRef.current)}
             docKey={selectedDoc.key}
