@@ -64,6 +64,44 @@ const asTitle = (value: unknown): string =>
   typeof value === 'string' && value.trim() ? value.trim() : '';
 
 /**
+ * The sections on a scene, in reading order: down the board, then across.
+ *
+ * The order is a decision and not an implementation detail, which is why it is stated
+ * once here and used by both callers below. A duplicate key is settled by where the
+ * sections sit rather than by the order the store happened to hand them over — deciding
+ * it by array order would make the winner change when nothing on the board did — and
+ * "the first section" means the same thing for the same reason.
+ */
+export function boardSectionsInReadingOrder<T extends BoardSectionElement>(
+  elements: readonly T[]
+): T[] {
+  return elements
+    .filter((element) => !element.isDeleted)
+    .filter((element) => (element.customData ?? {}).kind === BOARD_SECTION_KIND)
+    .slice()
+    .sort((a, b) => (a.y - b.y) || (a.x - b.x));
+}
+
+/**
+ * The section a board opens on: the first one in reading order, or nothing.
+ *
+ * Where a *key* lands is the reader asking for a region. This is the board being opened
+ * with nobody having asked for anything, and #245 is what it used to do instead — fit
+ * every element on the canvas, mirror and terminal blocks included, which on a scene over
+ * twice the width of the display is a landing at 0.4 and a 13px card body drawn at 5.
+ *
+ * Whether the section's key was *honoured* plays no part. A section that claimed `KeyB`
+ * or a malformed code is still a section — still the board's own statement of what it is
+ * made of — and a landing that skipped it would be reading the key to answer a question
+ * about the region.
+ */
+export function firstBoardSection<T extends BoardSectionElement>(
+  elements: readonly T[]
+): T | null {
+  return boardSectionsInReadingOrder(elements)[0] ?? null;
+}
+
+/**
  * Read the sections off a scene, and say which of them got their key.
  *
  * Reading order — down the board, then across — so that a duplicate is settled by where
@@ -78,11 +116,7 @@ export function resolveBoardSectionHotkeys(
   elements: readonly BoardSectionElement[],
   reserved: readonly string[] = RESERVED_HOTKEY_CODES
 ): BoardSectionHotkeys {
-  const sections = elements
-    .filter((element) => !element.isDeleted)
-    .filter((element) => (element.customData ?? {}).kind === BOARD_SECTION_KIND)
-    .slice()
-    .sort((a, b) => (a.y - b.y) || (a.x - b.x));
+  const sections = boardSectionsInReadingOrder(elements);
 
   const bindings: BoardSectionBinding[] = [];
   const ignored: IgnoredSectionClaim[] = [];
