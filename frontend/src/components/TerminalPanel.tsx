@@ -10,7 +10,7 @@ import {
   TERMINAL_LINE_HEIGHT,
   terminalScrollbar
 } from '../../../src/core/terminal-block'
-import { terminalCssVars, terminalXtermTheme } from '../../../src/core/terminal-palette'
+import { terminalCssVars, terminalDocumentInk, terminalXtermTheme } from '../../../src/core/terminal-palette'
 import type { TerminalTheme } from '../../../src/core/terminal-palette'
 import { clipboardImages } from '../../../src/core/pasted-images'
 import { terminalFontReady } from '../terminal-metrics'
@@ -606,8 +606,8 @@ interface LineItem {
  *
  * #242's colour vocabulary is SGR sequences, resolved against whichever of the two palettes the
  * reader is in — which an emulator does for itself and a document has to be told. `slot` is one
- * of the sixteen by name and `ink` is that theme's map, so a theme toggle repaints this the way
- * it repaints the emulator beside it, out of the same table.
+ * of the sixteen by name, or since #258 the seventeenth, and `ink` is that theme's map, so a
+ * theme toggle repaints this the way it repaints the emulator beside it, out of the same table.
  */
 function paint(segments: FoldSegment[], ink: Record<string, string>): React.ReactNode {
   if (!segments.length) return ' '
@@ -688,9 +688,13 @@ const TerminalTranscript: React.FC<{
 }> = ({ active, sessionId, output, ended, theme }) => {
   const { rows, details } = useMemo(() => parseFoldedTranscript(output), [output])
   const items = useMemo(() => foldItems(rows), [rows])
-  // The same table the emulator in the tab beside this one is themed from, so the two cannot
-  // disagree about what `cyan` is on this board.
-  const ink = useMemo(() => terminalXtermTheme(theme), [theme])
+  // The same sixteen the emulator in the tab beside this one is themed from, so the two cannot
+  // disagree about what `cyan` is on this board — plus the ink that only exists here. #258: an
+  // orange is not one of the sixteen and cannot be written as SGR, so it arrives as a *name* and
+  // is resolved at this point, which is the first one that knows which theme the reader is in.
+  // A tab drawn by the emulator never sees it and does not have to: it draws the mark as nothing
+  // and the line lands on the default ink.
+  const ink = useMemo(() => terminalDocumentInk(theme), [theme])
   const [open, setOpen] = useState<Set<string>>(() => readOpenFolds(sessionId))
   const boxRef = useRef<HTMLDivElement>(null)
   /** Whether the reader is still at the end of the run, which is where new lines arrive. */

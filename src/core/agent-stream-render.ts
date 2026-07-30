@@ -48,7 +48,10 @@
  * `terminal-palette.ts` for why bold and dim are not used either.
  */
 
-import { AGENT_INK, agentToolSlot, ANSI_RESET, inSlot, type TerminalSlot } from './terminal-palette.js';
+import {
+  AGENT_INK, agentToolSlot, ANSI_RESET, inSlot,
+  type TerminalDocumentInk, type TerminalInk, type TerminalSlot,
+} from './terminal-palette.js';
 
 /** How much of a tool's output is worth putting in a block somebody is watching. */
 const RESULT_LINES = 6;
@@ -91,10 +94,21 @@ const DETAIL_CHARS = 8_000;
  * `f` opens a row that belongs to a tool call, `c` a row that continues one, and `d` carries
  * the detail record itself. Only the frontend reads them; `stripFoldMarks` is what everything
  * else uses.
+ *
+ * `i` is the fourth, and it carries a colour rather than an identity. #258 asked for an ink
+ * that is not one of the sixteen, and there is no SGR number for such a thing — see
+ * `TerminalDocumentInk` in `terminal-palette.ts` for why that restriction holds for every byte
+ * an emulator may see, and why a document is the one reader that can be handed a *name*
+ * instead. So the name rides here: `i=<ink>` opens a run in it and `i=` closes the run, which
+ * is the pair an SGR sequence writes, and an emulator draws both as nothing.
  */
 const FOLD_OSC = '\u001b]1338;';
 const FOLD_END = '\u0007';
-const FOLD_MARK = /\u001b\]1338;([fcd])=([^\u0007\u001b]*)\u0007/g;
+const FOLD_MARK = /\u001b\]1338;([fcdi])=([^\u0007\u001b]*)\u0007/g;
+/** The three that say which tool call a row belongs to. `i` is a colour, read further down. */
+const ROW_MARK = /\u001b\]1338;([fcd])=([^\u0007\u001b]*)\u0007/g;
+/** The one that says what ink a run is in, read where the SGR sequences are read. */
+const INK_MARK = /^\u001b\]1338;i=([^\u0007\u001b]*)\u0007$/;
 
 /** Whether a transcript is one the board composed, and therefore one that can fold. */
 export function hasFoldMarks(text: string): boolean {
@@ -120,8 +134,8 @@ export interface FoldDetail {
 /** One run of a line in one slot, which is as much as a `<span>` needs to be told. */
 export interface FoldSegment {
   text: string;
-  /** One of the sixteen, or null for the reader's default ink. */
-  slot: TerminalSlot | null;
+  /** One of the sixteen, the seventeenth, or null for the reader's default ink. */
+  slot: TerminalInk | null;
 }
 
 /** One drawn line of a transcript, and the tool call it belongs to. */
@@ -169,7 +183,7 @@ const SGR_SLOT: Record<number, TerminalSlot> = {
  * rather than being guessed at, which is the same trade the renderer makes by refusing to
  * write one.
  */
-function slotAfter(current: TerminalSlot | null, params: string): TerminalSlot | null {
+function slotAfter(current: TerminalInk | null, params: string): TerminalInk | null {
   let slot = current;
   for (const part of (params || '0').split(';')) {
     const code = Number(part || '0');
@@ -186,14 +200,18 @@ const ANSI = /(?:\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b[\]P^_X][\s\S]*?(?:\u0007|\u0
 /** One line, cut into runs of one colour, with every other escape sequence dropped. */
 function segmentsOf(line: string): FoldSegment[] {
   const segments: FoldSegment[] = [];
-  let slot: TerminalSlot | null = null;
+  let slot: TerminalInk | null = null;
   let index = 0;
   ANSI.lastIndex = 0;
   for (let match = ANSI.exec(line); match; match = ANSI.exec(line)) {
     if (match.index > index) segments.push({ text: line.slice(index, match.index), slot });
     index = ANSI.lastIndex;
     const sgr = /^\u001b\[([0-9;]*)m$/.exec(match[0]);
-    if (sgr) slot = slotAfter(slot, sgr[1] ?? '');
+    if (sgr) { slot = slotAfter(slot, sgr[1] ?? ''); continue; }
+    // The other way a run says what colour it is, and it is read here rather than stripped
+    // with the identity marks, because where it sits on the line is the whole of what it says.
+    const ink = INK_MARK.exec(match[0]);
+    if (ink) slot = ink[1] ? (ink[1] as TerminalInk) : null;
   }
   if (index < line.length) segments.push({ text: line.slice(index), slot });
   return segments;
@@ -217,8 +235,8 @@ export function parseFoldedTranscript(text: string): FoldedTranscript {
   for (const line of lines) {
     let id: string | null = null;
     let head = false;
-    FOLD_MARK.lastIndex = 0;
-    for (let match = FOLD_MARK.exec(line); match; match = FOLD_MARK.exec(line)) {
+    ROW_MARK.lastIndex = 0;
+    for (let match = ROW_MARK.exec(line); match; match = ROW_MARK.exec(line)) {
       const kind = match[1];
       const payload = match[2] ?? '';
       if (kind === 'd') {
@@ -240,7 +258,7 @@ export function parseFoldedTranscript(text: string): FoldedTranscript {
     }
     // The marks come off first and the colour is read second, which is the order they were
     // written in: a mark sits in front of whatever sequence the line starts in.
-    const drawn = line.replace(FOLD_MARK, '');
+    const drawn = line.replace(ROW_MARK, '');
     const segments = segmentsOf(drawn);
     rows.push({ id, head, text: segments.map((segment) => segment.text).join(''), segments });
   }
@@ -360,6 +378,44 @@ function safeId(id: string): string {
 }
 
 const foldLine = (id: string, kind: 'f' | 'c'): string => `${FOLD_OSC}${kind}=${id}${FOLD_END}`;
+/**
+ * One run in an ink that is not one of the sixteen, opened and closed.
+ *
+ * The counterpart of `inSlot`, and the same shape: closed rather than left open, because a
+ * transcript is appended to for the life of a run and an ink left on would paint every line
+ * after it. What it writes is a name rather than a number — `terminal-palette.ts` says why the
+ * numbers stop at sixteen and why a document can be told a name instead.
+ */
+const inInk = (ink: TerminalDocumentInk, text: string): string =>
+  text ? `${FOLD_OSC}i=${ink}${FOLD_END}${text}${FOLD_OSC}i=${FOLD_END}` : text;
+
+/**
+ * What the transcript already ends with, so a blank line is written once rather than per block.
+ *
+ * #258 asked for room either side of the agent's prose, and "either side" is two decisions that
+ * meet: the block after a sentence wants a blank line above it and the sentence wants one below.
+ * Written twice they accumulate — three sentences in a row would open a growing gap — so the
+ * one below is written and the one above is asked for, and it is only supplied when the
+ * transcript does not already end in one.
+ *
+ * Two characters is the whole of the state a question like that needs, and it is deliberately
+ * *not* the transcript: this class sees only what this renderer wrote, so a run of blank lines
+ * inside a tool's own output is none of its business and is passed through untouched.
+ */
+class Spacing {
+  /** The last two characters written. A transcript that has not started counts as blank. */
+  private tail = '\n\n';
+
+  /** Nothing, or the newline that opens a blank line above whatever comes next. */
+  gap(): string {
+    return this.tail.endsWith('\n\n') ? '' : '\n';
+  }
+
+  wrote(piece: string): void {
+    if (piece) this.tail = (this.tail + piece).slice(-2);
+  }
+}
+
 const foldData = (record: Partial<FoldDetail> & { id: string }): string =>
   `${FOLD_OSC}d=${JSON.stringify(record)}${FOLD_END}`;
 
@@ -393,22 +449,34 @@ class FoldIds {
   }
 }
 
-function renderEvent(event: StreamEvent, ids: FoldIds): string {
+function renderEvent(event: StreamEvent, ids: FoldIds, spacing: Spacing): string {
+  let out = '';
+  // Everything this function appends goes through here, so the spacing above knows what the
+  // transcript ends with even part-way through an event carrying several blocks.
+  const write = (piece: string): void => { out += piece; spacing.wrote(piece); };
   switch (event.type) {
     case 'assistant': {
       const content = event.message?.content;
-      if (typeof content === 'string') return `${content}\n`;
+      if (typeof content === 'string') { write(`${content}\n`); return out; }
       if (!Array.isArray(content)) return '';
-      let out = '';
       for (const block of content) {
         if (block?.type === 'text' && block.text?.trim()) {
-          out += `${block.text.trim()}\n`;
+          // The one thing in the transcript addressed to whoever is watching, rather than a
+          // record of what the agent did — so it is given the room a paragraph has and not the
+          // no room a log row has. #258: it used to land hard against the tool call above it.
+          write(`${spacing.gap()}${block.text.trim()}\n\n`);
         } else if (block?.type === 'thinking') {
           // Marked, never printed. It is the agent's private reasoning, it is long, and a
           // block somebody is watching to see what the run is *doing* is the wrong place
-          // for it — but silence would read as a stall. Dim for the same reason: it says the
-          // run is alive, not what it is doing.
-          out += `${inSlot(AGENT_INK.aside, '✻ thinking…')}\n`;
+          // for it — but silence would read as a stall.
+          //
+          // It was dim until #258, on the argument that it says the run is alive rather than
+          // what it is doing. What the ask answers is that this line is the *agent itself* —
+          // the `✻` is the starburst its own interface draws — where every other line is the
+          // agent's work, and that is worth a colour of its own rather than the ink of a file
+          // path. The seventeenth ink, which exists only in the fold view: see
+          // `TerminalDocumentInk`.
+          write(`${inInk(AGENT_INK.presence, '✻ thinking…')}\n`);
         } else if (block?.type === 'tool_use') {
           const name = block.name ?? 'tool';
           const summary = summariseInput(block.input);
@@ -423,9 +491,9 @@ function renderEvent(event: StreamEvent, ids: FoldIds): string {
           // until the result, so a tool that is still running can already be opened, and it
           // carries the input as plain text — colour is for the row, and the record is what a
           // reader opens to read.
-          out += foldData({ id, name, input: capped(fullInput(block.input)) })
+          write(foldData({ id, name, input: capped(fullInput(block.input)) })
             + foldLine(id, 'f')
-            + `${inSlot(agentToolSlot(name), `⏺ ${name}`)}${inSlot(AGENT_INK.argument, `(${summary})`)}\n`;
+            + `${inSlot(agentToolSlot(name), `⏺ ${name}`)}${inSlot(AGENT_INK.argument, `(${summary})`)}\n`);
         }
       }
       return out;
@@ -433,19 +501,18 @@ function renderEvent(event: StreamEvent, ids: FoldIds): string {
     case 'user': {
       const content = event.message?.content;
       if (!Array.isArray(content)) return '';
-      let out = '';
       for (const block of content) {
         if (block?.type !== 'tool_result') continue;
         const rendered = renderResult(block.content, block.is_error === true);
         const id = ids.close(block);
-        if (!id) { out += rendered; continue; }
+        if (!id) { write(rendered); continue; }
         // Every line of the clipped preview is marked, because folding shut has to take the
         // whole answer with it and not only its first row. Marked in front of whatever colour
         // the line starts in — including the tool's own, which `renderResult` passes through.
         const marked = rendered.replace(/\n$/, '').split('\n')
           .map((line) => foldLine(id, 'c') + line)
           .join('\n');
-        out += foldData({ id, result: capped(resultText(block.content).trim()) }) + marked + '\n';
+        write(foldData({ id, result: capped(resultText(block.content).trim()) }) + marked + '\n');
       }
       return out;
     }
@@ -455,7 +522,10 @@ function renderEvent(event: StreamEvent, ids: FoldIds): string {
       // somebody is scrolled away from.
       const slot = event.is_error ? AGENT_INK.failure : AGENT_INK.success;
       const said = event.is_error ? 'the run reported an error' : 'the run finished';
-      return `\n${inSlot(slot, `⏺ ${said}${turns}`)}\n`;
+      // The blank line above it is asked for rather than written, for the same reason prose's
+      // is: a run whose last word was a sentence already has one, and two would be a gap.
+      write(`${spacing.gap()}${inSlot(slot, `⏺ ${said}${turns}`)}\n`);
+      return out;
     }
     // `system` is the startup banner and `rate_limit_event` is bookkeeping. Neither says
     // anything about the work, and both would arrive before the first line of it.
@@ -473,6 +543,7 @@ function renderEvent(event: StreamEvent, ids: FoldIds): string {
 export class AgentStreamRenderer {
   private pending = '';
   private readonly ids = new FoldIds();
+  private readonly spacing = new Spacing();
 
   /** What this chunk adds to the transcript. Empty means "nothing complete yet". */
   feed(chunk: string): string {
@@ -483,19 +554,20 @@ export class AgentStreamRenderer {
     this.pending = lines.pop() ?? '';
 
     let out = '';
+    const write = (piece: string): void => { out += piece; this.spacing.wrote(piece); };
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       if (!trimmed.startsWith('{')) {
         // Not an envelope, so it is somebody talking. Verbatim.
-        out += `${line}\n`;
+        write(`${line}\n`);
         continue;
       }
       try {
-        out += renderEvent(JSON.parse(trimmed) as StreamEvent, this.ids);
+        out += renderEvent(JSON.parse(trimmed) as StreamEvent, this.ids, this.spacing);
       } catch {
         // A line that opens like JSON and is not JSON is still a line somebody wrote.
-        out += `${line}\n`;
+        write(`${line}\n`);
       }
     }
     return out;
