@@ -61,6 +61,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -197,10 +198,9 @@ const children = [];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
+  port: PORT,
   env: {
-    ...process.env,
     // Deliberately off rather than inherited. A machine that exports `EXCALIDRAW_TERMINAL`
     // puts a shell on this board, and since #200 the first block to open is what the mirror
     // is placed from — so the region steps left once, mid-run, and every viewport coordinate
@@ -208,8 +208,6 @@ const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
     // click was the one that missed. Nothing here is about the terminal, so it is switched
     // off at the source instead of being raced with (#150's answer, for the same reason).
     EXCALIDRAW_TERMINAL: '',
-    PORT: String(PORT),
-    HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_GH_COMMAND: `node "${stubPath.replace(/\\/g, '/')}"`,
@@ -220,8 +218,7 @@ const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
     // a silent no-op, and the check fails on its own harness rather than on the feature.
     EXCALIDRAW_LIBRARY: join(repoRoot, 'docs', 'blocks.excalidrawlib'),
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });

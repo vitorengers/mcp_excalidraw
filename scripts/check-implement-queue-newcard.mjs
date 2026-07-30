@@ -32,13 +32,13 @@
  * Usage: node scripts/check-implement-queue-newcard.mjs
  */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -216,12 +216,9 @@ let child = null;
 let serverOutput = '';
 
 function startCanvas() {
-  child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  child = spawnCanvas({
+    port,
     env: {
-      ...process.env,
-      PORT: String(port),
-      HOST: '127.0.0.1',
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
       EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
@@ -229,8 +226,7 @@ function startCanvas() {
       EXCALIDRAW_IMPLEMENT_CONCURRENCY: String(CAP),
       EXCALIDRAW_IMPLEMENT_QUEUE_MS: String(QUEUE_MS),
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   child.stdout.on('data', (chunk) => { serverOutput += chunk.toString(); });
   child.stderr.on('data', (chunk) => { serverOutput += chunk.toString(); });
 }

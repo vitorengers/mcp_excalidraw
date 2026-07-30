@@ -25,14 +25,13 @@
  * Usage: node scripts/check-health-identity.mjs
  */
 
-import { spawn } from 'node:child_process';
-import { createServer } from 'node:net';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 let failures = 0;
 
@@ -42,19 +41,6 @@ function check(name, condition, detail = '') {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** A port nobody is on, so this can never collide with the board or another check. */
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.unref();
-    probe.on('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
-    });
-  });
-}
 
 async function healthOf(port, attempts = 100) {
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -74,20 +60,14 @@ mkdirSync(workDir, { recursive: true });
 const started = [];
 
 /**
- * A canvas server with exactly the environment given — every `EXCALIDRAW_*` this process
- * happens to hold is stripped first, so the machine running the check cannot decide the answer.
+ * A canvas server with exactly the environment given. The stripping this used to do by hand —
+ * every `EXCALIDRAW_*` out of the child's environment, so the machine running the check cannot
+ * decide the answer — is `scripts/lib/spawn-canvas.mjs`'s job now, and it also turns off the
+ * `.env` beside the working directory, which the hand-rolled version never could.
  */
-async function startCanvas(extraEnv) {
+async function canvasWith(extraEnv) {
   const port = await freePort();
-  const env = { ...process.env, PORT: String(port), HOST: '127.0.0.1' };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('EXCALIDRAW_')) delete env[key];
-  }
-  const child = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-    cwd: repoRoot,
-    stdio: 'ignore',
-    env: { ...env, ...extraEnv },
-  });
+  const { child } = startCanvas({ port, env: extraEnv });
   started.push(child);
   const health = await healthOf(port);
   return { port, health, pid: child.pid };
@@ -97,7 +77,7 @@ async function startCanvas(extraEnv) {
 
 console.log('\nA canvas with nothing configured');
 
-const bare = await startCanvas({});
+const bare = await canvasWith({});
 check('it answers /health at all', bare.health !== null);
 
 if (bare.health) {
@@ -123,7 +103,7 @@ writeFileSync(registry, JSON.stringify({ workspaces: [] }), 'utf8');
 
 // The agent values are never run here and never read back — only whether they are set is
 // reported, so anything non-empty exercises the same expression the routes are gated on.
-const board = await startCanvas({
+const board = await canvasWith({
   EXCALIDRAW_WORKSPACES: registry,
   EXCALIDRAW_TERMINAL: '1',
   EXCALIDRAW_ISSUE_AGENT: 'agent-that-is-never-run --research',
@@ -153,7 +133,7 @@ console.log('\nOne agent on and the other off');
 // The two variables are separate on purpose: sharing one command would mean that turning on
 // issue blocks quietly turned on repository writes. A single `agents: true` would hide exactly
 // that, so the split has to survive into what /health says.
-const researchOnly = await startCanvas({
+const researchOnly = await canvasWith({
   EXCALIDRAW_WORKSPACES: registry,
   EXCALIDRAW_ISSUE_AGENT: 'agent-that-is-never-run --research',
 });

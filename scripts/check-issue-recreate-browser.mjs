@@ -33,6 +33,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -254,7 +255,6 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 
 const serverEnv = {
-  ...process.env,
   PORT: String(PORT),
   HOST: '127.0.0.1',
   LOG_LEVEL: 'error',
@@ -267,16 +267,14 @@ const serverEnv = {
   STUB_AGENT_PROMPT: promptPath,
   STUB_AGENT_RELEASE: releasePath,
 };
-// Whoever runs this may have the terminal switched on in their own shell, and the whole
-// environment is inherited. A terminal block's xterm panel is a DOM overlay over the mirror,
-// and clicks aimed at a card land on it and are silently swallowed — the check would then
-// fail on a coordinate rather than on the feature.
-delete serverEnv.EXCALIDRAW_TERMINAL;
+// Nothing this machine exports reaches the child: `scripts/lib/spawn-canvas.mjs` strips every
+// `EXCALIDRAW_*` before the check's own values go in, so there is no terminal block over the
+// board — and no other inherited setting — unless this check asks for it.
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot, env: serverEnv, stdio: ['ignore', 'pipe', 'pipe'],
-});
+const server = startCanvas({
+  env: serverEnv,
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });

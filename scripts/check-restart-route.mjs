@@ -31,14 +31,13 @@
  * Usage: node scripts/check-restart-route.mjs
  */
 
-import { spawn } from 'node:child_process';
-import { createServer } from 'node:net';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 let failures = 0;
 
@@ -48,19 +47,6 @@ function check(name, condition, detail = '') {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** A port nobody is on, so this can never collide with the board or another check. */
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.unref();
-    probe.on('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
-    });
-  });
-}
 
 async function healthOf(port, attempts = 100) {
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -99,21 +85,14 @@ writeFileSync(registry, JSON.stringify({ workspaces: [] }), 'utf8');
 const toKill = [];
 
 /**
- * A canvas server with exactly the environment given — every `EXCALIDRAW_*` this process
- * happens to hold is stripped first, so the machine running the check cannot decide the
- * answer, and neither can the board's own environment leaking in through the shell.
+ * A canvas server with exactly the environment given. Stripping every `EXCALIDRAW_*` out of the
+ * child — so neither the machine running the check nor the board's own environment leaking in
+ * through the shell can decide the answer — is `scripts/lib/spawn-canvas.mjs`'s job now,
+ * together with the `.env` this used to miss.
  */
-async function startCanvas(extraEnv, host = '127.0.0.1') {
+async function canvasWith(extraEnv, host = '127.0.0.1') {
   const port = await freePort();
-  const env = { ...process.env, PORT: String(port), HOST: host, LOG_LEVEL: 'error' };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('EXCALIDRAW_')) delete env[key];
-  }
-  const child = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-    cwd: repoRoot,
-    stdio: 'ignore',
-    env: { ...env, ...extraEnv },
-  });
+  const { child } = startCanvas({ port, env: { HOST: host, LOG_LEVEL: 'error', ...extraEnv } });
   toKill.push(child.pid);
   const health = await healthOf(port);
   return { port, health, pid: child.pid };
@@ -133,7 +112,7 @@ try {
 
   console.log('\n1. a board configured the way the operator\'s is');
 
-  const board = await startCanvas(BOARD_ENV);
+  const board = await canvasWith(BOARD_ENV);
   check('it answers /health', board.health !== null);
   check('and it is the board rather than a stand-in',
     board.health?.workspaces === 'configured' && board.health?.terminal === true
@@ -207,7 +186,7 @@ try {
 
   console.log('\n6. off loopback the route is refused');
 
-  const open = await startCanvas(BOARD_ENV, '0.0.0.0');
+  const open = await canvasWith(BOARD_ENV, '0.0.0.0');
   check('the open-bound server is up', open.health !== null);
   let refusedStatus = 0;
   let refusedBody = null;

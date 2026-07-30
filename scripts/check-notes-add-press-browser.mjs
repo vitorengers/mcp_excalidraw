@@ -45,6 +45,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -231,12 +232,9 @@ let serverLog = '';
  * - `LOG_FILE_PATH` is the operator's real log, which a throwaway server has no business in.
  */
 function startServer(port, registry, extra = {}) {
-  const env = { ...process.env };
-  for (const name of [
-    'EXCALIDRAW_TERMINAL', 'EXCALIDRAW_LIBRARY', 'EXCALIDRAW_DOCS_DIR',
-    'EXCALIDRAW_IMPLEMENT_AGENT', 'EXCALIDRAW_IMPLEMENT_AGENT_WSL',
-    'EXCALIDRAW_ISSUE_AGENT', 'EXCALIDRAW_ISSUE_AGENT_WSL',
-  ]) delete env[name];
+  // The list this used to delete by hand is now the whole of `EXCALIDRAW_*`, stripped by
+  // `scripts/lib/spawn-canvas.mjs` before any of the values below arrive.
+  const env = {};
   Object.assign(env, {
     PORT: String(port),
     HOST: '127.0.0.1',
@@ -246,11 +244,9 @@ function startServer(port, registry, extra = {}) {
     EXCALIDRAW_GH_COMMAND: `node "${stubPath.replace(/\\/g, '/')}"`,
     STUB_GH_FIXTURE: fixturePath,
   }, extra);
-  const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-    cwd: repoRoot,
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const server = startCanvas({
+    env: env,
+  }).child;
   children.push(server);
   server.stdout.on('data', (chunk) => { serverLog += chunk; });
   server.stderr.on('data', (chunk) => { serverLog += chunk; });

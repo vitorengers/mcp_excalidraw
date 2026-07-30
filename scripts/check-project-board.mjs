@@ -15,13 +15,13 @@
  * Usage: node scripts/check-project-board.mjs
  */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -274,15 +274,12 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 
 function startCanvas(port, host) {
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  const child = spawnCanvas({
+    port,
     env: {
-      ...process.env,
-      PORT: String(port),
       HOST: host,
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
@@ -290,8 +287,7 @@ function startCanvas(port, host) {
       STUB_GH_FIXTURE: fixturePath,
       STUB_GH_LOG: logPath,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk) => { output += chunk.toString(); });

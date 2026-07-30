@@ -28,7 +28,6 @@
  * Usage: node scripts/check-terminal-tabs.mjs
  */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -36,6 +35,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -102,19 +102,15 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const running = [];
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
+  port: PORT,
   env: {
-    ...process.env,
-    PORT: String(PORT),
-    HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_TERMINAL: stubCommand,
     EXCALIDRAW_TERMINAL_PTY: '0',
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 running.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk.toString(); });
 server.stderr.on('data', (chunk) => { serverLog += chunk.toString(); });

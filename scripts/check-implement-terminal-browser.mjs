@@ -35,6 +35,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -148,7 +149,6 @@ const children = [];
 
 let serverLog = '';
 const serverEnv = {
-  ...process.env,
   PORT: String(PORT),
   HOST: '127.0.0.1',
   LOG_LEVEL: 'error',
@@ -159,11 +159,10 @@ const serverEnv = {
   EXCALIDRAW_TERMINAL: `node -e "setInterval(()=>{},1000)"`,
   EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}" -p`,
 };
-delete serverEnv.EXCALIDRAW_TERMINAL_PTY;
 
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot, env: serverEnv, stdio: ['ignore', 'pipe', 'pipe'],
-});
+const server = startCanvas({
+  env: serverEnv,
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });

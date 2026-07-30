@@ -41,6 +41,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -185,7 +186,6 @@ const QUEUE_MS = 1500;
 
 let serverLog = '';
 const serverEnv = {
-  ...process.env,
   PORT: String(PORT),
   HOST: '127.0.0.1',
   LOG_LEVEL: 'error',
@@ -199,14 +199,12 @@ const serverEnv = {
   STUB_GH_FIXTURE: fixturePath,
 };
 // A terminal block's xterm panel is a DOM overlay over the mirror, and clicks aimed at the
-// toggle land on it instead. This board needs no terminal, so it gets none.
-delete serverEnv.EXCALIDRAW_TERMINAL;
+// toggle land on it instead. This board needs no terminal, and gets none: nothing this
+// machine exports reaches the child.
 
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
   env: serverEnv,
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });

@@ -28,13 +28,13 @@
  * Usage: node scripts/check-issue-cache.mjs
  */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -182,12 +182,9 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const MEMO_MS = 4000;
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
+  port: PORT,
   env: {
-    ...process.env,
-    PORT: String(PORT),
-    HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
@@ -196,8 +193,7 @@ const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
     STUB_GH_VERSION: versionPath,
     STUB_GH_SLEEP_MS: '250',
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });
 

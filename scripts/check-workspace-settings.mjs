@@ -34,13 +34,13 @@
  * Usage: node scripts/check-workspace-settings.mjs
  */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -153,12 +153,10 @@ const IMPLEMENT_COMMAND = `node "${stub}" -p --output-format stream-json`;
 const PLAIN_ISSUE_ARGV = ['--as-issue', '--output-format', 'stream-json'];
 const PLAIN_IMPLEMENT_ARGV = ['-p', '--output-format', 'stream-json'];
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 
 function startCanvas(port, { host = '127.0.0.1', implement = true, issue = true } = {}) {
   const env = {
-    ...process.env,
     PORT: String(port),
     HOST: host,
     LOG_LEVEL: 'error',
@@ -168,14 +166,15 @@ function startCanvas(port, { host = '127.0.0.1', implement = true, issue = true 
     EXCALIDRAW_ISSUE_AGENT_TIMEOUT: '900',
     EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT: '900',
   };
+  // Left unset rather than deleted: the environment starts with no `EXCALIDRAW_*` in it at
+  // all, so "not granted" is simply "never named". Deleting was what the operator's `.env`
+  // used to undo, handing this server a real agent for the case that asserts it has none.
   if (issue) env.EXCALIDRAW_ISSUE_AGENT = ISSUE_COMMAND;
-  else delete env.EXCALIDRAW_ISSUE_AGENT;
   if (implement) env.EXCALIDRAW_IMPLEMENT_AGENT = IMPLEMENT_COMMAND;
-  else delete env.EXCALIDRAW_IMPLEMENT_AGENT;
 
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot, env, stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const child = spawnCanvas({
+    env: env,
+  }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk) => { output += chunk.toString(); });

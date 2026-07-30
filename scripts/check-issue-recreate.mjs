@@ -38,13 +38,13 @@
  * Usage: node scripts/check-issue-recreate.mjs
  */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -309,7 +309,6 @@ const running = [];
 
 function startCanvas(thisPort, host, { agent = true } = {}) {
   const env = {
-    ...process.env,
     PORT: String(thisPort),
     HOST: host,
     LOG_LEVEL: 'error',
@@ -322,12 +321,13 @@ function startCanvas(thisPort, host, { agent = true } = {}) {
     STUB_AGENT_PROMPTS: promptDir,
     STUB_AGENT_HOLD: holdFlag,
   };
+  // Nothing to delete in the other case: the child's environment starts with no
+  // `EXCALIDRAW_*` in it at all, so "not granted" is "never named".
   if (agent) env.EXCALIDRAW_ISSUE_AGENT = `node "${agentStub.replace(/\\/g, '/')}"`;
-  else delete env.EXCALIDRAW_ISSUE_AGENT;
 
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot, env, stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const child = spawnCanvas({
+    env: env,
+  }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk) => { output += chunk.toString(); });

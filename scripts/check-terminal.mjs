@@ -32,6 +32,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const isWindows = process.platform === 'win32';
@@ -162,22 +163,17 @@ setInterval(() => { try { appendFileSync(${JSON.stringify(tickFile.replace(/\\/g
 
 // ─── Servers ──────────────────────────────────────────────────
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 
 function startCanvas(port, env = {}) {
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  const child = spawnCanvas({
+    port,
     env: {
-      ...process.env,
-      PORT: String(port),
-      HOST: '127.0.0.1',
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
       ...env,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   let log = '';
   child.stdout.on('data', (chunk) => { log += chunk.toString(); });
   child.stderr.on('data', (chunk) => { log += chunk.toString(); });

@@ -27,13 +27,13 @@
  * Usage: node scripts/check-issue-todo-column.mjs
  */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -256,12 +256,9 @@ let child = null;
 let serverOutput = '';
 
 function startCanvas() {
-  child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  child = spawnCanvas({
+    port,
     env: {
-      ...process.env,
-      PORT: String(port),
-      HOST: '127.0.0.1',
       // Warnings reach stderr, and one of the cases is about a warning being all that
       // happens. Nothing quieter than this would let it be read.
       LOG_LEVEL: 'warn',
@@ -272,8 +269,7 @@ function startCanvas() {
       STUB_GH_CONTROL: controlPath,
       STUB_GH_LOG: logPath,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   child.stdout.on('data', (chunk) => { serverOutput += chunk.toString(); });
   child.stderr.on('data', (chunk) => { serverOutput += chunk.toString(); });
 }

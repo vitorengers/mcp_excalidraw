@@ -57,6 +57,7 @@ import { inflateSync } from 'node:zlib';
 import WebSocket from 'ws';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -250,25 +251,21 @@ const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 
-// The terminal block is deleted out of the child's environment on purpose: this machine's
-// shell exports EXCALIDRAW_TERMINAL=1, and a terminal block would put an extra shape into
-// the scene bounds every fit here is measured against, and a DOM overlay over the canvas.
+// Nothing this machine exports reaches the child: `scripts/lib/spawn-canvas.mjs` strips every
+// `EXCALIDRAW_*` before the check's own values go in, so there is no terminal block over the
+// board — and no other inherited setting — unless this check asks for it.
 const serverEnv = {
-  ...process.env,
   PORT: String(PORT),
   HOST: '127.0.0.1',
   LOG_LEVEL: 'error',
   EXCALIDRAW_WORKSPACES: registryPath,
   EXCALIDRAW_BOARD_STATE: join(workDir, 'board-state'),
 };
-delete serverEnv.EXCALIDRAW_TERMINAL;
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
   env: serverEnv,
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });

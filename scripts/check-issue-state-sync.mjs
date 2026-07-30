@@ -30,15 +30,13 @@
  * Usage: node scripts/check-issue-state-sync.mjs
  */
 
-import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
-
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 let failures = 0;
 const check = (name, condition, detail = '') => {
@@ -99,17 +97,15 @@ const WS = 'state-check';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
+  port: PORT,
   env: {
-    ...process.env,
-    PORT: String(PORT), HOST: '127.0.0.1', LOG_LEVEL: 'error',
+    LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_GH_COMMAND: `node "${stubGhPath.replace(/\\/g, '/')}"`,
     EXCALIDRAW_ISSUE_AGENT: `node "${stubAgentPath.replace(/\\/g, '/')}"`,
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });
 

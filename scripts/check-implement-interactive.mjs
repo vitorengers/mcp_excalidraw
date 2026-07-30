@@ -35,8 +35,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
 import { freePort } from './lib/free-port.mjs';
-
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 let failures = 0;
 
@@ -177,14 +176,12 @@ writeFileSync(registryPath, JSON.stringify({
   ],
 }), 'utf8');
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 const stubPath = agentStub.replace(/\\/g, '/');
 const shellCommand = `node "${shellStub.replace(/\\/g, '/')}"`;
 
 function startCanvas(port, agentCommand) {
   const env = {
-    ...process.env,
     PORT: String(port),
     HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
@@ -192,15 +189,12 @@ function startCanvas(port, agentCommand) {
     EXCALIDRAW_IMPLEMENT_AGENT: agentCommand,
     EXCALIDRAW_TERMINAL: shellCommand,
   };
-  // The PTY is the thing under test, so a machine that exports the override must not be
-  // allowed to answer the question for this check.
-  delete env.EXCALIDRAW_TERMINAL_PTY;
+  // The PTY is the thing under test, and a machine that exports the override must not be
+  // allowed to answer the question for this check — which is why nothing here inherits it.
 
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const child = spawnCanvas({
+    env: env,
+  }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk) => { output += chunk.toString(); });

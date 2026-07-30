@@ -32,6 +32,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -167,15 +168,12 @@ writeFileSync(registryPath, JSON.stringify({
   workspaces: [{ id: 'comments', path: projectDir.replace(/\\/g, '/') }],
 }), 'utf8');
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 
 function startCanvas(port, host) {
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  const child = spawnCanvas({
+    port,
     env: {
-      ...process.env,
-      PORT: String(port),
       HOST: host,
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
@@ -185,8 +183,7 @@ function startCanvas(port, host) {
       STUB_GH_COMMENTS: commentsPath,
       STUB_GH_FAIL_FLAG: failFlag,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk) => { output += chunk.toString(); });

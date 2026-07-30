@@ -43,6 +43,7 @@ import { inflateSync } from 'node:zlib';
 import WebSocket from 'ws';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -321,7 +322,6 @@ const children = [];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const serverEnv = {
-  ...process.env,
   PORT: String(PORT),
   HOST: '127.0.0.1',
   LOG_LEVEL: 'error',
@@ -331,16 +331,14 @@ const serverEnv = {
   // The `+` drops a block *from the library*, so without one every click is a silent no-op.
   EXCALIDRAW_LIBRARY: join(repoRoot, 'docs', 'blocks.excalidrawlib'),
 };
-// Inherited from whoever runs this. With the terminal on, its xterm panel is a DOM overlay
-// over the mirror and every click aimed at the `+` lands on it instead.
-delete serverEnv.EXCALIDRAW_TERMINAL;
+// Nothing this machine exports reaches the child: `scripts/lib/spawn-canvas.mjs` strips every
+// `EXCALIDRAW_*` before the check's own values go in, so there is no terminal block over the
+// board — and no other inherited setting — unless this check asks for it.
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
   env: serverEnv,
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });

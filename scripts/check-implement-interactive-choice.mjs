@@ -39,6 +39,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
 import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -193,7 +194,6 @@ writeFileSync(registryPath, JSON.stringify({
   ],
 }), 'utf8');
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 const stubPath = agentStub.replace(/\\/g, '/');
 const shellCommand = `node "${shellStub.replace(/\\/g, '/')}"`;
@@ -204,7 +204,6 @@ const AGENT_COMMAND = `node "${stubPath}" -p --output-format stream-json --verbo
 
 function startCanvas(port, extraEnv) {
   const env = {
-    ...process.env,
     PORT: String(port),
     HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
@@ -213,18 +212,13 @@ function startCanvas(port, extraEnv) {
     EXCALIDRAW_TERMINAL: shellCommand,
     ...extraEnv,
   };
-  // The PTY is what an interactive run rests on, so a machine that exports the override must
-  // not be allowed to answer the question for this check.
-  delete env.EXCALIDRAW_TERMINAL_PTY;
-  for (const [name, value] of Object.entries(extraEnv ?? {})) {
-    if (value === undefined) delete env[name];
-  }
+  // The PTY is what an interactive run rests on, and a machine that exports the override must
+  // not be allowed to answer the question for this check — which is why nothing here inherits
+  // it, and why a value of `undefined` above leaves it unset rather than setting the string.
 
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const child = spawnCanvas({
+    env: env,
+  }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk) => { output += chunk.toString(); });
