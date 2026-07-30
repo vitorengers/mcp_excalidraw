@@ -23,6 +23,15 @@ export interface AnchoredDocsPanelProps extends DocsPanelBodyProps {
   anchor: Rect | null
   /** The canvas area, which is what the card must stay inside. */
   viewport: Size
+  /**
+   * The other overlays on screen, in the same coordinates — the terminal panels.
+   *
+   * They share this card's layer and are drawn after it, so where both want the same
+   * pixels the card is covered rather than covering (#241). Placement takes them as
+   * obstacles; the card is not moved for a block that has no session open, because such a
+   * block draws no panel.
+   */
+  obstacles?: Rect[]
   /** True while the shape is being dragged, resized or rotated. */
   suppressed: boolean
   onClose: () => void
@@ -44,7 +53,7 @@ export interface AnchoredDocsPanelProps extends DocsPanelBodyProps {
  * the reader's scroll position and refetch the document every time the block is nudged.
  */
 export const AnchoredDocsPanel: React.FC<AnchoredDocsPanelProps> = ({
-  anchor, viewport, suppressed, onClose, ...body
+  anchor, viewport, obstacles, suppressed, onClose, ...body
 }) => {
   // The anchor says *where* a card would go; it must not also decide *whether* there is
   // one. Letting it decide left an empty card with a close button on screen after the
@@ -53,7 +62,7 @@ export const AnchoredDocsPanel: React.FC<AnchoredDocsPanelProps> = ({
   if (!anchor || !hasSomethingToShow) return null
 
   const height = cardHeightFor(viewport, MAX_CARD_HEIGHT)
-  const placement = placeCard(anchor, { width: CARD_WIDTH, height }, viewport)
+  const placement = placeCard(anchor, { width: CARD_WIDTH, height }, viewport, { obstacles })
 
   return (
     <div
