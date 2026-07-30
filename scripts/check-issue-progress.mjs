@@ -37,6 +37,8 @@
  * Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-issue-progress.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

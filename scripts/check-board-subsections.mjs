@@ -27,6 +27,8 @@
  * Offline. Run `./node_modules/.bin/tsc` first — the resolver is a compiled module.
  *
  * Usage: node scripts/check-board-subsections.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, readFileSync } from 'node:fs';

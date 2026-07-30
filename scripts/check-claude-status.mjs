@@ -39,6 +39,8 @@
  * `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-claude-status.mjs
+ *
+ * Tier: fast
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';

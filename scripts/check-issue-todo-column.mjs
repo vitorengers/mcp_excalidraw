@@ -25,6 +25,8 @@
  * real coding agent, and nothing needs a browser. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-issue-todo-column.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

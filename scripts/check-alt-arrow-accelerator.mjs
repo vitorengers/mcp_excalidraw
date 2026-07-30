@@ -32,6 +32,8 @@
  * reason; it is run by hand, on Windows, when the chord is in question.
  *
  * Usage: node scripts/check-alt-arrow-accelerator.mjs [--chrome <path>] [--keep]
+ *
+ * Tier: windows
  */
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -40,6 +42,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import WebSocket from 'ws';
+import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
 import { freePort } from './lib/free-port.mjs';
 
@@ -48,22 +51,8 @@ const argOf = (name) => {
   return index >= 0 ? process.argv[index + 1] : null;
 };
 
-function findChrome() {
-  const named = argOf('--chrome');
-  if (named) return existsSync(named) ? named : null;
-  return [
-    process.env.CHROME_PATH,
-    'C:/Program Files/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-  ].find((path) => path && existsSync(path)) ?? null;
-}
-
 const chromePath = findChrome();
-if (!chromePath) {
-  console.log('SKIPPED — no Chrome or Edge found. Pass --chrome <path> or set CHROME_PATH.');
-  process.exit(0);
-}
+if (!chromePath) skipWithoutChrome({ what: 'nothing was measured.' });
 if (process.platform !== 'win32') {
   console.log('SKIPPED — the accelerator being asked about is the Windows one.');
   process.exit(0);

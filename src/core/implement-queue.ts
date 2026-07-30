@@ -63,6 +63,14 @@ export type QueuePassReason =
   | 'no-column'
   /** The workspace is gone, unusable, or has no GitHub project on it. */
   | 'no-project'
+  /**
+   * Every card it could otherwise have started is waiting on an issue still open.
+   *
+   * Not a stall, for the same reason `nothing-startable` is not: a card waiting on its
+   * foundation is the rule working. The detail names who is waiting on what, because a
+   * queue that quietly starts nothing is the whole of #263.
+   */
+  | 'blocked'
   /** The board read failed — `gh` unresolvable, an expired login, a GitHub outage. */
   | 'unreadable';
 
@@ -87,7 +95,7 @@ const passes = new Map<string, QueuePass>();
 
 /** Whether a reason means the queue wanted to start something and could not. */
 export function reasonStalls(reason: QueuePassReason): boolean {
-  return reason !== 'started' && reason !== 'nothing-startable';
+  return reason !== 'started' && reason !== 'nothing-startable' && reason !== 'blocked';
 }
 
 export function recordQueuePass(
@@ -132,12 +140,59 @@ export function queuedWorkspaces(): string[] {
  * What is *not* filtered here is whether a run already happened: that is the implement
  * registry's answer rather than the board's, and it is the caller's to ask, one card at a
  * time, so the count it is working against stays live while it starts them.
+ *
+ * `blocked` is the fifth kind, and it arrives as an argument rather than being worked out
+ * here on purpose. Whether a card's foundation has landed is a fact about issue bodies and
+ * their open state — a `gh` read — and this module's whole shape is that choosing the next
+ * issue is pure and instant. The caller resolves it; `dependenciesOf` below is the half that
+ * can be reasoned about without a network.
  */
-export function startableCards(cards: readonly BoardCard[]): BoardCard[] {
+export function startableCards(
+  cards: readonly BoardCard[],
+  blocked?: ReadonlySet<number>
+): BoardCard[] {
   return cards
     .filter((card) => card.contentType === 'Issue'
       && Boolean(card.url)
       && card.state !== 'CLOSED'
-      && card.draggable !== false)
+      && card.draggable !== false
+      && !(blocked && card.number !== null && blocked.has(card.number)))
     .sort(oldestFirst);
+}
+
+/** Fenced code, which is somebody showing a declaration rather than making one. */
+const FENCED = /^```[\s\S]*?^```/gm;
+
+/**
+ * A line that says nothing else: `Depends on #306.` or `Depends on #271, #272.`
+ *
+ * Anchored to the start of a line with **no leading whitespace**, and the line must contain
+ * nothing but the declaration. That narrowness is the point. This is read off issue bodies
+ * nobody wrote for a parser, and the two ways to be wrong are not symmetric: matching too
+ * eagerly — a `#306` in a sentence, a link, an example — silently freezes the queue on a
+ * dependency the author never declared, and there is nothing on the board that would say so.
+ * Matching too little only leaves today's behaviour. So prose loses.
+ */
+const DECLARATION = /^depends on ((?:#\d+\s*,\s*)*#\d+)\s*\.?[ \t]*$/gim;
+
+/**
+ * The issue numbers a body declares itself built on, in the order it names them.
+ *
+ * A number repeated is one dependency. A body that declares nothing yields nothing, which is
+ * the overwhelmingly common case and must cost nothing.
+ */
+export function dependenciesOf(body: string): number[] {
+  if (!body) return [];
+  const prose = body.replace(FENCED, '');
+  const found: number[] = [];
+  const seen = new Set<number>();
+  for (const match of prose.matchAll(DECLARATION)) {
+    for (const token of (match[1] ?? '').split(',')) {
+      const number = Number(token.trim().slice(1));
+      if (!Number.isInteger(number) || seen.has(number)) continue;
+      seen.add(number);
+      found.push(number);
+    }
+  }
+  return found;
 }

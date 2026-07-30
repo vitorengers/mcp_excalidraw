@@ -28,6 +28,8 @@
  * first — it runs `dist/server.js`.
  *
  * Usage: node scripts/check-issue-state-sync.mjs
+ *
+ * Tier: fast
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';

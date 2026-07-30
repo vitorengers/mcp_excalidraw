@@ -1,5 +1,19 @@
 #!/usr/bin/env node
-
+/**
+ * Checks where the canvas server binds, and what a second one on the same port does.
+ *
+ * Three properties: the default bind is IPv4 loopback and nothing else, a duplicate start on
+ * a port already held exits rather than sitting there, and `HOST=::` — which would publish
+ * the board on every interface — is refused.
+ *
+ * It picks a free high port of its own unless `PORT` is set, in which case it takes that one
+ * — so in a shell that exports `PORT=3737` it collides with a running board and fails on the
+ * port rather than on the property. Run `./node_modules/.bin/tsc` first.
+ *
+ * Usage: node scripts/check-local-bind.mjs
+ *
+ * Tier: fast
+ */
 import { spawn } from 'node:child_process';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

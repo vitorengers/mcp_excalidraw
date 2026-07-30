@@ -31,6 +31,8 @@
  * Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-terminal-pty.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';

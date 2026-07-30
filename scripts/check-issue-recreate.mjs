@@ -36,6 +36,8 @@
  * a real coding agent. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-issue-recreate.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

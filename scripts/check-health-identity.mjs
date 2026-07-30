@@ -23,6 +23,8 @@
  * board, to GitHub or to the network. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-health-identity.mjs
+ *
+ * Tier: fast
  */
 
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';

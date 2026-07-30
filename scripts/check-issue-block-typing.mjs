@@ -21,6 +21,8 @@
  * workspace, and kills it. Run `./node_modules/.bin/tsc` first — it runs `dist/server.js`.
  *
  * Usage: node scripts/check-issue-block-typing.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';

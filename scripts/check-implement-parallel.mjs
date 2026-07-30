@@ -19,6 +19,8 @@
  * them. Nothing here talks to GitHub. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-implement-parallel.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn, spawnSync } from 'node:child_process';

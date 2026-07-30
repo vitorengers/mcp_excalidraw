@@ -10,6 +10,8 @@
  * Offline. Run `./node_modules/.bin/tsc` first — this reads the compiled module.
  *
  * Usage: node scripts/check-panel-target.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync } from 'node:fs';

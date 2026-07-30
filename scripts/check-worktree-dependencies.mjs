@@ -14,6 +14,8 @@
  * links pass this; a junction does not.
  *
  * Usage: node scripts/check-worktree-dependencies.mjs
+ *
+ * Tier: fast
  */
 
 import { spawnSync } from 'node:child_process';

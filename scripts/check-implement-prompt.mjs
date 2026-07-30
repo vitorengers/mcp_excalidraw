@@ -18,6 +18,8 @@
  * builds the prompt differently is covered too.
  *
  * Usage: node scripts/check-implement-prompt.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

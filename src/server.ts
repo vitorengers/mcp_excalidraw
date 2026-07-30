@@ -65,6 +65,7 @@ import {
   lastQueuePass,
   QueuePass,
   QueuePassReason,
+  dependenciesOf,
   queueEnabled,
   queuedWorkspaces,
   recordQueuePass,
@@ -2551,7 +2552,58 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
       return;
     }
 
-    for (const card of startableCards(column.cards)) {
+    // Which cards are waiting on an issue that has not closed.
+    //
+    // Resolved here rather than inside `startableCards`, which stays pure and instant: this
+    // costs a `gh` read per card inspected. So it walks the column in the order the queue
+    // would take it and stops as soon as it has found enough startable cards to fill every
+    // free slot — on a healthy board that is the first one or two, and the reads are behind
+    // the same memo an issue block uses.
+    const onBoard = new Map<number, string | null>();
+    for (const section of board.sections) {
+      for (const boardCard of section.cards) {
+        if (boardCard.number !== null) onBoard.set(boardCard.number, boardCard.state);
+      }
+    }
+    const free = IMPLEMENT_CONCURRENCY <= 0
+      ? column.cards.length
+      : Math.max(0, IMPLEMENT_CONCURRENCY - runningImplements(workspaceId).length);
+    const blocked = new Set<number>();
+    const waiting: string[] = [];
+    let clear = 0;
+    for (const candidate of startableCards(column.cards)) {
+      if (clear >= free) break;
+      if (candidate.number === null) { clear++; continue; }
+      let unmet: number[] = [];
+      try {
+        const detail = await issueMemo.read(
+          workspaceId,
+          candidate.url as string,
+          () => fetchIssue(workspace, candidate.url as string)
+        );
+        unmet = dependenciesOf(detail.body).filter((number) => {
+          const state = onBoard.get(number);
+          // A dependency this board has never heard of cannot be resolved, and a declaration
+          // nothing can answer must not be what stops a queue: it starts.
+          return state !== undefined && state !== 'CLOSED';
+        });
+      } catch (error) {
+        // The body is an optimisation, not a gate. A read that fails leaves the card exactly
+        // as startable as it was before this existed.
+        logger.warn(`Queue: could not read ${candidate.url} for its dependencies: ${(error as Error).message}`);
+      }
+      if (unmet.length === 0) { clear++; continue; }
+      blocked.add(candidate.number);
+      waiting.push(`#${candidate.number} waits on ${unmet.map((n) => `#${n}`).join(', ')}`);
+    }
+    if (blocked.size > 0) {
+      outcome = {
+        reason: 'blocked',
+        detail: `Waiting on work that has not landed: ${waiting.join('; ')}.`
+      };
+    }
+
+    for (const card of startableCards(column.cards, blocked)) {
       // Re-read on every iteration rather than counted once: the queue is not the only thing
       // that can take a slot, and turning it off has to stop the pass it is in the middle of.
       if (!queueEnabled(workspaceId)) return;

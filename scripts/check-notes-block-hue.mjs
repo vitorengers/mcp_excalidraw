@@ -32,6 +32,8 @@
  * halves read the compiled modules and the browser half loads the built frontend.
  *
  * Usage: node scripts/check-notes-block-hue.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';
@@ -41,6 +43,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { inflateSync } from 'node:zlib';
 import WebSocket from 'ws';
+import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas } from './lib/spawn-canvas.mjs';
@@ -247,29 +250,16 @@ if (seed?.parseBoardScene) {
 
 // ─── 4. On a real board, in a real browser ────────────────────
 
-/** Chrome, wherever this machine keeps it. Edge speaks the same protocol. */
-function findChrome() {
-  const named = argOf('--chrome');
-  if (named) return existsSync(named) ? named : null;
-  return [
-    process.env.CHROME_PATH,
-    'C:/Program Files/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium',
-  ].find((path) => path && existsSync(path)) ?? null;
-}
-
 const chromePath = findChrome();
 const frontend = join(repoRoot, 'dist', 'frontend', 'index.html');
 
-if (!chromePath || !existsSync(frontend)) {
-  console.log('\n4. SKIPPED — ' + (chromePath
-    ? 'dist/frontend/index.html not found, so the browser half was not run'
-    : 'no Chrome or Edge found, so the browser half was not run'));
-  if (!chromePath) console.log('        Pass --chrome <path> or set CHROME_PATH to run it.');
+// A missing browser and a missing `dist/frontend` are answered separately since #273: the
+// first is the shared probe's, and exit 3 under --strict is what makes it countable.
+if (!chromePath) {
+  skipWithoutChrome({ lead: '\n4. ', failures, after: () => console.log('\nall offline cases passed') });
+}
+if (!existsSync(frontend)) {
+  console.log('\n4. SKIPPED — dist/frontend/index.html not found, so the browser half was not run');
   if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
   console.log('\nall offline cases passed');
   process.exit(0);

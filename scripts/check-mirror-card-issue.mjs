@@ -17,6 +17,8 @@
  * Run `./node_modules/.bin/tsc` first — the offline half reads the compiled modules.
  *
  * Usage: node scripts/check-mirror-card-issue.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';

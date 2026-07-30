@@ -35,6 +35,8 @@
  * only in the source is a fix this cannot see.
  *
  * Usage: node scripts/check-agent-transcript-fold.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';
@@ -43,6 +45,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
+import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas } from './lib/spawn-canvas.mjs';
@@ -317,20 +320,6 @@ check('a session whose command does not stream is byte for byte what it was',
 
 // ─── The browser ──────────────────────────────────────────────
 
-function findChrome() {
-  const named = argOf('--chrome');
-  if (named) return existsSync(named) ? named : null;
-  return [
-    process.env.CHROME_PATH,
-    'C:/Program Files/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium',
-  ].find((path) => path && existsSync(path)) ?? null;
-}
-
 const chromePath = findChrome();
 const frontend = join(repoRoot, 'dist', 'frontend', 'index.html');
 if (!existsSync(frontend)) {
@@ -340,10 +329,13 @@ if (!existsSync(frontend)) {
 }
 
 if (!chromePath) {
-  console.log('\nSKIPPED — no Chrome or Edge found, so the browser half was not run.');
-  console.log('        Pass --chrome <path> or set CHROME_PATH to run it.');
-  try { rmSync(workDir, { recursive: true, force: true }); } catch { /* Windows holds handles */ }
-  process.exit(failures === 0 ? 0 : 1);
+  skipWithoutChrome({
+    lead: '\n',
+    failures,
+    before: () => {
+      try { rmSync(workDir, { recursive: true, force: true }); } catch { /* Windows holds handles */ }
+    },
+  });
 }
 
 const projectDir = join(workDir, 'fold-project');

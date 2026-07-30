@@ -26,6 +26,8 @@
  * port and kills it. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-terminal-tabs.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';

@@ -25,6 +25,8 @@
  *      bug with a field added.
  *
  * Usage: node scripts/check-workspace-language.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

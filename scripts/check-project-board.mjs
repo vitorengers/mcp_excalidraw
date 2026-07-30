@@ -13,6 +13,8 @@
  * Run `./node_modules/.bin/tsc` first — the offline half reads the compiled modules.
  *
  * Usage: node scripts/check-project-board.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

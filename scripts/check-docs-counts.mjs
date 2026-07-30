@@ -22,6 +22,8 @@
  * Offline and self-contained; it reads sources, not a running server.
  *
  * Usage: node scripts/check-docs-counts.mjs
+ *
+ * Tier: fast
  */
 
 import { execFileSync } from 'node:child_process';

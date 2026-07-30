@@ -18,6 +18,8 @@
  * Run `./node_modules/.bin/tsc` first — this reads the compiled modules.
  *
  * Usage: node scripts/check-issue-images.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

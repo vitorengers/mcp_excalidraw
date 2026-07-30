@@ -26,6 +26,8 @@
  * first — it reads the compiled modules.
  *
  * Usage: node scripts/check-issue-cache.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

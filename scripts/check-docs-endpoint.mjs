@@ -9,6 +9,8 @@
  * Usage: node scripts/check-docs-endpoint.mjs [--url http://127.0.0.1:3000]
  * Expects the server to run with EXCALIDRAW_DOCS_DIR pointing at a directory that
  * contains sample-doc.md.
+ *
+ * Tier: fast
  */
 
 const urlArg = process.argv.indexOf('--url');
