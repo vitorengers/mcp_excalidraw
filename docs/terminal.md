@@ -687,11 +687,34 @@ gives.
 
 ## Closing takes the tree
 
-`DELETE` kills the process — on Windows through `taskkill /T`, because killing the shell alone
-leaves the command running inside it. A session closed while something was running would
-otherwise leave that something behind with nothing left to stop it, which is the constraint
+`DELETE` kills the process, and the tree under it, because killing the shell alone leaves the
+command running inside it. A session closed while something was running would otherwise leave
+that something behind with nothing left to stop it, which is the constraint
 `docs/issue-block.md` already records about a reset: nothing here can reach into a process the
 server no longer owns.
+
+**How the tree is reached is the platform's answer.** Windows has `taskkill /PID … /T /F`, which
+walks the parent links; it is the first thing `close()` tries and the end of it when it works.
+POSIX has no such walk and does not need one — a piped shell is spawned `detached`, so it leads
+a **process group** of its own, and the close signals the group: `SIGTERM` first, so a
+`npm run build` can remove its half-written output and a dev server can release its port, then
+`SIGKILL` after a short grace for whatever did not take the hint. The grace is scheduled rather
+than waited through, because `close()` is called from a route and from the process's own `exit`
+handler and both are synchronous; a close on the way out of the server therefore sends the
+polite signal only, which is what a shutdown should be sending anyway. Where the group signal
+finds nothing — no group, or a platform that has none — the close falls back to the single-pid
+kill it always did.
+
+Without the group there was nothing to aim at: the child sat in the *server's* own group, and
+that is not a group anything may be signalled. So on macOS and Linux, closing a tab running a
+build, a dev server or a `claude` run used to leave the command orphaned and still holding its
+port, while the same close on Windows took the tree down. Pipes are not the exotic case here —
+a session opened with a prompt on stdin drops the PTY binding deliberately, which is every
+non-interactive agent run, and a machine with no prebuilt binding gets pipes for everything.
+
+The pseudoterminal path is left on the binding's own `kill()`. Closing a pty master already
+hangs up the foreground process group, so a second group kill there would be answering a
+question that has an answer, on a path with no measurement behind it.
 
 Every session is closed when the server goes down, and with a PTY that promise needs help. A
 piped shell kept it by itself — its stdin was the server's, and a closed pipe is an EOF it exits
@@ -1853,6 +1876,17 @@ it. A board returned to puts its block back where it was left.
   `process.platform` before importing the module, because this repository is maintained on a
   box that reports `win32` and a check that asked the real platform would pass without ever
   reaching the branch it is about.
+- `scripts/check-terminal-tree-kill.mjs` — that closing a piped session takes the tree, not just
+  the shell: a session whose shell has started a grandchild is closed and the grandchild has to
+  be gone, found by the port it listens on rather than by a pid nobody holds a handle to. The
+  prompt on stdin and the end of file that follows it are asserted beside it, because a group of
+  one's own is a new session on POSIX and detaching is the kind of change that quietly costs a
+  child its stdin. What each platform can honestly answer is split: the group kill is what the
+  first section runs on macOS and Linux and `taskkill /T` is what it runs on Windows, the
+  ordering of the Windows branch is asserted on a POSIX box with a stand-in for `taskkill` on
+  `PATH` — Node will not run a `.cmd` without a shell, so one cannot be installed on Windows —
+  and the fallback for a machine with no process groups is asserted on Windows, where a negative
+  pid always throws.
 - `scripts/check-child-session-env.mjs` — that `CLAUDE_CODE_CHILD_SESSION` is not passed on,
   on the PTY path, the pipe path and the agent path, and that a sentinel variable beside it
   still arrives — the board strips one key rather than filtering the environment. It starts
