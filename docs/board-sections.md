@@ -288,6 +288,30 @@ request with no entry in the log.
 It says nothing about subsections, and that is deliberate: this board draws none. The rule is
 that both halves stay true, not that every board is cut the same depth.
 
+One of those five rules can be too thin to answer. The merge log is read with
+`git log <fork base>..HEAD`, and the fork base is not in a `--depth 1` clone — the shape
+`actions/checkout` makes unless a workflow asks for more — so there the rule prints
+`SKIPPED — shallow clone, the merge log cannot be verified here` and the other four still
+decide. A missing commit is a fact about the checkout rather than about the branch, and the CI
+job this rule exists for checks out in full. `scripts/check-shallow-clone.mjs` clones this
+repository at both depths and holds it to that.
+
+### Writing the file back
+
+The board on the canvas is not the tracked file. `scripts/export-board.mjs` is the only path
+from one to the other, and it is run by hand, against a running board:
+
+```
+node scripts/export-board.mjs --url http://127.0.0.1:3737 --workspace board-tool \
+                              --out docs/board.excalidraw
+```
+
+Both flags are required and neither has a default. They used to name the maintainer's own
+board — port and workspace — which made an argument-less run in any checkout write whatever
+answered on that port over `docs/board.excalidraw`. With a flag missing it now exits 2 and
+writes nothing. The port is whichever one the board was started on; see
+[running.md](running.md).
+
 `scripts/check-board-side-by-side-browser.mjs` holds the arrangement: that the two sections still
 share a top edge and do not overlap, that Project structure still ends before Development begins,
 that nothing was left behind on the old canvas when the section moved, and — in a real Chrome, on
