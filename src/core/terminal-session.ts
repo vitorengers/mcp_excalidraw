@@ -537,7 +537,7 @@ export class TerminalSession {
         cols: this.cols,
         rows: this.rows,
         cwd,
-        env: { ...stringEnv(env), TERM: 'xterm-256color' }
+        env: { ...stringEnv(env), TERM: 'xterm-256color', ...truecolorEnv(this.render) }
       });
       this.pty.onData((chunk) => this.emit(chunk));
       this.pty.onExit(({ exitCode }) => this.settle(exitCode ?? null));
@@ -734,6 +734,32 @@ export class TerminalSession {
     logger.info(`Terminal "${this.id}" for workspace "${this.workspaceId}" exited`, { code });
     this.hooks.onExit(code);
   }
+}
+
+/**
+ * Whether the child is told the terminal it has been given is a 24-bit one.
+ *
+ * `TERM=xterm-256color` is a name, and a name is where a program's colour decision stops:
+ * `supports-color`, which nearly every Node CLI reaches for, promotes to 24-bit only when
+ * `COLORTERM` says `truecolor` or `24bit`, and on the name alone it settles for 256. Node's own
+ * `tty.WriteStream.getColorDepth` reads the same variable. So a program that would have drawn
+ * its own brand colour drew the nearest of 256 instead, and this board then repainted *that*
+ * with whichever of its sixteen it landed nearest — a downgrade the board asked for by omission.
+ * xterm.js renders 24-bit, so there was nothing to protect. This is the same kind of statement
+ * as the `NO_COLOR` strip in `agentEnv`: the board describing the terminal it is really handing
+ * over, rather than filtering what the child may do with it. `NO_COLOR` still wins where an
+ * operator holds it, because every library reads that first.
+ *
+ * **It stops at the tab an emulator draws**, which is why the renderer is the question. A tab the
+ * board renders itself — `Implement / Fix`, `--output-format stream-json` — is drawn as a
+ * document whose colours are slot *names* resolved against the reader's palette, and a document
+ * has no answer for `38;2;r;g;b` but the default ink. Promoting that child would turn a tool's
+ * coloured output from sixteen resolvable slots into an unresolvable literal, which is colour
+ * lost rather than gained. So the tab that repaints itself gets the promotion and the tab the
+ * board composes does not.
+ */
+function truecolorEnv(render: AgentStreamRenderer | null): Record<string, string> {
+  return render ? {} : { COLORTERM: 'truecolor' };
 }
 
 /** `process.env` as the PTY binding wants it: no holes where a variable was unset. */

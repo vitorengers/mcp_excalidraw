@@ -78,6 +78,36 @@ because a rule kept for the shell and not for them is how the two drift apart.
   spends a whole section arguing about was being drawn for a program that had been told not to
   use colour at all.
 
+And one key is **added**, on the pseudoterminal path only:
+
+- **`COLORTERM=truecolor`**, because that is what the emulator on the far side of the block
+  really is. `TERM=xterm-256color` is a name, and a name is where a program's colour decision
+  stops: `supports-color` — which nearly every Node CLI reaches for — promotes to 24-bit only
+  when `COLORTERM` says `truecolor` or `24bit`, and on the name alone it settles for 256. Node's
+  own `tty.WriteStream.getColorDepth` reads the same variable. xterm.js renders 24-bit, so the
+  board was understating its own terminal and the child was downgrading for nothing. It is the
+  same kind of statement as the `NO_COLOR` strip above — the board describing what it is really
+  handing over, rather than deciding what the child may do with it — and `NO_COLOR` still wins
+  where an operator holds it, because every library reads that first.
+
+  **It stops at the tab an emulator draws.** A tab the board renders itself — `Implement / Fix`,
+  the one with `--output-format stream-json` in its command — is a *document* since #251, and a
+  document resolves colour from slot names; a `38;2;r;g;b` has no name and lands on the default
+  ink. Telling that child it has 24 bits would trade sixteen resolvable slots for one
+  unresolvable literal, so it is not told. The pipe path is not told either: there is no terminal
+  there at all.
+
+  **And what a real child does with it, measured.** Claude Code 2.1.220, launched with no
+  arguments through this board's own pty binding on 2026-07-30 with `NO_COLOR` deleted, emitted
+  the **same 48 colour sequences either way** — `[37m`, `[2m`, `[32m`, `[91m`, `[33m` and the
+  rest of the sixteen — and **not one** `38;5` or `38;2`. Its interface draws in the sixteen, so
+  on that tab this changes nothing today, and *this board's palette* is what decides what its
+  orange looks like there. Windows also answers 24-bit on its own — Node and `supports-color`
+  both special-case a modern console — so where the variable decides anything is where `TERM` is
+  all a program has: every POSIX board, and every WSL workspace on a Windows one, which
+  `buildAgentCommand` runs through `wsl.exe` into a Linux Node. It is set because it is true,
+  not because a measurement here moved.
+
 **Claude Code says so itself, in its status line**, if you ever see this again from somewhere
 else: `Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker`. That is what the
 block used to show, and a session started under it writes no transcript at all — not a
@@ -104,11 +134,12 @@ boundary and the other was not, on the same screen, which is what made an inheri
 like a defect in the terminal.
 
 Nothing else is filtered. There is no allowlist and no per-project environment facility — the
-board removes keys it has a reason to remove, and everything else the machine's environment
-carries arrives untouched. `scripts/check-child-session-env.mjs` and
-`scripts/check-no-color-env.mjs` assert both halves of that, on the PTY path, the pipe path and
-the agent path; the second also asserts the half that keeps this a correction, a board whose
-`NO_COLOR` came with no `CLAUDECODE` handing it on untouched.
+board removes keys it has a reason to remove, adds the one above where it is true, and
+everything else the machine's environment carries arrives untouched.
+`scripts/check-child-session-env.mjs` and `scripts/check-no-color-env.mjs` assert the removals,
+on the PTY path, the pipe path and the agent path; the second also asserts the half that keeps
+this a correction, a board whose `NO_COLOR` came with no `CLAUDECODE` handing it on untouched.
+`scripts/check-colorterm-env.mjs` asserts the addition, and the two places it stops.
 
 ## A PTY, where there is one
 
@@ -342,8 +373,11 @@ The rest of the vocabulary:
 
 - **the argument inside the parens** is `brightBlack`, so a column of tool calls reads as a column
   of verbs and the path steps back behind the name;
-- **the thinking marker, the result gutter, the continuation indent and the `… N more lines`
-  tail** are the same dim ink — all four are beside the point of the line they are on;
+- **the result gutter, the continuation indent and the `… N more lines` tail** are the same dim
+  ink — all three are beside the point of the line they are on;
+- **the `✻ thinking…` marker is the agent's own orange**, which is the seventeenth ink and has a
+  section of its own below. It was the dim ink until #258, on the argument that it says the run
+  is alive rather than what it is doing;
 - **the assistant's prose is plain ink**, and a line that is not a JSON envelope still passes
   through byte for byte, uncoloured;
 - **the closing line is `green` when the run finished and `red` when it reported an error.**
@@ -364,6 +398,61 @@ Code" partly means chips, and the section on the palette below records why one c
 here: on paper all sixteen slots are dark ink, so light-on-colour is unavailable to any palette
 that keeps the 3:1 floor. Ink on paper, foreground only, is also the closer reading of the
 board's own design.
+
+### The seventeenth ink, and the one view it lives in
+
+#258 asked for Claude's orange on the marker that says the agent is thinking. Orange is not one
+of the sixteen and there is no slot to borrow — `yellow` is already `mutation`, `red` is already
+`failure` — so this is the one exception to the paragraph above, and it is written down here with
+the boundary on it because an exception nobody bounded is a rule nobody keeps.
+
+**What makes it possible is that one reader stopped being an emulator.** The restriction above is
+about the composing end: the transcript is written on the *server*, which cannot know which of
+the two palettes the reader is in, so a literal colour would be one theme's hex printed into both
+cards. Since #251 a transcript the board composed is drawn as a **document**, and a document is
+handed slot *names* which `TerminalPanel.tsx` resolves to hexes at paint time — the first point in
+the chain that knows the theme. A name is exactly what a toggle can resolve twice.
+
+- **It is a name with a hex per theme**, `DOCUMENT_INKS` in `terminal-palette.ts`. Night is
+  Anthropic's brand orange `#d97757` at 5.6:1 on `#1d1912`. Paper is **not** that hex — `#d97757`
+  is 2.9:1 on `#faf6ee`, under the floor every other ink on this card was moved to clear — so the
+  light value is the same hue and saturation taken down until it clears: `#d25d37`, 3.6:1, the
+  ratio `yellow` already sits at there. One orange cannot serve both surfaces, and that is the
+  whole reason this is a named ink rather than a substitution.
+- **It cannot travel as SGR, so it does not.** It rides the fold view's private OSC as a fourth
+  mark kind beside `f`/`c`/`d`: `ESC ] 1338 ; i=agent BEL` opens a run and `i=` closes it, which
+  an emulator draws as nothing and `stripFoldMarks` already takes out. **No byte an emulator can
+  see has changed**, which is what keeps #242's rule intact rather than weakened.
+- **In an emulator the marked run is the default ink**, and that is the cost, written down rather
+  than hidden. Only a rendered transcript carries the mark and only the document draws one, so in
+  practice nothing is on that path — but a reader who opens such a command as an ordinary shell
+  gets the marker in plain ink and nothing worse.
+- **It paints the thinking line and nothing else.** The `⏺` bullets carry #242's five categories,
+  and painting them all one colour would take that information away to add this one; the closing
+  line is `green` or `red` and says whether the run worked. The ask named "the thinking and the
+  Anthropic symbol", and the `✻` on that line *is* the starburst, so the line covers both.
+- **It does not reach `Implement, and let me answer`**, and cannot: the board composes nothing
+  there. What that tab draws is measured in the environment section above — Claude Code's own
+  interface draws in the sixteen, so what its orange looks like in that tab is decided by this
+  board's palette, not by anything this section adds.
+
+`scripts/check-agent-transcript-prose-and-ink.mjs` asserts the mark and both hexes against their
+own surfaces, and `scripts/check-agent-transcript-ink-browser.mjs` reads the row's **pixels** back
+off a real Chrome in both themes.
+
+### Prose is given the room a paragraph has
+
+The same issue, and the smaller half: a `text` block was appended as `${text}\n` with nothing in
+front of it, so the one line in the transcript addressed to whoever is watching landed hard
+against the `⏺ Tool(argument)` above it and the next tool call below it. It now has a blank line
+either side. The renderer already knew that shape — the closing line has always opened with one —
+so this was an omission in one branch rather than something the transcript could not take.
+
+The blank line **below** is written and the one **above** is asked for: written twice they
+accumulate, and three sentences in a row would open a growing gap. `Spacing` in
+`agent-stream-render.ts` keeps the last two characters written and supplies the leading newline
+only when the transcript does not already end in a blank line — so it sees only what the renderer
+itself wrote, and a run of blank lines inside a tool's own output is none of its business.
 
 **None of this can cost a run its pull request.** `TerminalSession` hands the **raw** chunk to
 `onRaw` before rendering anything, and that is what `extractGithubUrl` and `UsageMeter` read;
@@ -424,6 +513,17 @@ on the far side of it. The key handler claims Alt chords, the editing chords in
 `terminal-keys.ts`, `Ctrl+C` with a selection and `Ctrl+V`, and nothing else, so every other
 control chord arrives unchanged. **The transcript in that tab belongs to the program, not to the
 board**, and folding it is the program's own affordance.
+
+**#258 asked for that decision to be revisited and it stands**, with the reason narrowed rather
+than repeated. The ask was that the blank line, the orange and #246's fold all reach that tab
+too. Two of the three are the board drawing into a screen it does not compose — it would mean
+recovering rows out of another program's repaints, and it would be undoing this paragraph rather
+than extending it, so it is left for whoever wants to overrule it in writing. The third turned
+out to be a real thing the board did control and had not set: the tab's own environment said
+nothing about how many colours its terminal has. That is `COLORTERM`, in the environment section
+above, together with the measurement of what the child actually emits — which is how we now know
+that the orange in that tab is one of the sixteen, drawn by the program and resolved by this
+board's palette.
 
 Both halves are in `scripts/check-agent-transcript-fold.mjs`, which is a browser check because a
 fold compiles perfectly whether or not anything can be clicked on it.
@@ -1183,9 +1283,32 @@ interrupt again; **Ctrl+V pastes what the clipboard is offering** — text into 
 a screenshot as the `\x16` that lets the program go and fetch it, which is the rule
 [below](#a-paste-is-decided-by-what-the-clipboard-is-offering); the wheel scrolls the
 scrollback, and so does the bar along the right of the screen; and Alt+click moves the shell's
-cursor along the line it is editing. A wheel the scrollback cannot use — the screen is at the
-bottom, or there is none — is handed to the canvas instead of dropped, so panning and zooming
-still work over a block.
+cursor along the line it is editing. A wheel the terminal has **nothing** to scroll with — no
+scrollback behind the screen at all, or a rendered transcript that fits inside the block — is
+handed to the canvas instead of dropped, so panning and zooming still work over a block.
+
+**Nothing to scroll is not the same as the end of what there is**, and reading them as one
+sentence is what #256 reported: a reader scrolling an Implement / Fix run reached the top of it,
+kept wheeling, and the canvas panned out from under the block they were reading. Both of the
+block's views did it, by two different routes. The emulator asked the *event* — xterm's
+`_bubbleScroll` calls `preventDefault` only while its viewport still has room in the wheel's
+direction, so at either end it declines and the overlay reads that as "the emulator had no use
+for this"; the document view computed the same boundary by hand. So the question moved onto the
+box: `terminalHasScrollToGive` measures the scroller under the pointer — `.xterm-viewport` for a
+screen, the transcript itself for a run — and **while there is anything there, the vertical
+wheel is the terminal's**, at its ends as much as in its middle.
+
+That is the stricter of the two answers, and it is a choice rather than a derivation. A gesture
+latch would let a *second* wheel after a pause pan the board, the way `overscroll-behavior:
+contain` never chains; this does not. The reader who wants to pan has the header and the rest of
+the canvas, and the reader who does not want to lose their place has no other way of saying so.
+It is also why the rule is re-asked per event rather than held for the gesture: a scrollback does
+not appear or vanish between two notches, so a latch would buy nothing that is not already true.
+The gesture lock below is for the *axis*, which a single event genuinely cannot settle.
+
+The three exceptions are unchanged. Ctrl, Meta and Shift stay whole, so a block with a deep
+scrollback is still somewhere the board can be zoomed from; the horizontal axis is the board's
+under #162 and #198; and a program holding the pointer is still sent the wheel as an escape.
 
 **The wheel is answered one axis at a time**, which is #162 and what a touchpad made
 visible. A pan carries both deltas in the same event, and the emulator has a use for exactly
@@ -1258,7 +1381,9 @@ border, since a browser snaps a border to whole device pixels and a chip that gr
 `scripts/check-terminal-focus-browser.mjs` is the check for who owns the pointer — it clicks
 the middle of the screen and types, drags the header and the body and compares what moved,
 turns the wheel both ways and sideways, and drags a corner afterwards to say the shape is
-still a shape.
+still a shape. `scripts/check-terminal-wheel-edge-browser.mjs` is the check for the *ends* of
+the scroll, and it needs four tabs to ask it: an emulator with a deep scrollback and one with
+none, a rendered transcript taller than the block and one that fits inside it.
 `scripts/check-terminal-size-browser.mjs` is the check for the sizes, and it measures the
 render rather than the file: it reads the block the board placed off the scene, measures each
 control against itself with `--terminal-tab-scale` forced back to 1, and asks for the bottom
@@ -1681,6 +1806,26 @@ it. A board returned to puts its block back where it was left.
   a marked transcript is drawn as a document, and there are no `.xterm-rows` in an agent tab any
   more. That the document resolves the same slots out of the same palette is
   `check-agent-transcript-fold.mjs`'s case.
+- `scripts/check-colorterm-env.mjs` — the other side of the environment argument: that a shell on
+  a pseudoterminal is told `COLORTERM=truecolor`, that a program asking Node comes out at 24-bit
+  because of it, and the two places the promotion stops — a tab the board renders into a document,
+  and the pipe path, where there is no terminal to describe. Windows answers 24-bit on its own, so
+  the before-and-after case says so and steps aside there rather than asserting something the
+  platform decided.
+- `scripts/check-agent-transcript-prose-and-ink.mjs` — #258 against the bytes: a blank line either
+  side of prose, three sentences in a row not opening a growing gap, a blank line inside a tool's
+  own output left alone, the thinking marker carrying no SGR sequence at all and coming back named
+  as the seventeenth ink, both of that ink's hexes clearing 3:1 on their own surface **read out of
+  `terminal-palette.ts`** rather than retyped, `stripFoldMarks` leaving nothing behind, and
+  `extractGithubUrl` still finding the pull request. Run against the old code first, where eight
+  cases fail.
+- `scripts/check-agent-transcript-ink-browser.mjs` — and the half compiling cannot answer, in
+  **both themes** on a real Chrome: the marker's computed colour is that theme's hex, it is no
+  longer the ink the argument beside it is drawn in, it clears 3:1 against the card, and the
+  **most-inked pixel of the row** is nearer that orange than any of the other sixteen — with the
+  blank lines counted as drawn rows rather than as bytes. The case a literal would fail: the same
+  marker is a different hex in the two themes. Against the old code the marker reads `#83869a` on
+  paper and `#6c7086` on night — the argument's own grey, in the pixels.
 - `scripts/check-agent-transcript-fold.mjs` — both halves of #246. That the transcript now
   carries the whole input and the whole answer the row's preview clips, that `extractGithubUrl`
   and `UsageMeter` still read the same bytes out of the tap, and that a session whose command
@@ -1766,19 +1911,33 @@ it. A board returned to puts its block back where it was left.
   viewer. The rightmost column the shell was told about drawn in full and clear of the strip, at
   8, 13 and 24, with a ruler exactly `cols` wide — the geometry says the screen box ends before
   the strip, the ruler says the last character in it was painted there. And the wheel unchanged:
-  one it can use still scrolls the scrollback, one it cannot still reaches the canvas. It is the
+  one the scrollback can use still scrolls it, and one turned at the bottom of it still leaves
+  the board where it was, a block wearing a bar being one that has a scrollback. It is the
   one browser check here that does **not** pass `--hide-scrollbars`, which would otherwise let
   every case in it pass by measuring nothing.
 - `scripts/check-terminal-focus-browser.mjs` — who owns the pointer where, in Chrome. A click
   in the middle of the screen focusing the shell and a command typed straight after it running;
   a drag on the header moving the block and a drag on the screen selecting text and *not*
   moving it; Ctrl+C copying that selection and, with nothing selected, still interrupting; the
-  wheel scrolling the scrollback and, when there is none left to scroll, reaching the canvas;
+  wheel reaching the canvas over a block with no scrollback at all and staying with the
+  terminal once there is one, which is the pair #256 separated;
   the sideways half of a wheel reaching the canvas *while* the vertical half is being used —
   by the scrollback, and by a program holding the pointer, which the check puts into that
   state by writing `1006` and `1000` into the emulator's own parser; the header still a target
   at a zoom that shrinks everything else; and the corner still resizing the block, with the
   new size reaching the server.
+- `scripts/check-terminal-wheel-edge-browser.mjs` — who owns the wheel at the **ends** of a
+  terminal's scroll, in Chrome, and the case the file above frames rather than asks. Four
+  sessions, so each case has a tab genuinely in the state it names: an emulator with two
+  hundred lines behind it and one with three, a folded transcript of eighty tool calls and one
+  of a single call that fits inside the block. Parked at the bottom and wheeled down, and
+  parked at the top and wheeled up, the board's `scrollX`, `scrollY` and `zoom` are unmoved for
+  both of the block's views — while the notches in between still scroll the terminal, so
+  nothing was bought by swallowing them. And the three the change does not touch: the block
+  with nothing behind it still pans the board, Ctrl and the wheel still zoom over a deep
+  scrollback, and the sideways axis is still the board's. It runs its sessions on pipes
+  (`EXCALIDRAW_TERMINAL_PTY=0`), because the fold marks are OSC sequences and a pseudoconsole
+  re-renders what passes through it — which is also why an agent tab is on pipes to begin with.
 - `scripts/check-terminal-hotkey-browser.mjs` — who owns the *keyboard*, in Chrome, and the
   sibling of the file above. Each of Alt+B, Alt+T, Alt+P and Alt+G moving the viewport with
   real keystrokes into a focused emulator, read off `scrollX`/`scrollY` rather than off a

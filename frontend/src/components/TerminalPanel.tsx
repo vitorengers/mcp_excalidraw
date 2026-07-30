@@ -10,7 +10,7 @@ import {
   TERMINAL_LINE_HEIGHT,
   terminalScrollbar
 } from '../../../src/core/terminal-block'
-import { terminalCssVars, terminalXtermTheme } from '../../../src/core/terminal-palette'
+import { terminalCssVars, terminalDocumentInk, terminalXtermTheme } from '../../../src/core/terminal-palette'
 import type { TerminalTheme } from '../../../src/core/terminal-palette'
 import { clipboardImages } from '../../../src/core/pasted-images'
 import { terminalFontReady } from '../terminal-metrics'
@@ -224,6 +224,42 @@ function forwardHorizontalWheelToCanvas(event: React.WheelEvent): void {
 }
 
 /**
+ * How much taller than its own box a scroller has to be to count as having scrollback.
+ *
+ * Not zero, and not a tolerance for bad measurement either: the two numbers are derived
+ * from one measured cell height by two different roundings. xterm sizes its scroll area to
+ * `Math.round(rowHeight * lines)` and its viewport from the renderer's canvas, so a screen
+ * holding exactly its own rows and nothing behind them can still come out a fraction of a
+ * pixel taller than the box it sits in. A row is ten pixels at the smallest font this block
+ * offers, so two pixels cannot hide one.
+ */
+const SCROLLBACK_SLACK_PX = 2
+
+/**
+ * Whether the view under the pointer has anything of its own to scroll.
+ *
+ * Asked of the box rather than of the event, and that is #256. `defaultPrevented` answers
+ * "did *this* wheel move anything", which cannot tell a reader who has run out of scrollback
+ * halfway through reading from a reader who wants to pan the board — and the first of those
+ * had the canvas slide out from under the block they were reading.
+ *
+ * One question for both views, because the two draw the same box: an emulator's `.xterm-viewport`
+ * is what scrolls inside `.terminal-card__screen`, and a rendered transcript borrows that class
+ * and scrolls itself. A pointer over neither — the body's own margin, a card with no session —
+ * finds nothing and the board answers, which is what it always did.
+ *
+ * Re-asked per event rather than latched for the gesture, and it comes to the same thing: a
+ * scrollback does not appear or vanish between two notches of one wheel. What the gesture lock
+ * above exists for is the *axis*, which a single event genuinely cannot settle.
+ */
+function terminalHasScrollToGive(target: EventTarget | null): boolean {
+  const screen = (target as Element | null)?.closest?.('.terminal-card__screen')
+  if (!screen) return false
+  const scroller = screen.querySelector('.xterm-viewport') ?? screen
+  return scroller.scrollHeight > scroller.clientHeight + SCROLLBACK_SLACK_PX
+}
+
+/**
  * A wheel the emulator did not want, given to the board instead of dropped.
  *
  * The block is a shape on a board, and over any other shape that wheel pans or zooms. Now
@@ -232,10 +268,18 @@ function forwardHorizontalWheelToCanvas(event: React.WheelEvent): void {
  * either answer to the question of who owns the wheel.
  *
  * Two ways the emulator says it has spoken for one. It calls `preventDefault` on the wheel
- * it scrolled the scrollback with, and leaves the one it could not use alone — the screen is
- * already at the bottom, or there is no scrollback at all. And a program that has turned
- * mouse reporting on is being sent the wheel as an escape sequence, which xterm marks with a
- * class on its own root rather than with the event.
+ * it scrolled the scrollback with, and leaves the one it could not use alone. And a program
+ * that has turned mouse reporting on is being sent the wheel as an escape sequence, which
+ * xterm marks with a class on its own root rather than with the event.
+ *
+ * **But "it could not use this one" was two situations read as one**, and that is #256. xterm
+ * declines to prevent a wheel at either end of its viewport — `_bubbleScroll` prevents only
+ * while there is room in the wheel's direction — so a reader who scrolled to the top of sixty
+ * lines and kept going had the next notch pan the board out from under the block. That is not
+ * the same as a block with no scrollback at all, which is the case #112 answered and which
+ * still hands the wheel over. So the question below is asked of the box: **while the terminal
+ * has something to scroll the vertical wheel is the terminal's**, at its ends as much as in
+ * its middle, and a reader who wants to pan has the header and the rest of the canvas.
  *
  * What is left is handed to `dispatchWheelToCanvas` above rather than left to bubble.
  *
@@ -258,6 +302,10 @@ function forwardWheelToCanvas(event: React.WheelEvent): void {
   if ((event.target as Element | null)?.closest?.('.xterm.enable-mouse-events')) return
   const whole = event.ctrlKey || event.metaKey || event.shiftKey
   if (!whole && event.deltaY === 0) return
+  // Not asked of the three above: Ctrl and Meta are the zoom and Shift is Excalidraw's own
+  // sideways wheel, and none of them is a request to scroll the scrollback — a block with a
+  // deep one would otherwise be a place the board cannot be zoomed from.
+  if (!whole && terminalHasScrollToGive(event.target)) return
   dispatchWheelToCanvas(event, whole ? event.deltaX : 0, event.deltaY)
 }
 
@@ -606,8 +654,8 @@ interface LineItem {
  *
  * #242's colour vocabulary is SGR sequences, resolved against whichever of the two palettes the
  * reader is in — which an emulator does for itself and a document has to be told. `slot` is one
- * of the sixteen by name and `ink` is that theme's map, so a theme toggle repaints this the way
- * it repaints the emulator beside it, out of the same table.
+ * of the sixteen by name, or since #258 the seventeenth, and `ink` is that theme's map, so a
+ * theme toggle repaints this the way it repaints the emulator beside it, out of the same table.
  */
 function paint(segments: FoldSegment[], ink: Record<string, string>): React.ReactNode {
   if (!segments.length) return ' '
@@ -688,9 +736,13 @@ const TerminalTranscript: React.FC<{
 }> = ({ active, sessionId, output, ended, theme }) => {
   const { rows, details } = useMemo(() => parseFoldedTranscript(output), [output])
   const items = useMemo(() => foldItems(rows), [rows])
-  // The same table the emulator in the tab beside this one is themed from, so the two cannot
-  // disagree about what `cyan` is on this board.
-  const ink = useMemo(() => terminalXtermTheme(theme), [theme])
+  // The same sixteen the emulator in the tab beside this one is themed from, so the two cannot
+  // disagree about what `cyan` is on this board — plus the ink that only exists here. #258: an
+  // orange is not one of the sixteen and cannot be written as SGR, so it arrives as a *name* and
+  // is resolved at this point, which is the first one that knows which theme the reader is in.
+  // A tab drawn by the emulator never sees it and does not have to: it draws the mark as nothing
+  // and the line lands on the default ink.
+  const ink = useMemo(() => terminalDocumentInk(theme), [theme])
   const [open, setOpen] = useState<Set<string>>(() => readOpenFolds(sessionId))
   const boxRef = useRef<HTMLDivElement>(null)
   /** Whether the reader is still at the end of the run, which is where new lines arrive. */
@@ -732,15 +784,16 @@ const TerminalTranscript: React.FC<{
       // emulator's scrollback has no use for does — see `forwardWheelToCanvas`. The browser
       // scrolls this box itself and never calls `preventDefault`, so without this the board
       // would pan at the same time as the transcript scrolled.
+      //
+      // **"No use for" is the box having nothing to scroll, not this wheel reaching an end**,
+      // which is #256 on this side of the block: the rule used to read the direction too, so a
+      // reader at the top or the bottom of a run had the next notch pan the canvas away. The
+      // same question the emulator is asked, so a block with a shell in one tab and a run in
+      // another answers the wheel the same way in both.
       onWheel={(event) => {
         const box = boxRef.current
         if (!box) return
-        const atTop = box.scrollTop <= 0
-        const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 1
-        const room = box.scrollHeight > box.clientHeight
-        if (room && ((event.deltaY < 0 && !atTop) || (event.deltaY > 0 && !atBottom))) {
-          event.stopPropagation()
-        }
+        if (box.scrollHeight > box.clientHeight + SCROLLBACK_SLACK_PX) event.stopPropagation()
       }}
     >
       {items.map((item, index) => (item.kind === 'line' ? (

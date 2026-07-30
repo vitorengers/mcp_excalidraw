@@ -34,6 +34,8 @@ import {
   columnAt,
   mirrorAnchors,
   resolveMirrorOrigin,
+  layoutUnreadable,
+  UNREADABLE_WIDTH,
   MIRROR_KIND,
   NOTES_OPTION_ID
 } from '../../src/core/project-board-layout'
@@ -2353,26 +2355,30 @@ function App(): JSX.Element {
   }
 
   /**
-   * Draw the mirror for a board that was just read.
+   * Where the region's top-left corner goes, for a pass that is about to draw it.
    *
    * Anchored to the left of whatever else is on the canvas — measured **once**, and then
    * kept. Recomputing it on every poll is what let the region drift away from the board's
    * own content with nobody touching either (#99); `resolveMirrorOrigin` has the whole of
    * that reasoning, and `mirrorAnchors` says which elements the measurement is allowed to
    * see. Both live beside the layout arithmetic so a check can ask them without a browser.
+   *
+   * Its own function since #254, because there are now two things that get drawn here: the
+   * mirror, and the strip a board draws when its project could not be read at all. Where the
+   * second one stands is not a second answer to the same question — it stands where the
+   * mirror would have, so that the mirror arriving afterwards replaces it in place. Written
+   * twice, the two would have drifted apart the way #188 records every duplicated derivation
+   * doing.
+   *
+   * `width` is what the pass is about to draw, and it is what the remembered answer is
+   * measured back from: the pin is the region's **right** edge since #200, so a strip three
+   * columns wide and a mirror of four share an edge rather than a corner.
    */
-  const renderMirror = (board: ProjectBoard): void => {
-    const api = excalidrawAPIRef.current
-    if (!api) return
-
-    // Tombstones come along untouched. A deletion travels to the server as an element
-    // marked deleted, and a redraw that quietly dropped one would undo it — the mirror
-    // repaints on a timer, which is exactly when nobody would connect the two.
-    const scene = api.getSceneElementsIncludingDeleted()
-    const tombstones = scene.filter((element) => element.isDeleted && !isMirrorElement(element))
-    const own = scene.filter((element) => !element.isDeleted && !isMirrorElement(element))
-    const drafts = own.filter(isDraftBlock)
-
+  const placeMirror = (
+    scene: readonly ExcalidrawElement[],
+    own: readonly ExcalidrawElement[],
+    width: number
+  ): { x: number; y: number } => {
     // The terminal region, which since #200 is what this region is placed from: the canvas
     // reads mirror | terminals | documentation, so the blocks are the neighbour one step in.
     const terminalRegion = boundsOf(own.filter(isTerminalElement))
@@ -2388,10 +2394,6 @@ function App(): JSX.Element {
     // said once, so a check can ask it without a browser.
     const anchors = mirrorAnchors(own, drawn)
 
-    // The notes column is drawn too, and it is as wide as the rest, so the width the first
-    // measurement places the region by has to include it — `mirrorWidth`, not `boardWidth`,
-    // which counts only the options the project declares.
-    const width = mirrorWidth(board)
     const bounds = anchors.length > 0
       ? (() => {
         const [minX, minY] = getCommonBounds(anchors as readonly NonDeletedExcalidrawElement[])
@@ -2420,6 +2422,106 @@ function App(): JSX.Element {
     // canvas beyond it rather than onto the blocks. A poll that ran before the scene arrived
     // pins nothing, or the region would stay where an empty canvas put it for the session.
     if (settled) mirrorOriginsRef.current.set(workspaceId, { right: origin.x + width, y: origin.y })
+    return origin
+  }
+
+  /**
+   * Say on the canvas that the project could not be read, when there is nothing drawn yet.
+   *
+   * The gap #254 names: `refreshProjectBoard` returned on every failure that was not a 404,
+   * which is right on a board whose mirror is already up — a blip must not wipe a region
+   * somebody is reading — and is silence on a **cold** one, where nothing has ever been drawn
+   * and nothing is therefore what stays on the screen. From the canvas that is
+   * indistinguishable from a board with no `githubProject` at all, and #252 is what it cost.
+   *
+   * Warm is `board` being set rather than a shape being present, because that is the question
+   * being asked: is there a region here that was read from GitHub and is worth keeping? The
+   * strip itself is a mirror element, so a scene-side test would call the board warm the
+   * moment the strip landed and never correct the words on it again.
+   *
+   * `layoutUnreadable` says what it draws and why it is a strip rather than a toast.
+   */
+  const renderUnreadable = (reason: string): void => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+    if (projectBoardRef.current.board) return
+    // Same reason as every other write to this region: a redraw under a pointer or a caret
+    // takes the thing being worked on out from under it.
+    if (busyOnCanvas(api)) return
+
+    const scene = api.getSceneElementsIncludingDeleted()
+    const tombstones = scene.filter((element) => element.isDeleted && !isMirrorElement(element))
+    const own = scene.filter((element) => !element.isDeleted && !isMirrorElement(element))
+
+    const elements = layoutUnreadable(reason, placeMirror(scene, own, UNREADABLE_WIDTH))
+
+    // The poll comes round every twenty seconds and the failure is usually the same one, so
+    // the second pass has nothing to write. Sharing `signature` with the mirror is what makes
+    // the board arriving afterwards redraw: its signature is built from a whole layout and
+    // cannot equal this one.
+    const signature = JSON.stringify(elements)
+    if (signature === projectBoardRef.current.signature
+        && scene.some((element) => isMirrorElement(element))) {
+      return
+    }
+    projectBoardRef.current = { ...projectBoardRef.current, signature }
+
+    applySceneUpdateWithoutAutoSync(api, {
+      elements: [
+        ...convertElementsPreservingImageProps([
+          ...(own as unknown as Partial<ExcalidrawElement>[]),
+          ...(elements as unknown as Partial<ExcalidrawElement>[])
+        ]),
+        ...tombstones
+      ] as ExcalidrawElement[],
+      captureUpdate: CaptureUpdateAction.NEVER
+    })
+
+    // Excalidraw measures bound text when the element lands and keeps that number, so a label
+    // that arrives before the handwriting font does is stored narrow and then drawn with the
+    // real font and clipped to the stored width — a character or two off each end. That is a
+    // standing trap on this board, and what makes it self-correcting for the mirror is the
+    // poll: the board changes, the region is drawn again, the text is measured again. This
+    // strip has the opposite property. The failure it reports is usually the *same* failure
+    // every twenty seconds, so the signature above skips every redraw and the clipped
+    // measurement is the one that stays — measured in a browser at 467 against a sentence the
+    // page makes 510 wide.
+    //
+    // So the first pass after the fonts arrive draws it once more. It cannot loop: by then
+    // `status` is `loaded`. The signature has to be dropped or that redraw is the one thing
+    // this function is built to skip, and a board that came back meanwhile keeps its own.
+    if (document.fonts && document.fonts.status !== 'loaded') {
+      void document.fonts.ready.then(() => {
+        if (projectBoardRef.current.board) return
+        projectBoardRef.current = { ...projectBoardRef.current, signature: '' }
+        renderUnreadable(reason)
+      })
+    }
+  }
+
+  /**
+   * Draw the mirror for a board that was just read.
+   *
+   * Where it goes is `placeMirror`'s answer, measured once against the board's own content
+   * and then kept.
+   */
+  const renderMirror = (board: ProjectBoard): void => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+
+    // Tombstones come along untouched. A deletion travels to the server as an element
+    // marked deleted, and a redraw that quietly dropped one would undo it — the mirror
+    // repaints on a timer, which is exactly when nobody would connect the two.
+    const scene = api.getSceneElementsIncludingDeleted()
+    const tombstones = scene.filter((element) => element.isDeleted && !isMirrorElement(element))
+    const own = scene.filter((element) => !element.isDeleted && !isMirrorElement(element))
+    const drafts = own.filter(isDraftBlock)
+
+    // The notes column is drawn too, and it is as wide as the rest, so the width the first
+    // measurement places the region by has to include it — `mirrorWidth`, not `boardWidth`,
+    // which counts only the options the project declares.
+    const width = mirrorWidth(board)
+    const origin = placeMirror(scene, own, width)
 
     // The blocks the `+` dropped hold the top of their column, newest first, and the
     // mirrored cards start below them. Both halves of that arithmetic come from
@@ -2713,7 +2815,15 @@ function App(): JSX.Element {
         return
       }
       const body = await response.json().catch(() => ({}))
-      if (!body?.success || !body.board) return
+      if (!body?.success || !body.board) {
+        // Not a 404 — that was answered above and means the board simply has no project.
+        // This is `gh` unresolvable, an expired login, a token without the `project` scope,
+        // a GitHub outage, or the loopback refusal, and every one of them arrives here with
+        // its own sentence in `body.error`. Throwing that away is what #254 is about.
+        console.warn('Could not read the project board:', body?.error ?? response.status)
+        renderUnreadable(String(body?.error ?? `The server answered ${response.status}.`))
+        return
+      }
       await reconcileDrafts(body.board as ProjectBoard)
       if (activeWorkspaceRef.current !== workspace) return
       const { implementing, queue } = await readImplementRecords()
@@ -2727,7 +2837,12 @@ function App(): JSX.Element {
       if (busyOnCanvas(api)) return
       renderMirror(body.board as ProjectBoard)
     } catch (error) {
+      // The request never got an answer — the server down, or the page offline. Silent for
+      // the same reason and with the same cost as the branch above, so it says the same
+      // thing; a warm mirror is still left exactly where it is.
       console.warn('Could not read the project board:', error)
+      if (activeWorkspaceRef.current !== workspace) return
+      renderUnreadable((error as Error).message)
     }
   }
 
