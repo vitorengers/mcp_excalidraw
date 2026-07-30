@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { hasFoldMarks, parseFoldedTranscript } from '../../../src/core/agent-stream-render'
-import type { FoldDetail } from '../../../src/core/agent-stream-render'
+import type { FoldDetail, FoldRow, FoldSegment } from '../../../src/core/agent-stream-render'
 import {
   TERMINAL_FALLBACK_FONT_FAMILY,
   TERMINAL_FONT_FAMILY,
@@ -589,8 +589,8 @@ function writeOpenFolds(sessionId: string, open: Set<string>): void {
 interface FoldItem {
   kind: 'fold'
   id: string
-  /** The row that stands for the call: `⏺ Bash(…)`, exactly as the transcript wrote it. */
-  head: string
+  /** The row that stands for the call: `⏺ Bash(…)`, in the colours #242 gave it. */
+  head: FoldSegment[]
   /** The clipped preview the transcript carries, which is the fallback when the detail is gone. */
   preview: string[]
 }
@@ -598,7 +598,22 @@ interface FoldItem {
 /** Anything that is not a tool call: prose, a thinking mark, a line the agent printed itself. */
 interface LineItem {
   kind: 'line'
-  text: string
+  segments: FoldSegment[]
+}
+
+/**
+ * A line, in the ink the renderer wrote it in.
+ *
+ * #242's colour vocabulary is SGR sequences, resolved against whichever of the two palettes the
+ * reader is in — which an emulator does for itself and a document has to be told. `slot` is one
+ * of the sixteen by name and `ink` is that theme's map, so a theme toggle repaints this the way
+ * it repaints the emulator beside it, out of the same table.
+ */
+function paint(segments: FoldSegment[], ink: Record<string, string>): React.ReactNode {
+  if (!segments.length) return ' '
+  return segments.map((segment, index) => (
+    <span key={index} style={segment.slot ? { color: ink[segment.slot] } : undefined}>{segment.text}</span>
+  ))
 }
 
 /**
@@ -613,19 +628,19 @@ interface LineItem {
  * than swallowed: the scrollback has a ceiling, so the top of a long run is a transcript that
  * begins in the middle of somebody's `Read`.
  */
-function foldItems(rows: { id: string | null; head: boolean; text: string }[]): (FoldItem | LineItem)[] {
+function foldItems(rows: FoldRow[]): (FoldItem | LineItem)[] {
   const items: (FoldItem | LineItem)[] = []
   const open = new Map<string, FoldItem>()
   for (const row of rows) {
     if (row.id && row.head) {
-      const item: FoldItem = { kind: 'fold', id: row.id, head: row.text, preview: [] }
+      const item: FoldItem = { kind: 'fold', id: row.id, head: row.segments, preview: [] }
       open.set(row.id, item)
       items.push(item)
       continue
     }
     const owner = row.id ? open.get(row.id) : undefined
     if (owner) owner.preview.push(row.text)
-    else items.push({ kind: 'line', text: row.text })
+    else items.push({ kind: 'line', segments: row.segments })
   }
   return items
 }
@@ -668,9 +683,14 @@ const TerminalTranscript: React.FC<{
   sessionId: string
   output: string
   ended: string | null
-}> = ({ active, sessionId, output, ended }) => {
+  /** The board's, so #242's slot references resolve against the palette the reader is in. */
+  theme: TerminalTheme
+}> = ({ active, sessionId, output, ended, theme }) => {
   const { rows, details } = useMemo(() => parseFoldedTranscript(output), [output])
   const items = useMemo(() => foldItems(rows), [rows])
+  // The same table the emulator in the tab beside this one is themed from, so the two cannot
+  // disagree about what `cyan` is on this board.
+  const ink = useMemo(() => terminalXtermTheme(theme), [theme])
   const [open, setOpen] = useState<Set<string>>(() => readOpenFolds(sessionId))
   const boxRef = useRef<HTMLDivElement>(null)
   /** Whether the reader is still at the end of the run, which is where new lines arrive. */
@@ -724,7 +744,7 @@ const TerminalTranscript: React.FC<{
       }}
     >
       {items.map((item, index) => (item.kind === 'line' ? (
-        <div key={index} className="terminal-transcript__line">{item.text || ' '}</div>
+        <div key={index} className="terminal-transcript__line">{paint(item.segments, ink)}</div>
       ) : (
         <div
           key={index}
@@ -748,7 +768,7 @@ const TerminalTranscript: React.FC<{
             }}
           >
             <span className="terminal-transcript__caret">{open.has(item.id) ? '▾' : '▸'}</span>
-            <span className="terminal-transcript__head">{item.head}</span>
+            <span className="terminal-transcript__head">{paint(item.head, ink)}</span>
           </div>
           {open.has(item.id) && (details[item.id]
             ? <FoldDetailView detail={details[item.id]} />
@@ -1087,6 +1107,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             sessionId={tab.id}
             output={tab.output}
             ended={tab.ended}
+            theme={theme}
           />
         ) : (
           <TerminalScreen

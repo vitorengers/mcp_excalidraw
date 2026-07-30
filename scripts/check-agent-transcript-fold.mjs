@@ -76,6 +76,20 @@ const { extractGithubUrl } = await import(
 const { UsageMeter } = await import(
   pathToFileURL(join(repoRoot, 'dist', 'core', 'agent-usage.js')).href
 );
+// The board's own table, so section 3 can ask whether the document resolved a slot against the
+// palette rather than merely painted the row *something*. A hard-coded hex here would be the
+// defect #242 is about, one file further along.
+const { terminalXtermTheme } = await import(
+  pathToFileURL(join(repoRoot, 'dist', 'core', 'terminal-palette.js')).href
+);
+const PAPER = terminalXtermTheme('light');
+
+/** `#0e7c86` as a browser reports it, which is what `getComputedStyle` answers with. */
+function asRgb(hex) {
+  const value = hex.replace('#', '');
+  const [red, green, blue] = [0, 2, 4].map((at) => parseInt(value.slice(at, at + 2), 16));
+  return `rgb(${red}, ${green}, ${blue})`;
+}
 
 // ─── What a run streams, built so that clipping is visible ────
 //
@@ -188,6 +202,23 @@ check('the rows of a result belong to the call they answer',
   parsed.rows.filter((row) => row.id === 'toolu_bash_1' && !row.head).length > 1,
   'a result row carries no id, so folding the call shut would leave its answer behind');
 
+// #242 landed while this was being written, and the two meet here: it gave the transcript a
+// colour vocabulary written as SGR references to the sixteen named slots, precisely so the
+// reader's own palette resolves them. A document view that dropped the escapes on its way to a
+// `<div>` would be #246 quietly undoing it, so the row comes back cut where its colour changes
+// and named by *slot* rather than by hex — the hex is the frontend's, because only the frontend
+// knows which theme the board is in.
+const bashHead = heads.find((row) => row.text.startsWith('⏺ Bash'));
+check("a row keeps the colours #242 gave it, as slots rather than as a hex",
+  Boolean(bashHead)
+  && bashHead.segments.some((segment) => segment.slot === 'green' && segment.text.includes('Bash'))
+  && bashHead.segments.some((segment) => segment.slot === 'brightBlack' && segment.text.startsWith('(')),
+  JSON.stringify(bashHead?.segments));
+check('and prose keeps the reader\'s own ink rather than being given one',
+  parsed.rows.some((row) => row.text === "I'll look at the history."
+    && row.segments.every((segment) => segment.slot === null)),
+  JSON.stringify(parsed.rows[0]?.segments));
+
 const bash = parsed.details.toolu_bash_1;
 const write = parsed.details.toolu_write_1;
 
@@ -208,7 +239,10 @@ check('and a file-writing tool folds exactly as Bash does, so it is not Bash alo
 
 // The transcript is still the transcript. This is what a reader who never clicks sees, and it
 // has to be byte for byte the shape #219 and #220 settled — the marks draw as nothing.
-const visible = strip(rendered);
+// The SGR sequences come off as well as the marks, and for the same reason: #242 writes the
+// colour and neither it nor a mark is a glyph. What is left is what a reader sees.
+const stripEscapes = (text) => text.replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '');
+const visible = stripEscapes(strip(rendered));
 check('with its marks taken out the transcript is the one the block already drew',
   visible.includes('⏺ Bash(') && visible.includes('  ⎿  line 1 of a result')
   && /… \d+ more lines/.test(visible) && !visible.includes(RESULT_TAIL)
@@ -269,7 +303,7 @@ check('UsageMeter still counts out of the same bytes',
   JSON.stringify(counted));
 
 check('the scrollback the browser is replayed is the marked one',
-  marked(streamed.scrollback) && streamed.scrollback.includes('⏺ Bash('),
+  marked(streamed.scrollback) && stripEscapes(strip(streamed.scrollback)).includes('⏺ Bash('),
   JSON.stringify(streamed.scrollback.slice(0, 160)));
 
 const plain = await runSession(`${node} ${JSON.stringify(plainStub)}`);
@@ -467,6 +501,10 @@ const CARD = `(() => {
       id: fold.getAttribute('data-fold'),
       head: (fold.querySelector('.terminal-transcript__row') || {}).textContent || '',
       open: fold.classList.contains('terminal-transcript__fold--open'),
+      // What the row is actually painted, straight off the pixels the browser resolved. #242's
+      // colours are the board's, and a document view that dropped them would still fold.
+      inks: [...fold.querySelectorAll('.terminal-transcript__head span')]
+        .map((span) => getComputedStyle(span).color),
     })),
     hasEmulator: Boolean(card.querySelector('.xterm-rows')),
     text: transcript ? (transcript.textContent || '') : (card.textContent || ''),
@@ -533,6 +571,19 @@ try {
   check('and the prose the agent wrote is still there, unfolded',
     folded.text.includes("I'll look at the history.") && folded.text.includes('the run finished'),
     JSON.stringify(folded.text.slice(0, 200)));
+  // The half #242 would lose if this view had dropped the escapes on its way to a `<div>`. Not
+  // "the row has two colours on it", which a stylesheet could have done by accident: the
+  // *execution* slot for a `Bash`, the *mutation* slot for a `Write` and the dim ink for the
+  // argument, each read back as the hex this board's paper palette resolves that slot to.
+  const bashInks = folded.folds.find((fold) => fold.id === 'toolu_bash_1')?.inks ?? [];
+  const writeInks = folded.folds.find((fold) => fold.id === 'toolu_write_1')?.inks ?? [];
+  check('the row is painted in the slots #242 wrote, resolved against the reader\'s palette',
+    bashInks[0] === asRgb(PAPER.green) && writeInks[0] === asRgb(PAPER.yellow),
+    `Bash ${JSON.stringify(bashInks)} — expected ${asRgb(PAPER.green)}; `
+    + `Write ${JSON.stringify(writeInks)} — expected ${asRgb(PAPER.yellow)}`);
+  check('and the argument steps back into the dim ink behind the name',
+    bashInks[1] === asRgb(PAPER.brightBlack),
+    `${JSON.stringify(bashInks)} — expected ${asRgb(PAPER.brightBlack)}`);
 
   console.log('\n4. a pointer click on the row opens it, and a second one folds it back');
 

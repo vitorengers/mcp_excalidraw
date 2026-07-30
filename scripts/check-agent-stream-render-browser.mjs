@@ -127,18 +127,21 @@ const STREAM = `${EVENTS.map((event) => JSON.stringify(event)).join('\n')}\n`;
 // this check cannot drift from it. Trailing newline dropped; the blank line before the closing
 // line is kept, because a blank row is part of the shape being asserted.
 //
-// **Marks off, and that is an assertion rather than a convenience.** Since #246 the renderer
-// puts an invisible mark in front of every row that belongs to a tool call — an OSC sequence
-// with a private identifier, which is how the block knows which rows fold together and where
-// the detail behind them is. An emulator handed one looks for a handler, finds none and draws
-// nothing, so the *drawn* row is the marked line with the marks taken off. Comparing the drawn
-// rows against the marked string would fail on every row that carries one, and comparing them
-// against the stripped string is what says the marks cost the picture nothing. The section
-// below asserts that directly, rather than leaving it implied by this line.
+// **The SGR sequences come off, and so do the fold marks, and neither is a workaround.**
+// Since #242 the renderer writes colour and since #246 it writes fold marks; both are
+// *instructions to the emulator* rather than columns — xterm consumes an SGR and draws
+// nothing, and it finds no handler for a private OSC and draws nothing either. So a row's
+// `textContent` is the glyphs alone, and comparing a drawn row against a line that still
+// carried either spelling would be comparing a drawn line to one nobody draws — and would
+// start failing on a change to the colour, or to the fold, rather than to the geometry, which
+// is the only thing this check is about. The colours are
+// `check-agent-stream-render-colour-browser.mjs`'s subject and the marks are
+// `check-agent-transcript-fold.mjs`'s.
 const { AgentStreamRenderer, hasFoldMarks, stripFoldMarks } =
   await import(pathToFileURL(rendererModule).href);
 const RENDERED = new AgentStreamRenderer().feed(STREAM);
-const EXPECTED = stripFoldMarks(RENDERED).replace(/\n$/, '').split('\n');
+const stripEscapes = (text) => text.replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '');
+const EXPECTED = stripEscapes(stripFoldMarks(RENDERED)).replace(/\n$/, '').split('\n');
 
 // ─── A project with a terminal ────────────────────────────────
 
@@ -373,8 +376,12 @@ try {
 
   check('the session is on pipes, which is where the agent tab is',
         pipeSession.mode === 'pipe', pipeSession.mode);
+  // Read through `stripEscapes` for the reason above: since #242 the tool name and its argument
+  // are two coloured runs, so `⏺ Read(` is no longer contiguous in the bytes even though it is
+  // contiguous on the screen, which is the thing being asked about.
   check('the transcript is the renderer\'s output, envelopes gone',
-        scrollback.includes('⏺ Read(') && scrollback.includes('  ⎿  alpha') && !scrollback.includes('"type"'),
+        stripEscapes(scrollback).includes('⏺ Read(') && stripEscapes(scrollback).includes('  ⎿  alpha')
+        && !scrollback.includes('"type"'),
         JSON.stringify(scrollback.slice(0, 200)));
   // The premise of everything below it: this session is one an emulator draws, which is what
   // being unmarked means since #246. A marked one is the agent tab, and it has no emulator.

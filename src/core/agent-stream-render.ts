@@ -32,7 +32,23 @@
  * The event vocabulary below was read off a real capture rather than assumed: `system`,
  * `assistant` carrying `text`, `thinking` or `tool_use`, `user` carrying `tool_result`,
  * `rate_limit_event`, and a final `result`.
+ *
+ * ## Colour, and why it is spelled as slot numbers
+ *
+ * Until #242 this file wrote no SGR sequence at all, so a `Write`, a `Bash`, a thinking marker,
+ * a failed tool result and a successful one were the one grey xterm falls back to. The only
+ * colour that ever reached the block came in *through* a tool's own output, which `renderResult`
+ * passes through verbatim — an accident, and the tell that none was being written.
+ *
+ * What it writes now is `terminal-palette.ts`'s semantic map, and nothing but the sixteen named
+ * slots. The reason is the two themes: this board's terminal has a palette per theme and xterm
+ * is re-themed on a toggle, so `[36m` is cyan-on-paper for one reader and cyan-on-night for
+ * the other, both of them checked to clear 3:1 on their own surface. A `38;2;r;g;b` would be one
+ * of those two hexes printed into both cards, and wrong in one. See the note at the bottom of
+ * `terminal-palette.ts` for why bold and dim are not used either.
  */
+
+import { AGENT_INK, agentToolSlot, ANSI_RESET, inSlot, type TerminalSlot } from './terminal-palette.js';
 
 /** How much of a tool's output is worth putting in a block somebody is watching. */
 const RESULT_LINES = 6;
@@ -101,6 +117,13 @@ export interface FoldDetail {
   result: string | null;
 }
 
+/** One run of a line in one slot, which is as much as a `<span>` needs to be told. */
+export interface FoldSegment {
+  text: string;
+  /** One of the sixteen, or null for the reader's default ink. */
+  slot: TerminalSlot | null;
+}
+
 /** One drawn line of a transcript, and the tool call it belongs to. */
 export interface FoldRow {
   /** The tool call this row is part of, or null for prose, thinking and everything else. */
@@ -109,6 +132,18 @@ export interface FoldRow {
   head: boolean;
   /** The line as it is drawn, marks and escape sequences gone. */
   text: string;
+  /**
+   * The same line, cut where its colour changes.
+   *
+   * #242 gave this transcript a colour vocabulary — a tool's name in its category's slot, the
+   * argument and the gutter in the dim ink, a failed result in red — written as SGR sequences
+   * so that the reader's own palette resolves them and both themes fall out of one map. A view
+   * that is a document rather than an emulator has to resolve them itself, and dropping them
+   * would be #246 quietly undoing #242. So the escapes are read here rather than deleted, and
+   * the slot *name* is what comes out: the hex is the frontend's business, because only the
+   * frontend knows which theme the board is in.
+   */
+  segments: FoldSegment[];
 }
 
 export interface FoldedTranscript {
@@ -116,8 +151,53 @@ export interface FoldedTranscript {
   details: Record<string, FoldDetail>;
 }
 
-/** Anything else an emulator would have eaten, so a `<div>` does not print it. */
-const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b[\]P^_X][\s\S]*?(?:\u0007|\u001b\\)|\u001b[@-Z\\-_]/g;
+/** Which of the sixteen a foreground code names. The other direction of `SLOT_SGR`. */
+const SGR_SLOT: Record<number, TerminalSlot> = {
+  30: 'black', 31: 'red', 32: 'green', 33: 'yellow',
+  34: 'blue', 35: 'magenta', 36: 'cyan', 37: 'white',
+  90: 'brightBlack', 91: 'brightRed', 92: 'brightGreen', 93: 'brightYellow',
+  94: 'brightBlue', 95: 'brightMagenta', 96: 'brightCyan', 97: 'brightWhite',
+};
+
+/**
+ * The slot in force after one SGR sequence.
+ *
+ * Only the foreground is read. Background, bold and dim are not written by this renderer —
+ * `terminal-palette.ts` says why bold and dim are not — and a tool's own output that uses them
+ * is being asked one question here: what colour is this text. An extended colour (`38;5;N`,
+ * `38;2;r;g;b`) cannot be answered as one of the sixteen, so it falls back to the default ink
+ * rather than being guessed at, which is the same trade the renderer makes by refusing to
+ * write one.
+ */
+function slotAfter(current: TerminalSlot | null, params: string): TerminalSlot | null {
+  let slot = current;
+  for (const part of (params || '0').split(';')) {
+    const code = Number(part || '0');
+    if (code === 0 || code === 39) slot = null;
+    else if (code === 38) return null;
+    else if (SGR_SLOT[code]) slot = SGR_SLOT[code];
+  }
+  return slot;
+}
+
+/** Every escape sequence, so a `<div>` prints none of them and the SGR ones can be read. */
+const ANSI = /(?:\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b[\]P^_X][\s\S]*?(?:\u0007|\u001b\\)|\u001b[@-Z\\-_])/g;
+
+/** One line, cut into runs of one colour, with every other escape sequence dropped. */
+function segmentsOf(line: string): FoldSegment[] {
+  const segments: FoldSegment[] = [];
+  let slot: TerminalSlot | null = null;
+  let index = 0;
+  ANSI.lastIndex = 0;
+  for (let match = ANSI.exec(line); match; match = ANSI.exec(line)) {
+    if (match.index > index) segments.push({ text: line.slice(index, match.index), slot });
+    index = ANSI.lastIndex;
+    const sgr = /^\u001b\[([0-9;]*)m$/.exec(match[0]);
+    if (sgr) slot = slotAfter(slot, sgr[1] ?? '');
+  }
+  if (index < line.length) segments.push({ text: line.slice(index), slot });
+  return segments;
+}
 
 /**
  * A rendered transcript, read back as rows and the detail behind them.
@@ -158,7 +238,11 @@ export function parseFoldedTranscript(text: string): FoldedTranscript {
       id = payload;
       if (kind === 'f') head = true;
     }
-    rows.push({ id, head, text: line.replace(FOLD_MARK, '').replace(ANSI, '') });
+    // The marks come off first and the colour is read second, which is the order they were
+    // written in: a mark sits in front of whatever sequence the line starts in.
+    const drawn = line.replace(FOLD_MARK, '');
+    const segments = segmentsOf(drawn);
+    rows.push({ id, head, text: segments.map((segment) => segment.text).join(''), segments });
   }
 
   return { rows, details };
@@ -174,6 +258,15 @@ interface ContentBlock {
   tool_use_id?: string;
   input?: Record<string, unknown>;
   content?: unknown;
+  /**
+   * Whether the tool answered with a failure.
+   *
+   * Declared here since #242. It was always on the wire — the API puts it on a `tool_result`
+   * and Claude Code streams the block through unchanged — and dropping it meant a tool that
+   * failed was drawn exactly like one that worked, which is the single most useful thing colour
+   * can say in a block somebody is watching to see whether a run is going wrong.
+   */
+  is_error?: boolean;
 }
 
 interface StreamEvent {
@@ -216,18 +309,34 @@ function resultText(content: unknown): string {
   return '';
 }
 
-/** A tool's answer, trimmed to what a watcher can take in, and marked as an answer. */
-function renderResult(content: unknown): string {
+/**
+ * A tool's answer, trimmed to what a watcher can take in, and marked as an answer.
+ *
+ * The gutter and the indent are always the renderer's own ink; the *text* is the tool's, and
+ * whether it is repainted depends on `failed`. On the way through, a tool that colours its own
+ * output keeps that colour — the green `built in 12.93s` in #242's screenshot is a real thing a
+ * real tool said about itself, and swallowing it to impose a house style would be a loss. On a
+ * failure the text is repainted anyway: `<tool_use_error>…` carries no colour of its own, and
+ * red across the whole block is the point.
+ *
+ * The block is closed with a reset because the tool's own colour may not be: a sequence left
+ * open would paint the prose after it, which is meant to be plain ink.
+ */
+function renderResult(content: unknown, failed: boolean): string {
+  const gutter: TerminalSlot = failed ? AGENT_INK.failure : AGENT_INK.aside;
+  const body = (line: string): string => (failed ? inSlot(AGENT_INK.failure, line) : line);
+
   const text = resultText(content).trim();
-  if (!text) return '  ⎿  (no output)\n';
+  if (!text) return `${inSlot(gutter, '  ⎿  (no output)')}\n`;
 
   const clipped = text.length > RESULT_CHARS ? `${text.slice(0, RESULT_CHARS)}…` : text;
   const lines = clipped.split('\n');
   const shown = lines.slice(0, RESULT_LINES);
   const rest = lines.length - shown.length;
 
-  return shown.map((line, index) => (index === 0 ? `  ⎿  ${line}` : `     ${line}`)).join('\n')
-    + (rest > 0 ? `\n     … ${rest} more line${rest === 1 ? '' : 's'}` : '')
+  return shown.map((line, index) => inSlot(gutter, index === 0 ? '  ⎿  ' : '     ') + body(line)).join('\n')
+    + (rest > 0 ? `\n${inSlot(AGENT_INK.aside, `     … ${rest} more line${rest === 1 ? '' : 's'}`)}` : '')
+    + ANSI_RESET
     + '\n';
 }
 
@@ -297,18 +406,26 @@ function renderEvent(event: StreamEvent, ids: FoldIds): string {
         } else if (block?.type === 'thinking') {
           // Marked, never printed. It is the agent's private reasoning, it is long, and a
           // block somebody is watching to see what the run is *doing* is the wrong place
-          // for it — but silence would read as a stall.
-          out += '✻ thinking…\n';
+          // for it — but silence would read as a stall. Dim for the same reason: it says the
+          // run is alive, not what it is doing.
+          out += `${inSlot(AGENT_INK.aside, '✻ thinking…')}\n`;
         } else if (block?.type === 'tool_use') {
+          const name = block.name ?? 'tool';
           const summary = summariseInput(block.input);
           const id = ids.open(block);
-          const name = block.name ?? 'tool';
-          // The row is what it always was; what is new is in front of it, and draws as
-          // nothing. The detail goes out with the *call* rather than being held until the
-          // result, so a tool that is still running can already be opened.
+          // Two runs, not one: the name says what kind of thing is happening and carries the
+          // category's colour, the argument says which file or command and steps back into the
+          // dim ink so a column of tool calls reads as a column of verbs.
+          //
+          // The fold marks go in **front of the colour**, and the order is not arbitrary: the
+          // mark is the row's identity and has to be the first thing on the line whichever
+          // sequences follow it. The detail goes out with the *call* rather than being held
+          // until the result, so a tool that is still running can already be opened, and it
+          // carries the input as plain text — colour is for the row, and the record is what a
+          // reader opens to read.
           out += foldData({ id, name, input: capped(fullInput(block.input)) })
             + foldLine(id, 'f')
-            + `⏺ ${name}(${summary})\n`;
+            + `${inSlot(agentToolSlot(name), `⏺ ${name}`)}${inSlot(AGENT_INK.argument, `(${summary})`)}\n`;
         }
       }
       return out;
@@ -319,11 +436,12 @@ function renderEvent(event: StreamEvent, ids: FoldIds): string {
       let out = '';
       for (const block of content) {
         if (block?.type !== 'tool_result') continue;
-        const rendered = renderResult(block.content);
+        const rendered = renderResult(block.content, block.is_error === true);
         const id = ids.close(block);
         if (!id) { out += rendered; continue; }
         // Every line of the clipped preview is marked, because folding shut has to take the
-        // whole answer with it and not only its first row.
+        // whole answer with it and not only its first row. Marked in front of whatever colour
+        // the line starts in — including the tool's own, which `renderResult` passes through.
         const marked = rendered.replace(/\n$/, '').split('\n')
           .map((line) => foldLine(id, 'c') + line)
           .join('\n');
@@ -333,7 +451,11 @@ function renderEvent(event: StreamEvent, ids: FoldIds): string {
     }
     case 'result': {
       const turns = typeof event.num_turns === 'number' ? `, ${event.num_turns} turn${event.num_turns === 1 ? '' : 's'}` : '';
-      return `\n⏺ ${event.is_error ? 'the run reported an error' : 'the run finished'}${turns}\n`;
+      // Until #242 these two differed only in their wording, at the end of a transcript
+      // somebody is scrolled away from.
+      const slot = event.is_error ? AGENT_INK.failure : AGENT_INK.success;
+      const said = event.is_error ? 'the run reported an error' : 'the run finished';
+      return `\n${inSlot(slot, `⏺ ${said}${turns}`)}\n`;
     }
     // `system` is the startup banner and `rate_limit_event` is bookkeeping. Neither says
     // anything about the work, and both would arrive before the first line of it.
