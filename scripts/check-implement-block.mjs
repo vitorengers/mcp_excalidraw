@@ -7,20 +7,46 @@
  * variable is set, it must refuse a block with no issue, and one block must never become
  * two pull requests.
  *
- * Run against a server started with EXCALIDRAW_IMPLEMENT_AGENT pointing at a stub that
- * prints a pull request URL — the point is this server's behaviour, not an agent's.
+ * Self-contained: it builds a throwaway git repository — a real one, because a run is given a
+ * worktree of its own — writes a stub implement agent that prints a pull request URL when it
+ * is let go, and starts two canvases on free ports: one with no agent, to prove the route is
+ * off, and one with the stub. Nothing here talks to GitHub. Run `./node_modules/.bin/tsc`
+ * first.
  *
- * Usage: node scripts/check-implement-block.mjs [--url http://127.0.0.1:3838] [--disabled]
+ * **The stub waits to be released**, and the in-flight cases are why: a second POST refused
+ * while a run is going, and a reset refused for the same reason, are both assertions about a
+ * run that is still there when the next request arrives. A stub that answered instantly would
+ * pass or fail on scheduling instead.
+ *
+ * `--url` points the same cases at a board you are already looking at; there the stub is
+ * yours to arrange, the workspace to name, and `--disabled` says which of the two servers you
+ * pointed it at. Note that the cases write to that board and start real runs in it.
+ *
+ * Usage: node scripts/check-implement-block.mjs [--url http://127.0.0.1:3737 --workspace <id> [--disabled]]
  *
  * Tier: fast
  */
 
-const urlArg = process.argv.indexOf('--url');
-const BASE = (urlArg !== -1 && process.argv[urlArg + 1])
-  || process.env.EXPRESS_SERVER_URL
-  || 'http://127.0.0.1:3000';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { openCanvas, urlOverride } from './lib/spawn-canvas.mjs';
+
+const url = urlOverride();
 const EXPECT_DISABLED = process.argv.includes('--disabled');
-const WS = 'board-tool';
+const workspaceArg = process.argv.indexOf('--workspace');
+/** The id the registry below declares — or, against somebody else's board, the id they name. */
+const WS = workspaceArg !== -1 && process.argv[workspaceArg + 1]
+  ? process.argv[workspaceArg + 1]
+  : 'implement-block-check';
+
+if (url && workspaceArg === -1) {
+  console.error('--url needs --workspace <id>: which board on that server these cases run in '
+    + 'is not something this check may guess.');
+  process.exit(2);
+}
 
 let failures = 0;
 
@@ -28,6 +54,68 @@ function check(name, condition, detail = '') {
   if (condition) console.log(`  ok    ${name}`);
   else { failures++; console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`); }
 }
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ─── The throwaway world ──────────────────────────────────────
+
+const workDir = join(tmpdir(), `implement-block-check-${process.pid}`);
+const projectDir = join(workDir, 'project');
+const agentStub = join(workDir, 'agent.mjs');
+const registryPath = join(workDir, 'workspaces.json');
+const releaseFile = join(workDir, 'release');
+
+const hold = () => { rmSync(releaseFile, { force: true }); };
+const release = () => { writeFileSync(releaseFile, '', 'utf8'); };
+
+function git(cwd, args) {
+  return spawnSync('git', args, { cwd, encoding: 'utf8' });
+}
+
+if (!url) {
+  rmSync(workDir, { recursive: true, force: true });
+  mkdirSync(projectDir, { recursive: true });
+
+  // A real repository: the run is given a git worktree cut from the default branch, so a
+  // directory that is not one fails long before any of these cases could be reached.
+  git(projectDir, ['init', '-b', 'main']);
+  git(projectDir, ['config', 'user.email', 'check@example.com']);
+  git(projectDir, ['config', 'user.name', 'Check']);
+  git(projectDir, ['config', 'commit.gpgsign', 'false']);
+  writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
+    name: 'Implement Block Check',
+    repo: 'vitorengers/mcp_excalidraw',
+  }), 'utf8');
+  writeFileSync(join(projectDir, 'README.md'), '# Implement Block Check\n', 'utf8');
+  git(projectDir, ['add', '.']);
+  git(projectDir, ['commit', '-m', 'initial']);
+
+  writeFileSync(agentStub, `#!/usr/bin/env node
+import { existsSync } from 'node:fs';
+
+const releaseFile = ${JSON.stringify(releaseFile)};
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+let input = '';
+process.stdin.on('data', (chunk) => { input += chunk.toString(); });
+process.stdin.on('end', async () => {
+  // Held until the check says so, so a run can be looked at while it is live. The cap is a
+  // backstop for a check that failed before it released anything, not a timing assumption.
+  for (let attempt = 0; attempt < 1800 && !existsSync(releaseFile); attempt++) await sleep(100);
+  process.stdout.write('Implemented, and opened one pull request.\\n');
+  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/pull/99\\n');
+});
+`, 'utf8');
+
+  writeFileSync(registryPath, JSON.stringify({
+    workspaces: [{ id: WS, path: projectDir.replace(/\\/g, '/') }],
+  }), 'utf8');
+}
+
+const serverEnv = { LOG_LEVEL: 'error', EXCALIDRAW_WORKSPACES: registryPath };
+const agentCommand = `node "${agentStub.replace(/\\/g, '/')}" -p`;
+
+let BASE = '';
 
 async function call(path, options = {}) {
   const glue = path.includes('?') ? '&' : '?';
@@ -37,8 +125,6 @@ async function call(path, options = {}) {
   });
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** A block that already carries an issue, which is the only kind that can be implemented. */
 async function blockWithIssue(y) {
@@ -56,22 +142,34 @@ async function blockWithIssue(y) {
   return created.body.element.id;
 }
 
-async function main() {
-  console.log(`canvas: ${BASE}${EXPECT_DISABLED ? '  (expecting the feature off)' : ''}`);
-
-  if (EXPECT_DISABLED) {
-    console.log('\n1. off unless its own variable is set');
-    const id = await blockWithIssue(0);
-    const off = await call(`/api/issue-block/${id}/implement`, { method: 'POST' });
-    check('404 when EXCALIDRAW_IMPLEMENT_AGENT is unset', off.status === 404, `got ${off.status}`);
-    check('says how to enable it', /EXCALIDRAW_IMPLEMENT_AGENT/.test(off.body.error ?? ''), off.body.error);
-    // Enabling issue blocks must not enable repository writes.
-    check('naming the issue agent instead would not do', !/EXCALIDRAW_ISSUE_AGENT/.test(off.body.error ?? ''));
-    await call('/api/elements/clear', { method: 'DELETE' });
-    if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
-    console.log('\nall cases passed');
-    return;
+async function settled(elementId, attempts = 60) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const element = (await call(`/api/elements/${elementId}`)).body.element;
+    if (element?.customData?.implementState !== 'running') return element;
+    await sleep(250);
   }
+  return (await call(`/api/elements/${elementId}`)).body.element;
+}
+
+// ─── The feature off ──────────────────────────────────────────
+
+async function disabledCases() {
+  console.log(`canvas: ${BASE}  (expecting the feature off)`);
+
+  console.log('\n1. off unless its own variable is set');
+  const id = await blockWithIssue(0);
+  const off = await call(`/api/issue-block/${id}/implement`, { method: 'POST' });
+  check('404 when EXCALIDRAW_IMPLEMENT_AGENT is unset', off.status === 404, `got ${off.status}`);
+  check('says how to enable it', /EXCALIDRAW_IMPLEMENT_AGENT/.test(off.body.error ?? ''), off.body.error);
+  // Enabling issue blocks must not enable repository writes.
+  check('naming the issue agent instead would not do', !/EXCALIDRAW_ISSUE_AGENT/.test(off.body.error ?? ''));
+  await call('/api/elements/clear', { method: 'DELETE' });
+}
+
+// ─── The feature on ───────────────────────────────────────────
+
+async function mainCases() {
+  console.log(`canvas: ${BASE}`);
 
   console.log('\n1. a block with no issue has nothing to implement');
   const bare = await call('/api/elements', {
@@ -90,6 +188,7 @@ async function main() {
   check('404 for an unknown element', missing.status === 404, `got ${missing.status}`);
 
   console.log('\n3. a run starts and answers immediately');
+  hold();
   const blockId = await blockWithIssue(300);
   const started = await call(`/api/issue-block/${blockId}/implement`, { method: 'POST' });
   check('202 Accepted, not a held-open request', started.status === 202, `got ${started.status}`);
@@ -100,12 +199,8 @@ async function main() {
   check('409 while in flight', double.status === 409, `got ${double.status}`);
 
   console.log('\n5. the result lands on the element');
-  let element;
-  for (let attempt = 0; attempt < 40; attempt++) {
-    await sleep(250);
-    element = (await call(`/api/elements/${blockId}`)).body.element;
-    if (element?.customData?.implementState !== 'running') break;
-  }
+  release();
+  const element = await settled(blockId);
   check('state became done', element?.customData?.implementState === 'done',
         `state=${element?.customData?.implementState} error=${element?.customData?.implementError}`);
   check('the pull request URL was captured',
@@ -131,6 +226,8 @@ async function main() {
   check('the issue it came from survived the reset', Boolean(cleared?.customData?.issueUrl),
         'a reset must not throw away the issue');
 
+  // Held again first: case 8 is about a run that is genuinely still there.
+  hold();
   const rerun = await call(`/api/issue-block/${blockId}/implement`, { method: 'POST' });
   check('the block can be implemented again', rerun.status === 202, `got ${rerun.status}`);
 
@@ -139,16 +236,43 @@ async function main() {
   check('409 while in flight', duringRun.status === 409, `got ${duringRun.status}`);
   check('says why', /running right now/i.test(duringRun.body.error ?? ''), duringRun.body.error);
 
-  for (let attempt = 0; attempt < 40; attempt++) {
-    await sleep(250);
-    const settled = (await call(`/api/elements/${blockId}`)).body.element;
-    if (settled?.customData?.implementState !== 'running') break;
-  }
-
+  release();
+  await settled(blockId);
   await call('/api/elements/clear', { method: 'DELETE' });
-
-  if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
-  console.log('\nall cases passed');
 }
 
-main().catch((err) => { console.error(`\nerror: ${err.message}`); process.exit(1); });
+// ─── Which servers this run needs ─────────────────────────────
+
+try {
+  if (url) {
+    const canvas = await openCanvas({ url });
+    BASE = canvas.base;
+    try {
+      if (EXPECT_DISABLED) await disabledCases();
+      else await mainCases();
+    } finally { canvas.stop(); }
+  } else {
+    // Both halves, because both are this route's behaviour and neither needs the maintainer
+    // to remember which server they are pointed at.
+    const off = await openCanvas({ env: serverEnv });
+    BASE = off.base;
+    try { await disabledCases(); } finally { off.stop(); }
+
+    const on = await openCanvas({ env: { ...serverEnv, EXCALIDRAW_IMPLEMENT_AGENT: agentCommand } });
+    BASE = on.base;
+    try { await mainCases(); } finally { on.stop(); }
+  }
+} catch (error) {
+  console.error(`\nerror: ${error.message}`);
+  failures++;
+} finally {
+  if (!url) {
+    if (existsSync(workDir)) release();
+    await sleep(500);
+    if (existsSync(projectDir)) git(projectDir, ['worktree', 'prune']);
+    rmSync(workDir, { recursive: true, force: true, maxRetries: 5 });
+  }
+}
+
+if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
+console.log('\nall cases passed');

@@ -7,8 +7,9 @@ A Windows portproxy rule maps `0.0.0.0:3000` to `localhost:3000` — that is, to
 in the canvas server is involved, which is exactly why it is hard to see: the server starts
 fine, reports healthy, and every request hangs.
 
-Whatever starts the board therefore sets `PORT=3737` — see [running.md](running.md) — and the
-throwaway instances used by the check scripts use 3838.
+Whatever starts the board therefore sets `PORT=3737` — see [running.md](running.md). The check
+scripts never touch either number: each asks the kernel for a free port and starts its own
+instance on it.
 
 ## How to recognise it
 

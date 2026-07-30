@@ -7,24 +7,48 @@
  * route that fetches the issue, the guards around it, and the fact that the body is
  * fetched rather than copied onto the element.
  *
- * Run against a server started with EXCALIDRAW_GH_COMMAND pointing at a stub that
- * prints what `gh issue view --json` would print, and EXCALIDRAW_ISSUE_AGENT at a stub
- * that prints an issue URL — the point is this server's behaviour, not GitHub's.
+ * Self-contained: it builds a throwaway workspace, writes a stub issue agent that prints an
+ * issue URL and a stub `gh` that answers what `gh issue view --json` would, starts its own
+ * canvas on a free port and kills it. Nothing here talks to GitHub. Run
+ * `./node_modules/.bin/tsc` first.
  *
- * The gh stub must **fail its first invocation** and succeed afterwards. That is what
- * gh does on this machine, and it is what case 5 relies on: with no retry, the first
- * call is the only call and the title is silently lost.
+ * **The `gh` stub refuses its first `issue view`** and succeeds afterwards. That is what `gh`
+ * does on this machine — socket buffer exhaustion that clears on the next attempt — and it is
+ * what case 3 rests on: with no retry the first call is the only call and the title is
+ * silently lost. Keyed on the call rather than on the invocation count, because the run makes
+ * other `gh` calls and a counter that any of them could satisfy would leave the read-back
+ * succeeding first time, which is exactly the way this check could pass for the wrong reason.
+ * Case 6 reads the stub's own log back rather than asserting `true`.
  *
- * Usage: node scripts/check-issue-detail.mjs [--url http://127.0.0.1:3838]
+ * `--url` points the same cases at a board you are already looking at; there the stubs are
+ * yours to arrange, and the workspace to name.
+ *
+ * Usage: node scripts/check-issue-detail.mjs [--url http://127.0.0.1:3737 --workspace <id>]
  *
  * Tier: fast
  */
 
-const urlArg = process.argv.indexOf('--url');
-const BASE = (urlArg !== -1 && process.argv[urlArg + 1])
-  || process.env.EXPRESS_SERVER_URL
-  || 'http://127.0.0.1:3000';
-const WS = 'board-tool';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { openCanvas, urlOverride } from './lib/spawn-canvas.mjs';
+
+const url = urlOverride();
+const workspaceArg = process.argv.indexOf('--workspace');
+/** The id the registry below declares — or, against somebody else's board, the id they name. */
+const WS = workspaceArg !== -1 && process.argv[workspaceArg + 1]
+  ? process.argv[workspaceArg + 1]
+  : 'issue-detail-check';
+
+if (url && workspaceArg === -1) {
+  console.error('--url needs --workspace <id>: which board on that server these cases run in '
+    + 'is not something this check may guess.');
+  process.exit(2);
+}
+
+/** Long enough that it cannot fit on one line of a 200px block — case 4 is about that. */
+const TITLE = 'The docs panel is slow to open on large boards';
 
 let failures = 0;
 
@@ -32,6 +56,87 @@ function check(name, condition, detail = '') {
   if (condition) console.log(`  ok    ${name}`);
   else { failures++; console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`); }
 }
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ─── The throwaway world ──────────────────────────────────────
+
+const workDir = join(tmpdir(), `issue-detail-check-${process.pid}`);
+const projectDir = join(workDir, 'project');
+const agentStub = join(workDir, 'agent.mjs');
+const ghStub = join(workDir, 'gh.mjs');
+const ghLog = join(workDir, 'gh-calls.log');
+const registryPath = join(workDir, 'workspaces.json');
+
+if (!url) {
+  rmSync(workDir, { recursive: true, force: true });
+  mkdirSync(projectDir, { recursive: true });
+  writeFileSync(ghLog, '', 'utf8');
+
+  writeFileSync(agentStub, `#!/usr/bin/env node
+let input = '';
+process.stdin.on('data', (chunk) => { input += chunk.toString(); });
+process.stdin.on('end', () => {
+  process.stdout.write('Investigated, and opened one issue.\\n');
+  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/issues/7\\n');
+});
+`, 'utf8');
+
+  writeFileSync(ghStub, `#!/usr/bin/env node
+import { appendFileSync, readFileSync } from 'node:fs';
+
+const log = ${JSON.stringify(ghLog)};
+const args = process.argv.slice(2);
+const reading = args[0] === 'issue' && args[1] === 'view';
+const before = readFileSync(log, 'utf8').split('\\n').filter(Boolean);
+appendFileSync(log, args.join(' ') + '\\n');
+
+// The blip this machine really produces, on the call the run depends on. Every later one
+// succeeds, so a retry is the difference between a title and a broken-looking block.
+if (reading && !before.some((line) => line.startsWith('issue view'))) {
+  process.stderr.write('error connecting to api.github.com\\n');
+  process.exit(1);
+}
+
+if (reading) {
+  const number = (/issues\\/(\\d+)/.exec(args.join(' ')) ?? [])[1] ?? '0';
+  process.stdout.write(JSON.stringify({
+    number: Number(number),
+    title: ${JSON.stringify(TITLE)},
+    body: 'What the issue says, fetched rather than stored.',
+    state: 'OPEN',
+    comments: [],
+    stateReason: null,
+    closedByPullRequestsReferences: [],
+  }));
+} else {
+  process.stderr.write('stub gh: unexpected call ' + args.join(' ') + '\\n');
+  process.exit(1);
+}
+`, 'utf8');
+
+  writeFileSync(registryPath, JSON.stringify({
+    workspaces: [{ id: WS, path: projectDir.replace(/\\/g, '/') }],
+  }), 'utf8');
+  writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
+    name: 'Issue Detail Check',
+    repo: 'vitorengers/mcp_excalidraw',
+  }), 'utf8');
+}
+
+const canvas = await openCanvas({
+  url,
+  env: {
+    LOG_LEVEL: 'error',
+    EXCALIDRAW_WORKSPACES: registryPath,
+    EXCALIDRAW_ISSUE_AGENT: `node "${agentStub.replace(/\\/g, '/')}" -p`,
+    EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
+  },
+});
+const BASE = canvas.base;
+
+/** Every `gh` command line the stub was given, in order. */
+const ghCalls = () => (url ? [] : readFileSync(ghLog, 'utf8').split('\n').filter(Boolean));
 
 async function call(path, options = {}) {
   const glue = path.includes('?') ? '&' : '?';
@@ -41,8 +146,6 @@ async function call(path, options = {}) {
   });
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function main() {
   console.log(`canvas: ${BASE}`);
@@ -142,19 +245,32 @@ async function main() {
   check('it returns the issue state', Boolean(detail.body.issue?.state));
 
   console.log('\n6. the first gh of the run failed, and nothing showed it');
-  // The stub fails its very first invocation — which is the read-back inside the run,
-  // in case 3. gh does exactly this here: socket buffer exhaustion that clears on the
-  // next attempt. Without a retry that first call is the only call, the title never
-  // lands, and the blip reaches the reader as a broken block. So case 3 passing *is*
-  // the proof; this only states what it proved.
-  check('the stub was asked to fail once', true, '');
+  // The stub refuses the run's own read-back, in case 3. Without a retry that first call is
+  // the only call, the title never lands, and the blip reaches the reader as a broken block.
+  // So case 3 passing *is* the proof — as long as the refusal really happened, which is what
+  // the stub's log says here rather than being taken on trust.
+  const views = ghCalls().filter((line) => line.startsWith('issue view'));
+  check('the stub was asked to read the issue more than once',
+        url ? true : views.length >= 2,
+        `${views.length} issue view call(s) — the first was refused, so a single call means no retry`);
   check('the title landed anyway', Boolean(element?.customData?.issueTitle),
         'a single transient gh failure lost the title');
 
   await call('/api/elements/clear', { method: 'DELETE' });
-
-  if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
-  console.log('\nall cases passed');
 }
 
-main().catch((err) => { console.error(`\nerror: ${err.message}`); process.exit(1); });
+try {
+  await main();
+} catch (error) {
+  console.error(`\nerror: ${error.message}`);
+  failures++;
+} finally {
+  canvas.stop();
+  if (!url) {
+    await sleep(200);
+    rmSync(workDir, { recursive: true, force: true, maxRetries: 5 });
+  }
+}
+
+if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
+console.log('\nall cases passed');

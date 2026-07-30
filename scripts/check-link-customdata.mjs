@@ -7,15 +7,19 @@
  * zod strips unknown keys — so the browser could set them and the API could not.
  * These cases pin the round-trip down.
  *
- * Usage: node scripts/check-link-customdata.mjs [--url http://127.0.0.1:3000]
+ * Self-contained: with no arguments it starts its own canvas on a free port and kills it.
+ * Run `./node_modules/.bin/tsc` first. `--url` points the same cases at a board you are
+ * already looking at, which is a debugging move rather than the way this is run.
+ *
+ * Usage: node scripts/check-link-customdata.mjs [--url http://127.0.0.1:3737]
  *
  * Tier: fast
  */
 
-const urlArg = process.argv.indexOf('--url');
-const BASE = (urlArg !== -1 && process.argv[urlArg + 1])
-  || process.env.EXPRESS_SERVER_URL
-  || 'http://127.0.0.1:3000';
+import { openCanvas, urlOverride } from './lib/spawn-canvas.mjs';
+
+const canvas = await openCanvas({ url: urlOverride(), env: { LOG_LEVEL: 'error' } });
+const BASE = canvas.base;
 
 const LINK = 'https://github.com/vitorengers/FicaAI/blob/main/docs/decisoes/conectividade.md';
 const DOC = { docKey: 'conectividade', kind: 'decision' };
@@ -40,7 +44,7 @@ async function api(path, options = {}) {
 async function main() {
   console.log(`canvas: ${BASE}`);
 
-  console.log('\n1. create aceita e devolve os campos');
+  console.log('\n1. create accepts both fields and gives them back');
   const created = await api('/api/elements', {
     method: 'POST',
     body: JSON.stringify({
@@ -49,24 +53,24 @@ async function main() {
     }),
   });
   const id = created.element.id;
-  check('link no create', created.element.link === LINK, `recebeu ${created.element.link}`);
-  check('customData no create', created.element.customData?.docKey === 'conectividade');
+  check('link on create', created.element.link === LINK, `got ${created.element.link}`);
+  check('customData on create', created.element.customData?.docKey === 'conectividade');
 
-  console.log('\n2. os campos persistem no store');
+  console.log('\n2. the fields survive in the store');
   const fetched = (await api(`/api/elements/${id}`)).element;
-  check('link persistido', fetched.link === LINK);
-  check('customData persistido', fetched.customData?.kind === 'decision');
+  check('link persisted', fetched.link === LINK);
+  check('customData persisted', fetched.customData?.kind === 'decision');
 
-  console.log('\n3. update altera os campos');
+  console.log('\n3. update changes them');
   await api(`/api/elements/${id}`, {
     method: 'PUT',
     body: JSON.stringify({ link: null, customData: { docKey: 'outro', kind: 'note' } }),
   });
   const updated = (await api(`/api/elements/${id}`)).element;
-  check('link aceita null', updated.link === null, `recebeu ${updated.link}`);
-  check('customData substituido', updated.customData?.docKey === 'outro');
+  check('link accepts null', updated.link === null, `got ${updated.link}`);
+  check('customData replaced', updated.customData?.docKey === 'outro');
 
-  console.log('\n4. sobrevivem ao sync do frontend');
+  console.log('\n4. and both survive a frontend sync');
   await api('/api/elements/sync', {
     method: 'POST',
     body: JSON.stringify({
@@ -79,13 +83,20 @@ async function main() {
     }),
   });
   const synced = (await api(`/api/elements/${id}`)).element;
-  check('link apos sync', synced.link === LINK);
-  check('customData apos sync', synced.customData?.docKey === 'conectividade');
+  check('link after the sync', synced.link === LINK);
+  check('customData after the sync', synced.customData?.docKey === 'conectividade');
 
   await api(`/api/elements/${id}`, { method: 'DELETE' });
-
-  if (failures) { console.error(`\n${failures} caso(s) falharam`); process.exit(1); }
-  console.log('\ntodos os casos passaram');
 }
 
-main().catch((err) => { console.error(`\nerro: ${err.message}`); process.exit(1); });
+try {
+  await main();
+} catch (error) {
+  console.error(`\nerror: ${error.message}`);
+  failures++;
+} finally {
+  canvas.stop();
+}
+
+if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
+console.log('\nall cases passed');
