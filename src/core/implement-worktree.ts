@@ -23,6 +23,7 @@ import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
 import { AgentDirectory, agentEnv } from './issue-agent.js';
+import { foldPathCase } from './workspace-paths.js';
 import { Workspace } from './workspaces.js';
 
 export interface ImplementWorktree extends AgentDirectory {
@@ -146,8 +147,18 @@ function worktreeFor(workspace: Workspace, issueUrl: string): AgentDirectory {
   return { path: path.join(root.path, name), innerPath: `${root.innerPath}/${name}` };
 }
 
-function samePath(a: string, b: string): boolean {
-  const clean = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+/**
+ * Whether two spellings name the same checkout — git's own, from `worktree list --porcelain`,
+ * against the one this module built.
+ *
+ * Case folds where the filesystem does and nowhere else, the same rule the workspace canonical
+ * form follows: on Linux `…/Issue-5` and `…/issue-5` are two directories, and calling them one
+ * would have this read a checkout that exists where there is none.
+ *
+ * Exported for `scripts/check-workspace-path-case.mjs`, which has no other way in.
+ */
+export function samePath(a: string, b: string): boolean {
+  const clean = (value: string) => foldPathCase(value.replace(/\\/g, '/').replace(/\/+$/, ''));
   return clean(a) === clean(b);
 }
 
