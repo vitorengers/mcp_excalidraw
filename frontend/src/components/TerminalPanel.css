@@ -388,3 +388,109 @@
   text-overflow: ellipsis;
   pointer-events: none;
 }
+
+/* ── The folded transcript ─────────────────────────────────────────────────────────────────
+
+   The other kind of tab, and the reason it is a `<div>` rather than an emulator is written on
+   `TerminalTranscript` in `TerminalPanel.tsx`: this is a transcript the *board* composed, so
+   it is a log with line identity, and a fold with something to click is a document affordance
+   that an xterm grid has nowhere to hang. #246.
+
+   It borrows `.terminal-card__screen` for its box — the same absolute inset, the same stacking
+   with one visible at a time — so a block with a shell in one tab and a run in another is one
+   frame with two kinds of thing in it rather than two layouts. What it does not borrow is
+   `overflow: hidden`: this box scrolls itself, which is what an emulator's viewport was doing
+   underneath. */
+.terminal-card__screen.terminal-transcript {
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  white-space: pre;
+  cursor: text;
+}
+
+/* The bar this box scrolls with, in the strip the grid already reserved for the emulator's
+   one — `--terminal-scrollbar` is written onto the card by `TerminalPanel.tsx` and is the same
+   number `terminalGrid()` subtracts. Two boxes, one strip, one number. */
+.terminal-card__screen.terminal-transcript::-webkit-scrollbar {
+  width: var(--terminal-scrollbar, 12px);
+  background: transparent;
+}
+
+.terminal-card__screen.terminal-transcript::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.terminal-card__screen.terminal-transcript::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background-color: var(--terminal-ink-dim);
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .terminal-card__screen.terminal-transcript {
+    scrollbar-width: thin;
+    scrollbar-color: var(--terminal-ink-dim) transparent;
+  }
+}
+
+/* Prose, a thinking mark, the closing line: everything the board did not fold. Drawn exactly
+   where the renderer said, which is what `white-space: pre` above is for — the `⎿` blocks are
+   indented by spaces in the transcript and nothing here re-indents them. */
+.terminal-transcript__line {
+  min-height: 1em;
+}
+
+/* One tool call. The row is the target and the whole width of it is, because the ask was to
+   click on the command rather than on a triangle beside it. */
+.terminal-transcript__row {
+  display: flex;
+  gap: 0.4em;
+  align-items: baseline;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.terminal-transcript__row:hover,
+.terminal-transcript__row:focus-visible {
+  background: var(--terminal-chip);
+  outline: none;
+}
+
+/* Dim, because it is a control rather than something the run said, and it is the one glyph
+   in here the board wrote itself. */
+.terminal-transcript__caret {
+  flex: 0 0 auto;
+  color: var(--terminal-ink-dim);
+}
+
+.terminal-transcript__head {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* What the click reveals, set off from the transcript by a rule down its left rather than by
+   a box: an opened fold is still part of the run, in the place the run put it, and a panel
+   with a border all the way round reads as somewhere else. */
+.terminal-transcript__detail {
+  margin: 0.15em 0 0.35em 0.9em;
+  padding-left: 0.7em;
+  border-left: 2px solid var(--terminal-rule);
+}
+
+.terminal-transcript__detail-label {
+  color: var(--terminal-ink-dim);
+  font-size: 0.85em;
+}
+
+/* Wrapped rather than clipped, and that is the difference from every other line in here. A
+   transcript row is a row of a grid and runs off the right; this is the thing the reader
+   opened the fold to read, so a long command wraps and a long result scrolls with the box. */
+.terminal-transcript__detail-text {
+  margin: 0 0 0.3em;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

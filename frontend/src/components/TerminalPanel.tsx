@@ -1,6 +1,8 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
+import { hasFoldMarks, parseFoldedTranscript } from '../../../src/core/agent-stream-render'
+import type { FoldDetail } from '../../../src/core/agent-stream-render'
 import {
   TERMINAL_FALLBACK_FONT_FAMILY,
   TERMINAL_FONT_FAMILY,
@@ -547,6 +549,221 @@ const TerminalScreen: React.FC<{
 }
 
 /**
+ * Which rows of a folded transcript the reader has opened, kept where a reload can find them.
+ *
+ * A fold is a reading position rather than board data: it belongs to whoever is watching, it
+ * is not part of what the run did, and a second board open on the same session has no business
+ * being folded the same way. So it is neither in the scene nor on the server — nothing about it
+ * is synced, exported or committed, for the reason the transcript itself is an overlay.
+ *
+ * Keyed by session, because a session's ids are only unique inside it: a real run's tool calls
+ * carry the agent's own `toolu_…`, but a stream that named none gets `t1`, `t2`, and `s1` on
+ * a board restarted yesterday is not `s1` today. Worst case is a row that comes back open on a
+ * session that never had it, which costs a click.
+ */
+const FOLD_STORE = 'excalidraw.terminal.folds'
+
+/** How many open rows one session remembers. A reader who opened a hundred has a fold problem. */
+const FOLD_STORE_LIMIT = 200
+
+function readOpenFolds(sessionId: string): Set<string> {
+  try {
+    const raw = window.localStorage?.getItem(`${FOLD_STORE}:${sessionId}`)
+    const ids = raw ? JSON.parse(raw) : []
+    return new Set(Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [])
+  } catch {
+    // No storage, or something that is not a list. A transcript that folds from scratch is
+    // the whole feature; losing the positions is not worth refusing to draw.
+    return new Set()
+  }
+}
+
+function writeOpenFolds(sessionId: string, open: Set<string>): void {
+  try {
+    const ids = [...open].slice(-FOLD_STORE_LIMIT)
+    window.localStorage?.setItem(`${FOLD_STORE}:${sessionId}`, JSON.stringify(ids))
+  } catch { /* private mode, or the quota. The fold still works for this page. */ }
+}
+
+/** One tool call, folded shut, and everything the click has to reveal. */
+interface FoldItem {
+  kind: 'fold'
+  id: string
+  /** The row that stands for the call: `⏺ Bash(…)`, exactly as the transcript wrote it. */
+  head: string
+  /** The clipped preview the transcript carries, which is the fallback when the detail is gone. */
+  preview: string[]
+}
+
+/** Anything that is not a tool call: prose, a thinking mark, a line the agent printed itself. */
+interface LineItem {
+  kind: 'line'
+  text: string
+}
+
+/**
+ * A transcript's rows, with every tool call collapsed into the one row that stands for it.
+ *
+ * Grouped by id rather than by adjacency, and that is not a detail: a `tool_result` arrives in
+ * its own envelope and anything the agent said in between — a `✻ thinking…` mark, a sentence —
+ * lands between the call and its answer. Adjacency would make those two groups with one id
+ * between them, and a fold that opened twice.
+ *
+ * A continuation row whose head is not in the transcript is drawn as an ordinary line rather
+ * than swallowed: the scrollback has a ceiling, so the top of a long run is a transcript that
+ * begins in the middle of somebody's `Read`.
+ */
+function foldItems(rows: { id: string | null; head: boolean; text: string }[]): (FoldItem | LineItem)[] {
+  const items: (FoldItem | LineItem)[] = []
+  const open = new Map<string, FoldItem>()
+  for (const row of rows) {
+    if (row.id && row.head) {
+      const item: FoldItem = { kind: 'fold', id: row.id, head: row.text, preview: [] }
+      open.set(row.id, item)
+      items.push(item)
+      continue
+    }
+    const owner = row.id ? open.get(row.id) : undefined
+    if (owner) owner.preview.push(row.text)
+    else items.push({ kind: 'line', text: row.text })
+  }
+  return items
+}
+
+/** What an opened row shows, when the record behind it is still in the scrollback. */
+const FoldDetailView: React.FC<{ detail: FoldDetail }> = ({ detail }) => (
+  <div className="terminal-transcript__detail">
+    <div className="terminal-transcript__detail-label">{detail.name || 'tool'} — what was sent</div>
+    <pre className="terminal-transcript__detail-text">{detail.input || '(nothing)'}</pre>
+    <div className="terminal-transcript__detail-label">what came back</div>
+    <pre className="terminal-transcript__detail-text">
+      {detail.result === null ? '(still running)' : (detail.result || '(no output)')}
+    </pre>
+  </div>
+)
+
+/**
+ * One session's transcript, as a document rather than as a screen.
+ *
+ * This is the other half of #246, and the reason it is a second component rather than a mode of
+ * the emulator above: a fold is a *document* affordance. An xterm grid has no line identity, no
+ * region ownership and no hit target — it is a screen being painted, and a row of it is whatever
+ * happens to be at that y. Nothing can be hung off a row that does not exist.
+ *
+ * The trade an emulator was bought with is therefore not being made here, and it is worth saying
+ * which trade: xterm parses cursor moves, colours and the alternate screen, which is what a
+ * program repainting itself needs. **Nothing repaints in here.** This view is drawn only for a
+ * transcript carrying the board's own fold marks, and only `AgentStreamRenderer` writes those —
+ * which happens only for a command with `--output-format stream-json` in it, which Claude Code
+ * accepts only beside `--print`. So the session is headless by construction: its stdin went to a
+ * prompt and ended there, it is `readOnly` in the summary, and there is no keyboard to give up.
+ * A reader who opens such a command by hand as an ordinary shell gets this view too, and loses
+ * the keyboard with it — a corner nobody reaches through the board's own buttons.
+ *
+ * The fold state is the reader's and lives in `localStorage` above, so it survives the reload
+ * that the transcript itself survives by being replayed out of the server's scrollback.
+ */
+const TerminalTranscript: React.FC<{
+  active: boolean
+  sessionId: string
+  output: string
+  ended: string | null
+}> = ({ active, sessionId, output, ended }) => {
+  const { rows, details } = useMemo(() => parseFoldedTranscript(output), [output])
+  const items = useMemo(() => foldItems(rows), [rows])
+  const [open, setOpen] = useState<Set<string>>(() => readOpenFolds(sessionId))
+  const boxRef = useRef<HTMLDivElement>(null)
+  /** Whether the reader is still at the end of the run, which is where new lines arrive. */
+  const pinnedRef = useRef(true)
+
+  const toggle = (id: string): void => {
+    setOpen((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      writeOpenFolds(sessionId, next)
+      return next
+    })
+  }
+
+  // Follow the end of the run, unless the reader has scrolled back to read something. Same
+  // rule an emulator's scrollback follows, and for the same reason: a transcript that jumped
+  // to the bottom every time a line arrived would be unreadable while a run is working.
+  useEffect(() => {
+    const box = boxRef.current
+    if (!box || !pinnedRef.current) return
+    box.scrollTop = box.scrollHeight
+  }, [output, open, active, ended])
+
+  return (
+    <div
+      className="terminal-card__screen terminal-transcript"
+      // The line box the grid was derived from, named from the same constant the emulator is
+      // built with rather than spelled again in the stylesheet — a transcript and a screen in
+      // two tabs of one block have to be set at the same rhythm or the block has two.
+      style={{ visibility: active ? 'visible' : 'hidden', lineHeight: TERMINAL_LINE_HEIGHT }}
+      data-session={sessionId}
+      ref={boxRef}
+      onScroll={(event) => {
+        const box = event.currentTarget
+        pinnedRef.current = box.scrollTop + box.clientHeight >= box.scrollHeight - 2
+      }}
+      // A wheel this document has no use for goes to the board, exactly as a wheel the
+      // emulator's scrollback has no use for does — see `forwardWheelToCanvas`. The browser
+      // scrolls this box itself and never calls `preventDefault`, so without this the board
+      // would pan at the same time as the transcript scrolled.
+      onWheel={(event) => {
+        const box = boxRef.current
+        if (!box) return
+        const atTop = box.scrollTop <= 0
+        const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 1
+        const room = box.scrollHeight > box.clientHeight
+        if (room && ((event.deltaY < 0 && !atTop) || (event.deltaY > 0 && !atBottom))) {
+          event.stopPropagation()
+        }
+      }}
+    >
+      {items.map((item, index) => (item.kind === 'line' ? (
+        <div key={index} className="terminal-transcript__line">{item.text || ' '}</div>
+      ) : (
+        <div
+          key={index}
+          className={`terminal-transcript__fold${open.has(item.id) ? ' terminal-transcript__fold--open' : ''}`}
+          data-fold={item.id}
+        >
+          {/* The whole row is the target, not a caret beside it. The ask was to click on the
+              tool call, and a reader aiming at a triangle the width of one character in a
+              block that may be zoomed out is aiming at nothing. */}
+          <div
+            className="terminal-transcript__row"
+            role="button"
+            tabIndex={0}
+            aria-expanded={open.has(item.id)}
+            title={open.has(item.id) ? 'fold this tool call away' : 'show what was sent and what came back'}
+            onClick={() => toggle(item.id)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return
+              event.preventDefault()
+              toggle(item.id)
+            }}
+          >
+            <span className="terminal-transcript__caret">{open.has(item.id) ? '▾' : '▸'}</span>
+            <span className="terminal-transcript__head">{item.head}</span>
+          </div>
+          {open.has(item.id) && (details[item.id]
+            ? <FoldDetailView detail={details[item.id]} />
+            // The record has been trimmed out of the scrollback but the rows it marked are
+            // still here. The clipped preview is what the block always showed, so showing it
+            // is a fold that reveals less rather than a fold that reveals nothing.
+            : <pre className="terminal-transcript__detail-text">{item.preview.join('\n')}</pre>)}
+        </div>
+      )))}
+      {ended && <div className="terminal-transcript__line">[{ended}]</div>}
+    </div>
+  )
+}
+
+/**
  * The terminal, drawn over the block that stands for it.
  *
  * A DOM overlay rather than a scene element, for the reason the documentation card is one:
@@ -850,8 +1067,28 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       >
         {/* `onData` is dropped rather than posted for a read-only session: the route refuses
             one, and a block that posted anyway would be asking for a 409 per keystroke to
-            learn what its own status already told it. */}
-        {tabs.map((tab) => (
+            learn what its own status already told it.
+
+            **Which of the two views a tab gets is asked of the transcript**, not of the
+            session's flags, and that is #246. A transcript carrying fold marks is one the
+            board composed itself out of `stream-json` — see `agent-stream-render.ts` — so it
+            is a log with line identity rather than a screen, and it is drawn as a document
+            that folds. Everything else is a program's own repaints and stays in the emulator,
+            byte for byte as it was.
+
+            A rendered session opens with prose before its first tool call, so such a tab is
+            an emulator for its first few lines and a document afterwards. The flip disposes
+            an xterm that has drawn only what this view then draws again, which is why it is
+            not worth guessing the mode from the summary ahead of the evidence. */}
+        {tabs.map((tab) => (hasFoldMarks(tab.output) ? (
+          <TerminalTranscript
+            key={tab.id}
+            active={tab.id === active?.id}
+            sessionId={tab.id}
+            output={tab.output}
+            ended={tab.ended}
+          />
+        ) : (
           <TerminalScreen
             key={tab.id}
             active={tab.id === active?.id}
@@ -874,7 +1111,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               else focusRef.current.delete(tab.id)
             }}
           />
-        ))}
+        )))}
 
         {/* The way back from a shell that has gone, and all that is left of the bar that used
             to run along the bottom of the block. Alt+T was written down only in markdown,

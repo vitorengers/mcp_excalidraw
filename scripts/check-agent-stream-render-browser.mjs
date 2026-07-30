@@ -126,9 +126,19 @@ const STREAM = `${EVENTS.map((event) => JSON.stringify(event)).join('\n')}\n`;
 // The lines the emulator has to be drawing, computed with the same renderer the stub runs, so
 // this check cannot drift from it. Trailing newline dropped; the blank line before the closing
 // line is kept, because a blank row is part of the shape being asserted.
-const { AgentStreamRenderer } = await import(pathToFileURL(rendererModule).href);
+//
+// **Marks off, and that is an assertion rather than a convenience.** Since #246 the renderer
+// puts an invisible mark in front of every row that belongs to a tool call — an OSC sequence
+// with a private identifier, which is how the block knows which rows fold together and where
+// the detail behind them is. An emulator handed one looks for a handler, finds none and draws
+// nothing, so the *drawn* row is the marked line with the marks taken off. Comparing the drawn
+// rows against the marked string would fail on every row that carries one, and comparing them
+// against the stripped string is what says the marks cost the picture nothing. The section
+// below asserts that directly, rather than leaving it implied by this line.
+const { AgentStreamRenderer, hasFoldMarks, stripFoldMarks } =
+  await import(pathToFileURL(rendererModule).href);
 const RENDERED = new AgentStreamRenderer().feed(STREAM);
-const EXPECTED = RENDERED.replace(/\n$/, '').split('\n');
+const EXPECTED = stripFoldMarks(RENDERED).replace(/\n$/, '').split('\n');
 
 // ─── A project with a terminal ────────────────────────────────
 
@@ -151,14 +161,24 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
 // The stub the session runs. `\n` is what the renderer put there and nothing here adds to it —
 // the point of the check is that nothing on the way out does either.
 //
+// **The fold marks come off here, and that is the boundary between this check and #246's.** A
+// transcript that still carries them is one the *board* composed, and since #246 the block draws
+// such a tab as a document of collapsible rows rather than as a screen — there is no emulator
+// in an agent tab to ask this question of any more. What is left, and what this check is really
+// about, is every other pipe-mode session: a machine with no `@lydell/node-pty` binary, or a
+// board started with `EXCALIDRAW_TERMINAL_PTY=0`, staircases every `ls` exactly as #220
+// reported. So the stub prints the renderer's own lines, at the renderer's own columns, with
+// the marks stripped, which is precisely the byte stream such a session produces.
+// `scripts/check-agent-transcript-fold.mjs` covers the marked one.
+//
 // It stays alive afterwards, which is not decoration: a shell that exits is dropped from the
 // session map on the spot, so `GET /api/terminal` would answer with no sessions at all and the
 // block would have nothing to draw. Killed with the server in the `finally` below.
 const stubPath = join(workDir, 'stub-agent.mjs');
 writeFileSync(stubPath, `#!/usr/bin/env node
-import { AgentStreamRenderer } from ${JSON.stringify(pathToFileURL(rendererModule).href)};
+import { AgentStreamRenderer, stripFoldMarks } from ${JSON.stringify(pathToFileURL(rendererModule).href)};
 const stream = ${JSON.stringify(STREAM)};
-process.stdout.write(new AgentStreamRenderer().feed(stream));
+process.stdout.write(stripFoldMarks(new AgentStreamRenderer().feed(stream)));
 setInterval(() => {}, 60000);
 `, 'utf8');
 
@@ -356,6 +376,11 @@ try {
   check('the transcript is the renderer\'s output, envelopes gone',
         scrollback.includes('⏺ Read(') && scrollback.includes('  ⎿  alpha') && !scrollback.includes('"type"'),
         JSON.stringify(scrollback.slice(0, 200)));
+  // The premise of everything below it: this session is one an emulator draws, which is what
+  // being unmarked means since #246. A marked one is the agent tab, and it has no emulator.
+  check('and it carries no fold mark, so it is a session the emulator draws',
+        !hasFoldMarks(scrollback),
+        'a marked transcript is drawn as a document — see check-agent-transcript-fold.mjs');
   // The property #219 exists to protect, and the reason the fix is not `\r\n` in the renderer:
   // the raw tap, `extractGithubUrl` and `UsageMeter` all read these bytes.
   check('and it is `\\n`-terminated, with no carriage return anywhere in it',

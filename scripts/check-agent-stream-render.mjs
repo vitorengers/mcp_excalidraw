@@ -49,6 +49,14 @@ mkdirSync(workDir, { recursive: true });
 const { TerminalSession } = await import(
   pathToFileURL(join(repoRoot, 'dist', 'core', 'terminal-session.js')).href
 );
+// Since #246 a rendered tool line carries an invisible mark in front of it, which is how the
+// block knows which rows belong to which call and where the full detail behind them is. It is
+// an OSC sequence with a private identifier, so an emulator handed one draws nothing — every
+// assertion below is therefore about what is *drawn*, and this is what takes the marks off.
+// `check-agent-transcript-fold.mjs` is where the marks themselves are asserted.
+const { hasFoldMarks, stripFoldMarks } = await import(
+  pathToFileURL(join(repoRoot, 'dist', 'core', 'agent-stream-render.js')).href
+);
 
 /** The lines a real run emits, in the order it emits them. */
 const EVENTS = [
@@ -106,7 +114,7 @@ const streaming = await runSession(
 
 // Asserted line by line, never as a substring: every one of these strings is also inside the
 // raw JSON, so `includes` on the whole transcript would pass today and prove nothing.
-const linesOf = (text) => text.split('\n').map((line) => line.trim());
+const linesOf = (text) => stripFoldMarks(text).split('\n').map((line) => line.trim());
 
 check('the session ran to the end', streaming.exited);
 check("the assistant's prose is shown as prose, on a line of its own",
@@ -124,6 +132,11 @@ check('no raw JSON envelope is left in the transcript',
   'a JSON envelope reached the block');
 check('private thinking is not printed verbatim',
   !streaming.shown.includes('a private thought'));
+check('the tool line is marked for folding, and the mark is not part of what is drawn',
+  hasFoldMarks(streaming.shown)
+  && linesOf(streaming.shown).includes('⏺ Bash(echo hi)')
+  && !stripFoldMarks(streaming.shown).includes('1338'),
+  JSON.stringify(streaming.shown.slice(0, 200)));
 
 // ─── What the tap must still receive ──────────────────────────
 

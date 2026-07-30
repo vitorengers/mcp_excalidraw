@@ -38,11 +38,140 @@
 const RESULT_LINES = 6;
 const RESULT_CHARS = 400;
 
+/**
+ * How much of a tool call is kept behind the fold.
+ *
+ * The clip above is what the *row* shows and it is deliberate — six lines is what a reader
+ * scanning a run wants. This is the other number, the one the click reveals, and it is a
+ * ceiling rather than a summary: twenty times `RESULT_CHARS`, sixty-six times the 120
+ * characters `oneLine` leaves of a command, so a shell command and the output of nearly every
+ * tool call arrive whole.
+ *
+ * It is not infinity, and the reason is where the detail travels. It rides in the transcript
+ * (see the marks below), so it is spent out of `SCROLLBACK_LIMIT` — one `Read` of a large file
+ * with no ceiling here would push every visible line of the run out of a 200,000-character
+ * scrollback and leave the block holding one tool call. At this size a record is at most four
+ * per cent of that budget, and when the ceiling does bite it says so on the line rather than
+ * trimming in silence.
+ */
+const DETAIL_CHARS = 8_000;
+
+/**
+ * The marks that make a rendered transcript foldable, and why they are escape sequences.
+ *
+ * A transcript is one string: it is what the scrollback holds, what a reconnecting board is
+ * replayed and what a reload is served. Anything that has to survive all three has to be *in*
+ * it — a second channel would be a second thing to broadcast, to replay and to bound, and the
+ * three would drift. So a tool call's identity and its full detail are written into the same
+ * string as the line they belong to.
+ *
+ * They are written as OSC sequences with a private identifier, which is what makes that safe:
+ * an emulator handed one looks for a handler, finds none and draws nothing, so a transcript
+ * carrying these is byte for byte the same *picture* it was before. `trimScrollback` already
+ * knows where an OSC ends, so the scrollback ceiling cannot cut one in half. And they carry no
+ * C0 control character of their own — `JSON.stringify` escapes every byte below 0x20, the
+ * terminator among them — so a payload can hold a whole file and still be one line.
+ *
+ * `f` opens a row that belongs to a tool call, `c` a row that continues one, and `d` carries
+ * the detail record itself. Only the frontend reads them; `stripFoldMarks` is what everything
+ * else uses.
+ */
+const FOLD_OSC = '\u001b]1338;';
+const FOLD_END = '\u0007';
+const FOLD_MARK = /\u001b\]1338;([fcd])=([^\u0007\u001b]*)\u0007/g;
+
+/** Whether a transcript is one the board composed, and therefore one that can fold. */
+export function hasFoldMarks(text: string): boolean {
+  return text.includes(FOLD_OSC);
+}
+
+/** A transcript with its marks taken out, which is what everything but the fold view wants. */
+export function stripFoldMarks(text: string): string {
+  return text.replace(FOLD_MARK, '');
+}
+
+/** What one tool call did, in full, behind the row that stands for it. */
+export interface FoldDetail {
+  id: string;
+  /** The tool's name, so an expanded row still says what it was. */
+  name: string;
+  /** Every field of the tool's input, whole. */
+  input: string;
+  /** What the tool answered, whole. Null until the answer arrives. */
+  result: string | null;
+}
+
+/** One drawn line of a transcript, and the tool call it belongs to. */
+export interface FoldRow {
+  /** The tool call this row is part of, or null for prose, thinking and everything else. */
+  id: string | null;
+  /** Whether this row is the one that stands for the call when it is folded shut. */
+  head: boolean;
+  /** The line as it is drawn, marks and escape sequences gone. */
+  text: string;
+}
+
+export interface FoldedTranscript {
+  rows: FoldRow[];
+  details: Record<string, FoldDetail>;
+}
+
+/** Anything else an emulator would have eaten, so a `<div>` does not print it. */
+const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b[\]P^_X][\s\S]*?(?:\u0007|\u001b\\)|\u001b[@-Z\\-_]/g;
+
+/**
+ * A rendered transcript, read back as rows and the detail behind them.
+ *
+ * Written here rather than in the frontend because the frontend is not its only reader: the
+ * check asserts against the same parse, and a second implementation of a format is a second
+ * opinion about it. It is deliberately total — a row whose detail was trimmed out of the
+ * scrollback still comes back as a row, so a fold with nothing behind it degrades to the
+ * clipped preview the transcript already carried rather than to a blank.
+ */
+export function parseFoldedTranscript(text: string): FoldedTranscript {
+  const details: Record<string, FoldDetail> = {};
+  const rows: FoldRow[] = [];
+  const lines = text.split('\n');
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+
+  for (const line of lines) {
+    let id: string | null = null;
+    let head = false;
+    FOLD_MARK.lastIndex = 0;
+    for (let match = FOLD_MARK.exec(line); match; match = FOLD_MARK.exec(line)) {
+      const kind = match[1];
+      const payload = match[2] ?? '';
+      if (kind === 'd') {
+        try {
+          const record = JSON.parse(payload) as Partial<FoldDetail> & { id?: string };
+          if (!record.id) continue;
+          const existing = details[record.id] ?? { id: record.id, name: '', input: '', result: null };
+          details[record.id] = {
+            id: record.id,
+            name: record.name ?? existing.name,
+            input: record.input ?? existing.input,
+            result: record.result !== undefined ? record.result : existing.result,
+          };
+        } catch { /* a record cut in half by the scrollback ceiling is one row without detail */ }
+        continue;
+      }
+      id = payload;
+      if (kind === 'f') head = true;
+    }
+    rows.push({ id, head, text: line.replace(FOLD_MARK, '').replace(ANSI, '') });
+  }
+
+  return { rows, details };
+}
+
 interface ContentBlock {
   type?: string;
   text?: string;
   thinking?: string;
   name?: string;
+  /** The call's own id, which is what a result names when it answers. */
+  id?: string;
+  tool_use_id?: string;
   input?: Record<string, unknown>;
   content?: unknown;
 }
@@ -102,7 +231,60 @@ function renderResult(content: unknown): string {
     + '\n';
 }
 
-function renderEvent(event: StreamEvent): string {
+/** Every field of a tool's input, whole, which is what the row was hiding. */
+function fullInput(input: Record<string, unknown> | undefined): string {
+  if (!input) return '';
+  return Object.entries(input)
+    .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
+    .join('\n');
+}
+
+/** A field of a detail record, at the ceiling, saying so when it is at it. */
+function capped(text: string): string {
+  if (text.length <= DETAIL_CHARS) return text;
+  return `${text.slice(0, DETAIL_CHARS)}\n… ${text.length - DETAIL_CHARS} more characters`;
+}
+
+/** An id an OSC payload can carry, whatever the agent called its tool call. */
+function safeId(id: string): string {
+  return id.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
+}
+
+const foldLine = (id: string, kind: 'f' | 'c'): string => `${FOLD_OSC}${kind}=${id}${FOLD_END}`;
+const foldData = (record: Partial<FoldDetail> & { id: string }): string =>
+  `${FOLD_OSC}d=${JSON.stringify(record)}${FOLD_END}`;
+
+/**
+ * Which tool call each row belongs to, across one stream.
+ *
+ * A `tool_use` block carries its own `id` and the `tool_result` that answers it names that id
+ * in `tool_use_id`, so pairing is the agent's own and not a guess. Neither field is *required*
+ * to be there — nothing here assumes the command is Claude Code, and the captures this file was
+ * written against predate them — so an unnamed call gets a number and an unnamed result is
+ * paired with the oldest call still waiting for one. Tool calls are answered in order in every
+ * capture seen, and a wrong pairing costs the reader a fold rather than a line of transcript.
+ */
+class FoldIds {
+  private next = 0;
+  private waiting: string[] = [];
+
+  open(block: ContentBlock): string {
+    const id = block.id ? safeId(block.id) : `t${(this.next += 1)}`;
+    this.waiting.push(id);
+    return id;
+  }
+
+  close(block: ContentBlock): string | null {
+    if (block.tool_use_id) {
+      const id = safeId(block.tool_use_id);
+      this.waiting = this.waiting.filter((candidate) => candidate !== id);
+      return id;
+    }
+    return this.waiting.shift() ?? null;
+  }
+}
+
+function renderEvent(event: StreamEvent, ids: FoldIds): string {
   switch (event.type) {
     case 'assistant': {
       const content = event.message?.content;
@@ -119,7 +301,14 @@ function renderEvent(event: StreamEvent): string {
           out += '✻ thinking…\n';
         } else if (block?.type === 'tool_use') {
           const summary = summariseInput(block.input);
-          out += `⏺ ${block.name ?? 'tool'}(${summary})\n`;
+          const id = ids.open(block);
+          const name = block.name ?? 'tool';
+          // The row is what it always was; what is new is in front of it, and draws as
+          // nothing. The detail goes out with the *call* rather than being held until the
+          // result, so a tool that is still running can already be opened.
+          out += foldData({ id, name, input: capped(fullInput(block.input)) })
+            + foldLine(id, 'f')
+            + `⏺ ${name}(${summary})\n`;
         }
       }
       return out;
@@ -129,7 +318,16 @@ function renderEvent(event: StreamEvent): string {
       if (!Array.isArray(content)) return '';
       let out = '';
       for (const block of content) {
-        if (block?.type === 'tool_result') out += renderResult(block.content);
+        if (block?.type !== 'tool_result') continue;
+        const rendered = renderResult(block.content);
+        const id = ids.close(block);
+        if (!id) { out += rendered; continue; }
+        // Every line of the clipped preview is marked, because folding shut has to take the
+        // whole answer with it and not only its first row.
+        const marked = rendered.replace(/\n$/, '').split('\n')
+          .map((line) => foldLine(id, 'c') + line)
+          .join('\n');
+        out += foldData({ id, result: capped(resultText(block.content).trim()) }) + marked + '\n';
       }
       return out;
     }
@@ -147,10 +345,12 @@ function renderEvent(event: StreamEvent): string {
 /**
  * One agent stream, turned into a transcript.
  *
- * One instance per session: it holds the half line the last chunk ended in.
+ * One instance per session: it holds the half line the last chunk ended in, and the ids that
+ * pair a tool call with the answer that arrives several chunks later.
  */
 export class AgentStreamRenderer {
   private pending = '';
+  private readonly ids = new FoldIds();
 
   /** What this chunk adds to the transcript. Empty means "nothing complete yet". */
   feed(chunk: string): string {
@@ -170,7 +370,7 @@ export class AgentStreamRenderer {
         continue;
       }
       try {
-        out += renderEvent(JSON.parse(trimmed) as StreamEvent);
+        out += renderEvent(JSON.parse(trimmed) as StreamEvent, this.ids);
       } catch {
         // A line that opens like JSON and is not JSON is still a line somebody wrote.
         out += `${line}\n`;

@@ -162,7 +162,12 @@ Four things follow from the mode, and they are the whole of the difference:
   translating on a PTY would rewrite a bare LF that a repainting program meant as "down one row,
   same column". The server's bytes are untouched, which is the property #219 exists to protect —
   the raw tap, `extractGithubUrl` and `UsageMeter` all read them.
-  `scripts/check-agent-stream-render-browser.mjs` reads the columns back off the emulator.
+  `scripts/check-agent-stream-render-browser.mjs` reads the columns back off the emulator. Since
+  #246 the agent tab itself is no longer one of the tabs this applies to — a transcript the board
+  composed is drawn as a document rather than as a screen, and lays its own lines out. What is
+  left under this rule is every *other* pipe-mode session, which is what that check now stands
+  for: a machine with no binding, or a board started with `EXCALIDRAW_TERMINAL_PTY=0`, staircases
+  every `ls` in exactly the way #220 reported.
 
 **Streaming is unchanged and is still the point.** A command that prints, pauses and prints
 again arrives as two messages while the process is still alive, and `scripts/check-terminal.mjs`
@@ -279,6 +284,61 @@ with an error are decided by one piece of code for a watched run and an unwatche
 `scripts/check-implement-terminal.mjs` covers the server, `scripts/check-implement-interactive.mjs`
 covers the two shapes side by side, and `scripts/check-implement-terminal-browser.mjs` covers the
 board.
+
+### One tab folds its tool calls, and the other one does not
+
+#246: a screenshot of an agent tab where every `Bash(...)` and every `Write(...)` stood open and
+cost most of a screen, with the ask that they collapse to one row and open on a click. Which of
+the two tabs the screenshot was is the whole of why the answer has two halves.
+
+**`Implement / Fix` folds, because the board writes that transcript.** With `-p` and
+`--output-format stream-json` the session's output is composed line by line by
+`AgentStreamRenderer`, so it is a *log* — every row has an identity, and the board knows which
+tool call it belongs to. Two things had to change for a click to have anything to reveal:
+
+1. **The detail had already been thrown away, in the server.** `summariseInput` kept one field of
+   a tool's input cut at 120 characters and `renderResult` kept six lines and 400 of the answer;
+   only that reached the scrollback, and the raw envelopes went to the tap and nowhere a browser
+   could read. So click-to-expand was never a frontend change — the thing the click would show
+   had never been sent. The renderer now writes the whole input and the whole answer into the
+   transcript as well, each capped at 8,000 characters and saying so on the line when the cap
+   bites. That is 20× the old result clip and 66× the old command clip; it is a ceiling rather
+   than a summary, and it exists because the detail is spent out of the same
+   `SCROLLBACK_LIMIT` the visible lines are — one uncapped `Read` of a large file would push a
+   whole run's transcript out of the block.
+2. **It travels in the transcript, as invisible marks.** `ESC ] 1338 ; f= …  BEL` opens a row
+   that belongs to a tool call, `c=` continues one and `d=` carries the record itself, JSON
+   encoded so no byte below 0x20 is ever raw. An OSC with a private identifier is what makes
+   that safe in both directions: an emulator handed one finds no handler and draws nothing, and
+   `trimScrollback` already knows where an OSC ends, so the scrollback ceiling cannot cut one in
+   half. A second channel was the alternative and was not taken — the transcript is already
+   broadcast, replayed on reconnect, served on reload and bounded, and a second thing to do all
+   four to is a second thing to get out of step. `emit()` is unchanged: `onRaw` first and
+   untouched, which is #219.
+
+The block then draws such a tab as a **document** rather than as a screen — `TerminalTranscript`
+in `frontend/src/components/TerminalPanel.tsx`, chosen per tab by whether the transcript carries
+marks. A fold is a hit target, and an xterm grid has no line identity, no region ownership and
+nothing to hang one on. Nothing is given up by leaving the emulator here: a marked transcript
+only exists for a command with `--output-format stream-json`, Claude Code accepts that only
+beside `--print`, and such a session is the read-only one whose stdin went to a prompt and ended
+there. There is no keyboard to lose. The fold state is the reader's rather than the board's —
+`localStorage`, keyed by session — so it survives a tab switch and a reload without being synced,
+exported or committed, for the same reason the overlay itself is not an element.
+
+**`Implement, and let me answer` does not fold, and must not.** That tab is a pseudoterminal and
+what is drawn is the agent's own full-screen interface repainting itself; the board never parses
+it and has no rows to own. A board-side fold there would mean recovering tool calls out of
+somebody else's repaints. What the board does instead is what it already did — stay out of the
+child's way — and that is now measured rather than asserted: `Ctrl+O`, which is how such an
+interface folds its own transcript, is dispatched into the tab and read back out of the process
+on the far side of it. The key handler claims Alt chords, the editing chords in
+`terminal-keys.ts`, `Ctrl+C` with a selection and `Ctrl+V`, and nothing else, so every other
+control chord arrives unchanged. **The transcript in that tab belongs to the program, not to the
+board**, and folding it is the program's own affordance.
+
+Both halves are in `scripts/check-agent-transcript-fold.mjs`, which is a browser check because a
+fold compiles perfectly whether or not anything can be clicked on it.
 
 ## The routes
 
@@ -1481,6 +1541,13 @@ it. A board returned to puts its block back where it was left.
   nobody clicking for it, labelled `#128` rather than `s4`, its screen drawing the agent's output
   while the record still says `running`, and the block still selectable and still resizable by
   its own corner afterwards.
+- `scripts/check-agent-transcript-fold.mjs` — both halves of #246. That the transcript now
+  carries the whole input and the whole answer the row's preview clips, that `extractGithubUrl`
+  and `UsageMeter` still read the same bytes out of the tap, and that a session whose command
+  does not stream carries no mark at all. Then, in Chrome: one row per tool call with the
+  command hidden, a real pointer press on the row revealing both, a second one folding it back,
+  `Bash` and `Write` alike, the state surviving a tab switch and a reload — and, for the other
+  tab, `Ctrl+O` dispatched into a session and read back out of the process on the far side of it.
 - `scripts/check-terminal-browser.mjs` — the block, in Chrome over the DevTools protocol.
   Placement, Alt+T, a command typed with real keystrokes, a corner dragged with a real pointer,
   and the store still holding none of it.
