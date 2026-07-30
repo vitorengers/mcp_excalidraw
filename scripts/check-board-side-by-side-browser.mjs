@@ -24,10 +24,16 @@
  * Then the part only a browser can answer. `Alt+P` and `Alt+G` are `scrollToContent` onto a
  * shape, and a board twice as wide is a different fit: #185 is this project's record of a
  * fit that type-checked, looked right in the numbers and drew the 13px card body at 6px. So
- * the whole-board fit is measured **off the screenshot** — the distance in real pixels
+ * the whole board at 100% is measured **off the screenshot** — the distance in real pixels
  * between Project structure's left border and Development's right border, over the width
  * those two are authored at — rather than read back out of `appState`, which is the number
  * the page believes rather than the one it painted.
+ *
+ * That view is **placed by this file** since #245, where a board switch stopped fitting the
+ * whole scene and started landing on the first section: the landing is asserted for what it
+ * now is, and the camera is then put at 100% over both sections for the measurement. The
+ * claim never was about the landing — it is that the two are side by side and that the pair
+ * still fits the display they were written for.
  *
  * The window is 2560x1440 on purpose: that is the display #185 was reported on, and the
  * question the side-by-side board raises is whether widening the content past it costs the
@@ -494,16 +500,20 @@ try {
   }, 'both sections to reach the canvas');
   await sleep(1600);   // the first-visit fit animates
 
-  console.log('\n3. the whole board still opens at the size it was written at');
+  console.log('\n3. the whole board still fits the display it was written for');
   let probe = await evaluate(PROBE);
-  await shot('01-whole-board');
   const whole = boundsOf(probe.boxes);
-  // Said out loud, because everything below it is a measurement of where the fit put the
-  // board: a page still sitting at 0, 0 would measure a board half off the side of the
-  // canvas and call the missing part a smaller zoom.
-  check('the board was fitted when it landed, not left at the origin',
+  // Said out loud, because everything below it is a measurement of where the camera is: a
+  // page still sitting at 0, 0 would measure a board half off the side of the canvas and
+  // call the missing part a smaller zoom.
+  check('the board was landed on when it was switched to, not left at the origin',
         probe.view.scrollX !== 0 || probe.view.scrollY !== 0,
         `${JSON.stringify(probe.view)} on ${probe.active}`);
+  // What that landing *is* has been the first section since #245, and at or above the size
+  // the board was written at. It used to be the whole scene, which is how the switch came to
+  // choose 0.4 for a reader who never asked to be zoomed out.
+  check('and the switch landed at or above the size the board was written at',
+        probe.view.zoom >= 1 - 0.001, `landed at ${probe.view.zoom.toFixed(3)}`);
   const wholeWidth = whole.maxX - whole.minX;
   const wholeFloor = floorFor(probe.view, wholeWidth);
   check('the canvas is the width #185 was reported at', probe.view.width > 2400,
@@ -521,6 +531,29 @@ try {
   const left = probe.sections[STRUCTURE];
   const right = probe.sections[DEVELOPMENT];
   const authored = (right.x + right.w) - left.x;
+
+  // The camera for that strip is **placed here**, at 100%, rather than taken from where the
+  // switch put it. Since #245 a switch lands on one section, so no path shows both at once —
+  // and the claim being measured was never about the landing anyway: it is that the two are
+  // side by side and that the pair still fits this display at the size they were written at.
+  // Placed rather than fitted keeps the discipline the numbers below depend on, which is that
+  // the expectation is this file's and the pixels are the page's. `updateScene` is the same
+  // door section 4 parks the camera through.
+  const placed = {
+    scrollX: 60 - left.x,
+    scrollY: 200 - probe.view.offsetTop - Math.max(left.y, right.y),
+  };
+  await evaluate(`window.__sideBySideApi.updateScene({ appState: { scrollX: ${placed.scrollX},`
+    + ` scrollY: ${placed.scrollY}, zoom: { value: 1 } } })`);
+  await sleep(600);
+  probe = await evaluate(PROBE);
+  await shot('01-whole-board');
+  check('the whole board can be put on this canvas at 100%',
+        Math.abs(probe.view.zoom - 1) < 0.001
+        && toScreenX(probe.view, left.x) >= 0
+        && toScreenX(probe.view, right.x + right.w) <= probe.view.width,
+        `${toScreenX(probe.view, left.x).toFixed(1)}..`
+        + `${toScreenX(probe.view, right.x + right.w).toFixed(1)} on a ${probe.view.width}px canvas`);
   const band = {
     top: Math.max(left.y, right.y),
     bottom: Math.min(left.y + left.h, right.y + right.h),

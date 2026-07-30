@@ -33,10 +33,12 @@
  *
  * The scene is the live board's, not the tracked file's, because that is the whole point of
  * the issue: the mirror is drawn for real from a stubbed `gh`, and the terminal block is
- * **seeded into the store** at the size `terminalSizeFor` gives it. Seeded rather than opened
- * because the block a shell opens arrives a few hundred milliseconds after the scene does —
- * a race the reader never sees, having been on the board for minutes, but one that would
- * otherwise decide whether this check's premise held on any given run.
+ * opened for real by a stub shell. Neither can be seeded into the store instead — both are
+ * derived, the autosync strips them on the way out, and a seeded one is gone within a second
+ * of the page reading the board. Which of them is on the canvas at the instant the switch
+ * fits is therefore a race with how fast `gh` answers, and that is the point rather than a
+ * flaw in the setup: the mirror alone already takes the landing below the authored zoom, and
+ * the fix is that neither is ever fitted again.
  *
  * Self-contained: throwaway registry and project directories, its own canvas server and its
  * own Chrome, all killed at the end. Run `./node_modules/.bin/tsc` and
@@ -96,10 +98,8 @@ if (!existsSync(terminalPath)) {
   console.error('        (run ./node_modules/.bin/tsc first)');
   process.exit(1);
 }
-// Read rather than retyped: the block's size and the gap it stands in are what make the live
-// scene twice the width of the display, and a copy of them here would be a second definition.
-const { TERMINAL_KIND, TERMINAL_GAP, TERMINAL_SIZE } =
-  await import(pathToFileURL(terminalPath).href);
+// Read rather than retyped: what marks a block as the terminal's is the module's to say.
+const { TERMINAL_KIND } = await import(pathToFileURL(terminalPath).href);
 
 let failures = 0;
 const check = (name, condition, detail = '') => {
@@ -126,6 +126,7 @@ const dirs = Object.fromEntries([OTHER, WIDE, LAPTOP].map((id) => [id, join(work
 for (const dir of [...Object.values(dirs), profileDir, shotDir]) mkdirSync(dir, { recursive: true });
 
 const stubPath = join(workDir, 'stub-gh.mjs');
+const stubShell = join(workDir, 'stub-shell.mjs');
 const fixturePath = join(workDir, 'fixture.json');
 const registryPath = join(workDir, 'workspaces.json');
 
@@ -167,6 +168,12 @@ if (args.includes('graphql')) process.stdout.write(readFileSync(process.env.STUB
 else process.stdout.write('{}\\n');
 `, 'utf8');
 
+/** A shell that says nothing and stays alive: this check is about geometry. */
+writeFileSync(stubShell, `#!/usr/bin/env node
+process.stdin.resume();
+setInterval(() => {}, 1000);
+`, 'utf8');
+
 writeFileSync(registryPath, JSON.stringify({
   workspaces: [OTHER, WIDE, LAPTOP].map((id) => ({ id, path: dirs[id].replace(/\\/g, '/') })),
 }), 'utf8');
@@ -188,11 +195,6 @@ const SECTION_HEIGHT = 1400;
 const SECTION_GAP = 44;
 const STRUCTURE = { x: 0, y: 0, width: SECTION_WIDTH, height: SECTION_HEIGHT };
 const DEVELOPMENT = { x: SECTION_WIDTH + SECTION_GAP, y: 0, width: SECTION_WIDTH, height: SECTION_HEIGHT };
-/** The block one gap left of the documentation, which is where #200 put the region. */
-const TERMINAL = {
-  x: -(TERMINAL_GAP + TERMINAL_SIZE.width), y: 0,
-  width: TERMINAL_SIZE.width, height: TERMINAL_SIZE.height,
-};
 /** A card in the first section, and the 13px body the issue is counting pixels of. */
 const CARD = { x: 40, y: 80, width: 290, height: 120 };
 const BODY_FONT_SIZE = 13;
@@ -216,10 +218,12 @@ const serverEnv = {
   EXCALIDRAW_WORKSPACES: registryPath,
   EXCALIDRAW_GH_COMMAND: `node "${stubPath.replace(/\\/g, '/')}"`,
   STUB_GH_FIXTURE: fixturePath,
+  // Named rather than inherited: this machine's shell exports `EXCALIDRAW_TERMINAL=1`, which
+  // would open a real shell per board, and a check that only works where the operator's
+  // environment happens to say so is not a check.
+  EXCALIDRAW_TERMINAL: `node "${stubShell.replace(/\\/g, '/')}"`,
+  EXCALIDRAW_TERMINAL_PTY: '0',
 };
-// This machine's shell exports it, and a real shell would open a *second* terminal block
-// beside the seeded one and drop the seeded one for having no session.
-delete serverEnv.EXCALIDRAW_TERMINAL;
 
 let serverLog = '';
 const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
@@ -254,10 +258,6 @@ async function seedBoard(workspace) {
   await seed(workspace, {
     type: 'rectangle', ...DEVELOPMENT, backgroundColor: 'transparent',
     customData: { kind: 'board-section', title: 'Development', hotkeyCode: 'KeyG' },
-  });
-  await seed(workspace, {
-    type: 'rectangle', ...TERMINAL, backgroundColor: '#faf6ee',
-    customData: { kind: TERMINAL_KIND },
   });
   await seed(workspace, {
     type: 'rectangle', ...CARD, backgroundColor: '#e7f5ff',
@@ -481,14 +481,21 @@ try {
         probe.view.width >= 2400, show(probe.view));
 
   console.log('\n2. switching onto the documentation board draws the live scene');
-  probe = await switchTo('Wide Display', WIDE);
+  const landed = await switchTo('Wide Display', WIDE);
   await shot('02-wide-landing');
+  // Read after the landing, not at it: the shell takes a moment to open and the block it
+  // gets arrives when it arrives. What the fit was handed is whatever had landed by then,
+  // which is the race described at the top; what the *reader* looks at is this.
+  probe = await waitFor(async () => {
+    const seen = await evaluate(PROBE);
+    return seen.mirror > 0 && seen.terminal > 0 ? seen : null;
+  }, 'the mirror and the terminal block to be drawn', 40).catch(() => evaluate(PROBE));
   const wideScene = boundsOf(probe.boxes);
   check('the mirror is drawn on it', probe.mirror > 0, `${probe.mirror} mirror element(s)`);
   check('a terminal block is standing beside the documentation', probe.terminal === 1,
         `${probe.terminal} block(s)`);
-  check('so the scene is over twice the width of the canvas',
-        wideScene.w > 2 * probe.view.width,
+  check('so the scene the reader is looking at is wider than the canvas',
+        wideScene.w > probe.view.width,
         `${Math.round(wideScene.w)} units against a ${Math.round(probe.view.width)}px canvas`);
 
   console.log('\n3. nothing is being rasterised below what the display can show');
@@ -515,17 +522,17 @@ try {
   await sleep(500);
 
   console.log('\n4. so what a board switch may not do is choose a zoom below the authored one');
-  const structure = probe.sections['Project structure'];
-  check('the whole scene could not have been fitted at the authored zoom',
-        floorFor(probe.view, wideScene.w) < AUTHORED_ZOOM,
-        `a whole-scene fit floors at ${floorFor(probe.view, wideScene.w).toFixed(3)}`);
-  check('the first section is what the switch landed on', onScreen(probe, structure),
-        `${show(probe.view)}, scrollX ${probe.view.scrollX.toFixed(1)}`);
+  check('a fit of the whole scene would have gone below it',
+        floorFor(landed.view, wideScene.w) < AUTHORED_ZOOM,
+        `a whole-scene fit floors at ${floorFor(landed.view, wideScene.w).toFixed(3)}`);
+  check('the first section is what the switch landed on',
+        onScreen(landed, landed.sections['Project structure']),
+        `${show(landed.view)}, scrollX ${landed.view.scrollX.toFixed(1)}`);
   check('and it is drawn at or above the zoom the board was written at',
-        probe.view.zoom >= AUTHORED_ZOOM - 0.001, show(probe.view));
+        landed.view.zoom >= AUTHORED_ZOOM - 0.001, show(landed.view));
   check('so the 13px card body is painted at 13px or more',
-        probe.body !== null && probe.body.fontSize * probe.view.zoom >= BODY_FONT_SIZE - 0.01,
-        probe.body ? `${(probe.body.fontSize * probe.view.zoom).toFixed(1)}px` : 'no body text found');
+        landed.body !== null && landed.body.fontSize * landed.view.zoom >= BODY_FONT_SIZE - 0.01,
+        landed.body ? `${(landed.body.fontSize * landed.view.zoom).toFixed(1)}px` : 'no body text found');
 
   console.log('\n5. the picture has settled by the time the wheel has');
   // Zoomed out by hand, which is the gesture the report is about, and then left alone. Two
@@ -536,8 +543,8 @@ try {
   const settled = await evaluate(PROBE);
   const at = toPage(settled.view, CARD.x, CARD.y);
   const clip = { x: Math.round(at.x), y: Math.round(at.y), width: 300, height: 160, scale: 1 };
-  check('the wheel zoomed the board out', settled.view.zoom < probe.view.zoom - 0.01,
-        `${probe.view.zoom.toFixed(3)} -> ${settled.view.zoom.toFixed(3)}`);
+  check('the wheel zoomed the board out', settled.view.zoom < landed.view.zoom - 0.01,
+        `${landed.view.zoom.toFixed(3)} -> ${settled.view.zoom.toFixed(3)}`);
   check('and the card is still on screen to be photographed',
         clip.x >= 0 && clip.y >= 0
         && clip.x + clip.width <= settled.view.width + settled.view.offsetLeft

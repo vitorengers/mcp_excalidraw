@@ -73,6 +73,32 @@ over the canvas in the corner the mirror is drawn in. `frontend/src/board-fit.ts
 arithmetic and `scripts/check-board-landing-browser.mjs` asserts it at two canvas heights with
 the menus shown and hidden.
 
+## Where a board opens, and what the numbers above leave out
+
+The headroom counted above is the **documentation's** 2324, and the board on the screen is not
+2324 across. Beside it stand a mirror 1320 wide, a terminal block about 1282 wide and two
+120-unit gaps — **a live scene of roughly 5,200 units**, over twice what a maximised 2560
+display gives. Nothing in this document said so until #245, and the arithmetic that came out of
+it is the same arithmetic as #185's, arriving by the width instead of by the height: a fit of
+that scene lands at 0.4, and the 13px card body is drawn at 5px.
+
+So a board that has never been seen opens on its **first section in reading order** — the shape
+`Alt+P` reaches on this board — rather than on everything the canvas is carrying. It is the last
+path that chose a zoom for the reader, and the one thing it must not choose is a zoom below the
+one the board was written at. A board that declares no section opens on its own drawing instead,
+which is the same rule with the mirror and the terminal left out; there is nothing else to leave
+out, because those two are the only shapes on a board that the board did not author.
+
+**Below 100% this board is a map, not a document.** There is no resolution to raise, and #245
+asked for one: Excalidraw hands `window.devicePixelRatio` to both of its renderers and
+rasterises every element cache at `devicePixelRatio x zoom`, so a settled view is already drawn
+at everything the display has. At 0.4 the glyphs are 5px, and canvas glyphs have no hinting —
+they land off the pixel grid and read as blurry rather than as small. The way to read a region
+is to go to it: `Alt+P`, `Alt+G`, `Alt+left` and `Alt+right` each land at or above 100%, which
+is why they exist. `scripts/check-board-sharpness-browser.mjs` measures both halves — the
+backing store against `cssWidth x devicePixelRatio` at dpr 1 and 2, and the landing a switch
+makes, on a 2560-wide canvas and on a laptop one.
+
 ## Why the key is on the shape
 
 `Alt+B` and `Alt+T` are constants in `frontend/src/App.tsx`, and they are right to be: a mirror
