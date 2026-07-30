@@ -218,6 +218,47 @@ across to the canvas server for the same reason.
 `scripts/check-canvas-fonts-browser.mjs` drives a cold Chrome over all of it, with `esm.sh`
 blocked in one scenario and every `woff2` held back 2.5 s in the other.
 
+## Two rasterisers draw the same string
+
+Text on this board is drawn by one of two entirely different things depending on whether it is
+being edited, and **they will never match**. This is not a defect and there is no setting for it.
+
+- **Editing is DOM.** Excalidraw's text editor is a real `<textarea class="excalidraw-wysiwyg">`
+  laid over the canvas, given the element's font, position and theme filter. Blink rasterises it:
+  hinted, snapped to the pixel grid per glyph, and spell-checked — the red wavy underlines in a
+  screenshot are the giveaway that a capture is of the editor rather than of the board.
+- **Committed, it is a bitmap twice over.** The string goes into an offscreen element cache at
+  `devicePixelRatio x zoom`, and that cache is blitted onto the scene canvas at a fractional
+  destination with `imageSmoothingEnabled` turned off for axis-aligned elements. Canvas2D text
+  has no hinting and no subpixel antialiasing at all.
+
+So committed text is softer than the same string in the editor, at every zoom and every
+resolution, and the only way to lift the floor would be to stop drawing the board on a canvas.
+`check-board-sharpness-browser.mjs` section 8 photographs one 16px Excalifont string in both
+states at zoom 1 and reports edge figures for each rather than arguing it: 18.58 across the
+editor's glyphs against 17.70 for the committed ones. A handwriting face with thin irregular
+stems is the worst case for this, and the generated blocks are drawn in one — `CARD_FONT_SIZE`
+16 and `fontFamily: 5` in `project-board-layout.ts`. Changing that typeface would move the floor
+and is a decision about what the board looks like rather than a fix (#267 leaves it open).
+
+**The backing store is not the amplifier, and this was measured before it was believed.**
+`canvas.width` is an `unsigned long`, so the `appState.width * devicePixelRatio` Excalidraw
+assigns to it is truncated; at a fractional device pixel ratio — Windows display scaling at 125%
+or 150%, or Chrome page zoom — the store therefore comes up short of `cssWidth x dpr` and the
+compositor rescales the whole layer. What is discarded is the fractional part of one product, so
+**the shortfall is bounded below one device pixel** on each axis however large the canvas is:
+0.75 of a pixel in 1013.75 at dpr 1.25, 0.5 in 1216.5 at dpr 1.5 — about one part in 1,350 and
+one in 2,433. Nothing visible happens at that scale.
+
+Which is also why `.excalidraw canvas { image-rendering: pixelated }` is **left alone**. It looks
+like the wrong rule and it is the right one here: at a rescale this close to 1, nearest neighbour
+copies whole source rows, so every row on screen is a row the rasteriser drew, while filtering
+blends *every* row with its neighbour at a near-constant phase. Overriding it to `auto` in
+`frontend/index.html`'s style block was built and measured first, and made the committed string
+measurably **softer** — the vertical edge figure fell 11% at dpr 1.5 and 14% at dpr 1.25, with
+half again as many pixels that are neither paper nor ink. The check holds the upstream value so
+the experiment is not repeated.
+
 ## Verification needs a real browser
 
 Three defects here compiled cleanly and did not work: a panel that never opened, a race in tab
