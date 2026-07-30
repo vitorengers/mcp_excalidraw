@@ -55,6 +55,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { inflateSync } from 'node:zlib';
 import WebSocket from 'ws';
+import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -174,29 +175,19 @@ if (!existsSync(modulePath)) {
 
 // ─── Chrome, or an honest skip ────────────────────────────────
 
-/** Chrome, wherever this machine keeps it. Edge speaks the same protocol. */
-function findChrome() {
-  const named = argOf('--chrome');
-  if (named) return existsSync(named) ? named : null;
-  const candidates = [
-    process.env.CHROME_PATH,
-    'C:/Program Files/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium',
-  ];
-  return candidates.find((path) => path && existsSync(path)) ?? null;
-}
-
 const chromePath = findChrome();
 const frontend = join(repoRoot, 'dist', 'frontend', 'index.html');
 
-if (!chromePath || !existsSync(frontend)) {
-  console.log(`\nSKIPPED — the browser half did not run: ${
-    chromePath ? 'dist/frontend/index.html not found (run ./node_modules/.bin/vite build)'
-               : 'no Chrome or Edge found (pass --chrome <path> or set CHROME_PATH)'}`);
+// The two reasons the browser half can be missing are now answered separately: a missing
+// browser is the shared probe's business, and exit 3 under --strict is the whole point of it,
+// while a missing `dist/frontend` is this machine not having run `vite build` and stays a
+// plain skip.
+if (!chromePath) {
+  skipWithoutChrome({ lead: '\n', failures, after: () => console.log('\nthe board-file cases passed') });
+}
+if (!existsSync(frontend)) {
+  console.log('\nSKIPPED — the browser half did not run: dist/frontend/index.html not found'
+              + ' (run ./node_modules/.bin/vite build)');
   if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
   console.log('\nthe board-file cases passed');
   process.exit(0);

@@ -175,3 +175,42 @@ node scripts/check-board-map.mjs
 
 Compiling is not working. Anything that changes what the browser does has to be looked at in a
 browser — three defects in the UI layer compiled cleanly and did none of what they claimed.
+
+### A green run has to say how much of itself it ran
+
+Sixty-nine of the checks drive Chrome over CDP, and a machine without one used to get
+`SKIPPED` and exit 0 from every single one of them — the same exit code as a pass. A CI job
+with no browser installed would have reported the whole of that category green having launched
+nothing, which is precisely the category the paragraph above exists to defend.
+
+So a check that cannot find a browser exits **3** rather than 0, under `CHECK_STRICT=1` or
+`--strict`, and says which paths it looked at:
+
+```
+CHECK_STRICT=1 node scripts/check-board-landing-browser.mjs
+```
+
+Without it the behaviour is unchanged — `SKIPPED` and exit 0 — because an operator running one
+check by hand on a machine with no browser wants a skip, not a failure. The exit code rather
+than a marker on stdout is deliberate: a runner has to classify a check that died before it
+printed anything.
+
+`scripts/run-checks.mjs` is what reads that code. It runs a tier and prints a census:
+
+```
+node scripts/run-checks.mjs --tier browser            # 69 skipped for want of a browser → exit 0
+node scripts/run-checks.mjs --tier browser --strict   # the same 69 → exit 1
+```
+
+`--only <glob>` narrows it to matching file names. The tier a check belongs to is read from a
+`Tier:` line in its banner where it has one; until every check declares one, anything importing
+`scripts/lib/find-chrome.mjs` counts as `browser`.
+
+**`CHROME_PATH` is authoritative**, the same way `--chrome` is: naming a browser that is not
+there is an error, not a reason to fall back to one somewhere else. That is what makes
+`CHROME_PATH=/nonexistent` a way to exercise the skip path on a machine that does have Chrome.
+
+`scripts/lib/find-chrome.mjs` holds the one candidate list — Windows Chrome and Edge, the macOS
+bundle, `/usr/bin/google-chrome`, `/usr/bin/chromium`, `/usr/bin/chromium-browser` and, last,
+`/snap/bin/chromium`. Adding a path anywhere else is a second copy that will drift, and
+`scripts/check-browser-strict.mjs` fails on one.
