@@ -93,6 +93,35 @@ const checkSources = new Map(
   checkFiles.map((name) => [name, readFileSync(join(scriptsDir, name), 'utf8')]),
 );
 
+/**
+ * The same file with its comments blanked out, borrowed from `check-tiers.mjs` and borrowed
+ * for its reason too: a banner that *explains* one machine's workspace id is history, and
+ * `check-shallow-clone.mjs` has to be able to say what `export-board.mjs` used to default to.
+ * What may not survive is a check that still *runs* against it.
+ *
+ * Only the workspace rule reads this. A `Usage:` line naming a target that no longer exists is
+ * not history, it is an instruction that fails, so those two are scanned whole.
+ */
+function code(source) {
+  let out = '';
+  let mode = 'code';
+  for (let i = 0; i < source.length; i++) {
+    const here = source[i];
+    const next = source[i + 1];
+    if (mode === 'code') {
+      if (here === '/' && next === '*') { mode = 'block'; i++; continue; }
+      if (here === '/' && next === '/') { mode = 'line'; i++; continue; }
+      out += here;
+    } else if (mode === 'block') {
+      if (here === '*' && next === '/') { mode = 'code'; i++; }
+      else if (here === '\n') out += here;
+    } else if (here === '\n') { mode = 'code'; out += here; }
+  }
+  return out;
+}
+
+const checkCode = new Map([...checkSources].map(([name, source]) => [name, code(source)]));
+
 /** `file:line` for every line of `sources` matching `needle`. */
 function hits(sources, needle) {
   const found = [];
@@ -119,18 +148,24 @@ const fromEnvironment = hits(checkSources, URL_VARIABLE);
 check(`and none reads its target out of ${URL_VARIABLE}`, fromEnvironment.length === 0,
       `${fromEnvironment.join(', ')} — a variable exported months ago must not choose the server a check asserts`);
 
-const operator = hits(checkSources, OPERATOR_WORKSPACE);
+const operator = hits(checkCode, OPERATOR_WORKSPACE);
 check('no check hardcodes the maintainer\'s workspace id', operator.length === 0,
       `${operator.join(', ')} — a check registers its own workspace and uses that id`);
 
 console.log(`\n2. the ${RETIRED_PORT} convention is gone from the prose too`);
 
+// Everything the issue's own `grep -rn` would have read: the two documents that carried the
+// convention, and every script — `scripts/lib/` included, because that is where the helper
+// the eight now share explains itself.
 const prose = new Map([
   ['CLAUDE.md', readFileSync(join(repoRoot, 'CLAUDE.md'), 'utf8')],
   ...readdirSync(docsDir)
     .filter((name) => name.endsWith('.md') && name !== 'development-log.md')
     .map((name) => [`docs/${name}`, readFileSync(join(docsDir, name), 'utf8')]),
-  ...[...checkSources].map(([name, source]) => [`scripts/${name}`, source]),
+  ...readdirSync(scriptsDir, { recursive: true })
+    .map((name) => String(name).replace(/\\/g, '/'))
+    .filter((name) => name.endsWith('.mjs'))
+    .map((name) => [`scripts/${name}`, readFileSync(join(scriptsDir, name), 'utf8')]),
 ]);
 
 const retired = hits(prose, RETIRED_PORT);

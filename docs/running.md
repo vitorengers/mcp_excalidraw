@@ -171,8 +171,9 @@ because a host path there can only produce `command not found`. Set
                                 --out docs/board.excalidraw
   ```
 
-  `--url` is the port *this* board was started on (`PORT`, 3737 here — not 3838, which is the
-  throwaway instance the older checks talk to), and `--workspace` is the board being exported.
+  `--url` is the port *this* board was started on (`PORT`, 3737 here — not one of the
+  throwaway instances a check starts, which are gone by the time you could point at them),
+  and `--workspace` is the board being exported.
   Run with either flag missing it exits 2 and writes nothing, because a request that guesses
   its own source is one absent flag away from committing whatever else was listening.
 

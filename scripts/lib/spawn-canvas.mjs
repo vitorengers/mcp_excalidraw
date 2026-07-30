@@ -98,8 +98,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * fell back to `http://127.0.0.1:3000` — a port `docs/trap-port-3000.md` says can never work
  * on the machine they were written on, and one nothing in the repository ever started. So the
  * common case, `node scripts/check-<name>.mjs` with no arguments, could only ever fail at
- * connect, and the convention that made it work — a second server on 3838, started by hand
- * with the right stubs — lived in prose and in one operator's habits.
+ * connect, and the convention that made it work — a second, empty server on a fixed port,
+ * started by hand with the right stubs — lived in prose and in one operator's habits.
  *
  * What is left is one explicit answer and one implicit one: a maintainer who says `--url` is
  * pointing a check at a board they are looking at, which is a real debugging move; everybody
