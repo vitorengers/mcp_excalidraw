@@ -343,15 +343,227 @@ function renderResult(content: unknown, failed: boolean): string {
 /** Every field of a tool's input, whole, which is what the row was hiding. */
 function fullInput(input: Record<string, unknown> | undefined): string {
   if (!input) return '';
+  return fieldsExcept(input, []);
+}
+
+/** The same list, with the fields that are the text being changed left out of it. */
+function fieldsExcept(input: Record<string, unknown>, hidden: readonly string[]): string {
   return Object.entries(input)
+    .filter(([key]) => !hidden.includes(key))
     .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
     .join('\n');
 }
 
-/** A field of a detail record, at the ceiling, saying so when it is at it. */
+/**
+ * ## A file edit is shown as a diff, and it is computed here
+ *
+ * #260: an `Edit` opened as `old_string:` followed by the whole old text and `new_string:`
+ * followed by the whole new text — two near-identical blocks with nothing marking what differs,
+ * so the reader diffed them by eye. The tab beside it, `Implement, and let me answer`, draws a
+ * diff; that picture belongs to the agent's own program and the board deliberately never parses
+ * it, so there was nothing to reuse and this is the board writing its own.
+ *
+ * **In the server rather than in `FoldDetailView`**, and there are two reasons rather than a
+ * preference. The frontend is handed `input` already flattened to one string, so an `old_string`
+ * whose own text contains a line reading `new_string:` defeats parsing it back apart in the
+ * browser. And the record is `capped()` before it is written into the transcript, so a diff
+ * computed after the cap would be a diff of a truncated file.
+ *
+ * The vocabulary is #242's: removed lines in the failure slot, added lines in the success slot,
+ * context in the reader's own ink, written as SGR references to the sixteen named slots and
+ * never as a hex — the payload is JSON-encoded into the OSC record, which escapes every byte
+ * below 0x20, so a diff full of escapes is still one unbroken line and `trimScrollback` can
+ * still find the end of the mark. Outside the fold view nothing changes at all: `stripFoldMarks`
+ * takes the whole record away, and the row is the `⏺ Edit(path)` it always was.
+ *
+ * `NotebookEdit` is deliberately **not** here. It is in `terminal-palette.ts`'s `mutation` group
+ * and it does change a file, but its input is a cell rather than a hunk and no capture in this
+ * repository contains one; guessing at the shape of a record nobody has seen is how a renderer
+ * gets a case that is wrong the first time it fires. It keeps the `key: value` list, as `Bash`
+ * and every other tool does.
+ */
+
+/** Which side of an edit one line is on. */
+type DiffMark = '-' | '+' | ' ';
+interface DiffLine { mark: DiffMark; text: string }
+
+/**
+ * How many lines of one side are paired up before the diff gives up and shows two blocks.
+ *
+ * The pairing below is the textbook longest-common-subsequence table, which is a cell per pair
+ * of lines. At this ceiling that is 160,000 cells for one tool call, which is nothing; without
+ * one, a `Write`-sized `new_string` against a `Read`-sized `old_string` would be a table nobody
+ * asked for on the path a block is drawn from. Past it the answer is still honest — every old
+ * line removed, then every new line added — it is simply not aligned.
+ */
+const DIFF_LINES = 400;
+
+/** The width of the gutter the line numbers are printed in. */
+const DIFF_GUTTER = 4;
+
+/**
+ * Two texts, line by line, as removals, additions and the context between them.
+ *
+ * The common prefix and suffix come off first, which is what makes the table small for the
+ * shape this actually sees: an `Edit`'s two strings are the same hunk with a few lines changed.
+ */
+function diffLines(before: string, after: string): DiffLine[] {
+  const old = before.split('\n');
+  const now = after.split('\n');
+  let head = 0;
+  while (head < old.length && head < now.length && old[head] === now[head]) head += 1;
+  let tail = 0;
+  while (tail < old.length - head && tail < now.length - head
+    && old[old.length - 1 - tail] === now[now.length - 1 - tail]) tail += 1;
+
+  const context = (text: string): DiffLine => ({ mark: ' ', text });
+  return [
+    ...old.slice(0, head).map(context),
+    ...pairMiddle(old.slice(head, old.length - tail), now.slice(head, now.length - tail)),
+    ...old.slice(old.length - tail).map(context),
+  ];
+}
+
+/** The part that actually differs, aligned so an unchanged line inside it stays context. */
+function pairMiddle(before: string[], after: string[]): DiffLine[] {
+  const removed = before.map((text): DiffLine => ({ mark: '-', text }));
+  const added = after.map((text): DiffLine => ({ mark: '+', text }));
+  if (!before.length || !after.length
+    || before.length > DIFF_LINES || after.length > DIFF_LINES) return [...removed, ...added];
+
+  const rows = before.length;
+  const cols = after.length;
+  const table: number[][] = Array.from({ length: rows + 1 }, () => new Array<number>(cols + 1).fill(0));
+  for (let row = rows - 1; row >= 0; row -= 1) {
+    for (let col = cols - 1; col >= 0; col -= 1) {
+      table[row]![col] = before[row] === after[col]
+        ? table[row + 1]![col + 1]! + 1
+        : Math.max(table[row + 1]![col]!, table[row]![col + 1]!);
+    }
+  }
+
+  const out: DiffLine[] = [];
+  let row = 0;
+  let col = 0;
+  while (row < rows && col < cols) {
+    if (before[row] === after[col]) { out.push({ mark: ' ', text: before[row]! }); row += 1; col += 1; }
+    else if (table[row + 1]![col]! >= table[row]![col + 1]!) { out.push(removed[row]!); row += 1; }
+    else { out.push(added[col]!); col += 1; }
+  }
+  while (row < rows) { out.push(removed[row]!); row += 1; }
+  while (col < cols) { out.push(added[col]!); col += 1; }
+  return out;
+}
+
+/**
+ * A diff, drawn.
+ *
+ * The gutter counts the lines the file will have **after** the edit, from 1 within the hunk, and
+ * a removed line has no number because it will not be there. They cannot be the file's own line
+ * numbers and that is not a shortcut: `old_string` and `new_string` are a hunk with no idea
+ * where in the file it sits, and nothing else in the input says. A number that looked absolute
+ * and was not would be worse than one that is plainly local.
+ */
+function renderDiff(lines: DiffLine[]): string {
+  let numbered = 0;
+  return lines.map((line) => {
+    const gutter = line.mark === '-'
+      ? ' '.repeat(DIFF_GUTTER)
+      : String((numbered += 1)).padStart(DIFF_GUTTER);
+    // The space between the gutter and the marker is load bearing: without it a line reads as
+    // `2+ …`, which is a number nobody wrote rather than a number and a mark.
+    const body = `${line.mark} ${line.text}`;
+    if (line.mark === '-') return inSlot(AGENT_INK.aside, `${gutter} `) + inSlot(AGENT_INK.failure, body);
+    if (line.mark === '+') return inSlot(AGENT_INK.aside, `${gutter} `) + inSlot(AGENT_INK.success, body);
+    // Context is the one that is *not* painted: the reader's own ink is what says "this did not
+    // move", and a third colour would make three things to tell apart instead of two.
+    return inSlot(AGENT_INK.aside, `${gutter} `) + body;
+  }).join('\n');
+}
+
+/** The fields above a diff, then the diff, with a blank line between them when there are both. */
+function withFields(fields: string, diff: string): string {
+  return fields ? `${fields}\n\n${diff}` : diff;
+}
+
+/** An `Edit`: its two strings, as one diff. */
+function editDetail(input: Record<string, unknown>): string {
+  const before = input.old_string;
+  const after = input.new_string;
+  if (typeof before !== 'string' || typeof after !== 'string') return fullInput(input);
+  return withFields(
+    fieldsExcept(input, ['old_string', 'new_string']),
+    renderDiff(diffLines(before, after)),
+  );
+}
+
+/** A `MultiEdit`: the same diff, once per edit, each saying which one it is. */
+function multiEditDetail(input: Record<string, unknown>): string {
+  const edits = input.edits;
+  if (!Array.isArray(edits) || !edits.length) return fullInput(input);
+  const blocks = edits.map((entry, index) => {
+    const one = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+    const before = typeof one.old_string === 'string' ? one.old_string : '';
+    const after = typeof one.new_string === 'string' ? one.new_string : '';
+    return [
+      inSlot(AGENT_INK.aside, `edit ${index + 1} of ${edits.length}`),
+      fieldsExcept(one, ['old_string', 'new_string']),
+      renderDiff(diffLines(before, after)),
+    ].filter(Boolean).join('\n');
+  });
+  return [fieldsExcept(input, ['edits']), ...blocks].filter(Boolean).join('\n\n');
+}
+
+/** A `Write`: the whole content added, because the old content is not in the input to remove. */
+function writeDetail(input: Record<string, unknown>): string {
+  const content = input.content;
+  if (typeof content !== 'string') return fullInput(input);
+  return withFields(
+    fieldsExcept(input, ['content']),
+    renderDiff(content.split('\n').map((text): DiffLine => ({ mark: '+', text }))),
+  );
+}
+
+/** What one tool call's opened row shows: a diff for the tools that change a file, else the list. */
+function detailInput(name: string, input: Record<string, unknown> | undefined): string {
+  if (!input) return '';
+  switch (name.trim().toLowerCase()) {
+    case 'edit': return editDetail(input);
+    case 'multiedit': return multiEditDetail(input);
+    case 'write': return writeDetail(input);
+    default: return fullInput(input);
+  }
+}
+
+/**
+ * A field of a detail record, at the ceiling, saying so when it is at it.
+ *
+ * Cut at a line boundary since #260, because the record can now carry SGR sequences: a cut in
+ * the middle of one leaves either an unterminated colour that paints the rest of the pane or,
+ * worse, half an escape drawn as `[3` across the screen. A single line longer than the whole
+ * ceiling has no boundary to cut at, so that one is cut where it falls, with any half-written
+ * escape taken off the end and the colour closed.
+ */
 function capped(text: string): string {
   if (text.length <= DETAIL_CHARS) return text;
-  return `${text.slice(0, DETAIL_CHARS)}\n… ${text.length - DETAIL_CHARS} more characters`;
+  const head = text.slice(0, DETAIL_CHARS);
+  const boundary = head.lastIndexOf('\n');
+  const kept = boundary > 0 ? head.slice(0, boundary) : head.replace(/\u001b(?:\[[0-9;]*)?$/, '');
+  const closed = kept.includes('\u001b[') ? `${kept}${ANSI_RESET}` : kept;
+  return `${closed}\n… ${text.length - kept.length} more characters`;
+}
+
+/**
+ * A detail record's own text, cut into coloured runs, one list per line.
+ *
+ * The other half of the diff above, and it is exported for the same reason
+ * `parseFoldedTranscript` is: the record arrives at the frontend as one flat string with #242's
+ * escapes in it, and a view that is a document rather than an emulator has to resolve them
+ * itself. What comes out is the slot *name*, because only the frontend knows which of the two
+ * palettes the reader is in.
+ */
+export function detailLines(text: string): FoldSegment[][] {
+  return text.split('\n').map(segmentsOf);
 }
 
 /** An id an OSC payload can carry, whatever the agent called its tool call. */
@@ -422,8 +634,10 @@ function renderEvent(event: StreamEvent, ids: FoldIds): string {
           // sequences follow it. The detail goes out with the *call* rather than being held
           // until the result, so a tool that is still running can already be opened, and it
           // carries the input as plain text — colour is for the row, and the record is what a
-          // reader opens to read.
-          out += foldData({ id, name, input: capped(fullInput(block.input)) })
+          // reader opens to read. Since #260 a tool that changes a file has that record written
+          // as a *diff* rather than as a field list — see `detailInput` — which is also why the
+          // record has colour in it at all.
+          out += foldData({ id, name, input: capped(detailInput(name, block.input)) })
             + foldLine(id, 'f')
             + `${inSlot(agentToolSlot(name), `⏺ ${name}`)}${inSlot(AGENT_INK.argument, `(${summary})`)}\n`;
         }
