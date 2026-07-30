@@ -58,6 +58,16 @@ export const TERMINAL_SESSION_LIMIT = 8;
 /** What a block reports before anything has resized it. */
 export const DEFAULT_GRID = { cols: 80, rows: 24 };
 
+/**
+ * How long a piped shell's process group is given to go on `SIGTERM` before it is killed.
+ *
+ * Short, because nothing is waiting on it — `close()` schedules the follow-up rather than
+ * blocking on it — and because the window is only worth having for a process that handles the
+ * signal at all. Long enough for a shell to reap what it was running and exit, which is the
+ * whole of what a well-behaved one does with a `SIGTERM`.
+ */
+const GROUP_KILL_GRACE = 400;
+
 /** Whether the shell is talking to a terminal or to three pipes. */
 export type TerminalMode = 'pty' | 'pipe';
 
@@ -588,6 +598,12 @@ export class TerminalSession {
       cwd,
       env,
       windowsHide: true,
+      // A process group of its own, so that `close()` has something to signal other than the
+      // shell. Without it the shell sits in the *server's* group, which is not a group anything
+      // may be aimed at, and what the shell started outlives the tab it was started in — see
+      // `killGroup`. POSIX only: `detached` on Windows means a new console window, and the tree
+      // there is taken down by `taskkill /T` rather than by a signal.
+      detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -702,10 +718,19 @@ export class TerminalSession {
    * End the session, and take whatever it was running with it.
    *
    * `stdin.end()` first for a piped shell, which is how one exits of its own accord, then
-   * the process. On Windows the tree is killed explicitly: `child.kill()` reaches the shell
-   * and not the command running inside it, and a session closed while something was running
-   * would otherwise leave that something behind with nothing left to stop it. A PTY is no
-   * different — the shell is the console's, and what it started is still its own child.
+   * the process. The tree is killed explicitly rather than the shell alone: `child.kill()`
+   * reaches the shell and not the command running inside it, and a session closed while
+   * something was running would otherwise leave that something behind with nothing left to
+   * stop it. A PTY is no different — the shell is the console's, and what it started is
+   * still its own child.
+   *
+   * How the tree is reached is the platform's answer, not ours. Windows has `taskkill /T`,
+   * which walks the parent links, and it stays exactly what it was: first, and the end of
+   * this method when it works. POSIX has no such walk and does not need one — a piped shell
+   * is spawned `detached`, so it leads a process group, and `killGroup` signals the group.
+   * The pty path is left on `pty.kill()` deliberately: closing a pseudoterminal master
+   * already hangs up the foreground group, so a group kill there would be a second answer
+   * to a question that has one, on a code path this issue has no measurement for.
    */
   close(): void {
     if (this.closing) return;
@@ -717,8 +742,44 @@ export class TerminalSession {
     if (process.platform === 'win32' && pid) {
       const killed = spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
       if (killed.status === 0) return;
+    } else if (this.child && pid && this.killGroup(pid)) {
+      return;
     }
     try { this.pty ? this.pty.kill() : this.child?.kill(); } catch { /* already gone */ }
+  }
+
+  /**
+   * Take down the process group a piped shell leads, or say that there was none to take down.
+   *
+   * `SIGTERM` first, because the group is a shell and whatever it was running, and both
+   * deserve the chance to go the way they would have gone had someone typed `exit` — a
+   * `npm run build` gets to remove its half-written output, a dev server gets to release its
+   * port. `SIGKILL` follows for the ones that do not take the hint. Aimed at `-pid` both
+   * times: the group id of a `detached` child is its own pid, and a group id outlives its
+   * leader for as long as any member of the group is still there, which is precisely the
+   * case this exists for.
+   *
+   * The follow-up is scheduled rather than waited for, and `unref`'d. `close()` is called
+   * from a route and from the `exit` handler, both of which are synchronous, and blocking
+   * either for a grace period would stall the board on the way to a tab closing. So an
+   * ordinary close gets both signals and a close on the way out of the process gets the
+   * first one, which is the polite one and the one a shutdown should be sending anyway.
+   *
+   * `false` means the signal never landed — no such group, which on this path means the
+   * shell was gone before we got here, or a platform that has no groups at all. Either way
+   * the caller falls back to the single-pid kill it always did.
+   */
+  private killGroup(pid: number): boolean {
+    try {
+      process.kill(-pid, 'SIGTERM');
+    } catch {
+      return false;
+    }
+    const timer = setTimeout(() => {
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* the group went, which is the point */ }
+    }, GROUP_KILL_GRACE);
+    timer.unref();
+    return true;
   }
 
   /** Poll until the console host has connected, then set the keeper on the pair of them. */
