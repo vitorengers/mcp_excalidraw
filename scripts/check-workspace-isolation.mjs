@@ -12,18 +12,22 @@
  * both used to broadcast with no workspace at all, so a request naming one board reached
  * every board open in every window (#156).
  *
- * Usage: node scripts/check-workspace-isolation.mjs [--url http://127.0.0.1:3000]
- * Expects an empty canvas.
+ * Self-contained: with no arguments it starts its own canvas on a free port and kills it, so
+ * the two boards below are empty because nothing else has ever written to them. Run
+ * `./node_modules/.bin/tsc` first. `--url` points the same cases at a board you are already
+ * looking at, which is a debugging move rather than the way this is run.
+ *
+ * Usage: node scripts/check-workspace-isolation.mjs [--url http://127.0.0.1:3737]
  *
  * Tier: fast
  */
 
 import WebSocket from 'ws';
 
-const urlArg = process.argv.indexOf('--url');
-const BASE = (urlArg !== -1 && process.argv[urlArg + 1])
-  || process.env.EXPRESS_SERVER_URL
-  || 'http://127.0.0.1:3000';
+import { openCanvas, urlOverride } from './lib/spawn-canvas.mjs';
+
+const canvas = await openCanvas({ url: urlOverride(), env: { LOG_LEVEL: 'error' } });
+const BASE = canvas.base;
 
 const A = 'alpha';
 const B = 'beta';
@@ -203,9 +207,16 @@ async function main() {
     watcherA.close();
     watcherB.close();
   }
-
-  if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
-  console.log('\nall cases passed');
 }
 
-main().catch((err) => { console.error(`\nerror: ${err.message}`); process.exit(1); });
+try {
+  await main();
+} catch (error) {
+  console.error(`\nerror: ${error.message}`);
+  failures++;
+} finally {
+  canvas.stop();
+}
+
+if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
+console.log('\nall cases passed');

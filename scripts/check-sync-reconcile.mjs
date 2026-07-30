@@ -6,16 +6,21 @@
  * element the browser had never seen — one created through the API seconds earlier —
  * vanished on the next autosync. These cases pin the reconciling behaviour down.
  *
- * Usage: node scripts/check-sync-reconcile.mjs [--url http://127.0.0.1:3000]
- * Requires a running canvas server. Exits non-zero on the first failed case.
+ * Self-contained: with no arguments it starts its own canvas on a free port and kills it,
+ * which is also how the empty board these cases need is guaranteed to be empty. Run
+ * `./node_modules/.bin/tsc` first. `--url` points the same cases at a board you are already
+ * looking at — it must be an empty one, and the count below still refuses to go on if it is
+ * not, because case 1 asserts what survived.
+ *
+ * Usage: node scripts/check-sync-reconcile.mjs [--url http://127.0.0.1:3737]
  *
  * Tier: fast
  */
 
-const urlArg = process.argv.indexOf('--url');
-const BASE = (urlArg !== -1 && process.argv[urlArg + 1])
-  || process.env.EXPRESS_SERVER_URL
-  || 'http://127.0.0.1:3000';
+import { openCanvas, urlOverride } from './lib/spawn-canvas.mjs';
+
+const canvas = await openCanvas({ url: urlOverride(), env: { LOG_LEVEL: 'error' } });
+const BASE = canvas.base;
 
 let failures = 0;
 
@@ -59,6 +64,7 @@ async function main() {
   const before = (await api('/api/elements')).elements;
   if (before.length) {
     console.error(`Canvas has ${before.length} element(s). Run against an empty canvas.`);
+    canvas.stop();
     process.exit(2);
   }
 
@@ -94,15 +100,19 @@ async function main() {
 
   console.log('\ncleaning up...');
   await api('/api/elements/clear', { method: 'DELETE' });
-
-  if (failures) {
-    console.error(`\n${failures} case(s) failed`);
-    process.exit(1);
-  }
-  console.log('\nall cases passed');
 }
 
-main().catch((err) => {
-  console.error(`\nerror: ${err.message}`);
+try {
+  await main();
+} catch (error) {
+  console.error(`\nerror: ${error.message}`);
+  failures++;
+} finally {
+  canvas.stop();
+}
+
+if (failures) {
+  console.error(`\n${failures} case(s) failed`);
   process.exit(1);
-});
+}
+console.log('\nall cases passed');

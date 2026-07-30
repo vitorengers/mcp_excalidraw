@@ -176,7 +176,7 @@ try {
 
   // The control: a script that exits non-zero on everything would pass both cases above. With
   // both flags given it has to get past the arguments and fail on the fetch instead.
-  const bothGiven = exportRun('--url', 'http://127.0.0.1:1', '--workspace', 'board-tool');
+  const bothGiven = exportRun('--url', 'http://127.0.0.1:1', '--workspace', 'any-board');
   check('with both flags it gets as far as the request',
         bothGiven.status !== 0
         && !refused(bothGiven.out, 'url') && !refused(bothGiven.out, 'workspace'),

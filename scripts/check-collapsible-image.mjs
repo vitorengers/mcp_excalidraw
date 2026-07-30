@@ -7,16 +7,22 @@
  * wrong shape. These cases pin that down, plus survival through sync and export,
  * since collapse state living only in the browser would be lost on any reload.
  *
- * Usage: node scripts/check-collapsible-image.mjs [--url http://127.0.0.1:3000]
+ * Self-contained: with no arguments it starts its own canvas on a free port and kills it, so
+ * the workspace it writes into is empty because nothing else has ever touched it. Run
+ * `./node_modules/.bin/tsc` first. `--url` points the same cases at a board you are already
+ * looking at, which is a debugging move rather than the way this is run.
+ *
+ * Usage: node scripts/check-collapsible-image.mjs [--url http://127.0.0.1:3737]
  *
  * Tier: fast
  */
 
-const urlArg = process.argv.indexOf('--url');
-const BASE = (urlArg !== -1 && process.argv[urlArg + 1])
-  || process.env.EXPRESS_SERVER_URL
-  || 'http://127.0.0.1:3000';
+import { openCanvas, urlOverride } from './lib/spawn-canvas.mjs';
 
+const canvas = await openCanvas({ url: urlOverride(), env: { LOG_LEVEL: 'error' } });
+const BASE = canvas.base;
+
+/** Its own board, so a run against a live server cannot draw on the one being looked at. */
 const WS = 'collapse-test';
 let failures = 0;
 
@@ -85,9 +91,16 @@ async function main() {
   check('no longer collapsed', element.customData?.collapsed === false);
 
   await api('/api/elements/clear', { method: 'DELETE' });
-
-  if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
-  console.log('\nall cases passed');
 }
 
-main().catch((err) => { console.error(`\nerror: ${err.message}`); process.exit(1); });
+try {
+  await main();
+} catch (error) {
+  console.error(`\nerror: ${error.message}`);
+  failures++;
+} finally {
+  canvas.stop();
+}
+
+if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
+console.log('\nall cases passed');

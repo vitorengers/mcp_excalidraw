@@ -58,7 +58,8 @@ break what the sync is for, and `check-issue-state-sync.mjs` asserts that half a
 
 ## Why the check matters
 
-Run `node scripts/check-sync-reconcile.mjs --url http://127.0.0.1:3838` against an empty
-instance. Four cases: the API element survives a sync that omits it, a tombstone removes while
+Run `node scripts/check-sync-reconcile.mjs`. It starts an empty instance of its own, which is
+what the cases need — an element that survives a sync is only visible on a board nothing else
+has written to. Four cases: the API element survives a sync that omits it, a tombstone removes while
 an absence does not, the newest version wins a race, and `version` is not overwritten. Against
 the old clear-and-replace code the first case fails immediately.
