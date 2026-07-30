@@ -1,0 +1,18 @@
+# Line endings are decided here, not by each contributor's core.autocrlf.
+#
+# The index was all-LF before this file existed, but only because the development machine
+# happens to have core.autocrlf=true. The Windows default when git is installed without the
+# recommended option is false, which commits CRLF — and a shell launcher committed that way
+# fails on Linux with `bad interpreter: /bin/sh^M`, a message that points nowhere near the
+# cause. `scripts/check-tracked-file-modes.mjs` holds the index to what this file says.
+#
+# The order matters: later rules win, so demo.gif has to come after the catch-all.
+
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.command text eol=lf
+*.mjs text eol=lf
+*.excalidraw text eol=lf
+
+demo.gif binary
