@@ -744,6 +744,13 @@ board and goes off the edge with it. The documentation card, which is a reading 
 clamps it into the canvas area before it is drawn, so it can never leave. That asymmetry is
 right, and it is also what left this card as the one overlay that could escape.
 
+It has a second consequence, which is #241 read from this side. Because this card **is** the
+shape it never moves out of anybody's way, and because it shares `--board-z-overlay` and is
+drawn later, a documentation card that wanted the same pixels lost them silently. The
+documentation card is the one that gives way: `placeCard` takes the panels' rects as obstacles
+and opens on a side clear of them — see `docs/docs-block.md`. Nothing here changed for it, and
+nothing here should: the block that is a shape stays where its shape is.
+
 Until #153 nothing stopped it. Pan a block above the top of the canvas and `top` went negative;
 the canvas wrapper declared no `overflow`, so the card was not clipped, and the project tab
 strip and the `Excalidraw Canvas` header row are `static` and unpositioned, so a card carrying

@@ -17,6 +17,11 @@
      placement is clamped into the viewport first; it shares the token because it is the same
      kind of thing, not because it had the same defect. #153. */
   z-index: var(--board-z-overlay, 5);
+  /* The width the component sets is the width placement reserved for the card, so it has to
+     be the width the card ends up occupying. Without this the border adds a pixel on each
+     side, and a card placed flush against a terminal panel — which is what avoiding one comes
+     down to (#241) — reaches two pixels into it. */
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   overflow: hidden;

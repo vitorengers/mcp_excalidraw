@@ -144,5 +144,146 @@ console.log('\n8. panning the block moves the card by exactly the same amount');
         `${before.top} -> ${after.top}`);
 }
 
+// ─── Obstacles ────────────────────────────────────────────────
+//
+// The viewport is not empty. Since #200 the board reads `mirror | terminals | documentation`,
+// so a mirror card has the terminal region immediately to its right — the first side placement
+// tries — and the terminal panel is a DOM overlay on the same layer, drawn later. Where both
+// want the same pixels the terminal takes them and the card is silently covered (#241). The
+// cases below are the ones the fix is for; every case above is the same call with no obstacles
+// passed, which is what "a board with no terminal on screen places every card where it does
+// today" means.
+
+/** Do two rectangles share any pixel? Same test the module uses. */
+const hits = (p, rect, card = CARD) =>
+  p.left < rect.x + rect.width &&
+  p.left + card.width > rect.x &&
+  p.top < rect.y + rect.height &&
+  p.top + card.height > rect.y;
+
+/**
+ * A screen wide enough for the card to change horizontal sides at all.
+ *
+ * In the 1200 above it cannot: the right side needs the shape to end by x=452 and the left
+ * side needs it to start at x=748, so no shape has room on both. The board runs on a screen
+ * around this wide, and "open on the other side" is only a question there.
+ */
+const WIDE = { width: 1920, height: 1000 };
+
+console.log('\n9. room to the right, but a terminal is standing in it');
+{
+  const anchor = { x: 800, y: 200, width: 240, height: 120 };
+  // Exactly where the card would have gone: right of the block, down the rest of the screen.
+  const terminal = { x: 1040, y: 0, width: 880, height: 1000 };
+  const bare = placeCard(anchor, CARD, WIDE);
+  check('without it the card would land on the terminal', hits(bare, terminal),
+        `right placement ${bare.left}..${bare.left + CARD.width}`);
+
+  const p = placeCard(anchor, CARD, WIDE, { obstacles: [terminal] });
+  check('placed on the other side', p.side === 'left', p.side);
+  check('clear of the terminal', !hits(p, terminal),
+        `card ${p.left}..${p.left + CARD.width} vs terminal ${terminal.x}..${terminal.x + terminal.width}`);
+  check('fully on screen', inside(p, CARD, WIDE), `left=${p.left} top=${p.top}`);
+  check('not covering the block', !overlaps(p, anchor));
+  check('and not reported as clamped — it found a side', p.clamped === false);
+}
+
+console.log('\n10. the same block with the terminal panned away is unchanged');
+{
+  const anchor = { x: 800, y: 200, width: 240, height: 120 };
+  const terminal = { x: 1800, y: 0, width: 880, height: 1000 };
+  const bare = placeCard(anchor, CARD, WIDE);
+  const p = placeCard(anchor, CARD, WIDE, { obstacles: [terminal] });
+  check('still to the right', p.side === 'right', p.side);
+  check('at exactly the position it had before', p.left === bare.left && p.top === bare.top,
+        `${bare.left},${bare.top} -> ${p.left},${p.top}`);
+}
+
+console.log('\n11. the board\'s own arrangement: a mirror card at the left edge, the terminal filling the right');
+{
+  // The reported case. The mirror is the leftmost region, so there is no room for a 720px
+  // card to its left on any screen — "the other side" here is below, and the terminal
+  // reaches far enough left that below has to move over a little as well.
+  const screen = { width: 1500, height: 900 };
+  const anchor = { x: 60, y: 200, width: 300, height: 140 };
+  const terminal = { x: 750, y: 0, width: 750, height: 900 };
+  const bare = placeCard(anchor, CARD, screen);
+  check('without it the card lands on the terminal', hits(bare, terminal),
+        `${bare.side} ${bare.left}..${bare.left + CARD.width}`);
+
+  const p = placeCard(anchor, CARD, screen, { obstacles: [terminal] });
+  check('clear of the terminal', !hits(p, terminal),
+        `${p.side} ${p.left}..${p.left + CARD.width} vs terminal from ${terminal.x}`);
+  check('fully on screen', inside(p, CARD, screen), `left=${p.left} top=${p.top}`);
+  check('not covering the block', !overlaps(p, anchor));
+  check('still beside the block it belongs to', p.side === 'below', p.side);
+  check('and moved no further than it had to', p.left === terminal.x - CARD.width,
+        `left=${p.left}, flush with the terminal would be ${terminal.x - CARD.width}`);
+}
+
+console.log('\n12. a terminal on each side still yields something readable');
+{
+  const anchor = { x: 800, y: 300, width: 200, height: 100 };
+  const obstacles = [
+    { x: 0, y: 0, width: 700, height: 1000 },
+    { x: 1100, y: 0, width: 820, height: 1000 },
+  ];
+  const p = placeCard(anchor, CARD, WIDE, { obstacles });
+  check('a side is chosen', ['right', 'left', 'below', 'above'].includes(p.side), String(p.side));
+  check('fully on screen', inside(p, CARD, WIDE), `left=${p.left} top=${p.top}`);
+  // Nothing can be clear here — the card is 720 wide and the gap between the two panels is
+  // 400 — so the rule is the documented fallback: today's first side with viewport room.
+  const bare = placeCard(anchor, CARD, WIDE);
+  check('and it is what today would have done', p.side === bare.side && p.left === bare.left && p.top === bare.top,
+        `${bare.side} ${bare.left},${bare.top} -> ${p.side} ${p.left},${p.top}`);
+}
+
+console.log('\n13. an obstacle over the whole viewport falls back rather than fails');
+{
+  const anchor = { x: 100, y: 200, width: 240, height: 120 };
+  const everything = { x: 0, y: 0, width: 1200, height: 800 };
+  const bare = placeCard(anchor, CARD, VIEWPORT);
+  const p = placeCard(anchor, CARD, VIEWPORT, { obstacles: [everything] });
+  check('identical to the placement with no obstacles',
+        p.side === bare.side && p.left === bare.left && p.top === bare.top && p.clamped === bare.clamped,
+        `${bare.side} ${bare.left},${bare.top} -> ${p.side} ${p.left},${p.top}`);
+  check('still fully on screen', inside(p));
+
+  // And the clamp itself is untouched: a block filling the screen still says so.
+  const filling = placeCard({ x: 0, y: 0, width: 1200, height: 800 }, CARD, VIEWPORT,
+                            { obstacles: [everything] });
+  check('a block filling the screen is still reported as clamped', filling.clamped === true);
+  check('and the clamped card is still on screen', inside(filling),
+        `left=${filling.left} top=${filling.top}`);
+}
+
+console.log('\n14. the obstacle that is the anchor does not push its own card around');
+{
+  // Selecting a terminal block: the panel covers the block's bounds exactly, so the block's
+  // own overlay must not count against it.
+  const anchor = { x: 100, y: 200, width: 240, height: 120 };
+  const itself = { x: 100, y: 200, width: 240, height: 120 };
+  const bare = placeCard(anchor, CARD, VIEWPORT);
+  const p = placeCard(anchor, CARD, VIEWPORT, { obstacles: [itself] });
+  check('unchanged', p.side === bare.side && p.left === bare.left && p.top === bare.top,
+        `${bare.side} ${bare.left} -> ${p.side} ${p.left}`);
+}
+
+console.log('\n15. an empty obstacle list is the same call as no obstacle list');
+{
+  for (const anchor of [
+    { x: 100, y: 200, width: 240, height: 120 },
+    { x: 900, y: 200, width: 240, height: 120 },
+    { x: 20, y: 20, width: 1160, height: 100 },
+    { x: 20, y: 520, width: 1160, height: 260 },
+  ]) {
+    const bare = placeCard(anchor, CARD, VIEWPORT);
+    const p = placeCard(anchor, CARD, VIEWPORT, { obstacles: [] });
+    check(`unchanged for a block at ${anchor.x},${anchor.y}`,
+          p.side === bare.side && p.left === bare.left && p.top === bare.top && p.clamped === bare.clamped,
+          `${bare.side} ${bare.left},${bare.top} -> ${p.side} ${p.left},${p.top}`);
+  }
+}
+
 if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
 console.log('\nall cases passed');
