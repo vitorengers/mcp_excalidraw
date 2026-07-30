@@ -23,6 +23,11 @@
  * request is merged, so the log always runs one entry ahead of `git log` — an entry with
  * no merge yet is the normal state, a merge with no entry is the defect.
  *
+ * It is also the one rule a checkout can be too thin to answer: the fork base below is not
+ * in a `--depth 1` clone, which is what `actions/checkout` makes by default. There it says
+ * so and stands down, and the other four still decide. `scripts/check-shallow-clone.mjs`
+ * holds it to that.
+ *
  * Offline apart from `git log`. Run `./node_modules/.bin/tsc` first: the section resolver
  * is a compiled module, checked here against boards built in memory.
  *
@@ -31,7 +36,7 @@
  * Tier: repo
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -55,6 +60,13 @@ let failures = 0;
 function check(name, condition, detail = '') {
   if (condition) console.log(`  ok    ${name}`);
   else { failures++; console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`); }
+}
+
+/** Whether a commit is in this checkout's object store at all. A shallow clone's is not. */
+function reachable(commit) {
+  const probe = spawnSync('git', ['cat-file', '-e', `${commit}^{commit}`],
+                          { cwd: repoRoot, encoding: 'utf8' });
+  return probe.status === 0;
 }
 
 const config = JSON.parse(readFileSync(join(repoRoot, 'board.config.json'), 'utf8'));
@@ -146,17 +158,32 @@ if (existsSync(logPath)) {
   check('every entry carries an ISO date', undated.length === 0,
         undated.map((entry) => `#${entry.pull} dated ${entry.date}`).join(', '));
 
-  const merged = execFileSync('git', ['log', '--format=%s', `${FORK_BASE}..HEAD`],
-                              { cwd: repoRoot, encoding: 'utf8' })
-    .split('\n')
-    .map((subject) => subject.match(/\(#(\d+)\)\s*$/))
-    .filter(Boolean)
-    .map((match) => match[1]);
+  // The fork base is only in the object store of a clone deep enough to hold it, and
+  // `actions/checkout@v4` clones at depth 1 unless a workflow says otherwise. Asked for a
+  // range starting at a commit it does not have, `git` answers `fatal: Invalid revision
+  // range` and an unguarded call turns that into a stack trace — which takes the four rules
+  // already decided down with it and says nothing about any of them.
+  //
+  // So this one rule gives itself up. A missing commit is a fact about the checkout, not
+  // about the branch, and the CI job that this rule exists for checks out with
+  // `fetch-depth: 0`. What is not given up is a `git` that fails for any other reason:
+  // reachable-and-broken is a failure, absent is a skip.
+  if (!reachable(FORK_BASE)) {
+    console.log(`  SKIPPED — shallow clone, the merge log cannot be verified here`);
+    console.log(`          (${FORK_BASE.slice(0, 12)} is not in this checkout; clone with --depth 0)`);
+  } else {
+    const merged = execFileSync('git', ['log', '--format=%s', `${FORK_BASE}..HEAD`],
+                                { cwd: repoRoot, encoding: 'utf8' })
+      .split('\n')
+      .map((subject) => subject.match(/\(#(\d+)\)\s*$/))
+      .filter(Boolean)
+      .map((match) => match[1]);
 
-  const recorded = new Set(entries.map((entry) => entry.pull));
-  const missing = [...new Set(merged)].filter((pull) => !recorded.has(pull));
-  check('every merged pull request has an entry', missing.length === 0,
-        `${missing.length} missing: ${missing.map((pull) => `#${pull}`).join(' ')}`);
+    const recorded = new Set(entries.map((entry) => entry.pull));
+    const missing = [...new Set(merged)].filter((pull) => !recorded.has(pull));
+    check('every merged pull request has an entry', missing.length === 0,
+          `${missing.length} missing: ${missing.map((pull) => `#${pull}`).join(' ')}`);
+  }
 }
 
 console.log('\n5. the resolver binds what the board declares, and nothing else');

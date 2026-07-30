@@ -164,7 +164,18 @@ because a host path there can only produce `command not found`. Set
   `EXCALIDRAW_BOARD_STATE` says. That is what comes back at the next start, unless the project's
   `board` file has been written since. Nothing is written into any project.
 - Into the *tracked* board file, nothing is saved back: `scripts/export-board.mjs` is how
-  `docs/board.excalidraw` is written, and it is a commit like any other.
+  `docs/board.excalidraw` is written, and it is a commit like any other. Both flags are
+  required — the script has no default board:
+
+  ```
+  node scripts/export-board.mjs --url http://127.0.0.1:3737 --workspace board-tool \
+                                --out docs/board.excalidraw
+  ```
+
+  `--url` is the port *this* board was started on (`PORT`, 3737 here — not 3838, which is the
+  throwaway instance the older checks talk to), and `--workspace` is the board being exported.
+  Run with either flag missing it exits 2 and writes nothing, because a request that guesses
+  its own source is one absent flag away from committing whatever else was listening.
 
 ## Verifying a change
 
@@ -195,7 +206,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 67 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
-| `repo` | the full history, and this repository's own board | anywhere with a full clone | 4 | no |
+| `repo` | the full history, and this repository's own board | anywhere with a full clone | 5 | no |
 
 The gate is `fast` plus `browser`. `repo` is off it because it cannot be satisfied from a
 contributor's fork — `check-board-map.mjs` reads `docs/board.excalidraw` and the merge history
