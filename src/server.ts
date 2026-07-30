@@ -122,8 +122,14 @@ import {
   SavedBoard
 } from './core/board-state.js';
 
-// Load environment variables
-dotenv.config();
+// Load environment variables — unless the caller said not to. See `src/core/config.ts` for why
+// `EXCALIDRAW_NO_DOTENV` exists; the short version is that dotenv only ever fills in variables
+// that are *unset*, so a `.env` beside the working directory silently undoes exactly the
+// deletions a caller made on purpose. `EXCALIDRAW_ENV_FILE` names a different file.
+if (process.env.EXCALIDRAW_NO_DOTENV !== '1') {
+  const envFile = process.env.EXCALIDRAW_ENV_FILE;
+  dotenv.config(envFile ? { path: envFile } : undefined);
+}
 
 // Every write to every store reaches the save half through here, rather than each of the
 // dozen writers remembering to. Nothing is written until a board has been registered as worth
