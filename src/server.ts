@@ -1224,10 +1224,31 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
 });
 
 // ─── Workspaces API (one project per board) ───────────────────
-//
+
+/**
+ * The guard every route in this block shares.
+ *
+ * Most of these write files this machine owns, and one of them lists its directories, so
+ * reaching them from the network would be strictly worse than reaching the routes that only
+ * read a project. The read below is guarded for the same reason rather than in spite of being
+ * a read: it does not read *a* project, it reads the map of all of them — every registered
+ * project's absolute path, and a WSL project's path inside its distro too. Same shape as the
+ * issue block's guard, and for the same reason.
+ */
+function offLoopback(res: Response, what: string): boolean {
+  if (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost') return false;
+  res.status(403).json({
+    success: false,
+    error: `${what} only while the server is bound to loopback.`
+  });
+  return true;
+}
+
 // Loaded per request rather than cached at boot: a project's board.config.json gets
 // edited while the server runs, and restarting to notice a config change would be silly.
 app.get('/api/workspaces', async (_req: Request, res: Response) => {
+  if (offLoopback(res, 'Projects are listed')) return;
+
   try {
     const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
     res.json({
@@ -1240,22 +1261,6 @@ app.get('/api/workspaces', async (_req: Request, res: Response) => {
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 });
-
-/**
- * The guard every route below shares.
- *
- * These write files this machine owns, and one of them lists its directories, so reaching
- * them from the network would be strictly worse than reaching the routes that only read a
- * project. Same shape as the issue block's guard, and for the same reason.
- */
-function offLoopback(res: Response, what: string): boolean {
-  if (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost') return false;
-  res.status(403).json({
-    success: false,
-    error: `${what} only while the server is bound to loopback.`
-  });
-  return true;
-}
 
 /**
  * Add a project to the registry.
