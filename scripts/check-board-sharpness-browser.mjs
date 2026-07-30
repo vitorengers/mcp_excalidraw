@@ -96,6 +96,9 @@ import { inflateSync } from 'node:zlib';
 import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -242,13 +245,12 @@ const AUTHORED_ZOOM = 1;
 const WINDOW = { width: 2560, height: 1440 };
 const LAPTOP_VIEWPORT = { width: 1440, height: 900 };
 
-const PORT = 36100 + (process.pid % 180);
-const CDP_PORT = PORT + 260;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 
 const serverEnv = {
-  ...process.env,
   PORT: String(PORT),
   HOST: '127.0.0.1',
   LOG_LEVEL: 'error',
@@ -263,11 +265,9 @@ const serverEnv = {
 };
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
   env: serverEnv,
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });

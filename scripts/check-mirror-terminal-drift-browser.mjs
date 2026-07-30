@@ -56,6 +56,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -182,19 +185,16 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
 // it exists to be somewhere else, which is all the switch needs it to be.
 writeFileSync(join(otherDir, 'board.config.json'), JSON.stringify({ name: 'Somewhere Else' }), 'utf8');
 
-const PORT = 35700 + (process.pid % 200);
-const CDP_PORT = PORT + 250;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
+  port: PORT,
   env: {
-    ...process.env,
-    PORT: String(PORT),
-    HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     // The block is half of what this check is about, so it is switched on deliberately here
@@ -204,8 +204,7 @@ const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
     STUB_GH_FIXTURE: fixturePath,
     STUB_GH_LOG: logPath,
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });

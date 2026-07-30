@@ -49,6 +49,9 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -111,24 +114,21 @@ const STRUCTURE = { x: 0, y: 0, width: 900, height: 2200 };
 const DEVELOPMENT = { x: 0, y: 2260, width: 900, height: 1800 };
 const WIDE = { x: 0, y: 4120, width: 2800, height: 400 };
 
-const PORT = 37500 + (process.pid % 200);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 
-// The terminal block is deleted out of the child's environment on purpose: this machine's
-// shell exports EXCALIDRAW_TERMINAL=1, and a terminal block would put a DOM overlay over the
-// mirror and an extra shape into the scene bounds every fit here is measured against.
-const serverEnv = { ...process.env, PORT: String(PORT), HOST: '127.0.0.1', LOG_LEVEL: 'error',
+// Nothing this machine exports reaches the child: `scripts/lib/spawn-canvas.mjs` strips every
+// `EXCALIDRAW_*` before the check's own values go in, so there is no terminal block over the
+// board — and no other inherited setting — unless this check asks for it.
+const serverEnv = { PORT: String(PORT), HOST: '127.0.0.1', LOG_LEVEL: 'error',
                     EXCALIDRAW_WORKSPACES: registryPath };
-delete serverEnv.EXCALIDRAW_TERMINAL;
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
   env: serverEnv,
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });

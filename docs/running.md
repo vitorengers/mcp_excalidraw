@@ -88,8 +88,8 @@ unusable there. The throwaway instances the self-contained checks start choose t
 port; the older `--url` family of checks expects one started by hand on **3838**, which is
 deliberately a different, empty server rather than the board you are working on.
 
-Everything else is `EXCALIDRAW_*`, and all nineteen are optional. Unset means the feature is off,
-not degraded.
+Everything else is `EXCALIDRAW_*`, and all twenty-one are optional. Unset means the feature is
+off, not degraded.
 
 | Variable | Default | What it does |
 |---|---|---|
@@ -113,6 +113,8 @@ not degraded.
 | `EXCALIDRAW_TERMINAL_PTY` | unset | `0` forces the pipe instead of a real pty, for a machine with no prebuilt binary |
 | `EXCALIDRAW_EXPORT_DIR` | working dir | The base directory MCP file exports may write to |
 | `EXCALIDRAW_NO_AUTOSTART` | unset | `1` stops the CLI and the MCP server auto-spawning a canvas |
+| `EXCALIDRAW_NO_DOTENV` | unset | `1` stops the server reading `<cwd>/.env` at all. The checks set it, because dotenv only ever fills in variables that are *unset* — which is exactly the set a check deleted on purpose — [trap-check-environment.md](trap-check-environment.md) |
+| `EXCALIDRAW_ENV_FILE` | `<cwd>/.env` | Read this file instead. Ignored when `EXCALIDRAW_NO_DOTENV=1` |
 
 **Pin the agents' model and effort.** Without `--model` and `--effort` on those two command
 lines the agent inherits whatever `~/.claude/settings.json` says, so changing the model of an
@@ -189,7 +191,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 78 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 81 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 67 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |

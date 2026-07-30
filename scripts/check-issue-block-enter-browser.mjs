@@ -48,6 +48,9 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -90,24 +93,20 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   repo: 'vitorengers/mcp_excalidraw',
 }), 'utf8');
 
-const PORT = 35800 + (process.pid % 300);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
+  port: PORT,
   env: {
-    ...process.env,
-    PORT: String(PORT),
-    HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });
@@ -339,7 +338,14 @@ try {
     '--no-default-browser-check',
     '--disable-gpu',
     '--hide-scrollbars',
-    '--window-size=1400,900',
+    // Wide enough that `placeCard` can put the issue card *beside* its block rather than
+    // clamped on top of it. At 1400 there was no room, the card covered the block, and the
+    // double click below selected a word in the card instead of opening the label editor —
+    // which this check got away with only because the server inherited
+    // `EXCALIDRAW_TERMINAL=1` from the machine's shell and the terminal panel, an obstacle
+    // `placeCard` routes around, pushed the card clear. #271 stopped a check's server
+    // inheriting anything it did not name, and this is what that uncovered.
+    '--window-size=1900,1000',
     BASE,
   ], { stdio: 'ignore' }));
 

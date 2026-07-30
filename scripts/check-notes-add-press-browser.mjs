@@ -47,6 +47,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -185,9 +188,9 @@ writeFileSync(join(barrenDir, 'board.config.json'), JSON.stringify({
   library: 'no-issue.excalidrawlib',
 }), 'utf8');
 
-const STOCKED_PORT = 35500 + (process.pid % 200);
-const BARREN_PORT = STOCKED_PORT + 200;
-const CDP_PORT = STOCKED_PORT + 400;
+const STOCKED_PORT = await freePort();
+const BARREN_PORT = await freePort();
+const CDP_PORT = await freePort();
 const STOCKED = `http://127.0.0.1:${STOCKED_PORT}`;
 const BARREN = `http://127.0.0.1:${BARREN_PORT}`;
 const children = [];
@@ -212,12 +215,9 @@ let serverLog = '';
  * - `LOG_FILE_PATH` is the operator's real log, which a throwaway server has no business in.
  */
 function startServer(port, registry, extra = {}) {
-  const env = { ...process.env };
-  for (const name of [
-    'EXCALIDRAW_TERMINAL', 'EXCALIDRAW_LIBRARY', 'EXCALIDRAW_DOCS_DIR',
-    'EXCALIDRAW_IMPLEMENT_AGENT', 'EXCALIDRAW_IMPLEMENT_AGENT_WSL',
-    'EXCALIDRAW_ISSUE_AGENT', 'EXCALIDRAW_ISSUE_AGENT_WSL',
-  ]) delete env[name];
+  // The list this used to delete by hand is now the whole of `EXCALIDRAW_*`, stripped by
+  // `scripts/lib/spawn-canvas.mjs` before any of the values below arrive.
+  const env = {};
   Object.assign(env, {
     PORT: String(port),
     HOST: '127.0.0.1',
@@ -227,11 +227,9 @@ function startServer(port, registry, extra = {}) {
     EXCALIDRAW_GH_COMMAND: `node "${stubPath.replace(/\\/g, '/')}"`,
     STUB_GH_FIXTURE: fixturePath,
   }, extra);
-  const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-    cwd: repoRoot,
+  const server = startCanvas({
     env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   children.push(server);
   server.stdout.on('data', (chunk) => { serverLog += chunk; });
   server.stderr.on('data', (chunk) => { serverLog += chunk; });

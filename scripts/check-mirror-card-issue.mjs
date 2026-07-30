@@ -21,11 +21,13 @@
  * Tier: fast
  */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -134,24 +136,23 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   repo: 'vitorengers/mcp_excalidraw',
 }), 'utf8');
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 
 function startCanvas(port, { withImplementAgent = true } = {}) {
   const env = {
-    ...process.env,
     PORT: String(port),
     HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
   };
+  // Nothing to delete in the other case: the child's environment starts with no
+  // `EXCALIDRAW_*` in it at all, so "not granted" is "never named".
   if (withImplementAgent) env.EXCALIDRAW_IMPLEMENT_AGENT = `node "${agentStub.replace(/\\/g, '/')}" -p`;
-  else delete env.EXCALIDRAW_IMPLEMENT_AGENT;
 
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot, env, stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const child = spawnCanvas({
+    env,
+  }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk) => { output += chunk.toString(); });
@@ -175,7 +176,7 @@ function stopAll() {
   for (const child of running) if (child.exitCode === null) child.kill('SIGKILL');
 }
 
-const port = 35500 + Math.floor(Math.random() * 1500);
+const port = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -280,7 +281,7 @@ try {
         'state leaked from another issue');
 
   console.log('\n11. the feature stays off unless its own variable is set');
-  const offPort = port + 2;
+  const offPort = await freePort();
   const offBase = `http://127.0.0.1:${offPort}`;
   const off = startCanvas(offPort, { withImplementAgent: false });
   await waitForHealth(offBase, off.child, off.read);

@@ -6,9 +6,11 @@
  * a port already held exits rather than sitting there, and `HOST=::` — which would publish
  * the board on every interface — is refused.
  *
- * It picks a free high port of its own unless `PORT` is set, in which case it takes that one
- * — so in a shell that exports `PORT=3737` it collides with a running board and fails on the
- * port rather than on the property. Run `./node_modules/.bin/tsc` first.
+ * It asks the kernel for a free port and never reads `PORT`. It used to do the opposite —
+ * `process.env.PORT || <a random number>` — and `PORT=3737` is in the development machine's
+ * session, so it bound nothing, health-checked the operator's **live board** and reported the
+ * duplicate-startup case green. See [trap-check-environment.md](../docs/trap-check-environment.md).
+ * Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-local-bind.mjs
  *
@@ -18,6 +20,9 @@ import { spawn } from 'node:child_process';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+import { canvasEnvironment } from './lib/spawn-canvas.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const repoRoot = join(__dirname, '..');
@@ -25,21 +30,22 @@ const serverPath = join(repoRoot, 'dist', 'server.js');
 const runtime = process.env.CANVAS_RUNTIME || process.execPath;
 const runtimeName = basename(runtime).toLowerCase();
 const runtimeArgs = runtimeName.includes('bun') ? ['run', serverPath] : [serverPath];
-const port = Number(process.env.PORT || 32000 + Math.floor(Math.random() * 2000));
+// Asked for, never read out of the environment. `PORT` is 3737 in this machine's session, so
+// `process.env.PORT || <a random number>` used to make this check health-check the operator's
+// live board and report the duplicate-startup case green without having started anything.
+const port = await freePort();
 const startupTimeoutMs = 5000;
 const duplicateExitTimeoutMs = 2500;
 
 function spawnCanvas(host) {
-  const env = {
-    ...process.env,
+  // Not `startCanvas`: this is the one check that has to run the server under a runtime of its
+  // own choosing (`CANVAS_RUNTIME`, for bun), and the default `HOST` is the subject rather than
+  // a setting. The environment is built the same way every other check's is.
+  const env = canvasEnvironment({
     PORT: String(port),
     LOG_LEVEL: 'error',
-  };
-  if (host) {
-    env.HOST = host;
-  } else {
-    delete env.HOST;
-  }
+    HOST: host || undefined,
+  });
 
   return spawn(runtime, runtimeArgs, {
     cwd: repoRoot,

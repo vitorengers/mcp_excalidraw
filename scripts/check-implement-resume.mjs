@@ -29,6 +29,9 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -141,22 +144,17 @@ writeFileSync(registryPath, JSON.stringify({
   workspaces: [{ id: 'resume', path: projectDir.replace(/\\/g, '/') }],
 }), 'utf8');
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 
 function startCanvas(port) {
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  const child = spawnCanvas({
+    port,
     env: {
-      ...process.env,
-      PORT: String(port),
-      HOST: '127.0.0.1',
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
       EXCALIDRAW_IMPLEMENT_AGENT: `node "${agentStub.replace(/\\/g, '/')}" -p`,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk) => { output += chunk.toString(); });
@@ -176,8 +174,8 @@ async function waitForHealth(base, child, read) {
   throw new Error(`the canvas server never answered on ${base}:\n${read()}`);
 }
 
-const firstPort = 37600 + (process.pid % 300);
-const secondPort = firstPort + 1;
+const firstPort = await freePort();
+const secondPort = await freePort();
 const FIRST = `http://127.0.0.1:${firstPort}`;
 const SECOND = `http://127.0.0.1:${secondPort}`;
 

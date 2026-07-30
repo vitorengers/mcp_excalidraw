@@ -43,14 +43,13 @@
  * Tier: fast
  */
 
-import { spawn } from 'node:child_process';
-import { createServer } from 'node:net';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 let failures = 0;
 
@@ -61,19 +60,6 @@ function check(name, condition, detail = '') {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const slash = (value) => value.replace(/\\/g, '/');
-
-/** A port nobody is on, so this can never collide with the board or another check. */
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.unref();
-    probe.on('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
-    });
-  });
-}
 
 const workDir = mkdtempSync(join(tmpdir(), 'check-claude-status-'));
 const statusDir = join(workDir, 'claude-status');
@@ -156,18 +142,13 @@ writeFileSync(join(statusDir, 'wsl-Unregistered.json'), JSON.stringify({
 const started = [];
 
 /**
- * A canvas server with exactly the environment given — every `EXCALIDRAW_*` this process
- * happens to hold is stripped first, so the machine running the check cannot decide the answer.
+ * A canvas server with exactly the environment given. Stripping every `EXCALIDRAW_*` out of the
+ * child — so the machine running the check cannot decide the answer — is
+ * `scripts/lib/spawn-canvas.mjs`'s job now, together with the `.env` this used to miss.
  */
-async function startCanvas(extraEnv, host = '127.0.0.1') {
+async function canvasWith(extraEnv, host = '127.0.0.1') {
   const port = await freePort();
-  const env = { ...process.env, PORT: String(port), HOST: host, LOG_LEVEL: 'error' };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('EXCALIDRAW_')) delete env[key];
-  }
-  const child = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-    cwd: repoRoot, stdio: 'ignore', env: { ...env, ...extraEnv },
-  });
+  const { child } = startCanvas({ port, env: { HOST: host, LOG_LEVEL: 'error', ...extraEnv } });
   started.push(child);
   const base = `http://127.0.0.1:${port}`;
   for (let attempt = 0; attempt < 120; attempt++) {
@@ -195,7 +176,7 @@ try {
 
   console.log('\n1. the route answers, once the directory is configured');
 
-  const board = await startCanvas({
+  const board = await canvasWith({
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_CLAUDE_STATUS: statusDir,
   });
@@ -314,7 +295,7 @@ try {
 
   console.log('\n9. off unless configured');
 
-  const unconfigured = await startCanvas({ EXCALIDRAW_WORKSPACES: registryPath });
+  const unconfigured = await canvasWith({ EXCALIDRAW_WORKSPACES: registryPath });
   const missing = await get(unconfigured, '/api/claude-status');
   check('404 with no directory configured', missing.status === 404,
     `got ${missing.status} — ${missing.text.slice(0, 200)}`);
@@ -323,7 +304,7 @@ try {
 
   console.log('\n10. and never off loopback, because it carries an email');
 
-  const open = await startCanvas({
+  const open = await canvasWith({
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_CLAUDE_STATUS: statusDir,
   }, '0.0.0.0');

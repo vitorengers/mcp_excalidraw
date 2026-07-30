@@ -19,20 +19,23 @@
  * own canvas server, killed at the end. Nothing here talks to GitHub and nothing runs a real
  * coding agent. Run `./node_modules/.bin/tsc` first.
  *
- * The server is started with a `cwd` holding no `.env` and on a port proved free rather than
- * derived from the pid — #271's two subjects, which this check has no reason to inherit.
+ * The server is started through `scripts/lib/spawn-canvas.mjs`, on a port from
+ * `scripts/lib/free-port.mjs` — so the `.env` beside the working directory is off and every
+ * inherited `EXCALIDRAW_*` is stripped, which is what this check was already doing by hand
+ * before #271 put both in one place.
  *
  * Usage: node scripts/check-implement-dependencies.mjs
  *
  * Tier: fast
  */
 
-import { spawn } from 'node:child_process';
-import { createServer } from 'node:net';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const { dependenciesOf, startableCards } = await import(
@@ -255,25 +258,17 @@ if (!existsSync(serverPath)) {
   process.exit(1);
 }
 
-const port = await new Promise((resolve, reject) => {
-  const probe = createServer();
-  probe.once('error', reject);
-  probe.listen(0, '127.0.0.1', () => {
-    const { port: p } = probe.address();
-    probe.close(() => resolve(p));
-  });
-});
+const port = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 const QUEUE_MS = 400;
 let serverOutput = '';
 
-const child = spawn(process.execPath, [serverPath], {
-  // No `.env` here, so the operator's own configuration cannot decide this check.
+const child = startCanvas({
+  port,
+  // No `.env` here either, belt and braces: the helper turns dotenv off, and this working
+  // directory has no file for it to read.
   cwd: workDir,
   env: {
-    ...process.env,
-    PORT: String(port),
-    HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
@@ -282,8 +277,7 @@ const child = spawn(process.execPath, [serverPath], {
     EXCALIDRAW_IMPLEMENT_QUEUE_MS: String(QUEUE_MS),
     EXCALIDRAW_ISSUE_MEMO_MS: '1',
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 child.stdout.on('data', (c) => { serverOutput += c.toString(); });
 child.stderr.on('data', (c) => { serverOutput += c.toString(); });
 

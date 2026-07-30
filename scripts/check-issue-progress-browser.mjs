@@ -36,6 +36,9 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -149,17 +152,16 @@ if (args[0] === 'issue' && args[1] === 'view') {
 }
 `, 'utf8');
 
-const PORT = 35300 + (process.pid % 200);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 
 let serverLog = '';
-// `EXCALIDRAW_TERMINAL` is deliberately dropped: this machine's shell sets it, and the terminal
-// block it would add is a DOM overlay over the board that the panel does not need and that
-// nothing here is asking about.
+// Nothing this machine exports reaches the child: `scripts/lib/spawn-canvas.mjs` strips every
+// `EXCALIDRAW_*` before the check's own values go in, so there is no terminal block over the
+// board — and no other inherited setting — unless this check asks for it.
 const serverEnv = {
-  ...process.env,
   PORT: String(PORT),
   HOST: '127.0.0.1',
   LOG_LEVEL: 'error',
@@ -167,13 +169,10 @@ const serverEnv = {
   EXCALIDRAW_ISSUE_AGENT: `node "${agentStub.replace(/\\/g, '/')}" -p --output-format stream-json`,
   EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
 };
-delete serverEnv.EXCALIDRAW_TERMINAL;
 
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
   env: serverEnv,
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });

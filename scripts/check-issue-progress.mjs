@@ -41,13 +41,13 @@
  * Tier: fast
  */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 let failures = 0;
 
@@ -205,23 +205,18 @@ writeFileSync(registryPath, JSON.stringify({
   ],
 }), 'utf8');
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 
 function startCanvas(port, agentCommand) {
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  const child = spawnCanvas({
+    port,
     env: {
-      ...process.env,
-      PORT: String(port),
-      HOST: '127.0.0.1',
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
       EXCALIDRAW_ISSUE_AGENT: agentCommand,
       EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk) => { output += chunk.toString(); });
@@ -242,8 +237,8 @@ async function waitForHealth(base, child, read) {
 }
 
 const stubPath = agentStub.replace(/\\/g, '/');
-const port = 37400 + (process.pid % 150);
-const streamedPort = port + 1;
+const port = await freePort();
+const streamedPort = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 const STREAMED_BASE = `http://127.0.0.1:${streamedPort}`;
 

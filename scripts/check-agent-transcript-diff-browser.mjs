@@ -60,6 +60,9 @@ import { inflateSync } from 'node:zlib';
 import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -387,16 +390,13 @@ const AGENT_COMMAND = `node "${agentStub.replace(/\\/g, '/')}" --output-format s
 const children = [];
 let serverLog = '';
 
-const PORT = 36100 + (process.pid % 90);
-const CDP_PORT = PORT + 100;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 
-children.push(spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+children.push(startCanvas({
+  port: PORT,
   env: {
-    ...process.env,
-    PORT: String(PORT),
-    HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_TERMINAL: '1',
@@ -404,8 +404,7 @@ children.push(spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
     // into and read a rendered line back out of.
     EXCALIDRAW_TERMINAL_PTY: '0',
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
-}));
+}).child);
 children[0].stdout.on('data', (chunk) => { serverLog += chunk; });
 children[0].stderr.on('data', (chunk) => { serverLog += chunk; });
 

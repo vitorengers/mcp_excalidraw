@@ -51,6 +51,9 @@ import { inflateSync } from 'node:zlib';
 import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -163,26 +166,22 @@ for (const project of PROJECTS) {
 const registryPath = join(workDir, 'workspaces.json');
 writeFileSync(registryPath, JSON.stringify(registry, null, 2), 'utf8');
 
-const PORT = 37200 + (process.pid % 200);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const children = [];
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
+  port: PORT,
   env: {
-    ...process.env,
-    PORT: String(PORT),
-    HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     // The board's own shell exports this, and a terminal block is a DOM overlay that
     // swallows the presses this check aims at the bar. Nothing here needs a terminal.
     EXCALIDRAW_TERMINAL: '',
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });

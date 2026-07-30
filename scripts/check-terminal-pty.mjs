@@ -35,12 +35,14 @@
  * Tier: fast
  */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
+
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -131,23 +133,18 @@ const stubCommand = `node "${stubShell.replace(/\\/g, '/')}"`;
 
 // ─── Servers ──────────────────────────────────────────────────
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 
 function startCanvas(port, env = {}) {
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  const child = spawnCanvas({
+    port,
     env: {
-      ...process.env,
-      PORT: String(port),
-      HOST: '127.0.0.1',
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
       EXCALIDRAW_TERMINAL: stubCommand,
       ...env,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   let log = '';
   child.stdout.on('data', (chunk) => { log += chunk.toString(); });
   child.stderr.on('data', (chunk) => { log += chunk.toString(); });
@@ -219,8 +216,8 @@ const type = (base, data) =>
 
 const occurrences = (haystack, needle) => haystack.split(needle).length - 1;
 
-const PORT = 38600 + (process.pid % 250);
-const PIPE_PORT = PORT + 1;
+const PORT = await freePort();
+const PIPE_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const PIPE_BASE = `http://127.0.0.1:${PIPE_PORT}`;
 

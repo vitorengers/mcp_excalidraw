@@ -52,11 +52,13 @@
  * Tier: fast
  */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -160,6 +162,16 @@ if (!existsSync(serverPath)) {
 const running = [];
 
 /**
+ * Every spelling of `name` this process holds, marked for removal from a child's environment.
+ * Case-insensitively, because Windows reports whatever case the variable was set with.
+ */
+const unset = (name) => Object.fromEntries(
+  Object.keys(process.env)
+    .filter((key) => key.toUpperCase() === name)
+    .map((key) => [key, undefined]),
+);
+
+/**
  * A board that was started without the variable, which is every board.
  *
  * Deleted rather than left alone: an operator's own `COLORTERM` would be inherited and the case
@@ -167,22 +179,15 @@ const running = [];
  * nothing.
  */
 function startCanvas(port, env = {}) {
-  const inherited = { ...process.env };
-  for (const key of Object.keys(inherited)) {
-    if (key.toUpperCase() === MARKER) delete inherited[key];
-  }
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  const child = spawnCanvas({
+    port,
     env: {
-      ...inherited,
-      PORT: String(port),
-      HOST: '127.0.0.1',
+      ...unset(MARKER),
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
       ...env,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   let log = '';
   child.stdout.on('data', (chunk) => { log += chunk.toString(); });
   child.stderr.on('data', (chunk) => { log += chunk.toString(); });
@@ -217,9 +222,9 @@ async function call(base, path, options = {}) {
   throw last;
 }
 
-const PORT = 39900 + (process.pid % 60);
-const PIPE_PORT = PORT + 1;
-const RENDERED_PORT = PORT + 2;
+const PORT = await freePort();
+const PIPE_PORT = await freePort();
+const RENDERED_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const PIPE_BASE = `http://127.0.0.1:${PIPE_PORT}`;
 const RENDERED_BASE = `http://127.0.0.1:${RENDERED_PORT}`;

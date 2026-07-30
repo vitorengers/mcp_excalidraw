@@ -27,6 +27,9 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+import { canvasEnvironment, startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -52,7 +55,10 @@ function defaultTimeout(env) {
            process.stdout.write(JSON.stringify(m.DEFAULT_TIMEOUT_MS ?? null));`,
   ], {
     encoding: 'utf8',
-    env: { ...process.env, EXCALIDRAW_ISSUE_AGENT_TIMEOUT: undefined, ...env },
+    // `canvasEnvironment` rather than `process.env`: `dist/core/issue-agent.js` pulls in
+    // `config.js`, which reads the `.env` beside the working directory — so the value this
+    // deliberately leaves unset came straight back from the operator's file.
+    env: canvasEnvironment({ EXCALIDRAW_ISSUE_AGENT_TIMEOUT: undefined, ...env }),
   });
   if (result.status !== 0) throw new Error(`could not read the default: ${result.stderr}`);
   return JSON.parse(result.stdout);
@@ -111,16 +117,12 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   repo: 'vitorengers/mcp_excalidraw',
 }), 'utf8');
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 
 function startCanvas(port, extraEnv = {}) {
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  const child = spawnCanvas({
+    port,
     env: {
-      ...process.env,
-      PORT: String(port),
-      HOST: '127.0.0.1',
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
       EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
@@ -128,8 +130,7 @@ function startCanvas(port, extraEnv = {}) {
       EXCALIDRAW_ISSUE_AGENT_TIMEOUT: undefined,
       ...extraEnv,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk) => { output += chunk.toString(); });
@@ -149,8 +150,8 @@ async function waitForHealth(base, child, read) {
   throw new Error(`the canvas server never answered on ${base}:\n${read()}`);
 }
 
-const port = 36400 + (process.pid % 300);
-const cappedPort = port + 1;
+const port = await freePort();
+const cappedPort = await freePort();
 
 async function call(base, path, options = {}) {
   const glue = path.includes('?') ? '&' : '?';

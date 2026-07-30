@@ -51,6 +51,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -142,9 +145,9 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
 
-const PORT = 35500 + (process.pid % 300);
-const CDP_PORT = PORT + 400;
-const DEAD_PORT = PORT + 800;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
+const DEAD_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const WORKSPACE = 'durability';
 // Where the board is expected to be saved, worked out the way the server works it out: beside
@@ -156,7 +159,6 @@ const children = [];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const serverEnv = {
-  ...process.env,
   PORT: String(PORT),
   HOST: '127.0.0.1',
   LOG_LEVEL: 'info',
@@ -170,23 +172,17 @@ const serverEnv = {
   // and the check would fail on its own harness rather than on the feature.
   EXCALIDRAW_LIBRARY: join(repoRoot, 'docs', 'blocks.excalidrawlib'),
 };
-// Whoever runs this may have the terminal switched on in their own shell, and the whole
-// environment is inherited. A terminal block is drawn over the board and its xterm panel is a
-// DOM overlay: with it on, the `+` ends up underneath and every click is swallowed.
-delete serverEnv.EXCALIDRAW_TERMINAL;
-// And the board is saved where this check's own registry says, not where an operator who has
-// pointed the boards somewhere else says.
-delete serverEnv.EXCALIDRAW_BOARD_STATE;
+// Nothing this machine exports reaches the child: `scripts/lib/spawn-canvas.mjs` strips every
+// `EXCALIDRAW_*` before the check's own values go in, so there is no terminal block over the
+// board — and no other inherited setting — unless this check asks for it.
 
 let serverLog = '';
 let server = null;
 
 function startServer() {
-  const child = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-    cwd: repoRoot,
+  const child = startCanvas({
     env: serverEnv,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   children.push(child);
   child.stdout.on('data', (chunk) => { serverLog += chunk; });
   child.stderr.on('data', (chunk) => { serverLog += chunk; });

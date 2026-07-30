@@ -52,6 +52,9 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -155,8 +158,8 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
 /** A section as tall as a real one, for the `Alt+P` half. */
 const SECTION = { x: 0, y: 0, width: 900, height: 2200 };
 
-const PORT = 36400 + (process.pid % 200);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 
@@ -172,23 +175,19 @@ const TALL = { width: 1500, height: 1500 };
 const SHORT = { width: 1500, height: 740 };
 const WINDOW = { width: TALL.width, height: 1000 };
 
-// Off deliberately, and said rather than left to the shell: this machine exports
-// EXCALIDRAW_TERMINAL=1, and a terminal block would put a DOM overlay over the mirror and an
-// extra shape into every bound measured here.
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+// Nothing this machine exports reaches the child: `scripts/lib/spawn-canvas.mjs` strips every
+// `EXCALIDRAW_*` before the check's own values go in, so there is no terminal block over the
+// board — and no other inherited setting — unless this check asks for it.
+const server = startCanvas({
+  port: PORT,
   env: {
-    ...process.env,
     EXCALIDRAW_TERMINAL: '',
-    PORT: String(PORT),
-    HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_GH_COMMAND: `node "${stubPath.replace(/\\/g, '/')}"`,
     STUB_GH_FIXTURE: fixturePath,
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 children.push(server);
 let serverLog = '';
 server.stdout.on('data', (chunk) => { serverLog += chunk; });

@@ -35,7 +35,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 let failures = 0;
 
@@ -145,7 +146,6 @@ writeFileSync(registryPath, JSON.stringify({
   ],
 }), 'utf8');
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 /**
  * The stub, in the shape it has always been in: headless.
@@ -161,26 +161,21 @@ const shellCommand = `node "${shellStub.replace(/\\/g, '/')}"`;
 
 function startCanvas(port, extraEnv = {}) {
   const env = {
-    ...process.env,
     PORT: String(port),
     HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_IMPLEMENT_AGENT: agentCommand,
   };
-  // Removed before `extraEnv` puts back whichever of them this server wants, because
-  // "unset" is one of the states under test and a check cannot assert it while inheriting
-  // it. A board running on the same machine exports `EXCALIDRAW_TERMINAL=1`, so the case
-  // about a board with no terminal was quietly being run against one that had it.
-  delete env.EXCALIDRAW_TERMINAL;
-  delete env.EXCALIDRAW_TERMINAL_PTY;
+  // `extraEnv` names whichever of them this server wants, and nothing else arrives: "unset"
+  // is one of the states under test and a check cannot assert it while inheriting it. A
+  // board running on the same machine exports `EXCALIDRAW_TERMINAL=1`, so the case about a
+  // board with no terminal was quietly being run against one that had it.
   Object.assign(env, extraEnv);
 
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  const child = spawnCanvas({
     env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk) => { output += chunk.toString(); });
@@ -216,9 +211,9 @@ function watch(port, workspace) {
   return { open, messages, close: () => { try { socket.close(); } catch { /* gone */ } } };
 }
 
-const PORT = 38600 + (process.pid % 300);
-const PLAIN_PORT = PORT + 1;
-const PTYLESS_PORT = PORT + 2;
+const PORT = await freePort();
+const PLAIN_PORT = await freePort();
+const PTYLESS_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const PLAIN_BASE = `http://127.0.0.1:${PLAIN_PORT}`;
 const PTYLESS_BASE = `http://127.0.0.1:${PTYLESS_PORT}`;

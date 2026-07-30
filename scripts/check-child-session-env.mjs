@@ -34,11 +34,13 @@
  * Tier: fast
  */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -164,7 +166,6 @@ process.stdin.on('end', () => {
 
 // ─── Servers ──────────────────────────────────────────────────
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 
 /**
@@ -175,20 +176,16 @@ const running = [];
  * would pass everywhere else for no reason.
  */
 function startCanvas(port, env = {}) {
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  const child = spawnCanvas({
+    port,
     env: {
-      ...process.env,
-      PORT: String(port),
-      HOST: '127.0.0.1',
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
       [MARKER]: '1',
       [SENTINEL]: SENTINEL_VALUE,
       ...env,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   let log = '';
   child.stdout.on('data', (chunk) => { log += chunk.toString(); });
   child.stderr.on('data', (chunk) => { log += chunk.toString(); });
@@ -223,8 +220,8 @@ async function call(base, path, options = {}) {
   throw last;
 }
 
-const PORT = 39100 + (process.pid % 300);
-const PIPE_PORT = PORT + 1;
+const PORT = await freePort();
+const PIPE_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const PIPE_BASE = `http://127.0.0.1:${PIPE_PORT}`;
 

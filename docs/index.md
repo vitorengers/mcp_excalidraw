@@ -67,3 +67,4 @@ Each of these cost a day or more once. They are here so the second time is free.
 | [trap-gh-path.md](trap-gh-path.md) | A server started before the CLI was installed hands that stale `PATH` to the agent |
 | [trap-agent-timeout.md](trap-agent-timeout.md) | The agent outlives its own issue, so the timeout salvages the URL rather than calling the work a failure |
 | [trap-export-noise.md](trap-export-noise.md) | Volatile metadata changes on every export and makes the diff say nothing |
+| [trap-check-environment.md](trap-check-environment.md) | An untracked `.env` restores what a check deleted, and a port derived from the process id collides |

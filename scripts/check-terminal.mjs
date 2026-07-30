@@ -33,6 +33,9 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const isWindows = process.platform === 'win32';
 
@@ -162,22 +165,17 @@ setInterval(() => { try { appendFileSync(${JSON.stringify(tickFile.replace(/\\/g
 
 // ─── Servers ──────────────────────────────────────────────────
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 
 function startCanvas(port, env = {}) {
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  const child = spawnCanvas({
+    port,
     env: {
-      ...process.env,
-      PORT: String(port),
-      HOST: '127.0.0.1',
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
       ...env,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   let log = '';
   child.stdout.on('data', (chunk) => { log += chunk.toString(); });
   child.stderr.on('data', (chunk) => { log += chunk.toString(); });
@@ -252,9 +250,9 @@ function watch(port) {
   };
 }
 
-const PORT = 38200 + (process.pid % 300);
-const DISABLED_PORT = PORT + 1;
-const REMOTE_PORT = PORT + 2;
+const PORT = await freePort();
+const DISABLED_PORT = await freePort();
+const REMOTE_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /**
@@ -708,7 +706,7 @@ try {
       workspaces: [{ id: WORKSPACE, path: innerPath, distro }],
     }), 'utf8');
 
-    const wslPort = PORT + 3;
+    const wslPort = await freePort();
     const WSL_BASE = `http://127.0.0.1:${wslPort}`;
     const wslCanvas = startCanvas(wslPort, {
       EXCALIDRAW_WORKSPACES: wslRegistry,

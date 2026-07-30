@@ -30,13 +30,13 @@
  * Tier: fast
  */
 
-import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 let failures = 0;
 
@@ -93,17 +93,17 @@ const rawRegistry = () => readFileSync(registryPath, 'utf8');
 const readRegistry = () => JSON.parse(rawRegistry());
 const fileOrder = () => readRegistry().workspaces.map((entry) => entry.id);
 
-const serverPath = join(repoRoot, 'dist', 'server.js');
 const running = [];
 
 function startCanvas(port, { host = '127.0.0.1', registry = registryPath } = {}) {
-  const env = { ...process.env, PORT: String(port), HOST: host, LOG_LEVEL: 'error' };
+  const env = { PORT: String(port), HOST: host, LOG_LEVEL: 'error' };
+  // Nothing to delete in the other case: the child's environment starts with no
+  // `EXCALIDRAW_*` in it at all, so "not granted" is "never named".
   if (registry) env.EXCALIDRAW_WORKSPACES = registry;
-  else delete env.EXCALIDRAW_WORKSPACES;
 
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot, env, stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const child = spawnCanvas({
+    env,
+  }).child;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk) => { output += chunk.toString(); });
@@ -123,9 +123,9 @@ async function waitForHealth(base, child, read) {
   throw new Error(`the canvas server never answered on ${base}:\n${read()}`);
 }
 
-const port = 38200 + (process.pid % 300);
-const openPort = port + 1;
-const barePort = port + 2;
+const port = await freePort();
+const openPort = await freePort();
+const barePort = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 const OPEN_BASE = `http://127.0.0.1:${openPort}`;
 const BARE_BASE = `http://127.0.0.1:${barePort}`;

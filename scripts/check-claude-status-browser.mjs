@@ -45,6 +45,9 @@ import { inflateSync } from 'node:zlib';
 import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -181,28 +184,26 @@ writeFileSync(join(statusDir, 'wsl-Ubuntu-22.04.json'), JSON.stringify({
   observedAt: NOW - 90 * 60,
 }), 'utf8');
 
-const PORT = 37500 + (process.pid % 300);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 
 const serverEnv = {
-  ...process.env,
   PORT: String(PORT),
   HOST: '127.0.0.1',
   LOG_LEVEL: 'error',
   EXCALIDRAW_WORKSPACES: registryPath,
   EXCALIDRAW_CLAUDE_STATUS: statusDir,
 };
-// This machine's shell has the terminal switched on, and the whole environment is inherited.
-// A terminal block draws an xterm panel over the board, and every coordinate below would be
-// measured against a page that is not the page under test.
-delete serverEnv.EXCALIDRAW_TERMINAL;
+// Nothing this machine exports reaches the child: `scripts/lib/spawn-canvas.mjs` strips every
+// `EXCALIDRAW_*` before the check's own values go in, so there is no terminal block over the
+// board — and no other inherited setting — unless this check asks for it.
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot, env: serverEnv, stdio: ['ignore', 'pipe', 'pipe'],
-});
+const server = startCanvas({
+  env: serverEnv,
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });

@@ -21,11 +21,13 @@
  * Tier: fast
  */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -198,18 +200,15 @@ if (!existsSync(serverPath)) {
   process.exit(1);
 }
 
-const port = 35500 + Math.floor(Math.random() * 1500);
+const port = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 let child = null;
 let serverOutput = '';
 
 function startCanvas() {
-  child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+  child = spawnCanvas({
+    port,
     env: {
-      ...process.env,
-      PORT: String(port),
-      HOST: '127.0.0.1',
       LOG_LEVEL: 'error',
       EXCALIDRAW_WORKSPACES: registryPath,
       EXCALIDRAW_GH_COMMAND: `node "${stubGhPath.replace(/\\/g, '/')}"`,
@@ -220,8 +219,7 @@ function startCanvas() {
       STUB_GH_CONTROL: controlPath,
       STUB_GH_LOG: logPath,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }).child;
   child.stdout.on('data', (chunk) => { serverOutput += chunk.toString(); });
   child.stderr.on('data', (chunk) => { serverOutput += chunk.toString(); });
 }

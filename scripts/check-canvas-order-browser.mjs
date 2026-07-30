@@ -47,6 +47,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -159,18 +162,15 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
 // phase is about, and somewhere else to switch to for the phase before it.
 writeFileSync(join(plainDir, 'board.config.json'), JSON.stringify({ name: 'Plain Board' }), 'utf8');
 
-const PORT = 35700 + (process.pid % 190);
-const CDP_PORT = PORT + 320;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 
 let serverLog = '';
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot,
+const server = startCanvas({
+  port: PORT,
   env: {
-    ...process.env,
-    PORT: String(PORT),
-    HOST: '127.0.0.1',
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_TERMINAL: `node "${stubShell.replace(/\\/g, '/')}"`,
@@ -178,8 +178,7 @@ const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
     EXCALIDRAW_GH_COMMAND: `node "${stubPath.replace(/\\/g, '/')}"`,
     STUB_GH_FIXTURE: fixturePath,
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });

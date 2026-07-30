@@ -54,6 +54,9 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 
+import { freePort } from './lib/free-port.mjs';
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -105,24 +108,24 @@ writeFileSync(registryPath, JSON.stringify({
   workspaces: [{ id: 'board', path: slash(projectDir) }],
 }, null, 2), 'utf8');
 
-const PORT = 36400 + (process.pid % 200);
+const PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 
 let serverLog = '';
 const serverEnv = {
-  ...process.env,
   PORT: String(PORT),
   HOST: '127.0.0.1',
   LOG_LEVEL: 'error',
   EXCALIDRAW_WORKSPACES: registryPath,
 };
-// This machine's shell exports it, and a terminal block would put a DOM overlay over the board.
-delete serverEnv.EXCALIDRAW_TERMINAL;
+// Nothing this machine exports reaches the child: `scripts/lib/spawn-canvas.mjs` strips every
+// `EXCALIDRAW_*` before the check's own values go in, so there is no terminal block over the
+// board — and no other inherited setting — unless this check asks for it.
 
-const server = spawn(process.execPath, [join(repoRoot, 'dist', 'server.js')], {
-  cwd: repoRoot, env: serverEnv, stdio: ['ignore', 'pipe', 'pipe'],
-});
+const server = startCanvas({
+  env: serverEnv,
+}).child;
 children.push(server);
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });
@@ -394,7 +397,7 @@ try {
   // ─── 1. The trap `document.fonts.check` sets ────────────────
 
   console.log('1. fonts.check answers yes for a font that is not there');
-  const cold = new Session('trap', PORT + 400);
+  const cold = new Session('trap', await freePort());
   await cold.start();
   await cold.evaluate(MEASURE_HELPERS);
   const trap = await cold.evaluate(`(() => {
@@ -414,7 +417,7 @@ try {
   // ─── 2. The board draws its own font with no internet ───────
 
   console.log('\n2. with esm.sh unreachable, the fonts come from the board');
-  const offline = new Session('offline', PORT + 401);
+  const offline = new Session('offline', await freePort());
   await offline.start();
   await offline.send('Network.setBlockedURLs', { urls: ['*esm.sh*'] });
   await offline.openBoard();
@@ -440,7 +443,7 @@ try {
   // ─── 3. Every label at the width the page measures ──────────
 
   console.log(`\n3. with every woff2 held back ${FONT_DELAY_MS} ms, no label is measured early`);
-  const slow = new Session('slow', PORT + 402);
+  const slow = new Session('slow', await freePort());
   slow.delayMs = FONT_DELAY_MS;
   await slow.start();
   await slow.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] });

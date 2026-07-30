@@ -20,7 +20,6 @@
  * Tier: fast
  */
 
-import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { request } from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -29,9 +28,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 
+import { startCanvas } from './lib/spawn-canvas.mjs';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(__dirname, '..');
-const serverPath = join(repoRoot, 'dist', 'server.js');
 
 const EVIL = 'https://evil.example';
 const startupTimeoutMs = 15000;
@@ -118,18 +117,15 @@ const expect = (condition, message) => { if (!condition) failures.push(message);
 const port = await freePort();
 // No .env here, so the operator's own configuration cannot decide this check.
 const workdir = mkdtempSync(join(tmpdir(), 'check-cross-origin-'));
-const child = spawn(process.execPath, [serverPath], {
+const child = startCanvas({
+  port,
   cwd: workdir,
   env: {
-    ...process.env,
-    PORT: String(port),
-    HOST: '127.0.0.1',
     EXCALIDRAW_TERMINAL: '1',
     EXCALIDRAW_WORKSPACES: '',
     LOG_LEVEL: 'error',
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+}).child;
 let output = '';
 child.stdout.on('data', (c) => { output += c; });
 child.stderr.on('data', (c) => { output += c; });
