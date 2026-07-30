@@ -21,7 +21,7 @@ function concatBuffers(...bufs: Uint8Array[]): Uint8Array {
 
 // Clean elements for excalidraw.com: strip server metadata, add Excalidraw
 // defaults, generate bound text elements, and resolve arrow bindings.
-function cleanElementsForShare(urlExportElements: ServerElement[]): Record<string, any>[] {
+export function cleanElementsForShare(urlExportElements: ServerElement[]): Record<string, any>[] {
   const cleanedExportElements: Record<string, any>[] = [];
   const boundTextElements: Record<string, any>[] = [];
   let indexCounter = 0;
@@ -57,10 +57,14 @@ function cleanElementsForShare(urlExportElements: ServerElement[]): Record<strin
 
   for (const el of urlExportElements) {
     // Strip server-only fields
+    // `customData` goes with them: it is where this tool keeps what a block *is* —
+    // issueUrl, implementState, docKey, kind, inTodo — and stock excalidraw.com reads
+    // none of it, so nothing rendered there can depend on a key inside. Removal rather
+    // than an allowlist for that reason.
     const {
       createdAt, updatedAt, syncedAt, source: _src,
       syncTimestamp, label, start, end, text,
-      version: _ver,
+      version: _ver, customData: _custom,
       ...rest
     } = el as any;
 
@@ -206,6 +210,21 @@ function cleanElementsForShare(urlExportElements: ServerElement[]): Record<strin
   cleanedExportElements.push(...boundTextElements);
 
   return cleanedExportElements;
+}
+
+// What the caller tells the operator once the scene is gone. It names the host rather
+// than only the link, because the link reads like a rendering of what is already local
+// and the upload is the part somebody reading an agent transcript has to be able to see.
+export function shareUploadNotice(shareUrl: string): string {
+  return [
+    'Diagram uploaded to json.excalidraw.com, a third-party store this tool does not control.',
+    '',
+    `Shareable URL: ${shareUrl}`,
+    '',
+    'The scene is encrypted, but the decryption key is in the URL — anyone with this link can',
+    'view and edit the diagram. Board metadata (issue links, implementation state, document',
+    'keys) is stripped before upload; everything drawn on the canvas was sent.'
+  ].join('\n');
 }
 
 // Export elements to a shareable excalidraw.com URL. The diagram is
