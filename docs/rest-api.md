@@ -31,10 +31,10 @@ One project per board — see [workspaces.md](workspaces.md).
 
 | Route | What it does |
 |---|---|
-| `GET /api/workspaces` | The registry, reloaded per request |
+| `GET /api/workspaces` | The registry, reloaded per request (loopback only — it is every project's absolute path) |
 | `POST /api/workspaces` | Append a project to the registry (loopback only) |
 | `PUT /api/workspaces/order` | Permute the registry, which is the order of the tabs (loopback only) |
-| `GET /api/workspaces/:id/config` | That project's `board.config.json`, as it is on disk |
+| `GET /api/workspaces/:id/config` | That project's `board.config.json`, as it is on disk (loopback only) |
 | `PUT /api/workspaces/:id/config` | Write it back, round-tripped (loopback only) |
 | `GET /api/fs/directories` | List folders, for the picker the browser cannot implement (loopback only) |
 
