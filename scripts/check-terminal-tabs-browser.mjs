@@ -286,7 +286,7 @@ const GRAB_API = `(() => {
  * The board and every terminal card on it.
  *
  * The cards come back with the middle of every part that takes a pointer, because that is
- * what a case here does with them: a chip, a `×`, a `+`, a `⧉` and a `⇥` are all things to
+ * what a case here does with them: a chip, a `×`, a `+`, a `⧉` and a `⇤` are all things to
  * be clicked, and working out where they are from the outside is the check re-deriving the
  * layout it is supposed to be checking.
  */
