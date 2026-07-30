@@ -126,9 +126,18 @@ const STREAM = `${EVENTS.map((event) => JSON.stringify(event)).join('\n')}\n`;
 // The lines the emulator has to be drawing, computed with the same renderer the stub runs, so
 // this check cannot drift from it. Trailing newline dropped; the blank line before the closing
 // line is kept, because a blank row is part of the shape being asserted.
+//
+// The SGR sequences come off, and that is not a workaround. Since #242 the renderer writes
+// colour, and an escape is an *instruction to the emulator*, not a column: xterm consumes it and
+// draws nothing, so a row's `textContent` is the glyphs alone. Comparing a row against a line
+// that still carried its escapes would be comparing a drawn line to a spelling nobody draws —
+// and would silently start failing on a change to the colour rather than to the geometry, which
+// is the only thing this check is about. The colours are
+// `check-agent-stream-render-colour-browser.mjs`'s subject.
 const { AgentStreamRenderer } = await import(pathToFileURL(rendererModule).href);
 const RENDERED = new AgentStreamRenderer().feed(STREAM);
-const EXPECTED = RENDERED.replace(/\n$/, '').split('\n');
+const stripEscapes = (text) => text.replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '');
+const EXPECTED = stripEscapes(RENDERED).replace(/\n$/, '').split('\n');
 
 // ─── A project with a terminal ────────────────────────────────
 
@@ -353,8 +362,12 @@ try {
 
   check('the session is on pipes, which is where the agent tab is',
         pipeSession.mode === 'pipe', pipeSession.mode);
+  // Read through `stripEscapes` for the reason above: since #242 the tool name and its argument
+  // are two coloured runs, so `⏺ Read(` is no longer contiguous in the bytes even though it is
+  // contiguous on the screen, which is the thing being asked about.
   check('the transcript is the renderer\'s output, envelopes gone',
-        scrollback.includes('⏺ Read(') && scrollback.includes('  ⎿  alpha') && !scrollback.includes('"type"'),
+        stripEscapes(scrollback).includes('⏺ Read(') && stripEscapes(scrollback).includes('  ⎿  alpha')
+        && !scrollback.includes('"type"'),
         JSON.stringify(scrollback.slice(0, 200)));
   // The property #219 exists to protect, and the reason the fix is not `\r\n` in the renderer:
   // the raw tap, `extractGithubUrl` and `UsageMeter` all read these bytes.

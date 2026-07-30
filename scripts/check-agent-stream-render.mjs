@@ -49,6 +49,9 @@ mkdirSync(workDir, { recursive: true });
 const { TerminalSession } = await import(
   pathToFileURL(join(repoRoot, 'dist', 'core', 'terminal-session.js')).href
 );
+const { extractGithubUrl } = await import(
+  pathToFileURL(join(repoRoot, 'dist', 'core', 'issue-agent.js')).href
+);
 
 /** The lines a real run emits, in the order it emits them. */
 const EVENTS = [
@@ -106,7 +109,15 @@ const streaming = await runSession(
 
 // Asserted line by line, never as a substring: every one of these strings is also inside the
 // raw JSON, so `includes` on the whole transcript would pass today and prove nothing.
-const linesOf = (text) => text.split('\n').map((line) => line.trim());
+//
+// The escapes come off first, and only here. Since #242 the renderer writes SGR sequences —
+// `⏺ Bash` in the execution slot, the gutter in the dim one — so a line is `ESC[32m⏺ BashESC[0m…`
+// rather than `⏺ Bash…`, and every assertion below is about *shape*: which words are on which
+// line, at what indent. `check-agent-stream-render-colour.mjs` is where the sequences
+// themselves are the subject. Stripping them in one helper keeps the two checks from having to
+// agree about a spelling neither of them is asking about.
+const stripEscapes = (text) => text.replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '');
+const linesOf = (text) => stripEscapes(text).split('\n').map((line) => line.trim());
 
 check('the session ran to the end', streaming.exited);
 check("the assistant's prose is shown as prose, on a line of its own",
@@ -134,6 +145,23 @@ check('the raw tap got every byte the process wrote',
   'the tap saw rendered text instead of the stream');
 check('and the tap is not what the block shows',
   streaming.raw !== streaming.shown);
+
+// Said again about the thing itself, since #242. The URL is read out of the *raw* stream, so
+// colour cannot reach it — but a URL is precisely the shape an SGR reset lands in the middle of,
+// and a renderer that ever came to paint one word of it would break the run's only report of
+// what it did. Asserted on the rendered transcript too, which is the harder of the two.
+const PULL = 'https://github.com/vitorengers/mcp_excalidraw/pull/242';
+const announced = await runSession(`${node} ${JSON.stringify(writeStub('url.mjs', [
+  { type: 'assistant', message: { content: [{ type: 'text', text: `Opened ${PULL}` }] } },
+  { type: 'user', message: { content: [{ type: 'tool_result', content: `${PULL}\n` }] } },
+  { type: 'result', subtype: 'success', is_error: false, num_turns: 2 },
+]))} --output-format stream-json`);
+
+check('a pull request URL survives the raw tap', extractGithubUrl(announced.raw, 'pull') === PULL,
+  String(extractGithubUrl(announced.raw, 'pull')));
+check('and it is still found in the transcript after the transcript is coloured',
+  extractGithubUrl(announced.shown, 'pull') === PULL,
+  JSON.stringify(announced.shown));
 
 // ─── A line split across two writes ───────────────────────────
 
