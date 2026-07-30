@@ -63,8 +63,12 @@ import {
   NotOnThisBoard
 } from './core/project-board.js';
 import {
+  lastQueuePass,
+  QueuePass,
+  QueuePassReason,
   queueEnabled,
   queuedWorkspaces,
+  recordQueuePass,
   setQueueEnabled,
   startableCards
 } from './core/implement-queue.js';
@@ -2373,14 +2377,37 @@ const IMPLEMENT_QUEUE_MS = (() => {
 })();
 
 /**
- * The workspaces with a pass in flight.
+ * How long a pass may hold the guard below before a later one stops believing in it.
+ *
+ * The guard is a saving, not a correctness property — the cap is enforced by the claim made
+ * before `beginImplement`'s first `await`, so two overlapping passes cannot start one issue
+ * twice or exceed the cap. What an unbounded guard *can* do is kill the queue outright: one
+ * pass that never returns holds its workspace for the life of the process while the toggle
+ * still draws "on", which is #263's second hypothesis and is silent in every direction.
+ *
+ * Four intervals, and never under five seconds. A healthy pass is one board read; the read
+ * gives up on its own after three `gh` attempts of thirty seconds, so the default interval
+ * puts this at two minutes — comfortably past the slowest read that is still going to
+ * answer. A board configured to drain every few seconds gets a bound of the same order,
+ * which is what makes this assertable in a check rather than only in an afternoon.
+ */
+const QUEUE_PASS_MS = Math.max(4 * IMPLEMENT_QUEUE_MS, 5_000);
+
+/**
+ * The workspaces with a pass in flight, and when that pass started.
  *
  * A pass reads the board and then starts runs one at a time, so two passes overlapping —
  * the timer and a run settling in the same instant — would each be working from a board read
  * before the other started. The claim guard would still hold the cap, but the second pass
  * would spend a `gh` read to be told no, every time.
+ *
+ * The instant is what bounds it. Each pass carries a number of its own so a stale one that
+ * finally returns clears its own entry and not the entry of whatever replaced it — without
+ * that, the recovery below would hand the guard to a new pass and then have it deleted out
+ * from under it by the corpse of the old one.
  */
-const draining = new Set<string>();
+const draining = new Map<string, { pass: number; startedAt: number }>();
+let queuePasses = 0;
 
 /** Whether this workspace has room for one more run right now. */
 function slotFree(workspaceId: string): boolean {
@@ -2405,53 +2432,146 @@ function slotFree(workspaceId: string): boolean {
  * obvious; `done` and `failed` are the same rule as the block's — a run happened, and asking
  * for it again is a decision for whoever is reading the failure, not for a loop. That is also
  * what stops a broken build from being retried forever: the queue tries each issue once.
+ *
+ * **Every exit is recorded.** A pass gives up in six places, and five of them used to do it
+ * without a word — `logger.info` reaches the log file and never the console, so a queue that
+ * was on and starting nothing was indistinguishable from a queue that was on with nothing to
+ * start. `recordQueuePass` is what `GET /api/implement` answers with and what the toggle on
+ * the mirror is drawn from, so the reason arrives everywhere the queue is visible.
  */
 async function dispatchQueue(workspaceId: string): Promise<void> {
   if (!IMPLEMENT_AGENT_CONFIGURED) return;
   if (!queueEnabled(workspaceId)) return;
-  if (draining.has(workspaceId)) return;
-  draining.add(workspaceId);
+
+  const inFlight = draining.get(workspaceId);
+  if (inFlight) {
+    if (Date.now() - inFlight.startedAt < QUEUE_PASS_MS) return;
+    // Past the bound, so this pass is not coming back and waiting on it is waiting forever.
+    // Loud, because it is the one queue state nothing else can be inferred from: the runs
+    // below still go through the same claim guard, so proceeding cannot double-start
+    // anything — it can only cost one extra `gh` read.
+    logger.warn(
+      `Queue: the pass on "${workspaceId}" has been running for `
+      + `${Math.round((Date.now() - inFlight.startedAt) / 1000)}s and is being given up on. `
+      + 'Something it awaited — the board read, most likely — has not come back.'
+    );
+  }
+
+  const pass = ++queuePasses;
+  draining.set(workspaceId, { pass, startedAt: Date.now() });
+
+  let started = 0;
+  /** What the pass ran into, replaced as it gets further. Recorded whichever exit it takes. */
+  let outcome: { reason: QueuePassReason; detail: string } = {
+    reason: 'nothing-startable',
+    detail: 'The column held nothing this queue may start.'
+  };
 
   try {
-    if (!slotFree(workspaceId)) return;
+    if (!slotFree(workspaceId)) {
+      outcome = capFullOutcome(workspaceId);
+      return;
+    }
 
     const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
-    if (!workspace || workspace.error || !workspace.githubProject) return;
+    if (!workspace || workspace.error || !workspace.githubProject) {
+      outcome = {
+        reason: 'no-project',
+        detail: !workspace
+          ? `Workspace "${workspaceId}" is no longer registered.`
+          : workspace.error
+            ? `This board is unusable: ${workspace.error}`
+            : 'This board has no "githubProject" in its board.config.json, so there is no column to drain.'
+      };
+      return;
+    }
 
     const board = await readProjectBoard(workspace, { cardLimit: 0 });
     const target = todoColumn(workspace);
     const column = findColumn(board, target.name);
     if (!column) {
-      logger.warn(
-        `Queue: no "${target.name}" column on this project, so there is nothing to drain. `
-        + `Name the column as "${target.setting}" in board.config.json.`
-      );
+      outcome = {
+        reason: 'no-column',
+        detail: `No "${target.name}" column on this project, so there is nothing to drain. `
+          + `Name the column as "${target.setting}" in board.config.json.`
+      };
       return;
     }
 
     for (const card of startableCards(column.cards)) {
       // Re-read on every iteration rather than counted once: the queue is not the only thing
       // that can take a slot, and turning it off has to stop the pass it is in the middle of.
-      if (!queueEnabled(workspaceId) || !slotFree(workspaceId)) return;
+      if (!queueEnabled(workspaceId)) return;
+      if (!slotFree(workspaceId)) {
+        outcome = capFullOutcome(workspaceId);
+        return;
+      }
       const issueUrl = card.url as string;
       if (readImplement(workspaceId, issueUrl)) continue;
 
       const answer = await beginImplement(workspaceId, issueUrl);
       if (answer.status === 202) {
+        started++;
         logger.info(`Queue: started ${issueUrl} on "${workspaceId}"`);
         continue;
       }
-      if (answer.status === 409) return;
+      if (answer.status === 409) {
+        // A click that raced this pass has taken the slot. Read as "not yet", and reported
+        // as the cap it is: the slot is held by a run, whoever asked for it.
+        outcome = capFullOutcome(workspaceId, String(answer.body.error ?? ''));
+        return;
+      }
       logger.warn(`Queue: ${issueUrl} was refused (${answer.status}): ${answer.body.error}`);
     }
   } catch (error) {
     // A board that cannot be read is a `gh` blip or a project that has gone; either way the
     // queue is a background convenience and must not take the server down with it.
+    outcome = { reason: 'unreadable', detail: `The board could not be read: ${(error as Error).message}` };
     logger.warn(`Queue: could not drain "${workspaceId}": ${(error as Error).message}`);
   } finally {
-    draining.delete(workspaceId);
+    // Only its own entry: a pass given up on above keeps running, and the one that replaced
+    // it must survive the corpse returning.
+    if (draining.get(workspaceId)?.pass === pass) draining.delete(workspaceId);
+    if (queueEnabled(workspaceId)) {
+      reportQueuePass(workspaceId, started > 0
+        ? { reason: 'started', detail: `Started ${started} run(s).`, started }
+        : { ...outcome, started });
+    }
   }
+}
+
+/** The cap's own words, naming the runs holding the slots so the reader knows who to ask. */
+function capFullOutcome(workspaceId: string, said = ''): { reason: QueuePassReason; detail: string } {
+  const inFlight = runningImplements(workspaceId);
+  return {
+    reason: 'cap-full',
+    detail: said || `All ${inFlight.length} slot(s) are taken, which is the limit set by `
+      + `EXCALIDRAW_IMPLEMENT_CONCURRENCY. Holding them: ${inFlight.map((run) => run.issueUrl).join(', ')}`
+  };
+}
+
+/**
+ * Record the pass, and say it out loud the first time it is a stall.
+ *
+ * Out loud on the *change* rather than on every pass, because a stalled queue stalls on a
+ * timer: warning each time would put the same sentence in the console every interval until
+ * somebody turned it off, and a line that repeats forever is a line nobody reads. What is
+ * worth interrupting for is the transition — the pass where the queue stopped being able to
+ * do what it was switched on to do, or started being able to again.
+ */
+function reportQueuePass(
+  workspaceId: string,
+  pass: { reason: QueuePassReason; detail: string; started: number }
+): void {
+  const previous = lastQueuePass(workspaceId);
+  const recorded = recordQueuePass(workspaceId, { ...pass, at: new Date().toISOString() });
+  if (!recorded.stalled) {
+    if (previous?.stalled) logger.warn(`Queue: "${workspaceId}" is draining again.`);
+    return;
+  }
+  if (previous?.stalled && previous.reason === recorded.reason && previous.detail === recorded.detail) return;
+  logger.warn(`Queue: "${workspaceId}" is on and starting nothing — ${recorded.detail}`);
 }
 
 /**
@@ -2476,14 +2596,29 @@ function syncQueueTimer(): void {
   }
 }
 
-/** What a queue looks like from outside: on or off, and the column it would drain. */
+/**
+ * What a queue looks like from outside: on or off, the column it would drain, and whether the
+ * last pass over it could do anything.
+ *
+ * `lastPass` is null until a pass has run since the switch was last flipped, which is the
+ * honest answer for the seconds between the click and the first pass — and for a queue that
+ * is off, where "the last pass" would be describing a decision somebody has already undone.
+ * `stalled` is lifted out of it because it is the one bit the board draws, and a mirror that
+ * had to know the reason vocabulary to draw a toggle would have to be edited every time a
+ * reason is added.
+ */
 function queueStateFor(workspace: Workspace | undefined, workspaceId: string): {
   enabled: boolean;
   column: string;
+  stalled: boolean;
+  lastPass: QueuePass | null;
 } {
+  const pass = lastQueuePass(workspaceId);
   return {
     enabled: queueEnabled(workspaceId),
-    column: workspace ? todoColumn(workspace).name : DEFAULT_TODO_COLUMN
+    column: workspace ? todoColumn(workspace).name : DEFAULT_TODO_COLUMN,
+    stalled: Boolean(pass?.stalled),
+    lastPass: pass
   };
 }
 
