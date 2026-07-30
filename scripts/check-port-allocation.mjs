@@ -24,6 +24,8 @@
  * browser, no network.
  *
  * Usage: node scripts/check-port-allocation.mjs
+ *
+ * Tier: fast
  */
 
 import { createServer } from 'node:net';

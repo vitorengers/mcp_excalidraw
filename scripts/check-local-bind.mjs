@@ -6,9 +6,11 @@
  * a port already held exits rather than sitting there, and `HOST=::` — which would publish
  * the board on every interface — is refused.
  *
- * It picks a free high port of its own unless `PORT` is set, in which case it takes that one
- * — so in a shell that exports `PORT=3737` it collides with a running board and fails on the
- * port rather than on the property. Run `./node_modules/.bin/tsc` first.
+ * It asks the kernel for a free port and never reads `PORT`. It used to do the opposite —
+ * `process.env.PORT || <a random number>` — and `PORT=3737` is in the development machine's
+ * session, so it bound nothing, health-checked the operator's **live board** and reported the
+ * duplicate-startup case green. See [trap-check-environment.md](../docs/trap-check-environment.md).
+ * Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-local-bind.mjs
  *
