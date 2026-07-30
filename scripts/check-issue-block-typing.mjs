@@ -30,6 +30,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 if (!existsSync(join(repoRoot, 'dist', 'server.js'))) {
@@ -46,7 +48,7 @@ const check = (name, condition, detail = '') => {
 
 const WORKSPACE = 'echo-check';
 const workDir = mkdtempSync(join(tmpdir(), 'check-issue-typing-echo-'));
-const PORT = 35400 + (process.pid % 200);
+const PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const children = [];

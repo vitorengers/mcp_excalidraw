@@ -32,6 +32,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -146,8 +148,8 @@ process.stdin.on('end', async () => {
 });
 `, 'utf8');
 
-const PORT = 35700 + (process.pid % 200);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 

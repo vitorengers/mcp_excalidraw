@@ -41,6 +41,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const argOf = (name) => {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : null;
@@ -95,8 +97,8 @@ window.addEventListener('keydown', (event) => {
 });
 </script></body></html>`;
 
-const PORT = 39100 + (process.pid % 300);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const http = createServer((request, response) => {

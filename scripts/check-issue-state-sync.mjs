@@ -36,6 +36,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -91,7 +93,7 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'State Check', repo: REPO,
 }), 'utf8');
 
-const PORT = 35800 + (process.pid % 300);
+const PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const WS = 'state-check';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

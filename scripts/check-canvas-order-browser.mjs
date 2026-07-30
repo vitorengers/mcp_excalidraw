@@ -44,6 +44,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -176,8 +178,8 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
 // phase is about, and somewhere else to switch to for the phase before it.
 writeFileSync(join(plainDir, 'board.config.json'), JSON.stringify({ name: 'Plain Board' }), 'utf8');
 
-const PORT = 35700 + (process.pid % 190);
-const CDP_PORT = PORT + 320;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 

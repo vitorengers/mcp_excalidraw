@@ -40,6 +40,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** The two bytes a fixture needs to be an escape stream, written so an editor cannot eat them. */
@@ -217,8 +219,8 @@ const type = (base, data) =>
 
 const occurrences = (haystack, needle) => haystack.split(needle).length - 1;
 
-const PORT = 38600 + (process.pid % 250);
-const PIPE_PORT = PORT + 1;
+const PORT = await freePort();
+const PIPE_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const PIPE_BASE = `http://127.0.0.1:${PIPE_PORT}`;
 

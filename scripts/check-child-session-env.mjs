@@ -38,6 +38,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const MARKER = 'CLAUDE_CODE_CHILD_SESSION';
@@ -221,8 +223,8 @@ async function call(base, path, options = {}) {
   throw last;
 }
 
-const PORT = 39100 + (process.pid % 300);
-const PIPE_PORT = PORT + 1;
+const PORT = await freePort();
+const PIPE_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const PIPE_BASE = `http://127.0.0.1:${PIPE_PORT}`;
 

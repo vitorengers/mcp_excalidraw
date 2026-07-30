@@ -38,6 +38,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -258,8 +260,8 @@ function watch(port, workspace) {
   return { open, messages, close: () => { try { socket.close(); } catch { /* gone */ } } };
 }
 
-const PORT = 39300 + (process.pid % 300);
-const BARE_PORT = PORT + 1;
+const PORT = await freePort();
+const BARE_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const BARE_BASE = `http://127.0.0.1:${BARE_PORT}`;
 

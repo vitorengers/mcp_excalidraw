@@ -25,6 +25,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -196,7 +198,7 @@ if (!existsSync(serverPath)) {
   process.exit(1);
 }
 
-const port = 35500 + Math.floor(Math.random() * 1500);
+const port = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 let child = null;
 let serverOutput = '';

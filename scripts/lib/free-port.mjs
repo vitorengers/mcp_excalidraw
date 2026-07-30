@@ -16,17 +16,39 @@
  */
 import { createServer } from 'node:net';
 
-/** One port nobody is listening on. */
-export function freePort() {
+/**
+ * Every port this process has already handed out.
+ *
+ * A check asks for its server's port, and later for its second server's or its Chrome's. Between
+ * the two the first probe has closed, so nothing stops the kernel from offering the same number
+ * twice — and by then the check has printed it into a stub script or a fixture and is about to
+ * bind it. Remembering is what makes two separate `freePort()` calls in one run distinct, which
+ * is what lets each declaration stay where it was written instead of being hoisted into one
+ * allocation at the top of the file.
+ */
+const handedOut = new Set();
+
+function probe() {
   return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.unref();
-    probe.on('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
+    const socket = createServer();
+    socket.unref();
+    socket.on('error', reject);
+    socket.listen(0, '127.0.0.1', () => {
+      const { port } = socket.address();
+      socket.close(() => resolve(port));
     });
   });
+}
+
+/** One port nobody is listening on, and that this process has not already claimed. */
+export async function freePort() {
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const port = await probe();
+    if (handedOut.has(port)) continue;
+    handedOut.add(port);
+    return port;
+  }
+  throw new Error('freePort: the kernel kept offering ports this run had already taken');
 }
 
 /**
@@ -40,21 +62,29 @@ export function freePort() {
  */
 export async function freePorts(n) {
   if (!Number.isInteger(n) || n < 1) throw new Error(`freePorts(${n}): ask for at least one port`);
-  const probes = [];
+  const held = [];
   try {
     const ports = [];
-    for (let i = 0; i < n; i++) {
-      const { probe, port } = await new Promise((resolve, reject) => {
-        const probe = createServer();
-        probe.unref();
-        probe.on('error', reject);
-        probe.listen(0, '127.0.0.1', () => resolve({ probe, port: probe.address().port }));
+    for (let attempt = 0; ports.length < n; attempt++) {
+      if (attempt >= n + 64) {
+        throw new Error('freePorts: the kernel kept offering ports this run had already taken');
+      }
+      const socket = await new Promise((resolve, reject) => {
+        const socket = createServer();
+        socket.unref();
+        socket.on('error', reject);
+        socket.listen(0, '127.0.0.1', () => resolve(socket));
       });
-      probes.push(probe);
+      held.push(socket);
+      const { port } = socket.address();
+      // Held open either way — dropping a duplicate here would hand it straight back on the
+      // next turn of the loop.
+      if (handedOut.has(port)) continue;
+      handedOut.add(port);
       ports.push(port);
     }
     return ports;
   } finally {
-    await Promise.all(probes.map((probe) => new Promise((resolve) => probe.close(resolve))));
+    await Promise.all(held.map((socket) => new Promise((resolve) => socket.close(resolve))));
   }
 }

@@ -38,6 +38,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -208,7 +210,7 @@ const CAP = 2;
 /** Short enough that a case does not have to wait out a real interval to see a pass. */
 const QUEUE_MS = 400;
 
-const port = 38200 + (process.pid % 300);
+const port = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 let child = null;
 let serverOutput = '';

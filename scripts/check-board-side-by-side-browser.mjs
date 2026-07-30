@@ -56,6 +56,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { inflateSync } from 'node:zlib';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -243,8 +245,8 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
 /** The display #185 was reported on. The floor this check states is the floor at this size. */
 const WINDOW = { width: 2560, height: 1440 };
 
-const PORT = 36400 + (process.pid % 200);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 

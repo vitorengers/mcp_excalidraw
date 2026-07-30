@@ -51,6 +51,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -211,15 +213,15 @@ function startServer(port, extraEnv) {
   return `http://127.0.0.1:${port}`;
 }
 
-const PORT = 35700 + (process.pid % 200);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 // `EXCALIDRAW_TERMINAL_PTY=0` is how the pipe is forced on a machine that has the binding —
 // exactly what `check-terminal-pty.mjs` uses it for, and what a `-p` agent run gets anyway.
 const PIPE_BASE = startServer(PORT, { EXCALIDRAW_TERMINAL_PTY: '0' });
 // The other one takes whatever this machine has. Deleted rather than left, because this
 // machine's own shell may export it — see the note in `docs/running.md` about what a
 // self-contained check inherits.
-const PTY_BASE = startServer(PORT + 1, { EXCALIDRAW_TERMINAL_PTY: undefined });
+const PTY_BASE = startServer(await freePort(), { EXCALIDRAW_TERMINAL_PTY: undefined });
 
 async function waitFor(fn, what, tries = 120) {
   for (let attempt = 0; attempt < tries; attempt++) {

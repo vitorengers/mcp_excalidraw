@@ -2,15 +2,16 @@
 /**
  * Checks that no `scripts/check-*.mjs` invents its own port number.
  *
- * Eighty-seven of them used to compute the port they listen on as `<base> + (process.pid % N)`.
- * That is not an allocation — it is a guess inside a band, and nothing coordinated the bands.
- * `check-agent-stream-render-browser.mjs` took 35700-35899 for its server and 36100-36299 for
- * Chrome, which is exactly `check-terminal-paper-browser.mjs`'s server range, whose own CDP
- * range 36500-36699 sits inside `check-board-subsections-browser.mjs`'s server range of
- * 36400-36699, with `check-board-sharpness-browser.mjs` at 36100-36279 in the same band.
- * Nineteen more took a second server at `port + 1` with no probe at all. Two checks running at
- * once could collide, and the failure read as a bug in the feature rather than in the
- * arithmetic.
+ * Ninety-six of them used to compute the port they listen on from a base number plus the
+ * process id, taken modulo the width of a band. That is not an allocation — it is a guess inside
+ * a band, and nothing coordinated the bands. `check-agent-stream-render-browser.mjs` took
+ * 35700-35899 for its server and 36100-36299 for Chrome, which is exactly
+ * `check-terminal-paper-browser.mjs`'s server range, whose own CDP range 36500-36699 sits inside
+ * `check-board-subsections-browser.mjs`'s server range of 36400-36699, with
+ * `check-board-sharpness-browser.mjs` at 36100-36279 in the same band. Two dozen more took a
+ * second server or a CDP port by adding a small number to the first one, with no probe at all.
+ * Two checks running at once could collide, and the failure read as a bug in the feature rather
+ * than in the arithmetic.
  *
  * The band was never the fix, because a band is only correct while nothing else is running.
  * `scripts/lib/free-port.mjs` asks the kernel, which is the only thing that actually knows.

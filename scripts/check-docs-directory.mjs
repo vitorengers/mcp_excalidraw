@@ -35,6 +35,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -114,7 +116,7 @@ function startCanvas(port) {
   return { child, read: () => output };
 }
 
-const port = 37900 + (process.pid % 300);
+const port = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 
 async function waitForHealth(child, read) {

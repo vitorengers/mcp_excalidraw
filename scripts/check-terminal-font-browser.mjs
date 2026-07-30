@@ -36,6 +36,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // The size the reader starts at, read rather than retyped: it moved from 13 to 18 in #199 and
@@ -117,8 +119,8 @@ writeFileSync(join(projectDir, 'ruler.js'), [
   '',
 ].join('\n'), 'utf8');
 
-const PORT = 35700 + (process.pid % 200);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 

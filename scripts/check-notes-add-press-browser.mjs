@@ -44,6 +44,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -202,9 +204,9 @@ writeFileSync(join(barrenDir, 'board.config.json'), JSON.stringify({
   library: 'no-issue.excalidrawlib',
 }), 'utf8');
 
-const STOCKED_PORT = 35500 + (process.pid % 200);
-const BARREN_PORT = STOCKED_PORT + 200;
-const CDP_PORT = STOCKED_PORT + 400;
+const STOCKED_PORT = await freePort();
+const BARREN_PORT = await freePort();
+const CDP_PORT = await freePort();
 const STOCKED = `http://127.0.0.1:${STOCKED_PORT}`;
 const BARREN = `http://127.0.0.1:${BARREN_PORT}`;
 const children = [];

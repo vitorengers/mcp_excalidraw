@@ -40,6 +40,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** The two base prompts, so "unchanged" can be an equality rather than a description. */
@@ -193,9 +195,9 @@ async function waitForHealth(base, child, read) {
   throw new Error(`the canvas server never answered on ${base}:\n${read()}`);
 }
 
-const port = 38200 + (process.pid % 300);
-const ungrantedPort = port + 1;
-const openPort = port + 2;
+const port = await freePort();
+const ungrantedPort = await freePort();
+const openPort = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 const UNGRANTED_BASE = `http://127.0.0.1:${ungrantedPort}`;
 const OPEN_BASE = `http://127.0.0.1:${openPort}`;

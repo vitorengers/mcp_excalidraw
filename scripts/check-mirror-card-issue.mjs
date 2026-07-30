@@ -25,6 +25,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -173,7 +175,7 @@ function stopAll() {
   for (const child of running) if (child.exitCode === null) child.kill('SIGKILL');
 }
 
-const port = 35500 + Math.floor(Math.random() * 1500);
+const port = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -278,7 +280,7 @@ try {
         'state leaked from another issue');
 
   console.log('\n11. the feature stays off unless its own variable is set');
-  const offPort = port + 2;
+  const offPort = await freePort();
   const offBase = `http://127.0.0.1:${offPort}`;
   const off = startCanvas(offPort, { withImplementAgent: false });
   await waitForHealth(offBase, off.child, off.read);

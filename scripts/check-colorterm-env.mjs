@@ -56,6 +56,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const MARKER = 'COLORTERM';
@@ -215,9 +217,9 @@ async function call(base, path, options = {}) {
   throw last;
 }
 
-const PORT = 39900 + (process.pid % 60);
-const PIPE_PORT = PORT + 1;
-const RENDERED_PORT = PORT + 2;
+const PORT = await freePort();
+const PIPE_PORT = await freePort();
+const RENDERED_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const PIPE_BASE = `http://127.0.0.1:${PIPE_PORT}`;
 const RENDERED_BASE = `http://127.0.0.1:${RENDERED_PORT}`;

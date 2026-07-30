@@ -55,6 +55,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** What a run of text has to clear against the card it is drawn on. */
@@ -242,8 +244,8 @@ setInterval(() => {}, 60000);
 
 const SESSION_COMMAND = `node "${stubPath.replace(/\\/g, '/')}"`;
 
-const PORT = 37100 + (process.pid % 200);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 

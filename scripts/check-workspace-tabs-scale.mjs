@@ -45,6 +45,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -139,8 +141,8 @@ registry.workspaces.push({ id: 'wsl-project', path: '//wsl.localhost/Ubuntu/home
 const registryPath = join(workDir, 'workspaces.json');
 writeFileSync(registryPath, JSON.stringify(registry, null, 2), 'utf8');
 
-const PORT = 36800 + (process.pid % 200);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const children = [];
 

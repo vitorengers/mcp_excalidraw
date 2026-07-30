@@ -54,6 +54,8 @@ import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -199,8 +201,8 @@ writeFileSync(join(projectDir, 'ruler.js'), [
   '',
 ].join('\n'), 'utf8');
 
-const PORT = 36300 + (process.pid % 200);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 

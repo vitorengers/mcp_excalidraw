@@ -31,6 +31,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -208,8 +210,8 @@ function stopAll() {
   for (const child of running) if (child.exitCode === null) child.kill('SIGKILL');
 }
 
-const port = 37600 + (process.pid % 300);
-const remotePort = port + 1;
+const port = await freePort();
+const remotePort = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 const REMOTE_BASE = `http://127.0.0.1:${remotePort}`;
 

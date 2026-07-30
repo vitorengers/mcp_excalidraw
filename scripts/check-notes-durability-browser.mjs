@@ -48,6 +48,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -159,9 +161,9 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
 
-const PORT = 35500 + (process.pid % 300);
-const CDP_PORT = PORT + 400;
-const DEAD_PORT = PORT + 800;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
+const DEAD_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const WORKSPACE = 'durability';
 // Where the board is expected to be saved, worked out the way the server works it out: beside

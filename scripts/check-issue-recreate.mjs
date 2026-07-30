@@ -44,6 +44,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -296,9 +298,9 @@ writeFileSync(registryPath, JSON.stringify({
 
 // ─── The servers ──────────────────────────────────────────────
 
-const port = 37800 + (process.pid % 200);
-const remotePort = port + 1;
-const barePort = port + 2;
+const port = await freePort();
+const remotePort = await freePort();
+const barePort = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 const REMOTE = `http://127.0.0.1:${remotePort}`;
 const BARE = `http://127.0.0.1:${barePort}`;

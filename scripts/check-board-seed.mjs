@@ -33,6 +33,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -198,7 +200,7 @@ writeFileSync(registryPath, JSON.stringify({
 // ─── The server ───────────────────────────────────────────────
 
 const serverPath = join(repoRoot, 'dist', 'server.js');
-const port = 37600 + (process.pid % 300);
+const port = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 
 let child = null;

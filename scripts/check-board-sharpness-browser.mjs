@@ -93,6 +93,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { inflateSync } from 'node:zlib';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -259,8 +261,8 @@ const AUTHORED_ZOOM = 1;
 const WINDOW = { width: 2560, height: 1440 };
 const LAPTOP_VIEWPORT = { width: 1440, height: 900 };
 
-const PORT = 36100 + (process.pid % 180);
-const CDP_PORT = PORT + 260;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 

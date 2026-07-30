@@ -31,6 +31,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -382,7 +384,7 @@ async function waitForHealth(base, child, read) {
   throw new Error(`the canvas server never answered on ${base}:\n${read()}`);
 }
 
-const port = 36900 + Math.floor(Math.random() * 1500);
+const port = await freePort();
 
 try {
   console.log('\n5. what closed the issue comes from gh');
@@ -404,7 +406,7 @@ try {
 
   console.log('\n6. a gh that does not know the field still reads the issue');
 
-  const oldPort = port + 2;
+  const oldPort = await freePort();
   const old = startCanvas(oldPort, oldStub);
   await waitForHealth(`http://127.0.0.1:${oldPort}`, old.child, old.read);
 

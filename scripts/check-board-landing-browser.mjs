@@ -49,6 +49,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const argOf = (name) => {
@@ -172,8 +174,8 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
 /** A section as tall as a real one, for the `Alt+P` half. */
 const SECTION = { x: 0, y: 0, width: 900, height: 2200 };
 
-const PORT = 36400 + (process.pid % 200);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 

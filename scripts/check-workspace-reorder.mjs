@@ -34,6 +34,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -121,9 +123,9 @@ async function waitForHealth(base, child, read) {
   throw new Error(`the canvas server never answered on ${base}:\n${read()}`);
 }
 
-const port = 38200 + (process.pid % 300);
-const openPort = port + 1;
-const barePort = port + 2;
+const port = await freePort();
+const openPort = await freePort();
+const barePort = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 const OPEN_BASE = `http://127.0.0.1:${openPort}`;
 const BARE_BASE = `http://127.0.0.1:${barePort}`;

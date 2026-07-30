@@ -21,6 +21,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
@@ -315,7 +317,7 @@ function stopAll() {
   }
 }
 
-const port = 34000 + Math.floor(Math.random() * 1500);
+const port = await freePort();
 const BASE = `http://127.0.0.1:${port}`;
 
 async function call(path, options = {}) {
@@ -378,7 +380,7 @@ try {
         `got ${rejected.status}`);
 
   console.log('\n16. the move route refuses to run off loopback');
-  const remotePort = port + 1;
+  const remotePort = await freePort();
   const remote = startCanvas(remotePort, '0.0.0.0');
   const REMOTE_BASE = `http://127.0.0.1:${remotePort}`;
   await waitForHealth(REMOTE_BASE, remote.child, remote.read);

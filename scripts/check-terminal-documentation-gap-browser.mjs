@@ -39,6 +39,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
+import { freePort } from './lib/free-port.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** The gap every region keeps from the one beside it — `TERMINAL_GAP` in `terminal-block.ts`. */
@@ -124,8 +126,8 @@ process.stdin.on('data', (chunk) => {
 setInterval(() => {}, 1000);
 `, 'utf8');
 
-const PORT = 35100 + (process.pid % 250);
-const CDP_PORT = PORT + 400;
+const PORT = await freePort();
+const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const children = [];
 
