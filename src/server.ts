@@ -1,5 +1,4 @@
 import express, { Request, Response, NextFunction } from 'express';
-import cors from 'cors';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import net from 'net';
@@ -113,6 +112,7 @@ import {
   onElementStoreChanged,
   DEFAULT_WORKSPACE_ID
 } from './core/element-store.js';
+import { allowedAuthorities, verifyOrigin } from './core/origin-gate.js';
 import {
   boardStateFile,
   flushBoardStateSaves,
@@ -135,10 +135,56 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = createServer(app);
-const wss = new WebSocketServer({ server });
+
+/**
+ * The authorities this board answers for, built once the port is known.
+ *
+ * Read through a function rather than captured, because `HOST` and `PORT` are resolved at the
+ * bottom of this file and both gates below run long after that.
+ */
+let authorities: Set<string> | null = null;
+function boardAuthorities(): Set<string> {
+  if (!authorities) {
+    authorities = allowedAuthorities(HOST, PORT, process.env.EXCALIDRAW_ALLOWED_HOSTS);
+  }
+  return authorities;
+}
+
+// The socket is the same hole as the routes by a door CORS does not cover at all: it declared
+// no `verifyClient`, so a page at any origin got `initial_elements` and every live shell's
+// scrollback on connect. Both gates have to exist; either one alone leaves the board readable.
+const wss = new WebSocketServer({
+  server,
+  verifyClient: ({ origin, req }, done) => {
+    const verdict = verifyOrigin({ origin, host: req.headers.host }, boardAuthorities(), PORT);
+    if (!verdict.ok) {
+      logger.warn(`Refused a WebSocket upgrade: ${verdict.reason}`);
+      done(false, 403, 'Forbidden');
+      return;
+    }
+    done(true);
+  }
+});
 
 // Middleware
-app.use(cors());
+//
+// This replaces `app.use(cors())`, whose defaults were `origin: '*'`. Note it refuses rather
+// than merely withholding CORS headers: a cross-origin `fetch` with `mode: 'no-cors'` still
+// runs on this side, and for `POST /api/terminal` the damage is starting the shell, not
+// reading the answer. See src/core/origin-gate.ts.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const verdict = verifyOrigin(
+    { origin: req.headers.origin, host: req.headers.host },
+    boardAuthorities(),
+    PORT
+  );
+  if (!verdict.ok) {
+    logger.warn(`Refused ${req.method} ${req.path}: ${verdict.reason}`);
+    res.status(403).json({ success: false, error: verdict.reason });
+    return;
+  }
+  next();
+});
 app.use(express.json({ limit: '10mb' }));
 
 // Serve static files from the build directory
