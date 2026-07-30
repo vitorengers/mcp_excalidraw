@@ -15,6 +15,10 @@
  * - `Cmd+Left` and `Cmd+Right` were dropped on the floor (`if (ev.metaKey) break;`), and
  *   `Cmd+Backspace` sent `\x7f` — one character again, because that branch never consults
  *   `metaKey`.
+ * - `Shift+Enter` was a bare `\r`, the same byte as Enter, because `case 13` reads only
+ *   `altKey`. That is #238: a reader asking for a line break submitted instead. Same shape,
+ *   same place, and the sequence the fix sends — `ESC CR` — is the one xterm has been
+ *   sending for `Alt+Enter` all along.
  *
  * So there are two questions here and they need two different instruments:
  *
@@ -95,7 +99,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Control characters, spelled so a failure prints something a reader can compare. */
 const readable = (text) => JSON.stringify(
   String(text).replace(/\x1b/g, '<ESC>').replace(/\x17/g, '<^W>').replace(/\x15/g, '<^U>')
-    .replace(/\x08/g, '<^H>').replace(/\x7f/g, '<DEL>').replace(/\x03/g, '<^C>'));
+    .replace(/\x08/g, '<^H>').replace(/\x7f/g, '<DEL>').replace(/\x03/g, '<^C>')
+    .replace(/\r/g, '<CR>').replace(/\x07/g, '<BEL>'));
 
 // ─── The chords, and the bytes each one is supposed to send ───
 
@@ -137,10 +142,19 @@ const CHORDS = [
     mac: '\x1b[F', other: '\x1b[F', intent: 'the end of the line' },
   { name: 'Cmd+Backspace', code: 'Backspace', key: 'Backspace', vk: 8, modifier: 'meta',
     mac: '\x15', other: '\x1b[1;5H', intent: 'delete to the start of the line' },
+
+  // #238, and the one row with `Shift` in it. xterm's `case 13` reads only `altKey`, so
+  // Shift+Enter and Enter were the same bare `\r` and every program behind the block read
+  // them as one keystroke — a submit where a line break was meant. `ESC CR` is what Claude
+  // Code's own `/terminal-setup` writes into VS Code, Cursor, Alacritty and Zed, and it is
+  // byte for byte what xterm already sends for `Alt+Enter`. Not keyboard-conditional: the
+  // two extended-key encodings are, because a program that never asked for them prints them.
+  { name: 'Shift+Enter', code: 'Enter', key: 'Enter', vk: 13, modifier: 'shift',
+    mac: '\x1b\r', other: '\x1b\r', intent: 'a line break, not a submit' },
 ];
 
-/** `Alt` is modifier bit 1 in the DevTools protocol, `Ctrl` 2, `Meta` 4. */
-const MODIFIER_BIT = { alt: 1, ctrl: 2, meta: 4 };
+/** `Alt` is modifier bit 1 in the DevTools protocol, `Ctrl` 2, `Meta` 4, `Shift` 8. */
+const MODIFIER_BIT = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
 
 // ─── A project with a terminal ────────────────────────────────
 
@@ -269,7 +283,7 @@ const send = (method, params = {}) => new Promise((resolve, reject) => {
 /**
  * The clipboard permission, granted over the **browser** target rather than the page's.
  *
- * Section 4 asks that `Ctrl+V` still pastes, and a paste with nothing on the clipboard is a
+ * Section 5 asks that `Ctrl+V` still pastes, and a paste with nothing on the clipboard is a
  * case that passes for the wrong reason. `Browser.grantPermissions` is refused on a page
  * session — same arrangement as `check-terminal-focus-browser.mjs`.
  */
@@ -523,6 +537,19 @@ function scenarios(shell) {
       expect: ['AA K5 zzz-'] },
     { name: 'Cmd+Backspace clears back to the start',
       typed: 'qqq', chords: ['Cmd+Backspace'], then: `${open}K6${close}`, expect: ['AA K6'] },
+    // #238, and last in the list on purpose: a shell that ended up at a continuation prompt
+    // because this one failed takes every case after it down with it.
+    //
+    // Neither line editor *inserts* a break for `ESC CR` — measured, both ways: PSReadLine
+    // does nothing at all with it and readline rings the bell. What is being asked here is
+    // the half that matters at a prompt, which is that it does not **submit** and does not
+    // clear: the line survives the chord and runs whole. `AA onetwo` is the tell, and it is
+    // the one answer neither of the other outcomes produces — a bare `\r` submits
+    // `...('A'+'A one` and both shells then open a continuation prompt, so the finished
+    // string carries a newline and prints as `AA one` / `two` across two lines.
+    { name: 'Shift+Enter leaves the line alone rather than running it',
+      typed: `${open}one`, chords: ['Shift+Enter'], then: `two${close}`,
+      expect: ['AA onetwo'] },
   ];
 }
 
@@ -555,7 +582,7 @@ try {
   await send('Runtime.enable');
   await send('Page.bringToFront');
 
-  // Two sections, so `Alt+P` and `Alt+G` are keys this board actually owns — section 4 asks
+  // Two sections, so `Alt+P` and `Alt+G` are keys this board actually owns — section 5 asks
   // whether the new table stepped on them, and a board with no marks would answer "no"
   // because there was nothing there to step on.
   for (const section of [
@@ -612,7 +639,39 @@ try {
     await readyPage();
   }
 
-  console.log(`\n3. and the shell moves: ${isWindows ? 'PowerShell over ConPTY' : 'the login shell'}`);
+  console.log('\n3. Enter is still a submit, and Shift+Enter is no longer one');
+  {
+    // The byte half of #238 is two assertions and they mean something only together: a table
+    // that claimed Enter as well would send `ESC CR` for both and break every prompt there
+    // is. What Shift+Enter sends is asserted by the table above, twice over; what is left to
+    // ask is that the key underneath it was not touched on the way.
+    await focusTerminal();
+    const before = (await evaluate(PROBE)).sent;
+    await enter();
+    await sleep(400);
+    const plain = await sentSince(before);
+    check('Enter still sends a bare CR', plain === '\r', `sent ${readable(plain)}`);
+
+    // And the shell half, asked the plainest way there is: a **complete** command, then
+    // Shift+Enter. A bare CR runs it there and then; `ESC CR` does not, in either editor.
+    await clearLine();
+    const marker = isWindows ? "Write-Output ('A'+'A K7')" : 'echo "A""A K7"';
+    await typeText(marker);
+    await sleep(300);
+    await pressChord(chordNamed('Shift+Enter'));
+    await sleep(1400);
+    check('a finished command is not run by Shift+Enter', !(await scrollbackOf()).includes('AA K7'),
+          'the shell ran it, so the chord reached it as a bare CR');
+    await enter();
+    let ranOnEnter = false;
+    try { await waitFor(async () => (await scrollbackOf()).includes('AA K7'), 'AA K7', 40); ranOnEnter = true; }
+    catch { /* reported below */ }
+    check('and the Enter after it still runs it', ranOnEnter,
+          `never saw "AA K7" — tail was ${readable((await scrollbackOf()).slice(-220))}`);
+    await clearLine();
+  }
+
+  console.log(`\n4. and the shell moves: ${isWindows ? 'PowerShell over ConPTY' : 'the login shell'}`);
   {
     const shell = isWindows ? 'powershell' : 'bash';
     for (const scenario of scenarios(shell)) {
@@ -635,7 +694,7 @@ try {
     await shot('03-shell-moved');
   }
 
-  console.log('\n4. the four board keys are still the board\'s, and Ctrl+V is still a paste');
+  console.log('\n5. the four board keys are still the board\'s, and Ctrl+V is still a paste');
   {
     // The neighbouring checks own these; what is asked here is only that a table inserted
     // *before* the AltGr bail did not step on any of them.
@@ -677,7 +736,7 @@ try {
     await clearLine();
   }
 
-  console.log('\n5. and the same bytes move readline, not only PSReadLine');
+  console.log('\n6. and the same bytes move readline, not only PSReadLine');
   if (!wslProject) {
     console.log(`  SKIP  ${distro ? `the "${distro}" share was not reachable` : 'no WSL distro on this machine'},`
                 + ' so `bash` was not run.');
