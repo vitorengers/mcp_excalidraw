@@ -71,6 +71,33 @@ hanging off the edge is unreadable while one that overlaps is merely in the way.
 lives in its own module so `scripts/check-anchored-placement.mjs` can check the edge cases
 without driving a browser.
 
+**The viewport is not empty, and room is not only about its edges.** `PlacementOptions.obstacles`
+takes the other overlays on screen in the same coordinates — the terminal panels, which
+`frontend/src/App.tsx` already holds as `terminalViews` and hands over as they are. They share
+this card's `--board-z-overlay` and are later in the DOM, so where both want the same pixels the
+terminal takes them and the card is *covered*, not moved: the reported symptom in #241 is a
+title cut mid-word and a body cut off down the panel's left edge, with the card itself perfectly
+placed by every rule it knew. A side is now taken only when it has viewport room **and** is
+clear of every obstacle. Three things follow, and each is a decision rather than a consequence:
+
+- **Only blocks with a session are obstacles.** A terminal block with none open draws no panel,
+  and a card must not move for something that is not on the screen.
+- **The card slides along the side it is on before it gives up.** The board reads
+  `mirror | terminals | documentation`, so a mirror card near the left edge has no room for a
+  720px card on its left at all — "the other side" of it is *below*, and the terminal reaches
+  far enough left that below has to move over as well. This is the sliding the module already
+  did to stay on screen, for the other reason, and it keeps the card on the side it chose.
+- **With nothing clear anywhere it does what it always did**: the first side with viewport room,
+  then the clamp. A terminal on both sides is a screen with nowhere to put a reading column, and
+  a card over a terminal beats one off the edge or one that moved for no gain.
+
+An obstacle sitting on the anchor is ignored, so selecting a terminal block still opens its card
+beside it; and an avoided obstacle never sets `clamped`, which stays the word for a card that
+had no side at all. `scripts/check-docs-card-avoids-terminal-browser.mjs` is the half no
+arithmetic can answer: two DOM overlays that overlap compile perfectly, so it measures the live
+`.docs-card` against the live `.terminal-card` in a browser and asks
+`document.elementFromPoint` what a click on the card would reach.
+
 Two consequences worth stating:
 
 - **The card is sized in screen pixels**, not scene units. At 40% zoom a card that scaled with
