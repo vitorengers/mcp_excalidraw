@@ -12,6 +12,7 @@
  */
 import { spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import logger from '../utils/logger.js';
 import { AgentUsage, streamsUsage, UsageMeter } from './agent-usage.js';
@@ -195,32 +196,172 @@ export function issueRevisePrompt(language: string | null | undefined): string {
 export const ISSUE_REVISE_PROMPT = issueRevisePrompt(null);
 
 /**
- * PATH for the agent, with the GitHub CLI added when it is missing.
+ * The command as an absolute path, or as it was given.
  *
- * The agent is told to use `gh`, but a server started before the CLI was installed
- * inherits a PATH without it — and a child process inherits that stale PATH in turn.
- * The failure reads as the agent being unable to create the issue, which points at
- * the wrong thing entirely.
+ * `child_process.spawn` searches `PATH` for a bare command name; the PTY binding does not,
+ * and on Windows it reports the failure as `File not found:` with nothing after the colon,
+ * which says neither what was missing nor that a lookup was expected. So the lookup happens
+ * here, against the same `PATH` the shell is about to be handed rather than this process's
+ * own — `EXCALIDRAW_TERMINAL=node ...` has to find the same `node` in both modes.
+ *
+ * Falling back to the original spelling is deliberate: a command that cannot be resolved
+ * should fail in the spawn, with the spawn's own message, rather than here.
+ *
+ * It lives here rather than in `terminal-session.ts`, which is where it was written and
+ * which still calls it, because `agentPath()` below now asks it the same question — "does
+ * this PATH resolve a runnable `gh`" — and a second copy of a PATH lookup is how the guard
+ * and the terminal come to disagree about what "on PATH" means. This module already owns
+ * what a child of the board is given, and `terminal-session.ts` already imports it, so the
+ * dependency runs one way.
+ *
+ * `platform` is a seam, not a setting: nothing in `src/` passes it. It decides how an
+ * executable is named — `PATHEXT` on Windows, nothing on POSIX — so that a check can assert
+ * the answer for all three platforms from whichever one it happens to be running on. The
+ * `PATH` separator is not part of it: that is the host's in production either way, and a
+ * check that stubbed it would be spelling paths no host would.
  */
-export function agentPath(): string {
-  const current = process.env.PATH ?? '';
-  if (/github cli/i.test(current)) return current;
+export function resolveExecutable(command: string, search: string, platform: NodeJS.Platform = process.platform): string {
+  const runnable = (candidate: string): boolean => {
+    try { return fs.existsSync(candidate) && fs.statSync(candidate).isFile(); } catch { return false; }
+  };
+  // Already a path of some kind, so there is nothing to look up.
+  if (command.includes('/') || command.includes('\\') || path.isAbsolute(command)) return command;
 
-  // Forward slashes: Windows accepts them, and they cannot be silently eaten as
-  // escape sequences the way a lone backslash before a letter would be.
-  const candidates = [
-    'C:/Program Files/GitHub CLI',
-    'C:/Program Files (x86)/GitHub CLI',
-  ];
-  const found = candidates.find((candidate) => {
-    try {
-      return fs.existsSync(path.join(candidate, 'gh.exe'));
-    } catch {
-      return false;
+  const extensions = platform === 'win32'
+    ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    : [];
+  for (const directory of search.split(path.delimiter).filter(Boolean)) {
+    const base = path.join(directory, command);
+    if (runnable(base)) return base;
+    for (const extension of extensions) {
+      if (runnable(base + extension)) return base + extension;
     }
-  });
+  }
+  return command;
+}
 
-  return found ? `${current}${path.delimiter}${found}` : current;
+/**
+ * The GitHub CLI directories a Windows install puts it in.
+ *
+ * Forward slashes: Windows accepts them, and they cannot be silently eaten as escape
+ * sequences the way a lone backslash before a letter would be.
+ */
+const WINDOWS_CANDIDATES = [
+  'C:/Program Files/GitHub CLI',
+  'C:/Program Files (x86)/GitHub CLI',
+];
+
+/**
+ * Where a POSIX machine keeps the tools this server's children need.
+ *
+ * A fixed list, and the alternative was considered and turned down: harvesting the real PATH
+ * at startup by running `$SHELL -lc 'printf %s "$PATH"'` is what GUI-launched developer tools
+ * on macOS do and is the only thing that can cover an asdf, nvm or mise install — but it puts
+ * a login shell on the server's startup path, and a shell that prompts, a shell that is slow
+ * and a `$SHELL` that is not POSIX are three new ways for the board to fail to come up. The
+ * list below costs four `existsSync` calls and cannot hang. What it misses is a version
+ * manager, which is written down as a known gap rather than pretended away.
+ */
+function posixCandidates(home: string): string[] {
+  return [
+    '/opt/homebrew/bin',              // Homebrew on Apple silicon
+    '/usr/local/bin',                 // Homebrew on Intel macOS, and the usual local install
+    '/home/linuxbrew/.linuxbrew/bin', // Homebrew on Linux
+    `${home}/.local/bin`,             // pipx, uv, and Claude Code's own installer
+    '/usr/bin',                       // the distro's own, which a stripped PATH can lack
+  ];
+}
+
+/**
+ * The seams `agentPath()` takes so that one platform can assert the answer for all three.
+ *
+ * Nothing in `src/` passes any of them; every caller calls `agentPath()` with no arguments
+ * and gets this machine. They exist because the failure this function fixes is only reachable
+ * from a GUI-launched process on a platform this is not developed on, so the alternative to a
+ * seam is a check that cannot be written.
+ */
+export interface AgentPathProbe {
+  /** The platform to answer for. Defaults to this process's. */
+  platform?: NodeJS.Platform;
+  /** The PATH to repair. Defaults to `process.env.PATH`. */
+  path?: string;
+  /** Where `~` expands to. Defaults to `os.homedir()`. */
+  home?: string;
+  /** A directory the candidates are looked for under, so a check can plant them. */
+  root?: string;
+}
+
+/** A candidate as it will be looked for: under `root` when a check planted one there. */
+function under(root: string | undefined, candidate: string): string {
+  // The drive letter goes, because it cannot be joined onto anything: the root stands in
+  // for the machine's own root, which is the whole of what a planted candidate needs.
+  return root ? path.join(root, candidate.replace(/^[A-Za-z]:/, '')) : candidate;
+}
+
+/** Two spellings of one directory, compared the way the platform compares them. */
+function sameAs(platform: NodeJS.Platform, entry: string): string {
+  const trimmed = entry.trim().replace(/[\\/]+$/, '');
+  return platform === 'win32' ? trimmed.replace(/\//g, '\\').toLowerCase() : trimmed;
+}
+
+function isDirectory(candidate: string): boolean {
+  try { return fs.existsSync(candidate) && fs.statSync(candidate).isDirectory(); } catch { return false; }
+}
+
+/**
+ * PATH for every child of the board, with the directories a tool lives in added when missing.
+ *
+ * The agent is told to use `gh`, but a server started before the CLI was installed inherits a
+ * PATH without it — and a child process inherits that stale PATH in turn. The failure reads as
+ * the agent being unable to create the issue, which points at the wrong thing entirely.
+ * `docs/trap-gh-path.md` is that trap.
+ *
+ * It was fixed on one platform only, and in a way that could not have worked on another: the
+ * guard was `/github cli/i` against the incoming PATH, which can only ever match a Windows
+ * Program Files directory name, and the candidates were two `C:/Program Files…` paths probed
+ * for `gh.exe`. On macOS and Linux the guard never matched, the probe found nothing, and the
+ * inherited PATH came back untouched — invisible from a shell, where `gh` is already on PATH,
+ * and the whole failure from a launcher: a process started from Finder, from a `.desktop`
+ * entry or from a LaunchAgent inherits launchd's minimal PATH, which holds neither Homebrew
+ * prefix nor `~/.local/bin`, so `gh` *and* the agent binary are both missing.
+ *
+ * So the guard is now a real lookup — a runnable `gh` on the PATH as given — which means the
+ * same thing on all three platforms, and the candidate list is the one the platform uses. The
+ * POSIX half appends every candidate that *exists*, rather than only those holding a `gh`:
+ * the agent binary has the identical GUI-launch problem and lives in the same directories, and
+ * a repair that fixed `gh` while leaving `claude` unfound would fix half of one launch.
+ *
+ * Directories are appended, never prepended, so nothing this adds can shadow a tool the
+ * machine's own PATH already chose.
+ */
+export function agentPath(probe: AgentPathProbe = {}): string {
+  const platform = probe.platform ?? process.platform;
+  const current = probe.path ?? process.env.PATH ?? '';
+  if (resolveExecutable('gh', current, platform) !== 'gh') return current;
+
+  const present = new Set(
+    current.split(path.delimiter).filter(Boolean).map((entry) => sameAs(platform, entry)),
+  );
+
+  let additions: string[];
+  if (platform === 'win32') {
+    // One, and by the presence of `gh.exe` rather than of the directory: unchanged from what
+    // this did before, because on Windows it already worked.
+    const found = WINDOWS_CANDIDATES
+      .map((candidate) => under(probe.root, candidate))
+      .find((candidate) => {
+        try { return fs.existsSync(path.join(candidate, 'gh.exe')); } catch { return false; }
+      });
+    additions = found ? [found] : [];
+  } else {
+    additions = posixCandidates(probe.home ?? os.homedir())
+      .map((candidate) => under(probe.root, candidate))
+      .filter(isDirectory);
+  }
+
+  additions = additions.filter((candidate) => !present.has(sameAs(platform, candidate)));
+  if (additions.length === 0) return current;
+  return [...(current ? [current] : []), ...additions].join(path.delimiter);
 }
 
 /**
@@ -282,9 +423,13 @@ function has(env: NodeJS.ProcessEnv, name: string): boolean {
  * and not the other is how they drift apart. Every correction is one key and none of them
  * rewrites a command line, so what `agent-usage.ts` and `workspaces.ts` rule out — a
  * configurable command — is untouched.
+ *
+ * `probe` is `agentPath`'s seam and nothing more: no caller in `src/` passes it, and it is
+ * here so that a check can assert the environment a child is handed on a platform other than
+ * the one it is running on. See `AgentPathProbe`.
  */
-export function agentEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, PATH: agentPath() };
+export function agentEnv(probe: AgentPathProbe = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, PATH: agentPath(probe) };
   const inherited = has(env, SESSION_ONLY.witness);
   // By comparison rather than by `delete env.X`: a Windows environment block is
   // case-insensitive, and once spread into a plain object a `Claude_Code_Child_Session`

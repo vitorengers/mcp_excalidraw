@@ -19,11 +19,12 @@
  * `docs/terminal.md` records what each mode costs.
  */
 import { spawn, spawnSync, ChildProcess } from 'child_process';
-import { existsSync, statSync } from 'fs';
-import { delimiter, isAbsolute, join } from 'path';
+import { existsSync } from 'fs';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
-import { AgentDirectory, agentEnv, buildAgentCommand } from './issue-agent.js';
+// `resolveExecutable` moved to `issue-agent.ts` — `agentPath()` asks it the same question
+// there, and one PATH lookup shared is one that cannot drift from the terminal's.
+import { AgentDirectory, agentEnv, buildAgentCommand, resolveExecutable } from './issue-agent.js';
 import { streamsUsage } from './agent-usage.js';
 import { AgentStreamRenderer } from './agent-stream-render.js';
 
@@ -244,38 +245,6 @@ export function buildTerminalCommand(
   prompt?: string | null
 ): { command: string; args: string[]; cwd: string | undefined } {
   return buildAgentCommand(workspace, shellCommand, directory, prompt);
-}
-
-/**
- * The command as an absolute path, or as it was given.
- *
- * `child_process.spawn` searches `PATH` for a bare command name; the PTY binding does not,
- * and on Windows it reports the failure as `File not found:` with nothing after the colon,
- * which says neither what was missing nor that a lookup was expected. So the lookup happens
- * here, against the same `PATH` the shell is about to be handed rather than this process's
- * own — `EXCALIDRAW_TERMINAL=node ...` has to find the same `node` in both modes.
- *
- * Falling back to the original spelling is deliberate: a command that cannot be resolved
- * should fail in the spawn, with the spawn's own message, rather than here.
- */
-export function resolveExecutable(command: string, path: string): string {
-  const runnable = (candidate: string): boolean => {
-    try { return existsSync(candidate) && statSync(candidate).isFile(); } catch { return false; }
-  };
-  // Already a path of some kind, so there is nothing to look up.
-  if (command.includes('/') || command.includes('\\') || isAbsolute(command)) return command;
-
-  const extensions = process.platform === 'win32'
-    ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
-    : [];
-  for (const directory of path.split(delimiter).filter(Boolean)) {
-    const base = join(directory, command);
-    if (runnable(base)) return base;
-    for (const extension of extensions) {
-      if (runnable(base + extension)) return base + extension;
-    }
-  }
-  return command;
 }
 
 /**
