@@ -175,6 +175,49 @@ node scripts/check-<name>.mjs
 node scripts/check-board-map.mjs
 ```
 
+That is the singular form, and it is what you want while a change is being written: one check,
+its output on the terminal, run against the old code first. **`npm test` is the whole suite** —
+`node scripts/run-checks.mjs`, every `scripts/check-*.mjs`, non-zero if any of them fails:
+
+```
+npm test                                          # all of them
+node scripts/run-checks.mjs --only 'check-docs-*'  # the ones whose name matches
+node scripts/run-checks.mjs --skip '*-browser'     # everything that needs no Chrome
+node scripts/run-checks.mjs --help                 # every flag
+```
+
+`--only` and `--skip` are globs over the file name — `*` and `?`, repeatable, comma-separated —
+and `--skip` is applied after `--only`. The run ends on a table of pass, fail, skip and timeout
+and the count it selected of what it discovered; a passing check's output is buffered away and a
+failing one's is printed.
+
+**It does not build.** A missing `dist/server.js` or `dist/frontend/index.html` stops the run
+with exit 2 and names the artifact, because a runner that rebuilds quietly hides which artifact
+a check actually needed and produces a pass nobody can reproduce by hand.
+
+**A check that hangs is killed**, at 180 seconds unless `--timeout <seconds>` says otherwise,
+and reported as `TIMEOUT` — its own classification rather than a FAIL, because it is the one
+outcome that needs acting on rather than reading. What is killed is the process *tree*:
+`taskkill /T /F` on Windows, the process group elsewhere. A check here starts a canvas server
+and often a headless Chrome under it, and `child.kill()` reaps neither — the check dies and the
+server keeps the port.
+
+**`--jobs <n>` runs more than one at a time**, and the default is 1. The checks are not yet
+independent of each other in the ways concurrency needs them to be; the flag exists now because
+the seam has to exist before that can be measured through it, and `--jobs auto` is the
+`min(4, cpus)` the default becomes once they are.
+
+At the end of a run the `check-*` working directories in `os.tmpdir()` that are older than the
+run **and untouched for an hour** are removed — 199 of them had accumulated on the maintainer's
+machine, because cleanup was per-script and every crash leaked one. `--keep-temp` turns it off.
+
+Both halves of that condition are there because the first version of it, which was age alone,
+deleted a directory that was still in use. `check-tiers.mjs` builds its fixture as
+`check-tiers-XXXXXX` and *then* spawns the runner, so the fixture is older than the run it is the
+subject of; the reap took it and the check died on `ENOENT` half way through. A single check is
+killed at 180 seconds, so nothing a live run owns can have gone untouched for twenty times that.
+What a run leaks itself is younger than the run and is collected by the next one.
+
 Compiling is not working. Anything that changes what the browser does has to be looked at in a
 browser — three defects in the UI layer compiled cleanly and did none of what they claimed.
 
@@ -191,7 +234,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 81 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 82 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 67 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
