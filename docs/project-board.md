@@ -84,7 +84,12 @@ buffer exhaustion the issue reader already retries — and without a retry that 
 canvas as a card snapping back for no reason anyone can see.
 
 `EXCALIDRAW_GH_COMMAND` overrides the binary, which is how `scripts/check-project-board.mjs`
-answers without a GitHub account behind it.
+answers without a GitHub account behind it. **Which binary is a question about the workspace,
+not about the server**: a WSL project's calls are resolved inside its distro, where a host path
+cannot exist, so it reads `EXCALIDRAW_GH_COMMAND_WSL` and otherwise the bare `gh` — never the
+host's. One variable for the whole server is #252, and it is what a distro-backed board's mirror
+disappearing at a restart looks like
+([trap-gh-path.md](trap-gh-path.md#it-is-two-machines-and-two-binaries)).
 
 ## Polled, because there is nothing to subscribe to
 

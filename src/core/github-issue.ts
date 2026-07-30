@@ -11,11 +11,7 @@ import { spawn } from 'child_process';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
 import { agentPath, buildAgentCommand } from './issue-agent.js';
-import { GH_COMMAND, runGh as runGhCommand } from './gh.js';
-
-// Re-exported from where it now lives, so the project board reader and this one cannot
-// disagree about which binary `gh` is.
-export { GH_COMMAND };
+import { ghCommandFor, runGh as runGhCommand } from './gh.js';
 
 /** How long a read may take. Far shorter than an agent run — this is one API call. */
 const TIMEOUT_MS = 30_000;
@@ -210,9 +206,12 @@ async function runGh(workspace: Workspace, issueUrl: string, fields: string): Pr
     throw new MalformedResponse(`Not a GitHub issue URL: ${issueUrl}`);
   }
 
+  // `ghCommandFor` rather than a constant, because this call site is spawned here rather
+  // than through `runGh` and would otherwise be the one door left open: a WSL workspace
+  // reading an issue would go on asking `bash` for the host's binary (#252).
   const { command, args, cwd } = buildAgentCommand(
     workspace,
-    `${GH_COMMAND} issue view ${issueUrl} --json ${fields}`
+    `${ghCommandFor(workspace)} issue view ${issueUrl} --json ${fields}`
   );
 
   logger.info(`Reading ${issueUrl} for workspace "${workspace.id}"`);
