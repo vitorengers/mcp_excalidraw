@@ -11,6 +11,8 @@
  * prints a pull request URL — the point is this server's behaviour, not an agent's.
  *
  * Usage: node scripts/check-implement-block.mjs [--url http://127.0.0.1:3838] [--disabled]
+ *
+ * Tier: fast
  */
 
 const urlArg = process.argv.indexOf('--url');

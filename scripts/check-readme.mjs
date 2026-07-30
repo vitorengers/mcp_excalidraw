@@ -22,6 +22,8 @@
  * Offline and self-contained.
  *
  * Usage: node scripts/check-readme.mjs
+ *
+ * Tier: repo
  */
 
 import { readFileSync } from 'node:fs';

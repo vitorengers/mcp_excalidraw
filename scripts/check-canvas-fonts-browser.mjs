@@ -42,6 +42,8 @@
  * frontend, so proving it red against the old code needs the old code *built*.
  *
  * Usage: node scripts/check-canvas-fonts-browser.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';

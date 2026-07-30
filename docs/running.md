@@ -176,12 +176,43 @@ node scripts/check-board-map.mjs
 Compiling is not working. Anything that changes what the browser does has to be looked at in a
 browser — three defects in the UI layer compiled cleanly and did none of what they claimed.
 
-### A green run has to say how much of itself it ran
+## Which checks run where
 
-Sixty-nine of the checks drive Chrome over CDP, and a machine without one used to get
-`SKIPPED` and exit 0 from every single one of them — the same exit code as a pass. A CI job
-with no browser installed would have reported the whole of that category green having launched
-nothing, which is precisely the category the paragraph above exists to defend.
+Not every check can run on every machine, and a check that quietly skips itself is
+indistinguishable from one that passed. So each `scripts/check-*.mjs` declares one tier in its
+banner — `Tier: fast` — and `scripts/run-checks.mjs` selects on it:
+
+```
+node scripts/run-checks.mjs --tier fast,browser   # the contributor gate
+node scripts/run-checks.mjs --list                # what would run, and nothing else
+```
+
+| Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
+|---|---|---|---|---|
+| `fast` | nothing | Linux, macOS, Windows | 78 | yes |
+| `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 67 | yes |
+| `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
+| `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
+| `repo` | the full history, and this repository's own board | anywhere with a full clone | 4 | no |
+
+The gate is `fast` plus `browser`. `repo` is off it because it cannot be satisfied from a
+contributor's fork — `check-board-map.mjs` reads `docs/board.excalidraw` and the merge history
+of *this* fork — and `wsl` is off it because a hosted runner has no distro.
+
+A tier whose tool is not on the machine is reported as **EXPECTED-SKIP** and the run still
+exits 0, so `--tier wsl` on a Linux box is honest rather than green. `browser` is the one
+exception: with no Chrome it *fails*, because a runner that was meant to have one and does not
+would otherwise hide sixty-seven checks behind a green tick that never ran them.
+
+The tiers are held to the source by `node scripts/check-tiers.mjs`: a check added with no
+`Tier:` line fails it, as does one that spawns `wsl.exe` while calling itself `fast`.
+
+### And a green run says how much of itself it ran
+
+The tier gate above answers whether this *machine* has a browser. It does not answer whether
+each check in the tier found one: a check handed a `CHROME_PATH` that points at nothing, or a
+`--chrome` at a stale path, used to print `SKIPPED` and exit 0 — the same exit code as a pass,
+so a runner reading it counted a check that measured nothing as a check that ran.
 
 So a check that cannot find a browser exits **3** rather than 0, under `CHECK_STRICT=1` or
 `--strict`, and says which paths it looked at:
@@ -190,21 +221,22 @@ So a check that cannot find a browser exits **3** rather than 0, under `CHECK_ST
 CHECK_STRICT=1 node scripts/check-board-landing-browser.mjs
 ```
 
-Without it the behaviour is unchanged — `SKIPPED` and exit 0 — because an operator running one
-check by hand on a machine with no browser wants a skip, not a failure. The exit code rather
+Without either, the behaviour is unchanged — `SKIPPED` and exit 0 — because an operator running
+one check by hand on a machine with no browser wants a skip, not a failure. The exit code rather
 than a marker on stdout is deliberate: a runner has to classify a check that died before it
 printed anything.
 
-`scripts/run-checks.mjs` is what reads that code. It runs a tier and prints a census:
+`run-checks.mjs` spawns every child with `CHECK_STRICT=1` whatever it was itself given — that is
+what makes a skip visible at all — and then decides what to do with it. It reads exit 3 as SKIP,
+and as FAIL under `--strict`:
 
 ```
-node scripts/run-checks.mjs --tier browser            # 69 skipped for want of a browser → exit 0
-node scripts/run-checks.mjs --tier browser --strict   # the same 69 → exit 1
+node scripts/run-checks.mjs --tier browser            # … — 0 skipped for want of a browser
+node scripts/run-checks.mjs --tier browser --strict   # any that gave up now fail the run
 ```
 
-`--only <glob>` narrows it to matching file names. The tier a check belongs to is read from a
-`Tier:` line in its banner where it has one; until every check declares one, anything importing
-`scripts/lib/find-chrome.mjs` counts as `browser`.
+The count is printed on **every** run, passing or not. That is the whole point of it: a green
+run has to say out loud how much of itself it did not execute.
 
 **`CHROME_PATH` is authoritative**, the same way `--chrome` is: naming a browser that is not
 there is an error, not a reason to fall back to one somewhere else. That is what makes
@@ -212,5 +244,7 @@ there is an error, not a reason to fall back to one somewhere else. That is what
 
 `scripts/lib/find-chrome.mjs` holds the one candidate list — Windows Chrome and Edge, the macOS
 bundle, `/usr/bin/google-chrome`, `/usr/bin/chromium`, `/usr/bin/chromium-browser` and, last,
-`/snap/bin/chromium`. Adding a path anywhere else is a second copy that will drift, and
-`scripts/check-browser-strict.mjs` fails on one.
+`/snap/bin/chromium`. It is last because a snap-confined Chromium launches under a different
+sandbox posture and CDP may not attach the same way, so it is only ever reached where no
+ordinary install exists to win. Adding a path anywhere else is a second copy that will drift,
+and `node scripts/check-browser-strict.mjs` fails on one.

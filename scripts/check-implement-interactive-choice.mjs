@@ -29,6 +29,8 @@
  * first.
  *
  * Usage: node scripts/check-implement-interactive-choice.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn, spawnSync } from 'node:child_process';

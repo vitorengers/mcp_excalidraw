@@ -18,6 +18,8 @@
  * Offline and self-contained; nothing is spawned. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-terminal-font.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync } from 'node:fs';

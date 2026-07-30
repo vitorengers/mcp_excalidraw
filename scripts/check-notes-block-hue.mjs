@@ -32,6 +32,8 @@
  * halves read the compiled modules and the browser half loads the built frontend.
  *
  * Usage: node scripts/check-notes-block-hue.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';

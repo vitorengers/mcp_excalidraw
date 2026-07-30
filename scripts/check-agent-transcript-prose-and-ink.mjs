@@ -46,6 +46,8 @@
  * Self-contained: no server, no browser, no network. Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-agent-transcript-prose-and-ink.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync } from 'node:fs';

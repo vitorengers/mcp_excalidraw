@@ -37,6 +37,8 @@
  * `./node_modules/.bin/vite build` first — it loads the built frontend.
  *
  * Usage: node scripts/check-agent-transcript-ink-browser.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';

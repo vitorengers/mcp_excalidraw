@@ -23,6 +23,8 @@
  * built frontend.
  *
  * Usage: node scripts/check-docs-panel-theme-browser.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';

@@ -41,6 +41,8 @@
  * Run `./node_modules/.bin/tsc` first.
  *
  * Usage: node scripts/check-wsl-command-quoting.mjs
+ *
+ * Tier: wsl
  */
 
 import { spawnSync } from 'node:child_process';

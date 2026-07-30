@@ -30,6 +30,8 @@
  * first.
  *
  * Usage: node scripts/check-mirror-anchor.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync } from 'node:fs';

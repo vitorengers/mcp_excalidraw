@@ -21,11 +21,18 @@
  * behaves identically until the day the lists disagree, which is exactly how
  * `check-alt-arrow-accelerator.mjs` came to have no macOS or Linux entry.
  *
+ * It is `fast`, and the second file `check-tiers.mjs` has to exempt from its "looks for a
+ * Chrome, so it must be a browser check" rule. Naming `findChrome` and `CHROME_PATH` is what
+ * this check is *about*; needing them is what it exists to prove nothing here does.
+ *
  * Usage: node scripts/check-browser-strict.mjs
+ *
+ * Tier: fast
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -141,30 +148,52 @@ console.log('\n4. run-checks.mjs counts the skips and can be made to fail on the
 const runnerPath = join(scriptsDir, 'run-checks.mjs');
 check('the runner exists', existsSync(runnerPath), 'scripts/run-checks.mjs');
 
-// A narrow slice of the browser tier: the census arithmetic is the same for four checks as
-// for sixty-nine, and sixty-nine subprocesses is minutes of wall clock for no extra assertion.
-// These four probe for a browser before they do anything else, so the slice skips in
-// milliseconds and — unlike the checks that run offline cases first — needs no built `dist/`.
-const SLICE = 'check-terminal-f*-browser';
+const censusOf = (output) => {
+  const found = output.match(/(\d+) skipped for want of a browser/);
+  return found ? Number(found[1]) : null;
+};
 
-const census = run([runnerPath, '--tier', 'browser', '--only', SLICE], { CHECK_STRICT: '' });
-const counted = census.output.match(/(\d+) skipped for want of a browser/);
-check('the census says how many were skipped for want of a browser', Boolean(counted),
-      census.output.trim().split(/\r?\n/).slice(-3).join(' | '));
-check('and the number is not zero here', counted && Number(counted[1]) > 0,
-      counted ? `counted ${counted[1]}` : 'no census line at all');
-check('a run with nothing but skips still exits 0 without --strict', census.code === 0,
-      `exit ${census.code}`);
+// 4a. The real browser tier, with the machine's Chrome answered away. #272's gate gives the
+// whole tier up as MISSING before any child starts; the number still has to be stated, because
+// "69 did not run" is the fact a reader of a CI log needs and the exit code alone does not
+// carry it.
+const gated = run([runnerPath, '--tier', 'browser', '--assume', 'chrome=0'], { CHECK_STRICT: '' });
+check('--tier browser with no browser says how many were skipped for want of one',
+      censusOf(gated.output) !== null,
+      gated.output.trim().split(/\r?\n/).slice(-3).join(' | '));
+check('and the number is the size of the tier, not zero', (censusOf(gated.output) ?? 0) > 0,
+      `counted ${censusOf(gated.output)}`);
+check('a tier that could not run does not exit 0', gated.code !== 0, `exit ${gated.code}`);
 
-const strictCensus = run([runnerPath, '--tier', 'browser', '--only', SLICE, '--strict'], { CHECK_STRICT: '' });
-check('--strict turns those skips into a non-zero exit', strictCensus.code !== 0,
-      `exit ${strictCensus.code}`);
-check('--strict still prints the census', /skipped for want of a browser/.test(strictCensus.output));
+// 4b. The case the tier gate cannot see: this machine *has* a browser, the tier runs, and the
+// checks in it give up one by one anyway — a stale `CHROME_PATH`, a `--chrome` at nothing. Exit
+// 0 there reads as a pass, which is the defect one level below the gate. Stubs rather than the
+// real tier: sixty-nine subprocesses is minutes of wall clock, and the arithmetic is the same.
+const fixture = mkdtempSync(join(tmpdir(), 'check-browser-strict-'));
+try {
+  const stub = (name, exit) => writeFileSync(join(fixture, name),
+    `/**\n * A stub.\n *\n * Tier: browser\n */\nprocess.exit(${exit});\n`);
+  stub('check-gave-up-a.mjs', 3);
+  stub('check-gave-up-b.mjs', 3);
+  stub('check-really-ran.mjs', 0);
 
-// The runner must not report a check it never ran as anything at all.
-const nothing = run([runnerPath, '--only', 'check-there-is-no-such-check'], { CHECK_STRICT: '' });
-check('matching no checks is an error, not an empty green run', nothing.code !== 0,
-      `exit ${nothing.code}`);
+  const ran = run([runnerPath, '--tier', 'browser', '--dir', fixture, '--assume', 'chrome=1'],
+                  { CHECK_STRICT: '' });
+  check('a check that exits 3 is not counted as a pass', /1 passed/.test(ran.output),
+        ran.output.trim().split(/\r?\n/).slice(-2).join(' | '));
+  check('it is counted as skipped for want of a browser', censusOf(ran.output) === 2,
+        `counted ${censusOf(ran.output)}`);
+  check('and the run still exits 0 without --strict', ran.code === 0, `exit ${ran.code}`);
+
+  const strictRun = run([runnerPath, '--tier', 'browser', '--dir', fixture,
+                         '--assume', 'chrome=1', '--strict'], { CHECK_STRICT: '' });
+  check('--strict turns those same skips into a non-zero exit', strictRun.code !== 0,
+        `exit ${strictRun.code}`);
+  check('--strict still prints the census', censusOf(strictRun.output) === 2,
+        `counted ${censusOf(strictRun.output)}`);
+} finally {
+  rmSync(fixture, { recursive: true, force: true });
+}
 
 console.log(failures === 0
   ? '\nall cases passed'

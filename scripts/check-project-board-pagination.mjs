@@ -17,6 +17,8 @@
  * and no GitHub account. Run `./node_modules/.bin/tsc` first — it reads the compiled modules.
  *
  * Usage: node scripts/check-project-board-pagination.mjs
+ *
+ * Tier: fast
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

@@ -41,6 +41,8 @@
  * it loads the built frontend.
  *
  * Usage: node scripts/check-terminal-keys-browser.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: wsl
  */
 
 import { execFileSync, spawn } from 'node:child_process';

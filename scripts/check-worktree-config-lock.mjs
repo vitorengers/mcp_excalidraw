@@ -29,6 +29,8 @@
  * that precondition is asserted first.
  *
  * Usage: node scripts/check-worktree-config-lock.mjs
+ *
+ * Tier: fast
  */
 
 import { spawnSync } from 'node:child_process';

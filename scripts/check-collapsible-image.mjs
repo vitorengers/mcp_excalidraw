@@ -8,6 +8,8 @@
  * since collapse state living only in the browser would be lost on any reload.
  *
  * Usage: node scripts/check-collapsible-image.mjs [--url http://127.0.0.1:3000]
+ *
+ * Tier: fast
  */
 
 const urlArg = process.argv.indexOf('--url');

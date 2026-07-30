@@ -46,6 +46,8 @@
  * resolver is a compiled module and the page is the built frontend.
  *
  * Usage: node scripts/check-board-side-by-side-browser.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';

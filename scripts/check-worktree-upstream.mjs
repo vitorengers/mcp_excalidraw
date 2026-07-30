@@ -23,6 +23,8 @@
  * what the agent's first push then does with it.
  *
  * Usage: node scripts/check-worktree-upstream.mjs
+ *
+ * Tier: fast
  */
 
 import { spawnSync } from 'node:child_process';

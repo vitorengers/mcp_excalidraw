@@ -19,6 +19,8 @@
  * Run `./node_modules/.bin/tsc` first — the last case reads the compiled panel predicates.
  *
  * Usage: node scripts/check-implement-resume.mjs
+ *
+ * Tier: fast
  */
 
 import { spawn, spawnSync } from 'node:child_process';

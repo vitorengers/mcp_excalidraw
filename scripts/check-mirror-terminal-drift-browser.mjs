@@ -44,6 +44,8 @@
  * frontend.
  *
  * Usage: node scripts/check-mirror-terminal-drift-browser.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';

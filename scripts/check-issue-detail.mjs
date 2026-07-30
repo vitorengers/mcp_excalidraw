@@ -16,6 +16,8 @@
  * call is the only call and the title is silently lost.
  *
  * Usage: node scripts/check-issue-detail.mjs [--url http://127.0.0.1:3838]
+ *
+ * Tier: fast
  */
 
 const urlArg = process.argv.indexOf('--url');

@@ -27,6 +27,8 @@
  * is a compiled module, checked here against boards built in memory.
  *
  * Usage: node scripts/check-board-map.mjs
+ *
+ * Tier: repo
  */
 
 import { execFileSync } from 'node:child_process';

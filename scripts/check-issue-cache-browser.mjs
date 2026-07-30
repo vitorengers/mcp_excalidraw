@@ -19,6 +19,8 @@
  * frontend.
  *
  * Usage: node scripts/check-issue-cache-browser.mjs [--chrome <path>] [--shots <dir>]
+ *
+ * Tier: browser
  */
 
 import { spawn } from 'node:child_process';
