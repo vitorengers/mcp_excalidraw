@@ -99,6 +99,39 @@ every twenty seconds, and only while the tab is on screen. A run that just finis
 immediately rather than waiting out the interval: that is the one moment the project changed for a
 reason the canvas already knows about.
 
+## A read that fails says so on a cold board, and is ignored on a warm one
+
+`GET /api/project-board` answers **502 with `gh`'s own message in it** when the read fails — `gh`
+unresolvable, an expired login, a token without the `project` scope, a GitHub outage, the loopback
+refusal above. The server was never the quiet part. The canvas was: every answer that was not a
+404 met one `return`, and on a board where the mirror is already drawn that is right, because a
+blip must not wipe a region somebody is reading. On a **cold** one — nothing drawn yet — nothing
+was what stayed on the screen, which from the canvas is indistinguishable from a board with no
+`githubProject` at all. #252 lost a WSL board's mirror to a restart that way, and the only trace
+anywhere was a line in `%LOCALAPPDATA%\Excalidraw-MCP\excalidraw.log`.
+
+So a cold failure draws a **red strip** where the mirror would have been, carrying the sentence
+the server sent, and a warm one still draws nothing at all (**#254**). `layoutUnreadable` is the
+whole of it, and `placeMirror` puts it exactly where the mirror goes, so the board arriving
+afterwards replaces it in place rather than beside it.
+
+A strip rather than a toast, and `morePages` above is the precedent — *a mirror that is missing
+cards says so on its own strip*. What is wrong here lasts as long as the failure does, and a toast
+has come and gone ten seconds later, leaving the canvas indistinguishable again, which is the
+complaint. It would also need a rule of its own to stop a twenty-second poll raising it a hundred
+and eighty times an hour; redrawing the same strip is simply idempotent, and the signature the
+mirror already keeps skips even that.
+
+There is no `ProjectBoard` behind the strip — that is what failed — so it carries no link, no
+columns and no count, and it is a fixed three columns wide rather than the project's. Everything
+else about it is the mirror's: the `project-board` mark that keeps it off the server and out of
+the export, the `docKey` that opens this document when it is selected, and `locked`, so it cannot
+be dragged somewhere it no longer means anything. `customData.unreadable` is what tells it from
+the strip of a board that *was* read.
+
+404 is untouched and still means something else entirely: the board has no project, so the region
+is cleared rather than explained.
+
 ## Where the region sits
 
 Measured **once**, against the board's own content, and then kept. The first time there is
