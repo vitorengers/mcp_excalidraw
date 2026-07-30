@@ -403,9 +403,54 @@ read the previous version's behaviour off a screen and take it for the current o
 was of an artifact, not of a bug.
 
 That run was also the first in which the `+` could be clicked at all: the check's server ran
-without `EXCALIDRAW_LIBRARY`, the library came back empty, and `addIssueBlockToColumn` warns to the
-console and returns when no template carries `customData.kind === "issue"`. Every click was a
-silent no-op, so the ordering assertions had never reached the thing they were about.
+without `EXCALIDRAW_LIBRARY`, the library came back empty, and `addIssueBlockToColumn` returned
+when no template carried `customData.kind === "issue"`. Every click was a silent no-op, so the
+ordering assertions had never reached the thing they were about. Silent to a console nobody had
+open, at that — which is the half of it that is fixed below.
+
+### A press, and never a selection left behind
+
+The `+` is answered by *selection*, which is the whole of #244: a locked shape cannot be clicked
+in Excalidraw 0.18 — there is no activation affordance for one — so the button has to stay
+unlocked, and the press it reads is `selectedElementIds` arriving on it. Two things follow, and
+neither was true before.
+
+**A selection is a press only when the button is alone in it.** The header rectangles are locked
+and no rubber band catches them, but every card, every draft and both buttons are unlocked, so one
+band across the header strip or one shift-click puts the `+` in a selection nobody pressed it in.
+That used to resolve the whole selection to "no single shape" and do nothing at all, leaving the
+button showing an ordinary selection box — the report's "it is selecting as a block". It is now
+taken *out* of the selection instead, and what the reader actually selected stays selected and
+stays described by the panel. The queue toggle is handled by the same lines, and a selection is
+still not a press for it either: sweeping it up does not flip the queue.
+
+Not while the gesture is still running, though. A rubber band is redrawn on every pointer move and
+would put the button straight back, so the button is shed on the selection the reader ends up
+with, once `selectionElement` is gone.
+
+**A press is answered even when it can do nothing.** `syncSelectedDoc` ignores a selection that
+has not changed — it must, or every pointer move over the button would drop another block — so a
+path that returned with the `+` still selected made the *next* press an unchanged selection, and
+the button was dead until something else was clicked. Every return out of `addIssueBlockToColumn`
+was such a path. The selection is now dropped first, before anything that can go wrong does, which
+is the rule the queue toggle was written with and states in the same words.
+
+The reachable one of those returns is a **library that ships no issue block**, and it warned to a
+console the reader does not have open. It now says so on the canvas as well, through Excalidraw's
+own toast, which is a sibling of the canvas rather than a shape drawn into it — so the message
+does not have to be cleaned up, exported around or synced to anyone. `docs/shared-library.md` is
+where that configuration lives.
+
+**A `+` dragged out of its header is put back by the next refresh**, which is what
+`project-board-layout.ts` has always claimed and nothing did until #244. The redraw is skipped
+when the layout has not changed, and the layout is computed from what it *wants* — so a mirror
+whose `+` had been nudged onto the empty canvas matched, was skipped, and stayed there. The skip
+now asks where those two shapes actually are first. Only those two: everything else on the mirror
+is locked and can only be where the last redraw put it.
+
+`scripts/check-notes-add-press-browser.mjs` drives all four in a real browser, the last of them
+against a second board whose workspace library is the shipped one with the issue block filtered
+out.
 
 A block grows as its title is typed, because an Excalidraw container grows to fit the text bound
 to it, and everything below it in the column moves down as it does — on the keystroke, not on the
@@ -619,7 +664,10 @@ Three things about the button belong here.
 **It is a shape, and it is unlocked**, exactly like the `+`: a locked shape cannot be clicked, and
 this one is a button. The header rectangles around it stay locked. It is handled as a *selection*
 rather than as a click, and the selection is dropped as soon as it is read — a toggle left
-selected could never be switched back, because a selection that has not changed is ignored.
+selected could never be switched back, because a selection that has not changed is ignored. A
+selection it arrives in *with company* is not a press at all, and it is taken out of that
+selection rather than left sitting in one; [the `+`](#a-press-and-never-a-selection-left-behind)
+is where both halves of that are written down, because both buttons go through the same lines.
 
 **The two states differ in fill and in weight, not in hue.** On is the column's own stroke filled
 in solid with a heavier outline and the glyph reversed out of it; off is white with a thin one.
