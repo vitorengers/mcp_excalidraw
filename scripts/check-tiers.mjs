@@ -146,8 +146,12 @@ const pretendPortable = [];
  *     that a check which cannot find a browser exits 3 rather than 0. It runs *without* one —
  *     that is the whole subject — so calling it `browser` would put the one check that proves
  *     the browser gate works behind the browser gate.
+ *   - `check-wsl-windows-only.mjs` (#286) names `wsl.exe` in order to assert that a board off
+ *     Windows never builds one. It is the same shape as the case above: the check needs no
+ *     distro, and `wsl` is the one tier on which its subject — a machine without `wsl.exe` —
+ *     is guaranteed not to hold.
  */
-const SELF_DESCRIBING = ['check-tiers.mjs', 'check-browser-strict.mjs'];
+const SELF_DESCRIBING = ['check-tiers.mjs', 'check-browser-strict.mjs', 'check-wsl-windows-only.mjs'];
 
 for (const [file, tier] of tierOf) {
   if (SELF_DESCRIBING.includes(file)) continue;

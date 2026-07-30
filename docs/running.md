@@ -87,8 +87,11 @@ the port goes to whatever auto-starts first.
 unusable there. The checks never use either: each starts its own instance on a port the kernel
 just handed out, and neither `PORT` nor anything else in the environment reaches it.
 
-Everything else is `EXCALIDRAW_*`, and all twenty-one are optional. Unset means the feature is
+Everything else is `EXCALIDRAW_*`, and every one of them is optional. Unset means the feature is
 off, not degraded.
+
+The nineteen below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
+and they are in [their own section](#windows-only-projects-inside-a-wsl-distro) rather than here.
 
 | Variable | Default | What it does |
 |---|---|---|
@@ -98,15 +101,12 @@ off, not degraded.
 | `EXCALIDRAW_LIBRARY` | unset | An `.excalidrawlib` served to every board, alongside each project's own — [shared-library.md](shared-library.md) |
 | `EXCALIDRAW_ISSUE_AGENT` | unset | The command line that researches an observation and opens the issue. Unset means issue blocks do nothing |
 | `EXCALIDRAW_IMPLEMENT_AGENT` | unset | The command line that implements one. Unset means the button is not offered |
-| `EXCALIDRAW_ISSUE_AGENT_WSL` | unset | The same command, spelled as a **WSL-backed** project's distro spells it. Unset falls back to `EXCALIDRAW_ISSUE_AGENT`, which only resolves inside a distro if it was written without an absolute path |
-| `EXCALIDRAW_IMPLEMENT_AGENT_WSL` | unset | The same, for implementing. A pair rather than one variable for the reason the pair above is a pair: granting a distro research must not thereby grant it repository writes |
 | `EXCALIDRAW_ISSUE_AGENT_TIMEOUT` | none | Seconds. Unset means no ceiling; a wedged run is handled by the block's reset instead |
 | `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` | none | The same, for implementing |
 | `EXCALIDRAW_IMPLEMENT_CONCURRENCY` | `4` | Runs at once. `0` is no cap, `1` serialises. Each one is a whole coding agent building on this machine |
 | `EXCALIDRAW_IMPLEMENT_QUEUE_MS` | `30000` | How often a workspace with its queue on looks for a free slot. The timer does not exist until a queue is turned on |
 | `EXCALIDRAW_ISSUE_MEMO_MS` | `30000` | How long one `gh` read of an issue is reused. `0` turns the memo off |
 | `EXCALIDRAW_GH_COMMAND` | `gh` | The GitHub CLI on **this machine**, when it is not on `PATH` — [trap-gh-path.md](trap-gh-path.md) |
-| `EXCALIDRAW_GH_COMMAND_WSL` | `gh` | The same, inside a **WSL-backed** project's distro. Unlike the agents' `_WSL` pair this does **not** fall back to the host value: a host path is exactly what cannot run there |
 | `EXCALIDRAW_CLAUDE_STATUS` | unset | The directory your Claude Code status line command writes its usage files into. Unset means `GET /api/claude-status` answers 404 and the header shows nothing — [claude-status.md](claude-status.md) |
 | `EXCALIDRAW_TERMINAL` | unset | `1` for the default shell, or a command line of your own. Unset means the terminal routes answer 404 — [terminal.md](terminal.md) |
 | `EXCALIDRAW_TERMINAL_PTY` | unset | `0` forces the pipe instead of a real pty, for a machine with no prebuilt binary |
@@ -129,6 +129,25 @@ A per-project `board.config.json` can override the model, the effort and the tim
 either agent. It cannot override the command itself; that boundary and its reasoning are in
 [issue-block.md](issue-block.md).
 
+## Windows only: projects inside a WSL distro
+
+**Everything in this section is Windows-only, and the board says so on macOS and Linux rather
+than trying.** A project registered with a `distro` runs through `wsl.exe`, which is a Windows
+binary: the agent command, the worktree's `git` and the `gh` the project board mirror polls with
+are all built as `wsl.exe -d <distro> …`. Off Windows there is no such program, so the board
+refuses instead of spawning one — the tab comes up broken reading `WSL-backed projects are
+Windows-only; this board is running on darwin`, and `POST /api/workspaces` answers 400 to a
+`distro` with the same sentence. If a remote or container backend is ever wanted there, it is a
+new workspace kind with a command builder of its own, not this one renamed: they would share the
+shape and neither the path translation nor the `--exec bash -lc` quoting.
+`node scripts/check-wsl-windows-only.mjs` holds this.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `EXCALIDRAW_ISSUE_AGENT_WSL` | unset | The issue command, spelled as a **WSL-backed** project's distro spells it. Unset falls back to `EXCALIDRAW_ISSUE_AGENT`, which only resolves inside a distro if it was written without an absolute path |
+| `EXCALIDRAW_IMPLEMENT_AGENT_WSL` | unset | The same, for implementing. A pair rather than one variable for the reason `EXCALIDRAW_ISSUE_AGENT` and `EXCALIDRAW_IMPLEMENT_AGENT` are a pair: granting a distro research must not thereby grant it repository writes |
+| `EXCALIDRAW_GH_COMMAND_WSL` | `gh` | The GitHub CLI inside a **WSL-backed** project's distro. Unlike the agents' `_WSL` pair this does **not** fall back to the host value: a host path is exactly what cannot run there |
+
 **A project inside a WSL distro needs the `_WSL` command.** Its agent runs inside the distro, so
 the command is resolved there: a host path like `C:/Users/you/.local/bin/claude.exe` is
 `No such file or directory` inside a distro, and the run exits 127 before it does anything. Set
@@ -139,8 +158,9 @@ as the distro names it:
 /home/you/.local/bin/claude -p --model claude-opus-5[1m] --effort high --allowedTools "..."
 ```
 
-That the command is granted by the environment rather than by the project is the same rule as
-above, and the reason a WSL project cannot simply declare its own in `board.config.json`.
+That the command is granted by the environment rather than by the project is the same rule the
+section above states — a `board.config.json` retunes an agent and never supplies one — and the
+reason a WSL project cannot simply declare its own.
 
 **And `gh` is resolved per project for the same reason** — `EXCALIDRAW_GH_COMMAND` is the host's
 CLI and nothing else. Where the distro has `gh` on its own `PATH`, which is the usual case,
@@ -202,7 +222,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 85 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 86 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 67 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
