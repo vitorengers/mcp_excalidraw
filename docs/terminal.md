@@ -30,10 +30,24 @@ EXCALIDRAW_TERMINAL=1
 ```
 
 `1`, `true`, `on`, `yes`, `enabled` or `default` all mean "the default shell for this
-workspace": PowerShell on Windows, `bash` on everything else, and `bash` inside the distro for
-a WSL-backed project. PowerShell rather than `cmd.exe` because `pwd`, `ls` and `cat` all mean
-something there, and a terminal whose first command fails on the platform's own spelling is a
-poor first impression.
+workspace": PowerShell on Windows, the login shell (`$SHELL`) on macOS and Linux, and `bash`
+inside the distro for a WSL-backed project. PowerShell rather than `cmd.exe` because `pwd`, `ls`
+and `cat` all mean something there, and a terminal whose first command fails on the platform's
+own spelling is a poor first impression.
+
+`$SHELL` rather than `bash` because that is the shell the reader chose: on macOS the login
+shell has been zsh since Catalina and `/bin/bash` is Apple's 3.2 from 2007, so `bash` opened a
+terminal with none of their rc files, aliases or prompt — and on a minimal Debian, an Alpine or
+a container image carrying only dash, `bash` is not on `PATH` at all and the session died in
+the spawn. It is read only when it is an **absolute** path, since a bare name is the thing being
+fixed; unset, empty or relative falls back to `/bin/bash` where that exists and `/bin/sh` where
+it does not — the first is the closest match to what this used to do, the second is the only
+shell POSIX guarantees is there. Both modes get the same string: a POSIX shell handed three
+pipes reads its commands from stdin already, and only PowerShell needs a second spelling.
+
+A WSL-backed project keeps `bash` and that is not an oversight: the command runs through
+`wsl.exe` into the distro, where the `$SHELL` this server can see belongs to the Windows host
+and describes a machine the shell will never run on.
 
 Anything else is taken as the command to run, which is how a machine that prefers something
 else says so — and how `scripts/check-terminal.mjs` puts a stub where a shell would be.
@@ -1832,6 +1846,13 @@ it. A board returned to puts its block back where it was left.
 - `scripts/check-terminal-pty.mjs` — that the shell sees a tty, that the echo moved with it,
   that a resize reaches the child, that the scrollback is cut between sequences, and that with
   no binding the server still starts and says `pipe`.
+- `scripts/check-terminal-default-shell.mjs` — which shell a bare `EXCALIDRAW_TERMINAL=1`
+  starts: `$SHELL` for a native workspace on macOS and Linux in both modes, an absolute
+  fallback where the machine names none, `bash` still for a WSL one, and both PowerShell
+  spellings still exactly as they were on Windows. Every case runs in a child that redefines
+  `process.platform` before importing the module, because this repository is maintained on a
+  box that reports `win32` and a check that asked the real platform would pass without ever
+  reaching the branch it is about.
 - `scripts/check-child-session-env.mjs` — that `CLAUDE_CODE_CHILD_SESSION` is not passed on,
   on the PTY path, the pipe path and the agent path, and that a sentinel variable beside it
   still arrives — the board strips one key rather than filtering the environment. It starts
