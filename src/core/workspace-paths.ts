@@ -15,7 +15,10 @@ export type WorkspaceEnvironment =
 export interface ResolvedPath {
   /** The path as given, only cleaned up. */
   input: string;
-  /** Comparable form — lower-cased, forward slashes, no trailing separator. */
+  /**
+   * Comparable form — forward slashes, no trailing separator, and lower-cased only where
+   * two spellings really are one directory. See `foldPathCase`.
+   */
   canonical: string;
   /** Path usable by this process to read files. */
   hostPath: string;
@@ -36,6 +39,28 @@ function stripTrailingSeparator(value: string): string {
 
 function toForwardSlashes(value: string): string {
   return value.replace(/\\/g, '/');
+}
+
+/**
+ * Fold a native path's case, but only on a platform whose filesystem does.
+ *
+ * The canonical form is a project's identity — `loadWorkspaces` dedupes on it and
+ * `addWorkspace` refuses a duplicate on it — so folding case decides whether two directories
+ * are one project. On Windows they are. On Linux `/home/me/Board` and `/home/me/board` are two
+ * directories, and folding made registering the second answer a 409 saying two spellings of one
+ * path are one project, while a registry that already held both silently dropped one.
+ *
+ * macOS is treated as Linux. Its default APFS volume is case-insensitive, so folding would
+ * usually be harmless there, but a case-sensitive volume behaves exactly like Linux — and which
+ * of the two a path sits on is not knowable from the path string. A rule keyed on the
+ * filesystem is not one this can implement from a string, so only the platform that is always
+ * case-insensitive folds.
+ *
+ * `wsl:` canonical forms fold regardless of this, and deliberately: WSL is reachable only from
+ * Windows, and the distro name there really is case-insensitive.
+ */
+export function foldPathCase(value: string): string {
+  return process.platform === 'win32' ? value.toLowerCase() : value;
 }
 
 /**
@@ -82,7 +107,7 @@ export function resolveWorkspacePath(input: string, distroHint?: string): Resolv
   }
 
   const absolute = path.resolve(trimmed);
-  const canonical = stripTrailingSeparator(toForwardSlashes(absolute)).toLowerCase();
+  const canonical = foldPathCase(stripTrailingSeparator(toForwardSlashes(absolute)));
   return {
     input: trimmed,
     canonical: `native:${canonical}`,
