@@ -338,7 +338,14 @@ try {
     '--no-default-browser-check',
     '--disable-gpu',
     '--hide-scrollbars',
-    '--window-size=1400,900',
+    // Wide enough that `placeCard` can put the issue card *beside* its block rather than
+    // clamped on top of it. At 1400 there was no room, the card covered the block, and the
+    // double click below selected a word in the card instead of opening the label editor —
+    // which this check got away with only because the server inherited
+    // `EXCALIDRAW_TERMINAL=1` from the machine's shell and the terminal panel, an obstacle
+    // `placeCard` routes around, pushed the card clear. #271 stopped a check's server
+    // inheriting anything it did not name, and this is what that uncovered.
+    '--window-size=1900,1000',
     BASE,
   ], { stdio: 'ignore' }));
 
