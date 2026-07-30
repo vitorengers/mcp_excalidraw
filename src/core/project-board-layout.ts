@@ -630,7 +630,10 @@ export function layoutBoard(
         strokeColor: stroke,
         backgroundColor: '#ffffff',
         // Deliberately not locked: a locked shape cannot be clicked, and this one is a
-        // button. A stray drag of it is corrected by the next refresh.
+        // button. A stray drag of it is corrected by the next refresh — which was a promise
+        // this file made and nothing kept until #244: the canvas skips a redraw when the
+        // layout has not changed, so `renderMirror` now asks where this shape actually is
+        // before believing that.
         locked: false,
         customData: { kind: MIRROR_KIND, role: 'add', sectionOptionId: section.optionId },
       });

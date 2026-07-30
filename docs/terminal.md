@@ -280,6 +280,94 @@ with an error are decided by one piece of code for a watched run and an unwatche
 covers the two shapes side by side, and `scripts/check-implement-terminal-browser.mjs` covers the
 board.
 
+### The agent transcript is drawn here, so its colours are ours
+
+An **Implement / Fix** tab is **not** Claude Code's own interface. A `-p` run streams
+`--output-format stream-json`, and `src/core/agent-stream-render.ts` turns those envelopes into
+the lines the block shows — the `⏺ Tool(argument)` line, the `⎿` result clipped to six lines with
+a `… N more lines` tail, the `✻ thinking…` marker, the closing line. An *interactive* tab is the
+other thing entirely: that is the real CLI drawing its own screen, in its own colours, and
+nothing below applies to it.
+
+Until #242 this file wrote **no SGR sequence at all**, so the whole transcript was the one xterm
+default foreground and a `Write` looked like a `Read` looked like a failed tool call. The only
+colour that ever appeared came *through* a tool's own output — `renderResult` passes a result
+verbatim, so a green `built in 12.93s` survived. Colour reached the block by accident and none
+was authored. This is not #223, which was `NO_COLOR` leaking into real shells; a variable that
+permits colour does nothing for a transcript that has none.
+
+**Only the sixteen named slots**, SGR 30-37 and 90-97, and that restriction is the whole design
+rather than a style rule. This surface has a palette per theme and xterm is re-themed on a
+toggle, so `ESC[36m` is resolved to paper's cyan for one reader and night's for the other, both
+already moved until they clear the 3:1 ink floor. A `38;5;N` or a `38;2;r;g;b` would be one of
+those two hexes printed into both cards, correct in one theme and unchecked in the other. Both
+themes therefore fall out of one map instead of being maintained twice.
+
+**Nothing writes bold or dim either.** `drawBoldTextInBrightColors` is xterm's default and is not
+turned off at `TerminalPanel.tsx`, so bold plus a colour is not a second axis — it is the *bright*
+member of the same pair, and #159 swapped those pairs on the dark palette, so bold would mean
+"lighter" on night and "darker" on paper. Dim is worse: xterm draws it by blending the glyph
+toward the background, which halves the exact ratio every slot was moved to clear. The palette
+already owns a dim ink that clears the floor — `brightBlack`, the comment grey in both themes —
+so "dim" here means that slot.
+
+**A category, not a list of tool names.** Names arrive from the stream and the set is open: an
+MCP server contributes tools nobody here has heard of, spelled `mcp__server__tool`. So the map in
+`terminal-palette.ts` is by what a call *is*, and a reader watching a run is telling apart five
+kinds:
+
+| | | |
+|---|---|---|
+| **inspection** | `cyan` | `Read`, `Glob`, `Grep`, `LS`, `NotebookRead`, `TodoRead` |
+| **mutation** | `yellow` | `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `TodoWrite` |
+| **execution** | `green` | `Bash`, `PowerShell`, `BashOutput`, `KillBash`, `KillShell` |
+| **network** | `blue` | `WebFetch`, `WebSearch` |
+| **delegation** | `magenta` | `Agent`, `Task`, `Skill`, `Workflow`, and every `mcp__…` |
+| **anything else** | `brightWhite` | which is the ink |
+
+An `mcp__…` tool is delegation on purpose: whatever it does, another program is doing it, which
+is what a sub-agent is from the point of view of somebody watching this run — and it is the one
+open-ended shape in the stream, so leaving it uncoloured would have left the commonest
+unrecognised name grey. Everything else falls to the ink rather than to a sixth hue, because
+colour here is *added information* and inventing a category for a tool we cannot place would be
+adding the wrong information. The lists are deliberately short; a name that turns out to matter
+is one line.
+
+The rest of the vocabulary:
+
+- **the argument inside the parens** is `brightBlack`, so a column of tool calls reads as a column
+  of verbs and the path steps back behind the name;
+- **the thinking marker, the result gutter, the continuation indent and the `… N more lines`
+  tail** are the same dim ink — all four are beside the point of the line they are on;
+- **the assistant's prose is plain ink**, and a line that is not a JSON envelope still passes
+  through byte for byte, uncoloured;
+- **the closing line is `green` when the run finished and `red` when it reported an error.**
+  Before #242 those two differed only in their wording, at the end of a transcript nobody is
+  scrolled to.
+
+**`is_error` was being dropped, and that is the other half of #242.** It is a field on a
+`tool_result`, `ContentBlock` declared no such field, and `renderEvent` forwarded only
+`block.content` — so a tool that failed was drawn identically to one that worked, which is
+visible in the issue's own screenshot. A failed result is now `red` across the gutter *and* the
+text: `<tool_use_error>…` carries no colour of its own, and which line is a failure is the most
+load-bearing thing colour can say in a block somebody is watching. A result that succeeded keeps
+the tool's own colouring, which is where the green `built in 12.93s` came from and is a real
+thing a real tool said about itself.
+
+**No coloured backgrounds, and that is a constraint rather than a preference.** "Similar to Claude
+Code" partly means chips, and the section on the palette below records why one cannot be served
+here: on paper all sixteen slots are dark ink, so light-on-colour is unavailable to any palette
+that keeps the 3:1 floor. Ink on paper, foreground only, is also the closer reading of the
+board's own design.
+
+**None of this can cost a run its pull request.** `TerminalSession` hands the **raw** chunk to
+`onRaw` before rendering anything, and that is what `extractGithubUrl` and `UsageMeter` read;
+only the rendered string is coloured. Every authored run is closed with a reset, so a sequence
+cannot paint the line after it, and `trimScrollback` was already escape-aware, so a trimmed
+replay cannot tear one. `scripts/check-agent-stream-render.mjs` asserts the URL is still found
+after the transcript is coloured, and `scripts/check-agent-stream-render-colour-browser.mjs`
+reads every colour back off a real render, in **both** themes.
+
 ## The routes
 
 | | |
@@ -1481,6 +1569,26 @@ it. A board returned to puts its block back where it was left.
   nobody clicking for it, labelled `#128` rather than `s4`, its screen drawing the agent's output
   while the record still says `running`, and the block still selectable and still resizable by
   its own corner afterwards.
+- `scripts/check-agent-stream-render.mjs` — the transcript a `stream-json` run produces: prose as
+  prose, a tool call as one readable line, a result as its own text, no envelope left anywhere,
+  a line cut in half by the socket shown once and whole, and a command that does not stream still
+  byte for byte what it wrote. Plus the two the split exists for — the raw tap getting every byte,
+  and a pull request URL still found by `extractGithubUrl` after the transcript is coloured.
+- `scripts/check-agent-stream-render-browser.mjs` — the same transcript, drawn: one row per line,
+  at the column the renderer named, on a pipe-mode session and a pty-mode one. #220's staircase.
+- `scripts/check-agent-stream-render-colour.mjs` — #242's, against the sequences themselves: only
+  the sixteen named slots and never a `38;5` or a `38;2`, two tools of a kind drawn alike and five
+  kinds apart, the argument told apart from the name it follows, `is_error` drawn red and
+  differently from a success, the closing line differing by more than its wording, prose left
+  plain, and nothing ending mid-sequence. Run against the old code first, where fourteen cases
+  fail on one symptom: not an escape in the whole transcript.
+- `scripts/check-agent-stream-render-colour-browser.mjs` — and the half compiling cannot answer:
+  the colours read back off the spans xterm drew, with the board put into **each theme in turn**.
+  Every authored run painted and off the prose ink, the five kinds separated by more than a
+  rounding error on the screen, a failed result red and a finished run green by *dominant channel*
+  rather than by hex, every colour clearing 3:1 against the card it is on — and the case a
+  hard-coded hex would fail on its own: the same run comes out a different colour in the two
+  themes, which is only true if the slot was resolved by the palette rather than printed.
 - `scripts/check-terminal-browser.mjs` — the block, in Chrome over the DevTools protocol.
   Placement, Alt+T, a command typed with real keystrokes, a corner dragged with a real pointer,
   and the store still holding none of it.
