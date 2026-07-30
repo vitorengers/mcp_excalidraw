@@ -22,7 +22,9 @@
  *   `38;2;r;g;b`. That is the whole reason both themes fall out for free: a slot is resolved by
  *   whichever palette the reader is in, and a literal colour bypasses the palette and is wrong
  *   in one of the two. `terminal-palette.ts` moved all sixteen until each cleared 3:1 on its own
- *   surface; a `38;2` throws that away.
+ *   surface; a `38;2` throws that away. #258 added a seventeenth ink and did **not** weaken
+ *   this: it has no SGR number, so it travels as a mark on the fold view's private OSC and no
+ *   byte an emulator can see has changed. The rule asserted here is the same rule.
  * - **Distinct categories, distinct slots.** Two tools that do the same *kind* of thing are
  *   drawn the same, two that do different kinds are drawn differently. Asserted through real
  *   tool names rather than by importing the map, because a check that imported it would agree
@@ -283,18 +285,28 @@ console.log('\n6. prose is plain ink, and a line nobody authored is untouched');
 const prose = render({ type: 'assistant', message: { content: [{ type: 'text', text: 'Done, and here is the answer.' }] } });
 check("the assistant's own prose carries no sequence at all",
       SEQUENCES(prose).length === 0, JSON.stringify(prose));
-check('and it is the same bytes it always was',
-      prose === 'Done, and here is the answer.\n', JSON.stringify(prose));
+// The bytes gained a blank line under them in #258 — prose is given the room a paragraph has
+// rather than the none a log row has — and gained nothing else. What is asserted here is still
+// that no sequence and no mark reaches a sentence: the spacing is
+// `scripts/check-agent-transcript-prose-and-ink.mjs`'s case, and it owns the shape.
+check('and it is the same bytes it always was, with the room #258 asked for around it',
+      prose === 'Done, and here is the answer.\n\n', JSON.stringify(prose));
 
 const passthrough = new AgentStreamRenderer().feed('warning: something the command said\n');
 check('a line that is not an envelope passes through verbatim, uncoloured',
       passthrough === 'warning: something the command said\n', JSON.stringify(passthrough));
 
+// The thinking marker left this vocabulary in #258. It is the one line that is the agent
+// itself rather than the agent's work, and what it is painted with is an ink that has no SGR
+// number — so what this file has to say about it is that it writes *no sequence*, which is the
+// rule this whole check is about. That the marker is nonetheless painted, and painted an orange
+// that clears the floor in both themes, is
+// `scripts/check-agent-transcript-prose-and-ink.mjs` and the browser check beside it.
 const thinkingSlot = slotAt(lineWith(EVERYTHING, 'thinking'), 'thinking');
 console.log(`     the thinking marker is ${thinkingSlot ?? 'plain'}`);
-check('the thinking marker is dimmed rather than left on the default ink',
-      Boolean(thinkingSlot), 'it is on the default foreground');
-check('and it is not one of the category colours',
+check('the thinking marker writes no SGR sequence, because its ink is not one of the sixteen',
+      thinkingSlot === null, String(thinkingSlot));
+check('and it is not left carrying a category colour',
       !Object.values(drawn).includes(thinkingSlot), String(thinkingSlot));
 
 // ─── 7. What the pull request URL is read from ────────────────

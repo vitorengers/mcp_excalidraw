@@ -380,6 +380,64 @@ export function terminalXtermTheme(theme: TerminalTheme): Record<string, string>
 /** One of the sixteen, by the name `TerminalAnsi` gives it. */
 export type TerminalSlot = keyof TerminalAnsi;
 
+/**
+ * ## The seventeenth ink, and the one view it exists in
+ *
+ * Everything above is the rule the paragraph before it states: colour is the sixteen slots,
+ * because the transcript is composed on the **server**, which cannot know which of the two
+ * palettes the reader is in. #258 asked for Claude's orange on the marker that says the agent is
+ * thinking, and orange is not one of the sixteen — `yellow` is already `mutation` and `red` is
+ * already `failure`, so there is no slot to borrow either.
+ *
+ * The exception is possible because #251 moved one reader off the emulator. A transcript the
+ * board composed is drawn as a *document*: `parseFoldedTranscript` reads a line back into slot
+ * **names**, and `TerminalPanel.tsx` resolves a name to a hex at paint time, which is the first
+ * point in the chain that knows the theme. A name is exactly what a theme toggle can resolve
+ * twice, so an ink that is not one of the sixteen can exist there with a hex per theme, checked
+ * on each of the two surfaces, without printing either hex into the other card.
+ *
+ * **And it stops there.** It cannot be written as SGR — there is no number for it — so it
+ * travels as a mark on #251's private OSC, which an emulator draws as nothing. In an emulator
+ * the marked run therefore comes out on the default ink: correct, dimmer than intended, and
+ * never wrong in a theme. Nothing else is allowed to follow it. The rule for every byte that may
+ * reach xterm is unchanged, and this exception is written down in `docs/terminal.md` with the
+ * same boundary on it.
+ */
+export type TerminalDocumentInk = 'agent';
+
+/** A name the fold view can paint with: one of the sixteen, or the seventeenth. */
+export type TerminalInk = TerminalSlot | TerminalDocumentInk;
+
+/**
+ * The inks that live outside the sixteen, one hex per theme.
+ *
+ * `agent` is the agent's own mark — the `✻` starburst and the word beside it — and both values
+ * are Anthropic's brand orange `#d97757`, which is what the ask names. Only the night one is
+ * that hex: on paper `#d97757` is **2.9:1**, under the 3:1 floor every other ink on this card
+ * was moved to clear, so the light value is the same hue and saturation taken down until it
+ * clears — 3.63:1, the ratio `yellow` already sits at there. One orange cannot serve both
+ * surfaces, which is the whole reason this is a named ink rather than a substitution.
+ *
+ * The name is the agent rather than the vendor on purpose: nothing in this repository requires
+ * the configured command to be Claude Code, and what the ink means is "this line is the agent
+ * itself, not its work". The hex is the brand's because the marker is.
+ */
+export const DOCUMENT_INKS: Record<TerminalDocumentInk, Record<TerminalTheme, string>> = {
+  agent: { light: '#d25d37', dark: '#d97757' },
+};
+
+/**
+ * Every ink the fold view can be handed a name for, for one theme.
+ *
+ * The sixteen and the seventeenth in one table, because `paint` looks a segment's name up in
+ * one place and a second table would be a second thing to keep in step with the theme.
+ */
+export function terminalDocumentInk(theme: TerminalTheme): Record<string, string> {
+  const inks: Record<string, string> = { ...terminalPalette(theme).ansi };
+  for (const [name, perTheme] of Object.entries(DOCUMENT_INKS)) inks[name] = perTheme[theme];
+  return inks;
+}
+
 /** The number a program spells a slot with as a foreground: 30-37, then 90-97. */
 const SLOT_SGR: Record<TerminalSlot, number> = {
   black: 30, red: 31, green: 32, yellow: 33, blue: 34, magenta: 35, cyan: 36, white: 37,
@@ -443,18 +501,29 @@ export const AGENT_ACTION_SLOT: Record<AgentAction, TerminalSlot> = {
  *
  * `argument` and `aside` are the same dim ink for the same reason — both are beside the point
  * of the line they are on — and they are named apart because they are two decisions and only
- * one of them is likely to be revisited.
+ * one of them is likely to be revisited. `aside` was the third of them until #258: the thinking
+ * marker left it, and the two that stayed are the two that really are beside the point.
  */
 export const AGENT_INK = {
   /** What is inside the parens: the path, the command, the query. */
   argument: 'brightBlack',
-  /** The gutter, the continuation indent, the `… N more lines` tail, the thinking marker. */
+  /** The gutter, the continuation indent, the `… N more lines` tail. */
   aside: 'brightBlack',
+  /**
+   * The agent's own mark, which is the `✻ thinking…` line and nothing else yet.
+   *
+   * The seventeenth ink, so it exists only where a name is resolved at paint time — see
+   * `TerminalDocumentInk` above. Deliberately *not* the `⏺` bullets: those carry #242's five
+   * categories, and painting them all one colour would take that information away to add this
+   * one. Deliberately not the closing line either, which is `green` or `red` and says whether
+   * the run worked.
+   */
+  presence: 'agent',
   /** A run that finished. */
   success: 'green',
   /** A run that reported an error, and a tool result carrying `is_error`. */
   failure: 'red',
-} as const satisfies Record<string, TerminalSlot>;
+} as const satisfies Record<string, TerminalInk>;
 
 /**
  * The tools each kind is spelled with — the ones this board's agents actually call.
