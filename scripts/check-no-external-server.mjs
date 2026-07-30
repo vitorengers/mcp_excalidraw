@@ -82,7 +82,12 @@ const CONVERTED = [
 /** Assembled, so this file does not contain the strings it is banning. See the banner. */
 const DEFAULT_PORT = ['30', '00'].join('');
 const RETIRED_PORT = ['38', '38'].join('');
-const DEFAULT_TARGET = ['127.0.0.1', DEFAULT_PORT].join(':');
+/**
+ * The URL form, not the bare `host:port`. `check-ci-workflow.mjs` reads docker `-p` specs and
+ * carries `--publish=127.0.0.1:3000:3000` as a fixture — a container's port mapping, which is
+ * not a canvas somebody could talk to. What is banned here is a check that names one.
+ */
+const DEFAULT_TARGET = ['http://127.0.0.1', DEFAULT_PORT].join(':');
 /** One machine's workspace id, hardcoded in two of the eight. */
 const OPERATOR_WORKSPACE = ['board', 'tool'].join('-');
 /** The CLI's canvas-URL variable, which is the CLI's to read and no check's. */
