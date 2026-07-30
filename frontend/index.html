@@ -62,32 +62,109 @@
             --board-z-dialog: 50;
         }
 
+        /*
+         * The one bar of chrome above the canvas.
+         *
+         * It was two: the project tabs in a strip of their own, and under them this header.
+         * Neither was broken — a merge here is a layout decision rather than a fix — and the
+         * decision is that the board gets one row and the canvas gets the height back. The
+         * tabs are the left-hand group, the controls the right-hand one, and `#261` is where
+         * the four things that made it more than moving a div are argued out.
+         *
+         * `align-items: flex-end`, so the strip keeps the height its own content asks for and
+         * sits on the bottom edge of the bar: the tabs are drawn as tabs, open at the bottom,
+         * and that only reads as a tab if the bottom they are open onto is the bar's own edge.
+         * `.controls` opts back into the full height with `align-self: stretch` and centres
+         * its contents there.
+         *
+         * `flex-wrap: nowrap`, deliberately: this row wrapping is the two-bar layout coming
+         * back by another door. The strip yields width instead (it has its own scrollbar), and
+         * `.controls` wraps *inside itself* when even that is not enough, which is the escape
+         * valve `ClaudeStatusHud.css` already relies on.
+         *
+         * No padding of its own: each group brings the padding its own type scale asks for.
+         */
         .header {
             background: #fff;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            padding: 10px 20px;
+            padding: 0;
             display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 10px;
+            align-items: flex-end;
+            flex-wrap: nowrap;
             /* Positioned only so that it can be on a layer at all. */
             position: relative;
             z-index: var(--board-z-chrome, 10);
         }
-        
-        .header h1 {
-            margin: 0;
-            color: #333;
-            font-size: 24px;
-        }
-        
+
+        /*
+         * The controls' type scale, and why it is not the strip's.
+         *
+         * The strip runs at `--workspace-tab-scale: 2.5` — a 32.5px project name, which #110
+         * and #144 measured — and these ran at 14px. One row cannot keep both, and putting the
+         * strip back to what #110 fixed is the wrong half to give up. So the controls come up
+         * to meet it.
+         *
+         * Not all the way, and the arithmetic is why — measured in the browser rather than
+         * guessed, because this is the number the whole row's usability turns on. The six
+         * controls and the connection pill come to about 770px at 1x. At 2.5 that is over
+         * 1900px before the usage HUD's optional 420px, so the row could not hold the tabs at
+         * all and every board would show a wrapped `.controls` — two rows of chrome again,
+         * arrived at from the other side. At 1.5 it is ~1150px, which clipped the third
+         * project's name mid-word on a 1600px row. At 1.25 it is ~960px and three projects
+         * still fit, which is why 1.25 is the number: the largest step that leaves the board's
+         * top-level navigation legible beside the controls it sits next to.
+         *
+         * One multiplier, the way the strip has one: retuning is this number, not a hunt
+         * through eight declarations. The HUD is deliberately not on it — it is a readout
+         * rather than a control, and its 11px and its 420px ceiling were measured together
+         * (`ClaudeStatusHud.css`), so scaling one without the other only makes it wrap.
+         */
         .controls {
+            --board-controls-scale: 1.25;
+
             display: flex;
-            gap: 10px;
+            align-items: center;
+            justify-content: flex-end;
+            gap: calc(10px * var(--board-controls-scale));
             flex-wrap: wrap;
+            /* The right-hand end of the bar — and still the right-hand end on a board with no
+               registry, where there is no strip beside it to push against. */
+            margin-left: auto;
+            align-self: stretch;
+            /*
+             * The strip yields width, these do not — until there is no window left, and then
+             * these wrap rather than overflow.
+             *
+             * Shrinkage is shared out in proportion to each item's shrink factor times its
+             * width, so at the default the two groups shrink *together*: a wide strip squeezed
+             * `.controls` into two rows on a 1600px window that had room for one — the two-bar
+             * layout coming back inside the bar that replaced it. The strip's `flex-basis: 0`
+             * (`WorkspaceTabs.css`) is what makes the order explicit instead: it asks for no
+             * width at all, so a window narrower than these controls is the only thing that
+             * ever takes width from them — and then they wrap, because they must never be
+             * scrolled away.
+             */
+            flex: 0 1 auto;
+            min-width: 0;
+            padding: 10px 20px;
         }
-        
+
+        .controls button {
+            font-size: calc(14px * var(--board-controls-scale));
+            padding: calc(8px * var(--board-controls-scale)) calc(16px * var(--board-controls-scale));
+            border-radius: calc(4px * var(--board-controls-scale));
+        }
+
+        .controls .sync-controls {
+            gap: calc(10px * var(--board-controls-scale));
+        }
+
+        .controls .spinner {
+            width: calc(12px * var(--board-controls-scale));
+            height: calc(12px * var(--board-controls-scale));
+            margin-right: calc(5px * var(--board-controls-scale));
+        }
+
         button {
             padding: 8px 16px;
             border: none;
@@ -115,17 +192,20 @@
             background-color: #545b62;
         }
         
+        /* On the controls' scale, like everything else in that group. The fallback is the
+           factor these were drawn at, so the rule is honest anywhere the property is absent. */
         .status {
             display: flex;
             align-items: center;
-            gap: 8px;
-            font-size: 14px;
+            gap: calc(8px * var(--board-controls-scale, 1));
+            font-size: calc(14px * var(--board-controls-scale, 1));
         }
-        
+
         .status-dot {
-            width: 8px;
-            height: 8px;
+            width: calc(8px * var(--board-controls-scale, 1));
+            height: calc(8px * var(--board-controls-scale, 1));
             border-radius: 50%;
+            flex: 0 0 auto;
         }
         
         .status-connected {
@@ -181,8 +261,11 @@
             100% { transform: rotate(360deg); }
         }
 
+        /* The width is a reservation rather than a size — it is what keeps the buttons beside
+           it from shuffling when `Synced` becomes `Last sync: …` — so it stays where it was
+           measured while the type on it comes up with the rest of the group. */
         .sync-status {
-            font-size: 12px;
+            font-size: calc(12px * var(--board-controls-scale, 1));
             min-width: 100px;
         }
 
@@ -265,10 +348,6 @@
         .app[data-theme="dark"] .header {
             background: #232329;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
-        }
-
-        .app[data-theme="dark"] .header h1 {
-            color: #e3e3e8;
         }
 
         .app[data-theme="dark"] .sync-time {

@@ -51,6 +51,36 @@ environment of whatever started it — which for an MCP server attached to an ed
 project tabs, no terminal, no agents, empty canvas. `workspaces: "none"` on a port you started a
 configured board on means something replaced it; kill it and start yours again.
 
+## Restarting it from the board
+
+`Restart Server`, at the right-hand end of the bar. It is the answer to the trap above rather
+than another way into it: the route hands the job to a process outside the server's own tree,
+which carries the board's environment across and refuses to call the restart done until the new
+`/health` reports a **different pid** with the same registry, terminal and agents. See
+[rest-api.md](rest-api.md#post-apirestart).
+
+What does not survive it:
+
+- **Terminal sessions.** Every shell on every board closes, with whatever was running in it.
+- **Implementation state**, which is in memory. Runs that were live are recorded as
+  `interrupted` and re-derived from git the next time the board looks.
+
+What does: **the boards themselves**, saved beside the registry. And the open page, which
+reconnects on its own — it shows Disconnected on the way, and nothing needs reloading.
+
+It starts the build that is on disk. **After `npm run build`, a restart is what picks it up**;
+a restart is not itself a build.
+
+Offered only on loopback — the route answers 403 anywhere else, and the button is disabled when
+the page was not reached over loopback. If the restart fails, the account of it is in
+`restart-<port>.log` in the same directory as the pidfile (`%LOCALAPPDATA%\Excalidraw-Canvas` on
+Windows): the process that asked for the restart is gone by the time the answer exists, so
+nothing else is watching.
+
+**Do not restart the board from a terminal block.** That is the failure this replaced, and it is
+still a failure: the block is a child of the server, so the kill kills the shell running it and
+the port goes to whatever auto-starts first.
+
 ## The environment
 
 `PORT` and `HOST` decide where it listens. **`PORT=3737`** on the development machine — 3000 is

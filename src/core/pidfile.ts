@@ -23,6 +23,18 @@ export function pidFilePath(port: number): string {
   return path.join(stateDir(), `server-${port}.pid`);
 }
 
+/**
+ * Where a restart writes down what happened to it.
+ *
+ * Beside the pidfile because it is the same kind of thing — runtime state about the server on
+ * this port — and in a file rather than in the log because the process that asked for the
+ * restart is deliberately dead before the answer exists. Nobody is watching by then, so the
+ * account has to survive being written to nobody.
+ */
+export function restartLogPath(port: number): string {
+  return path.join(stateDir(), `restart-${port}.log`);
+}
+
 // Written by the canvas server once it is actually listening, so `stop` and
 // stale-process checks work for both auto-spawned and manually started servers.
 export function writePidFile(port: number, pid: number): void {

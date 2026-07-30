@@ -5,10 +5,14 @@
  * The overlay is drawn at the block's bounds in viewport coordinates, with no clamp: pan the
  * block above the top of the canvas area and `top` goes negative, and nothing used to stop it
  * there. The canvas wrapper declared no `overflow`, so the card was not clipped; the project
- * tabs and the `Excalidraw Canvas` header row are static and unpositioned, so a `z-index: 5`
- * card painted over them. That is #153: the title band and the tab strip drawn across the
- * chrome, the connection pill and `Clear Canvas` hidden underneath, and — because the card's
- * body takes the pointer — unclickable as well as invisible.
+ * tabs and the header row are static and unpositioned, so a `z-index: 5` card painted over
+ * them. That is #153: the tab strip and the buttons drawn across, the connection pill and
+ * `Clear Canvas` hidden underneath, and — because the card's body takes the pointer —
+ * unclickable as well as invisible.
+ *
+ * Since #261 the two are one bar — `.workspace-tabs` is the left-hand group of `.header` —
+ * so the parts hit-tested below are parts of a single row. Both selectors are still asked
+ * about separately, because the ladder that #153 settled is declared on both.
  *
  * Why a browser, and why `elementFromPoint`. A bounding rect ignores clipping entirely: a
  * clipped card still reports the same box it always did, so a check that measured rects would
@@ -275,7 +279,10 @@ const PROBE = `(() => {
   const clear = Array.from(document.querySelectorAll('.header button'))
     .find((node) => (node.textContent || '').trim() === 'Clear Canvas') || null;
   const parts = {
-    title: document.querySelector('.header h1'),
+    // Was the Excalidraw Canvas title, which #261 removed when the two strips became one
+    // row. The restart button took its place here: it is the newest thing on the bar, and it
+    // is the one whose press cannot be taken back.
+    restart: document.querySelector('.header .restart-server__button'),
     status: document.querySelector('.header .status'),
     clear,
     tab: document.querySelector('.workspace-tabs .workspace-tab__select'),
@@ -403,7 +410,7 @@ try {
   for (const [name, what] of [
     ['the project tab', 'tab'],
     ['the `+` on the tab strip', 'add'],
-    ['the `Excalidraw Canvas` title', 'title'],
+    ['the `Restart Server` button', 'restart'],
     ['the connection pill', 'status'],
     ['the `Clear Canvas` button', 'clear'],
   ]) {
