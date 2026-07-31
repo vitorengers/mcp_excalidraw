@@ -53,7 +53,7 @@ import {
 import { BoardScene, parseBoardScene } from './core/board-seed.js';
 import { listDirectories } from './core/directory-browse.js';
 import {
-  AgentCommands, AgentHost, agentCommandFor, runIssueAgent, runReviseAgent, runsHeadless,
+  AgentCommands, AgentHost, AgentRun, agentCommandFor, runIssueAgent, runReviseAgent, runsHeadless,
   withoutPrintFlags
 } from './core/issue-agent.js';
 import {
@@ -95,7 +95,7 @@ import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
 import { GITHUB_HOST, issueUrlRefusal } from './core/github-host.js';
 import type { IssueDetail } from './core/github-issue.js';
 import { fetchPullLanding } from './core/github-pull.js';
-import { landingFor } from './core/implement-landing.js';
+import { Landing, landingFor } from './core/implement-landing.js';
 import { IssueMemo, memoWindow } from './core/issue-memo.js';
 import {
   PtyModule,
@@ -107,7 +107,7 @@ import {
 } from './core/terminal-session.js';
 import { issueBlockAppearance } from './core/issue-appearance.js';
 import { preserveServerAuthored } from './core/element-authorship.js';
-import { runImplementAgent } from './core/implement-agent.js';
+import { UnfinishedRun, runImplementAgent } from './core/implement-agent.js';
 import {
   ImplementRecord,
   ImplementUsage,
@@ -123,7 +123,8 @@ import {
   ImplementWorktree,
   ensureWorktree,
   originRemote,
-  releaseWorktree
+  releaseWorktree,
+  worktreesHoldingWork
 } from './core/implement-worktree.js';
 import { describeInterrupted, interruptedRuns } from './core/implement-recovery.js';
 import { layoutLabel, DEFAULT_BOUND_TEXT_FONT_SIZE } from './core/text-layout.js';
@@ -2264,7 +2265,7 @@ function recordImplement(
 function carriedImplement(
   workspaceId: string,
   issueUrl: string
-): Pick<ImplementRecord, 'startedAt' | 'usage' | 'terminal'> {
+): Pick<ImplementRecord, 'startedAt' | 'usage' | 'terminal' | 'recovered'> {
   const existing = readImplement(workspaceId, issueUrl);
   return {
     startedAt: existing?.startedAt ?? null,
@@ -2273,6 +2274,9 @@ function carriedImplement(
     // middle of the run, and a record rebuilt from literals at the end would forget which
     // tab the run happened in exactly when somebody goes looking for its transcript.
     terminal: existing?.terminal ?? null,
+    // And this one is a *bound*, so losing it does not merely forget something — it grants a
+    // second recovery. Carried rather than remembered for exactly that reason.
+    recovered: existing?.recovered ?? false,
   };
 }
 
@@ -2429,7 +2433,10 @@ async function beginImplement(
     startedAt: new Date().toISOString(),
     endedAt: null,
     usage: null,
-    terminal: null
+    terminal: null,
+    // This is the one write that starts a run rather than continuing one, so it is where the
+    // recovery allowance is handed out. Every record after it carries this forward.
+    recovered: false
   });
 
   /**
@@ -2574,41 +2581,72 @@ async function runImplementation(
     // do before the two features knew about each other.
     const host = implementTerminalHost(workspace, issueUrl);
 
-    const result = await runImplementAgent(workspace, issueUrl, {
-      // Resolved here rather than handed down: `beginImplement` has already refused a
-      // workspace with no command for its environment, so by this line there is one.
-      //
-      // And this is the whole of what a per-run "interactive" changes. Everything downstream
-      // already reads the shape of the command rather than a second setting — `runsHeadless`
-      // decides whether the tab gets a pseudoterminal, `buildAgentCommand` decides whether
-      // the prompt goes to stdin or travels as the last argument, `streamsUsage` decides
-      // whether there are token counts to read — so taking the print flags off is the same
-      // request the operator makes by leaving them out of `EXCALIDRAW_IMPLEMENT_AGENT`, made
-      // once instead of forever. `withoutPrintFlags` only ever removes; a command with no
-      // print flags in it comes back byte for byte.
-      agentCommand: interactiveCommand(
-        agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS) as string, options.interactive
-      ),
-      notFoundVariable: settingName('IMPLEMENT_AGENT_WSL'),
-      worktree,
-      resuming,
-      // Reached only when the configured command already streams. Otherwise the agent
-      // prints prose at exit, there is nothing to read, and this is never called.
-      onUsage: (usage) => recordImplementUsage(workspaceId, issueUrl, usage),
-      ...(host ? { host } : {})
-    });
-    const kept = await releaseWorktreeFor(workspace, worktree, issueUrl);
+    // The run, and then at most once more.
+    //
+    // **The loop is the whole of the recovery, and it is a loop rather than a second call into
+    // this function on purpose.** Re-entering would move the card to In Progress again, cut the
+    // worktree again and reset the start time; worse, it would have to pass the cap and the
+    // per-issue guard, which would either refuse it or need a way around them — a second door
+    // into starting a run, which is the thing `beginImplement`'s comment exists to prevent.
+    // Here the slot is already held, the state stays `running` for the reader, and the checkout
+    // survives between the two attempts because the release happens after both.
+    let unfinished: UnfinishedRun | null = null;
+    let result: AgentRun;
+    let landing: Landing;
+    for (;;) {
+      result = await runImplementAgent(workspace, issueUrl, {
+        // Resolved here rather than handed down: `beginImplement` has already refused a
+        // workspace with no command for its environment, so by this line there is one.
+        //
+        // And this is the whole of what a per-run "interactive" changes. Everything downstream
+        // already reads the shape of the command rather than a second setting — `runsHeadless`
+        // decides whether the tab gets a pseudoterminal, `buildAgentCommand` decides whether
+        // the prompt goes to stdin or travels as the last argument, `streamsUsage` decides
+        // whether there are token counts to read — so taking the print flags off is the same
+        // request the operator makes by leaving them out of `EXCALIDRAW_IMPLEMENT_AGENT`, made
+        // once instead of forever. `withoutPrintFlags` only ever removes; a command with no
+        // print flags in it comes back byte for byte.
+        agentCommand: interactiveCommand(
+          agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS) as string, options.interactive
+        ),
+        notFoundVariable: settingName('IMPLEMENT_AGENT_WSL'),
+        worktree,
+        resuming,
+        unfinished,
+        // Reached only when the configured command already streams. Otherwise the agent
+        // prints prose at exit, there is nothing to read, and this is never called.
+        onUsage: (usage) => recordImplementUsage(workspaceId, issueUrl, usage),
+        ...(host ? { host } : {})
+      });
 
-    // What the agent printed is not what happened. A run that prints a pull request URL has
-    // proved that a pull request exists, and nothing more — so the one participant that knows
-    // whether it landed is asked before the record is written. Only for a run that claims to
-    // have produced one: the other paths never asked GitHub anything and must not start.
-    const pull = result.ok && result.url
-      ? await fetchPullLanding(workspace, result.url)
-      : null;
-    const landing = landingFor({
-      ok: result.ok, url: result.url, error: result.error, output: result.output, pull
-    });
+      // What the agent printed is not what happened. A run that prints a pull request URL has
+      // proved that a pull request exists, and nothing more — so the one participant that knows
+      // whether it landed is asked before the record is written. Only for a run that claims to
+      // have produced one: the other paths never asked GitHub anything and must not start.
+      const pull = result.ok && result.url
+        ? await fetchPullLanding(workspace, result.url)
+        : null;
+      landing = landingFor({
+        ok: result.ok, url: result.url, error: result.error, output: result.output, pull
+      });
+
+      if (readImplement(workspaceId, issueUrl)?.recovered) break;
+      const held = await recoverable(workspace, issueUrl, result, landing, worktree);
+      if (!held) break;
+
+      logger.warn(
+        `${issueUrl} ended without landing anything and is being finished: ${landing.error}`
+      );
+      // Written before the second attempt starts, not after it: this is the bound, and a bound
+      // recorded on the way out is one a crash in between hands back.
+      recordImplement(workspaceId, issueUrl, {
+        state: 'running', url: landing.url, error: null, worktree: worktree?.path ?? null,
+        endedAt: null, ...carriedImplement(workspaceId, issueUrl), recovered: true
+      });
+      unfinished = { pullRequest: landing.url, worktree: held.worktree };
+    }
+
+    const kept = await releaseWorktreeFor(workspace, worktree, issueUrl);
 
     recordImplement(workspaceId, issueUrl, {
       state: landing.state, url: landing.url, error: landing.error, worktree: kept,
@@ -2955,6 +2993,59 @@ function queueStateFor(workspace: Workspace | undefined, workspaceId: string): {
 }
 
 /**
+ * Whether a run that just ended is worth finishing, and what it left to finish.
+ *
+ * Three gates, and each of them refuses a different thing that would otherwise turn one
+ * automatic second attempt into a loop or into damage.
+ *
+ * **Only a `failed` landing.** `done` shipped. `blocked` is the agent having stopped for a
+ * person on purpose — sending a second one at it would force the merge the first refused, which
+ * is the failure #409 added that state to make impossible.
+ *
+ * **Only a clean exit.** A turn that ended while a background command was still pending exits
+ * **zero**, which is the shape of both runs this exists for. A non-zero exit is a command that
+ * could not be found or an agent that blew up, and a null one is a timeout or a refusal made
+ * before anything spawned — a broken machine or a decision, neither of which a second identical
+ * attempt improves.
+ *
+ * **Only a run that got somewhere.** A pull request that exists, or a checkout holding commits
+ * or changes. With neither there is nothing to *finish*, and re-entering would be a plain re-run
+ * — which is exactly what `dispatchQueue`'s "the queue tries each issue once" refuses, and the
+ * rule this feature has to stay inside rather than quietly overturn.
+ *
+ * Derived from git rather than remembered, and read while the checkout is still there —
+ * `releaseWorktreeFor` runs after this, and it removes a worktree with nothing uncommitted in
+ * it even when that worktree holds commits the base branch has never seen.
+ */
+async function recoverable(
+  workspace: Workspace,
+  issueUrl: string,
+  result: AgentRun,
+  landing: Landing,
+  worktree: ImplementWorktree | null
+): Promise<{ worktree: HeldWorktree | null } | null> {
+  if (landing.state !== 'failed') return null;
+  if (result.code !== 0) return null;
+
+  let held: HeldWorktree | null = null;
+  if (worktree) {
+    try {
+      const wanted = worktree.path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+      held = (await worktreesHoldingWork(workspace)).find(
+        (candidate) => candidate.path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === wanted
+      ) ?? null;
+    } catch (error) {
+      // A git that will not answer is not a reason to refuse a recovery for a run that has a
+      // pull request — and not a reason to grant one for a run whose only evidence was this.
+      logger.warn(`Could not read what ${issueUrl} left in its checkout: ${(error as Error).message}`);
+    }
+  }
+
+  if (!landing.url && !held) return null;
+  return { worktree: held };
+}
+
+/**
  * Tidy up after a run, and report what could not be tidied.
  *
  * A worktree holding uncommitted changes is kept, because those changes are the only copy
@@ -3024,7 +3115,12 @@ async function recoverInterruptedRuns(): Promise<void> {
           // Nothing survives a restart here either: the sessions were the previous server's
           // and went down with it, so an id recovered from a worktree would name a tab that
           // stopped existing.
-          terminal: null
+          terminal: null,
+          // Nor does this, and it must not be inferred: whether the lost run had already spent
+          // its recovery is not written in the checkout. `false` is the honest reading, and it
+          // costs nothing — an `interrupted` run is offered to a person through **Resume**
+          // rather than continued automatically, and that offer has never been rationed.
+          recovered: false
         });
         logger.warn(
           `${run.issueUrl} was being implemented when a previous server stopped; `
