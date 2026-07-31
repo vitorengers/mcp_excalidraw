@@ -86,9 +86,21 @@ disappearing. That section only appears when something is in it.
 ## Both directions go through `gh`
 
 `src/core/gh.ts`, reusing `agentPath()` and `buildAgentCommand()` from the issue agent. No new
-HTTP client and no token to store: `gh` is already required here, already carries the `project`
-scope from your own login, and the two traps around it — a PATH without the CLI on it, and a WSL
-project whose paths only make sense inside the distro — are already paid for.
+HTTP client and no token to store: `gh` is already required here, and the two traps around it —
+a PATH without the CLI on it, and a WSL project whose paths only make sense inside the distro —
+are already paid for.
+
+**Your login needs one scope it does not come with.** `gh auth login` asks for `repo`,
+`read:org`, `gist` and `workflow`; a projectV2 query needs `read:project` as well, so on a fresh
+clone both the read and the write below fail until you have run this once:
+
+```
+gh auth refresh -s project
+```
+
+That command is what the board says when it recognises the refusal, rather than GitHub's own
+answer — four lines of token inventory that never name it. See *Asking `gh` twice for the same
+answer* below.
 
 Reading is one `gh api graphql` query returning the project id, the field, its options and the
 items, because a move needs the first three and the mirror needs the last. The query is built on
@@ -117,6 +129,28 @@ It is retried like every other `gh` call here, which is safe because setting a s
 is idempotent. The first real move made from this machine failed on `dial tcp` — the same socket
 buffer exhaustion the issue reader already retries — and without a retry that blip reaches the
 canvas as a card snapping back for no reason anyone can see.
+
+### Asking `gh` twice for the same answer
+
+A `gh` call is run up to three times, 400 ms and 1200 ms apart. That policy was written for one
+real fault — this machine's socket buffer exhaustion, which fails at connect time and succeeds
+seconds later — and it used to apply to every other failure as well, in two places at once:
+`runGh` had it, and the issue reader kept its own copy of the constants and spawned `gh`
+directly. So a CLI that is not installed, a login that has expired, a token without the
+`project` scope and a repository that does not exist were each asked three times, over 1.6
+seconds, to say the same thing (**#319**).
+
+`classifyGhFailure` in `src/core/gh.ts` is the one place that reads a failure and says whether
+asking again could change the answer. A spawn that found no binary, `gh auth`, a missing scope,
+`Could not resolve to a`, HTTP 401, 403 and 404 are **terminal**: one attempt, and a
+`TerminalGhFailure` carrying the literal command that fixes it — `gh auth refresh -s project`
+for the scope, `gh auth login` for the login — on the end of `gh`'s own sentence, so it reaches
+the canvas through the toast the section below describes. Anything else keeps all three
+attempts, because matching another tool's prose is matching something that changes between
+releases: **what the classifier does not recognise, it retries.** It reads the whole of `gh`'s
+stderr rather than the message the caller sees, which is the last 300 characters of it — the
+GraphQL scope refusal is longer than that, and the half naming the scope is the half that was
+cut. `scripts/check-gh-retry-policy.mjs` is the check.
 
 `EXCALIDRAW_GH_COMMAND` overrides the binary, which is how `scripts/check-project-board.mjs`
 answers without a GitHub account behind it. **Which binary is a question about the workspace,

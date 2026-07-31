@@ -2,11 +2,17 @@
  * Running `gh` inside a workspace.
  *
  * The GitHub CLI is this server's only client for GitHub, and that is a decision rather
- * than an omission: it is already required by the issue agent, already carries the
- * `project` scope from the user's own login, and the two traps around it — a PATH without
- * the CLI on it, and a WSL project whose paths only make sense inside the distro — are
- * already solved in `issue-agent.ts`. A second HTTP client would have to pay for both
- * again, plus a token to store.
+ * than an omission: it is already required by the issue agent, and the two traps around it —
+ * a PATH without the CLI on it, and a WSL project whose paths only make sense inside the
+ * distro — are already solved in `issue-agent.ts`. A second HTTP client would have to pay for
+ * both again, plus a token to store.
+ *
+ * **What the login does not come with is the `project` scope.** `gh auth login` asks for
+ * `repo`, `read:org`, `gist` and `workflow`; both halves of the mirror — the `gh api graphql`
+ * read and the `gh project item-edit` write — need `read:project` on top of those, so on a
+ * fresh clone they fail until `gh auth refresh -s project` has been run once. That command is
+ * what `classifyGhFailure` puts in front of the reader, because GitHub's own answer is four
+ * lines of token inventory that never names it (#319).
  */
 import { spawn } from 'child_process';
 import logger from '../utils/logger.js';
@@ -52,18 +58,133 @@ export function ghCommandFor(workspace: Workspace): string {
  * `gh` intermittently fails here with socket buffer exhaustion and succeeds on the next
  * attempt seconds later. Without a retry that fault reaches the canvas as a hard error,
  * which reads as a broken feature rather than as the blip it is.
+ *
+ * This is the policy for a failure that *might* be a blip. A failure that cannot ever succeed
+ * is spared it by `classifyGhFailure` below.
  */
 const ATTEMPTS = 3;
 const BACKOFF_MS = [400, 1200];
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The one thing to go and do about each failure that will not fix itself.
+ *
+ * Literal commands rather than descriptions. The reader is looking at a canvas that has just
+ * said the mirror could not be read; a sentence they can copy is the difference between that
+ * and a search.
+ */
+const REMEDY = {
+  install: 'Install the GitHub CLI, or set EXCALIDRAW_GH_COMMAND to where it lives.',
+  login: 'Run "gh auth login".',
+  scope: 'Run "gh auth refresh -s project" — a default "gh auth login" does not ask for that '
+    + 'scope, and the project board needs it.',
+  credential: 'Run "gh auth status" and log in again: GitHub refused the credential this gh '
+    + 'holds.',
+  target: 'Check the owner, repository or project number in the URL, and that the account this '
+    + 'gh is logged in as can see it.',
+  /** Nothing for a person to do: the caller handles it and there is no second attempt to make. */
+  none: '',
+} as const;
+
+/**
+ * What a failing `gh` said, and whether asking again could change the answer.
+ *
+ * Matched against the whole of `gh`'s output rather than against the message a caller ends up
+ * with: that one is the last 300 characters of stderr, and GitHub's scope refusal is longer
+ * than that — the half naming the scope is the half that gets cut.
+ *
+ * **Order matters, most specific first.** A missing scope is also an authentication failure
+ * and may also arrive as an HTTP 403, and only the first of those three names the command
+ * that fixes it.
+ *
+ * The last rule is the one that keeps this honest: text nothing here recognises is *not*
+ * terminal. Matching another tool's prose is matching something that changes between
+ * releases and between locales, so the fallback has to be the old behaviour — retry — rather
+ * than a refusal invented from a pattern that stopped matching.
+ */
+const TERMINAL: ReadonlyArray<{ pattern: RegExp; remedy: string }> = [
+  // The spawn never happened: no such binary, or one that cannot be executed.
+  { pattern: /\b(ENOENT|EACCES|ENOTDIR)\b/, remedy: REMEDY.install },
+  // gh's own pre-flight ("missing required scopes"), and GitHub's answer to a query the token
+  // may not make. Both are one `gh auth refresh` away.
+  {
+    pattern: /missing required scope|not been granted the required scope|requires one of the following scopes|auth refresh -s/i,
+    remedy: REMEDY.scope,
+  },
+  { pattern: /bad credentials|\bHTTP 401\b/i, remedy: REMEDY.credential },
+  { pattern: /gh auth login|not logged in|no default host configured/i, remedy: REMEDY.login },
+  { pattern: /could not resolve to an?\b|\bHTTP 40[34]\b/i, remedy: REMEDY.target },
+  // A field this `gh` does not know. Deterministic, and `fetchIssue` answers it by asking for
+  // less rather than by asking again.
+  { pattern: /unknown json field/i, remedy: REMEDY.none },
+];
+
+/** Whether a failure can ever succeed on another attempt, and what to do when it cannot. */
+export interface GhFailure {
+  terminal: boolean;
+  remedy: string;
+}
+
+/**
+ * Read one `gh` failure and say whether it is worth repeating.
+ *
+ * Exported because it is the policy rather than an implementation detail: `github-issue.ts`
+ * used to hold a second copy of the retry constants and its own opinion, and one classifier
+ * with one caller is how that stays impossible.
+ */
+export function classifyGhFailure(said: string): GhFailure {
+  for (const { pattern, remedy } of TERMINAL) {
+    if (pattern.test(said)) return { terminal: true, remedy };
+  }
+  return { terminal: false, remedy: '' };
+}
+
+/**
+ * A failure no retry can fix, carrying the sentence that fixes it.
+ *
+ * The remedy goes in `message` as well as in its own field, because the message is what
+ * travels: the route turns it into a 502 body, and the canvas says that out loud (#317). A
+ * remedy only a typed field carried would stop at the first `catch` that reads `.message`.
+ */
+export class TerminalGhFailure extends Error {
+  /** What `gh` said, without our sentence on the end. */
+  readonly said: string;
+  /** The literal command or step that fixes it, or `''` when there is nothing to name. */
+  readonly remedy: string;
+
+  constructor(said: string, remedy: string) {
+    super(remedy ? `${said} ${remedy}` : said);
+    this.name = 'TerminalGhFailure';
+    this.said = said;
+    this.remedy = remedy;
+  }
+}
+
+/**
+ * The error a failed `gh` becomes.
+ *
+ * `said` is what the caller will read; `full` is everything `gh` printed, which is what the
+ * classifier is given. They differ for a non-zero exit, where the message is truncated.
+ */
+function ghFailure(said: string, full: string = said): Error {
+  const failure = classifyGhFailure(full);
+  return failure.terminal ? new TerminalGhFailure(said, failure.remedy) : new Error(said);
+}
+
 export interface RunGhOptions {
   /** Ceiling on one attempt. These are single API calls, not agent runs. */
   timeoutMs?: number;
   /** Named in log lines and in the error a caller shows. */
   what: string;
-  /** Set to 1 for a call whose failure is deterministic and not worth repeating. */
+  /**
+   * Set to 1 for a call whose failure is deterministic and not worth repeating.
+   *
+   * Rarely needed now: `classifyGhFailure` answers this per failure rather than per call
+   * site, which is the half no caller was ever going to get right in advance. What is left
+   * for this is a caller that knows something the text cannot say — a probe whose failure is
+   * the answer it wanted.
+   */
   attempts?: number;
   /**
    * Text written to `gh`'s stdin, for a flag that reads one — `--body-file -`.
@@ -100,6 +221,10 @@ export async function runGh(
     try {
       return await runOnce(workspace, commandLine, options);
     } catch (error) {
+      // A failure that cannot succeed does not get a second chance. Three tries and 1.6
+      // seconds of waiting turn a missing scope into a slow missing scope, and the wait is
+      // paid by the canvas, which is showing nothing while it happens.
+      if (error instanceof TerminalGhFailure) throw error;
       // Report the last failure, not the first: it describes what kept happening.
       lastError = error as Error;
       if (attempt < attempts - 1) {
@@ -153,7 +278,8 @@ function runOnce(workspace: Workspace, commandLine: string, options: RunGhOption
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      reject(error);
+      // `spawn … ENOENT` is a CLI that is not there, which no wait can change.
+      reject(ghFailure(error.message));
     });
 
     child.on('close', (code) => {
@@ -161,8 +287,10 @@ function runOnce(workspace: Workspace, commandLine: string, options: RunGhOption
       settled = true;
       clearTimeout(timeout);
       // A raw `gh` stderr is more useful in the canvas than "request failed"; the caller
-      // has no better context to add.
-      if (code !== 0) reject(new Error(stderr.trim().slice(-300) || `gh exited with code ${code}`));
+      // has no better context to add. The whole of it goes to the classifier and only the
+      // tail to the reader, because the truncation is what hid the scope refusal.
+      const said = stderr.trim();
+      if (code !== 0) reject(ghFailure(said.slice(-300) || `gh exited with code ${code}`, said));
       else resolve(stdout);
     });
   });
