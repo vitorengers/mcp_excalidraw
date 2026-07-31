@@ -238,7 +238,12 @@ try {
   const canvas = startCanvas(port);
   await waitForHealth(BASE, canvas.child, canvas.read);
 
-  const { ISSUE_AGENT_PROMPT } = await importDist(join('core', 'issue-agent.js'), 'the issue agent');
+  const { ISSUE_AGENT_PROMPT, issueTargetSection } =
+    await importDist(join('core', 'issue-agent.js'), 'the issue agent');
+  // This project names a `repo`, and since #335 a board that names one says so in the prompt.
+  // Composed rather than hard-coded, because the subject here is the images: the baseline has
+  // to be the same board with nothing attached.
+  const targetSection = issueTargetSection({ repo: 'vitorengers/vibemaxxing', githubProject: null });
 
   console.log('1. a block with nothing attached sends the prompt it sends today');
   const plainText = 'The docs panel is slow to open on large boards';
@@ -248,7 +253,7 @@ try {
         JSON.stringify(plain.element?.customData));
   const plainPrompt = lastRun()?.prompt;
   check('the prompt is byte-identical to the one without this feature',
-        plainPrompt === `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${plainText}`,
+        plainPrompt === `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${plainText}${targetSection}`,
         JSON.stringify(plainPrompt?.slice(-200)));
 
   console.log('\n2. N attached images arrive as N readable files, named in the prompt');
