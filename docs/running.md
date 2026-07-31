@@ -405,8 +405,8 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 104 | yes |
-| `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 69 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 121 | yes |
+| `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 73 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
 | `repo` | the full history, and this repository's own board | anywhere with a full clone | 7 | no |
@@ -473,9 +473,26 @@ will not make one itself.
 
 | Job | Runners | Node | Runs |
 |---|---|---|---|
-| `fast` | ubuntu, macOS, Windows | 20 and 22, plus 18 on ubuntu | `--tier fast` |
+| `fast` | ubuntu, macOS, Windows | 20 and 22 | `--tier fast` |
 | `browser` | ubuntu, macOS, Windows | 20 | `--tier browser --strict` |
 | `repo` | ubuntu, with `fetch-depth: 0` | 20 | `--tier repo` |
+
+**Node 20 and 22, and `engines.node` says `>=20.0.0`** — the two are one claim and CI is the
+half of it with evidence. The matrix used to carry a third combination, 18 on ubuntu alone, to
+find out whether the `>=18` the manifest claimed held; Node 18 went end of life in April 2025,
+so the answer worth buying was raising the floor rather than going on measuring it (#281).
+`check-ci-workflow.mjs` fails if the manifest and the matrix disagree again.
+
+**`scripts/check-smoke-start.mjs` is what makes the two new images mean anything.** It is a
+`fast` check, so it runs in that job on all three: it starts a real `dist/server.js` on a port
+the kernel handed out, waits for `/health` to carry the service marker, and asserts the pidfile
+and `canvas.json` landed under the root *this* platform reads — `LOCALAPPDATA` on Windows,
+`~/Library/Application Support` on macOS, `XDG_STATE_HOME` elsewhere — with the other two roots
+empty. Without it a green matrix says only that the TypeScript compiles on three machines,
+which `CLAUDE.md` is explicit is not the same as working. Nothing in the workflow is written
+for a POSIX shell: `windows-latest` runs a `run:` block under PowerShell unless the step names
+one, so the `test -f dist/index.js` assertions that used to stand for this are a Node script
+now rather than a shell built-in.
 
 The `browser` job installs its own Chrome — `browser-actions/setup-chrome` — and exports
 `CHROME_PATH` to the run, rather than trusting the image to carry one; `--strict` is what turns
