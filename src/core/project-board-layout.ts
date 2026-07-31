@@ -545,9 +545,15 @@ export function layoutBoard(
   const mirrored = board.sections.reduce(
     (total, section) => total + section.cards.length + section.hidden, 0
   );
+  // A board with no field is the one the canvas invents for itself (`notesOnlyBoard`): there
+  // is no project, so there is no single-select field to name either, and ` — undefined` on
+  // the strip would be the region announcing a fault rather than a state.
+  const heading = board.fieldName
+    ? `${board.projectTitle} — ${board.fieldName}`
+    : board.projectTitle;
   const titleText = board.morePages
-    ? `${board.projectTitle} — ${board.fieldName}\nfirst ${mirrored} items, the project has more`
-    : `${board.projectTitle} — ${board.fieldName}`;
+    ? `${heading}\nfirst ${mirrored} items, the project has more`
+    : heading;
   const titleHeight = Math.max(
     TITLE_HEIGHT,
     layoutLabel(titleText, width, HEADER_FONT_SIZE).containerHeight
@@ -794,6 +800,46 @@ export function layoutBoard(
  */
 export function notesSection(): BoardSection {
   return { optionId: NOTES_OPTION_ID, name: NOTES_NAME, cards: [], hidden: 0 };
+}
+
+/** What the strip says when there is no project to name on it. */
+export const NO_PROJECT_TITLE = 'No GitHub project configured';
+
+/**
+ * The board a canvas draws when there is no project to mirror: the notes column, alone.
+ *
+ * The issue block is the feature this tool is built around, and until #316 it was unreachable
+ * until a `githubProject` was written into `board.config.json` — which registration never
+ * writes, so it was unreachable on every newly registered project. `/api/project-board`
+ * answers 404 there, the canvas read that as "clear the region", and the notes column and its
+ * `+` are drawn by that region.
+ *
+ * They do not need a project. The notes column mirrors nothing: it is the canvas's own, under
+ * a reserved option id GitHub cannot issue, and every block in it is an observation somebody
+ * wrote down. So a 404 gets this — a board of no sections, which `layoutMirror` then draws
+ * the notes column in front of exactly as it does for a project of four. One code path draws
+ * the column, whether or not there is anything beside it, which is what keeps the geometry
+ * from having two answers.
+ *
+ * Empty strings rather than invented values, and `noProject` rather than an empty-string test
+ * somewhere else: nothing here is a project's, so nothing here should read like one.
+ */
+export function notesOnlyBoard(): ProjectBoard {
+  return {
+    projectId: '',
+    projectTitle: NO_PROJECT_TITLE,
+    projectUrl: '',
+    fieldId: '',
+    fieldName: '',
+    sections: [],
+    morePages: false,
+    noProject: true,
+  };
+}
+
+/** Whether this is that board, rather than one that was read from GitHub. */
+export function isNotesOnlyBoard(board: ProjectBoard | null | undefined): boolean {
+  return board?.noProject === true;
 }
 
 /**

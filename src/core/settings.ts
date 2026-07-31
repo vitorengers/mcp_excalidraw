@@ -121,7 +121,8 @@ export const SETTINGS = [
   { name: 'IMPLEMENT_AGENT_TIMEOUT', fallback: 'no ceiling', description: 'Seconds before a wedged implement run is given up on' },
   { name: 'IMPLEMENT_CONCURRENCY', fallback: '4', description: 'Implement runs at once — 0 is no cap, 1 serialises' },
   { name: 'IMPLEMENT_QUEUE_MS', fallback: '30000', description: 'How often a workspace with its queue on looks for a free slot' },
-  { name: 'ISSUE_MEMO_MS', fallback: '30000', description: 'How long one gh read of an issue is reused — 0 turns the memo off' }
+  { name: 'ISSUE_MEMO_MS', fallback: '30000', description: 'How long one gh read of an issue is reused — 0 turns the memo off' },
+  { name: 'GH_STATUS_MEMO_MS', fallback: '30000', description: 'How long one answer about gh itself is reused — 0 turns the memo off' }
 ] as const satisfies readonly SettingDeclaration[];
 
 /** What a caller may ask `env()` for. A free string would make a typo resolve to `undefined`. */

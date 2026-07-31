@@ -1,6 +1,6 @@
 # REST API
 
-`src/server.ts`. 56 routes, and the only surface that is workspace-aware — everything the
+`src/server.ts`. 57 routes, and the only surface that is workspace-aware — everything the
 browser does, and everything this board was built with, goes through here.
 
 The table below is the whole set, one row per route. It used to be a summary of thirty, under a
@@ -76,6 +76,19 @@ The implement agent, its worktree and the queue that feeds it — see
 |---|---|
 | `GET /api/project-board` | The GitHub project, read live through `gh` (loopback only) |
 | `POST /api/project-board/move` | Move a card to another column — this one writes to GitHub (loopback only) |
+| `GET /api/github-status` | Whether `gh` is installed and logged in, per board, behind a short memo (loopback only — it answers with the login and the token's scopes) |
+
+`GET /api/project-board` answers three refusals, and they are three because the canvas does
+different things with them:
+
+| Status | `reason` | What the canvas does |
+|---|---|---|
+| 404 | `no-project` / `no-workspace` | Draws nothing, says nothing. Most boards. |
+| 422 | `bad-project-url` | Says so: somebody wrote a `githubProject` and it is not a project URL |
+| 502 | — | Says so, carrying `gh`'s own stderr |
+
+The 404 and the 422 were one answer until #317, which is why a typo in a project URL produced
+the silence meant for a board that never had one.
 
 ## Terminal
 
@@ -118,7 +131,7 @@ loopback only, and capped per board.
 | `GET /api/snapshots` | List the names |
 | `GET /api/snapshots/:name` | Restore one |
 | `GET /` | The built frontend |
-| `GET /health` | Liveness, plus the `pid` of whatever is actually answering and the `platform` it is answering from |
+| `GET /health` | Liveness, plus the `pid` of whatever is actually answering, the `platform` it is answering from, and what the startup preflights found: `agents` per role and environment, and `gh` (`resolved` plus a version number — never the login, the scopes or stderr, which this route is not authenticated enough for) |
 | `POST /api/restart` | Replace this server with a new one on the same port (loopback only) |
 | `GET /api/sync/status` | What the store and the connected browsers currently hold |
 | `GET /api/claude-status` | What each Claude Code environment on this machine has spent (loopback only) — [claude-status.md](claude-status.md) |
