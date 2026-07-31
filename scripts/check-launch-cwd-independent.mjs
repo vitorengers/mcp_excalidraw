@@ -141,11 +141,23 @@ async function healthAt(port, attempts = 60) {
  *
  * The environment is the one every check gives a canvas — no inherited `EXCALIDRAW_*`, no
  * `PORT`, no `HOST` — minus `EXCALIDRAW_NO_DOTENV`, because a check about which file decides
- * cannot start by turning the files off.
+ * cannot start by turning the files off. `EXPRESS_SERVER_URL` goes with them: the helper does
+ * not strip it, and one exported months ago would send every case below at the same board.
+ *
+ * `EXCALIDRAW_CANVAS_PORT` is set to a free port the case is not looking at, and that is a
+ * safety rather than an assertion. Where a case pins its port in `config.json`, the pin wins
+ * whatever this says; where the layers are *broken*, the search would otherwise start at the
+ * default and find the maintainer's own board, and the run would go red pointing at it.
  */
-function launch({ cwd, stateHome, extraEnv = {} }) {
-  const env = canvasEnvironment({ EXCALIDRAW_STATE_HOME: stateHome, LOG_LEVEL: 'error', ...extraEnv });
+function launch({ cwd, stateHome, elsewherePort, extraEnv = {} }) {
+  const env = canvasEnvironment({
+    EXCALIDRAW_STATE_HOME: stateHome,
+    EXCALIDRAW_CANVAS_PORT: String(elsewherePort),
+    LOG_LEVEL: 'error',
+    ...extraEnv,
+  });
   delete env.EXCALIDRAW_NO_DOTENV;
+  delete env.EXPRESS_SERVER_URL;
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [binPath, 'start'], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
@@ -220,7 +232,9 @@ try {
   // deterministic — and because a `PORT` read out of `config.json` is itself the claim that the
   // layers are applied before `core/port.ts` resolves against them.
   const state = writeStateHome('state', { PORT: port, EXCALIDRAW_WORKSPACES: stateRegistry });
-  const launchedFromDecoy = await launch({ cwd: decoyDir, stateHome: state.home });
+  const launchedFromDecoy = await launch({
+    cwd: decoyDir, stateHome: state.home, elsewherePort: await freePort(),
+  });
   check('`start` came back happy', launchedFromDecoy.code === 0, launchedFromDecoy.out.trim());
 
   const health = await boardAt(port);
@@ -245,7 +259,9 @@ try {
 
   const barePort = await freePort();
   const bareState = writeStateHome('bare-state', { PORT: barePort, EXCALIDRAW_WORKSPACES: stateRegistry });
-  const launchedFromBare = await launch({ cwd: bareDir, stateHome: bareState.home });
+  const launchedFromBare = await launch({
+    cwd: bareDir, stateHome: bareState.home, elsewherePort: await freePort(),
+  });
   check('`start` came back happy', launchedFromBare.code === 0, launchedFromBare.out.trim());
 
   const bareHealth = await boardAt(barePort);
@@ -264,7 +280,9 @@ try {
     PORT: besidePort, EXCALIDRAW_WORKSPACES: stateRegistry,
   });
   writeFileSync(join(besideState.dir, '.env'), 'EXCALIDRAW_TERMINAL=1\n', 'utf8');
-  const launchedBeside = await launch({ cwd: decoyDir, stateHome: besideState.home });
+  const launchedBeside = await launch({
+    cwd: decoyDir, stateHome: besideState.home, elsewherePort: await freePort(),
+  });
   check('`start` came back happy', launchedBeside.code === 0, launchedBeside.out.trim());
 
   const besideHealth = await boardAt(besidePort);
@@ -280,11 +298,7 @@ try {
   // running it may have a real board: with nothing named at all the search would start there.
   const freshPort = await freePort();
   const freshHome = make('fresh-state');
-  const launchedFresh = await launch({
-    cwd: bareDir,
-    stateHome: freshHome,
-    extraEnv: { EXCALIDRAW_CANVAS_PORT: String(freshPort) },
-  });
+  const launchedFresh = await launch({ cwd: bareDir, stateHome: freshHome, elsewherePort: freshPort });
   check('`start` came back happy', launchedFresh.code === 0, launchedFresh.out.trim());
   await boardAt(freshPort);
 
