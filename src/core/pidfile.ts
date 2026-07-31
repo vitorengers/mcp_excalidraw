@@ -71,15 +71,16 @@ export function restartLogPath(port: number): string {
 }
 
 /**
- * Where an auto-started server's stderr goes.
+ * Where a server that cannot start writes why.
  *
  * The same argument as the restart log, one door along: the launch path spawns the server
- * detached, so anything it says on the way down used to go to `stdio: 'ignore'` and the caller
- * was left with a health timeout naming nothing. A file the parent can read back turns that
- * into the server's own words.
+ * detached and with `stdio: 'ignore'` — deliberately, so that no inherited descriptor reaches
+ * it (#302) — so everything it said on the way down used to reach nobody, and the caller was
+ * left with a health timeout naming neither the port nor the conflict. The server writes here
+ * instead, and the launcher clears the file before spawning and reads it if the child dies.
  */
-export function spawnLogPath(port: number): string {
-  return path.join(stateDir(), `spawn-${port}.log`);
+export function startupLogPath(port: number): string {
+  return path.join(stateDir(), `startup-${port}.log`);
 }
 
 // Written by the canvas server once it is actually listening, so `stop` and

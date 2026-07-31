@@ -3,12 +3,12 @@
 ## Defaults
 
 - Canvas base URL: `EXPRESS_SERVER_URL`, else the running board's state file, else `http://127.0.0.1:3737` (next free port above it if taken); CLI also accepts `--url <canvasUrl>`
-- Canvas health: `GET /health` or `npx -y mcp-excalidraw-server status`
+- Canvas health: `GET /health` or `npx -y @vitorengers/vibemaxxing status`
 - Auto-start: any canvas-touching CLI command starts the server if it's down (opt out with `EXCALIDRAW_NO_AUTOSTART=1`)
 
 ## CLI Reference
 
-`npx -y mcp-excalidraw-server <command>` (or `excalidraw-canvas <command>` after `npm i -g`).
+`npx -y @vitorengers/vibemaxxing <command>` (or `excalidraw-canvas <command>` after `npm i -g`).
 JSON results on stdout — except `describe` (plain text) and raw-content output when `--out` is omitted (`export` scene JSON, `screenshot --format svg`). Diagnostics on stderr. Exit codes: 0 ok, 1 error, 2 usage, 3 canvas unreachable, 4 browser tab required. Explicit `start` overrides `EXCALIDRAW_NO_AUTOSTART=1`.
 
 ### Server

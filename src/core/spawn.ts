@@ -1,6 +1,5 @@
 import { spawn } from 'child_process';
 import fs from 'fs';
-import path from 'path';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
 import { EXPRESS_SERVER_URL, ENABLE_CANVAS_SYNC, EXCALIDRAW_NO_AUTOSTART } from './config.js';
@@ -9,7 +8,7 @@ import { isAcceptedCanvasService } from './identity.js';
 import { DEFAULT_CANVAS_PORT, removeCanvasState, whatIsOn } from './port.js';
 
 export { foreignServiceError };
-import { readPidFile, removePidFile, spawnLogPath } from './pidfile.js';
+import { readPidFile, removePidFile, startupLogPath } from './pidfile.js';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
@@ -45,7 +44,7 @@ function isLoopbackUrl(): boolean {
 function unreachableError(reason: string): Error {
   const error = new Error(
     `Canvas server is not reachable at ${EXPRESS_SERVER_URL} (${reason}). ` +
-    `Start it with \`mcp-excalidraw-server start\` or \`node dist/server.js\`.`
+    `Start it with \`vibemaxxing start\` or \`node dist/server.js\`.`
   );
   (error as any).code = 'CANVAS_UNREACHABLE';
   return error;
@@ -86,7 +85,7 @@ function portConflictError(port: number, occupant: string): Error {
 }
 
 /** The last of what the spawned server said before it gave up, or '' if it said nothing. */
-function spawnLogTail(file: string, limit = 900): string {
+function startupLogTail(file: string, limit = 900): string {
   try {
     const text = fs.readFileSync(file, 'utf-8').trim();
     return text.length > limit ? `...${text.slice(-limit)}` : text;
@@ -149,25 +148,31 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
     throw portConflictError(port, occupant);
   }
 
-  // Its stderr, in a file the parent can read back. `stdio: 'ignore'` was why a startup failure
-  // reached nobody: the server does say what went wrong, and it said it into the void.
-  const logFile = spawnLogPath(port);
-  let logFd: number | null = null;
-  try {
-    fs.mkdirSync(path.dirname(logFile), { recursive: true });
-    logFd = fs.openSync(logFile, 'w');
-  } catch { /* the spawn is worth more than its log */ }
+  // Cleared before the spawn rather than read blind after it: the server writes its own fatal
+  // startup errors here (see startServer in server.ts), and a message left by an earlier
+  // attempt on the same port would be relayed as this one's.
+  const startupLog = startupLogPath(port);
+  try { fs.rmSync(startupLog, { force: true }); } catch { /* nothing to clear */ }
 
   // dist/core/spawn.js -> dist/server.js; spawn args must be path strings
   const serverJs = fileURLToPath(new URL('../server.js', import.meta.url));
   const child = spawn(process.execPath, [serverJs], {
     detached: true,
-    stdio: ['ignore', 'ignore', logFd ?? 'ignore'],
+    // `stdio: 'ignore'` stays, and the startup error still gets back here — through the file
+    // above rather than through a pipe. Two reasons it is not a pipe: a detached child whose
+    // parent has exited would be writing into a closed one, and #302 kept this spawn free of
+    // inherited descriptors on purpose, because libuv skips `CREATE_NO_WINDOW` when a stdio
+    // entry is one. The file is the same shape as the restart log next to it, and for the same
+    // reason: by the time there is something to say, nobody is listening.
+    stdio: 'ignore',
+    // What every other spawn in this tree sets, and this one did not — including the other
+    // detached one, the PTY reaper in terminal-session.ts. `detached` and `stdio: 'ignore'`
+    // stay: the server has to outlive the CLI, and its output already goes to the log file
+    // (utils/logger.ts) rather than to a console anybody could read.
+    windowsHide: true,
     env: { ...process.env, PORT: String(port), HOST: bindHost }
   });
   child.unref();
-  // Ours is closed once the child holds its own; leaving it open would keep this process alive.
-  if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* already closed */ } }
 
   let exitCode: number | null = null;
   child.once('exit', code => { exitCode = code ?? 0; });
@@ -192,17 +197,17 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
     // It died rather than came up. Relayed with what it said, and now — waiting out the
     // remaining seven seconds to then report a timeout is describing the wrong event.
     if (exitCode !== null) {
-      const said = spawnLogTail(logFile);
+      const said = startupLogTail(startupLog);
       throw unreachableError(
         `the canvas server started on port ${port} exited with code ${exitCode} before answering /health`
-        + (said ? `. It said:\n${said}` : `. Its output is in ${logFile}`)
+        + (said ? `. It said:\n${said}` : `. It wrote nothing to ${startupLog}; the rest is in the platform log file`)
       );
     }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
 
   const stillThere = await whatIsOn(port, bindHost);
-  const said = spawnLogTail(logFile);
+  const said = startupLogTail(startupLog);
   throw unreachableError(
     `the server auto-started on port ${port} did not answer /health within ${timeoutMs}ms `
     + `(${stillThere ?? 'and nothing is listening on that port now'})`

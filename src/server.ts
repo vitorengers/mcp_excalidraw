@@ -4,6 +4,7 @@ import { createServer } from 'http';
 import net from 'net';
 import path from 'path';
 import fs from 'fs/promises';
+import { mkdirSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import logger from './utils/logger.js';
@@ -29,7 +30,7 @@ import {
 import { z } from 'zod';
 import WebSocket from 'ws';
 import { isMainModule } from './core/entry.js';
-import { writePidFile, removePidFile, restartLogPath } from './core/pidfile.js';
+import { writePidFile, removePidFile, restartLogPath, startupLogPath } from './core/pidfile.js';
 import {
   canvasUrlFor, explicitPort, preferredPort, removeCanvasState, writeCanvasState
 } from './core/port.js';
@@ -4975,32 +4976,50 @@ async function findExistingLoopbackListener(port: number): Promise<string | null
   return null;
 }
 
+/**
+ * A fatal startup failure, said twice: into the platform log, and into a file beside the pidfile.
+ *
+ * The second one is the only one the caller can read. This process is normally spawned detached
+ * with `stdio: 'ignore'` — see core/spawn.ts for why that stays — so a message on stderr reaches
+ * nobody, and the launcher was left reporting an eight-second health timeout that named neither
+ * the port nor what was on it. The launcher clears this file before spawning and relays whatever
+ * is in it if this process dies.
+ */
+function failStartup(message: string): void {
+  logger.error(message);
+  try {
+    const file = startupLogPath(PORT);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, `${new Date().toISOString()} ${message}
+`, 'utf-8');
+  } catch { /* the log above is what is left */ }
+  process.exit(1);
+}
+
 server.on('error', (error: NodeJS.ErrnoException) => {
   if (error.code === 'EADDRINUSE') {
     const address = (error as NodeJS.ErrnoException & { address?: string }).address || HOST;
-    logger.error(
+    failStartup(
       `Canvas server port ${PORT} is already in use on ${formatHostForUrl(address)}: `
       + 'something else is listening there. Stop it, or start with PORT unset and let the '
       + 'launch path pick a free port.'
     );
   } else if (error.code === 'EACCES') {
-    logger.error(`Canvas server cannot bind ${formatHostForUrl(HOST)}:${PORT}: permission denied.`);
+    failStartup(`Canvas server cannot bind ${formatHostForUrl(HOST)}:${PORT}: permission denied.`);
   } else {
-    logger.error('Failed to start canvas server:', error);
+    failStartup(`Failed to start canvas server: ${error.message}`);
   }
-  process.exit(1);
 });
 
 async function startServer(): Promise<void> {
   if (LOOPBACK_GUARD_HOSTS.has(HOST)) {
     const existingHost = await findExistingLoopbackListener(PORT);
     if (existingHost) {
-      logger.error(
+      failStartup(
         `Refusing to start canvas server on ${formatHostForUrl(HOST)}:${PORT}: ` +
         `${formatHostForUrl(existingHost)}:${PORT} is already listening. ` +
         'This prevents duplicate IPv4/IPv6 canvas servers from splitting state.'
       );
-      process.exit(1);
     }
   }
 
