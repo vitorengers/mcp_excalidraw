@@ -44,12 +44,19 @@ import { isAcceptedCanvasService } from './identity.js';
 // point, and an import that survived compilation would pull the agent preflight — and the
 // child spawns it reaches for — into a supervisor whose whole job is to poll a URL.
 import type { AgentsHealth } from './agent-preflight.js';
+import type { GithubHealth } from './github-status.js';
 
 /** What the replacement has to be, beyond answering at all. Same shape `/health` reports. */
 export interface CanvasIdentity {
   workspaces: string;
   terminal: boolean;
   agents: AgentsHealth;
+  /**
+   * Not compared by `matchesIdentity`, and for the reason the agents' `resolved` is not: it is
+   * a fact about the machine at the moment it was asked, and a replacement still answering
+   * `probing` a second after `listen` is the same board, not a different one.
+   */
+  gh: GithubHealth;
 }
 
 export interface RestartPlan {

@@ -72,8 +72,12 @@ import {
   todoColumn,
   DEFAULT_TODO_COLUMN,
   NoProjectConfigured,
+  ProjectUrlUnparseable,
   NotOnThisBoard
 } from './core/project-board.js';
+import {
+  GithubHealth, GithubStatus, githubHealth, githubPreflightLine, initialGithub, readGithubStatus
+} from './core/github-status.js';
 import {
   lastQueuePass,
   QueuePass,
@@ -2080,6 +2084,58 @@ async function runAgentPreflight(): Promise<void> {
   }
 }
 
+// ─── Is `gh` there, and is it logged in? ──────────────────────
+//
+// The same question one layer over, about the one binary every GitHub feature on this board
+// goes through. It fails as quietly as the agents do and in more ways: not installed, not
+// logged in, a token without the `project` scope, a project the account cannot see — and
+// until #317 all four arrived on the canvas as the same blank corner. `core/github-status.ts`
+// is where the two commands are run and what their output is allowed to say.
+
+/**
+ * What `/health` says about `gh`, replaced once when the probe lands.
+ *
+ * A value read synchronously, for exactly the reason `AGENT_PREFLIGHT` is: `/health` is what
+ * `stop`, auto-start and the restart supervisor wait on, and a route that awaited a `gh` that
+ * reaches the network would turn a slow morning into a board that looks like it never came up.
+ * Until the probe finishes this says `probing`, which is true.
+ *
+ * The host's own `gh`, not any one board's: this field describes the machine, and a server
+ * with no projects registered at all still has an answer to give. The per-workspace answer —
+ * which is the one a distro-backed project needs — is `GET /api/github-status`.
+ */
+let GH_PREFLIGHT: GithubHealth = initialGithub();
+
+/** Ask, once, at startup — after `listen`, and never awaited by anything. */
+async function runGithubPreflight(): Promise<void> {
+  try {
+    const status = await readGithubStatus(null);
+    GH_PREFLIGHT = githubHealth(status);
+    const line = githubPreflightLine(status);
+    if (line.level === 'warn') logger.warn(line.message);
+    else logger.info(line.message);
+  } catch (error) {
+    logger.warn(`GitHub preflight could not run: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * One `gh` interrogation per workspace, behind the same memo the issue reads use.
+ *
+ * The window matters here more than it does there. The canvas asks this on a *failing* poll,
+ * and a poll comes round every twenty seconds — so without a memo a board whose `gh` is broken
+ * would spawn two more processes every twenty seconds forever, to be told the same thing.
+ *
+ * `IssueMemo` unchanged rather than a second cache: it is already generic, already keyed by
+ * workspace, and already drops failures instead of remembering them, which is the property
+ * that matters when the thing being remembered is a `gh` that fails intermittently at connect.
+ * The second half of its key is a constant here — there is one status per workspace.
+ */
+const GH_STATUS_KEY = 'gh-status';
+const ghStatusMemo = new IssueMemo<GithubStatus>(
+  memoWindow(process.env.EXCALIDRAW_GH_STATUS_MEMO_MS)
+);
+
 /**
  * How many implementations one workspace may have in flight at once.
  *
@@ -3716,17 +3772,36 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
 // Both directions go through `gh`. It is already required by the issue agent, already
 // carries the `project` scope, and the PATH and WSL traps around it are already paid for.
 
-/** The workspace a project-board request is about, or a reason it is not usable. */
-async function projectWorkspace(req: Request): Promise<{ workspace: Workspace } | { error: string }> {
+/**
+ * The workspace a project-board request is about, or a reason it is not usable.
+ *
+ * The reason is carried alongside the sentence rather than left to be read out of it. Both
+ * answer 404 — the canvas draws nothing and says nothing for either, because neither is
+ * somebody's board being broken — but a payload whose only machine-readable part is English
+ * prose is one the next reader has to parse to act on.
+ */
+type ProjectWorkspaceRefusal = { error: string; reason: 'no-workspace' | 'no-project' };
+
+async function projectWorkspace(
+  req: Request
+): Promise<{ workspace: Workspace } | ProjectWorkspaceRefusal> {
   const workspaceId = workspaceIdFrom(req);
   const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
-    return { error: `Workspace "${workspaceId}" is not registered, so it has no GitHub project.` };
+    return {
+      error: `Workspace "${workspaceId}" is not registered, so it has no GitHub project.`,
+      reason: 'no-workspace'
+    };
   }
-  if (workspace.error) return { error: `Workspace is unusable: ${workspace.error}` };
+  if (workspace.error) {
+    return { error: `Workspace is unusable: ${workspace.error}`, reason: 'no-workspace' };
+  }
   if (!workspace.githubProject) {
-    return { error: 'This board has no "githubProject" in its board.config.json.' };
+    return {
+      error: 'This board has no "githubProject" in its board.config.json.',
+      reason: 'no-project'
+    };
   }
   return { workspace };
 }
@@ -3744,19 +3819,78 @@ app.get('/api/project-board', async (req: Request, res: Response) => {
   const resolved = await projectWorkspace(req);
   if ('error' in resolved) {
     // 404 rather than 400: the feature is absent for this board, not misused.
-    return res.status(404).json({ success: false, error: resolved.error });
+    return res.status(404).json({
+      success: false, reason: resolved.reason, error: resolved.error
+    });
   }
 
   try {
     const board = await readProjectBoard(resolved.workspace);
     res.json({ success: true, board });
   } catch (error) {
+    // 422 rather than 404, and that split is the point of #317. A 404 is the canvas's
+    // instruction to draw nothing and say nothing, which is right for the boards that have no
+    // project and wrong for the one board whose operator wrote a URL and got silence. The
+    // `reason` says the same thing in the body, for a reader that has the payload and not the
+    // status line.
+    if (error instanceof ProjectUrlUnparseable) {
+      return res.status(422).json({
+        success: false, reason: 'bad-project-url', error: (error as Error).message
+      });
+    }
     if (error instanceof NoProjectConfigured) {
-      return res.status(404).json({ success: false, error: (error as Error).message });
+      return res.status(404).json({
+        success: false, reason: 'no-project', error: (error as Error).message
+      });
     }
     // 502: the failure is GitHub's or gh's, not the caller's request.
     logger.warn(`Project board read failed: ${(error as Error).message}`);
     res.status(502).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/**
+ * `GET /api/github-status` — whether `gh` is there and logged in, for this board.
+ *
+ * Loopback-only, like every other route that runs `gh`: this one spawns nothing on anybody's
+ * behalf, but what it answers with is the account name and the token's scopes, and a canvas
+ * reachable from the network must not hand those out.
+ *
+ * The consumer is the canvas, on a poll that just failed. `GET /api/project-board` can say
+ * that `gh` refused; only this can say *why* — not installed, not logged in, or logged in
+ * without the `project` scope, which are three different things for the reader to go and do.
+ */
+app.get('/api/github-status', async (req: Request, res: Response) => {
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    return res.status(403).json({
+      success: false,
+      error: 'The GitHub status only answers while the server is bound to loopback.'
+    });
+  }
+
+  const workspaceId = workspaceIdFrom(req);
+  const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId) ?? null;
+
+  // A workspace that is not registered, or one the registry could not resolve, is still a
+  // question this route can answer — about the host's own `gh`. Refusing would hide the one
+  // failure most likely to be behind an unusable board on a fresh clone.
+  const target = workspace && !workspace.error ? workspace : null;
+
+  try {
+    const status = await ghStatusMemo.read(
+      target ? target.id : `${workspaceId} host`,
+      GH_STATUS_KEY,
+      () => readGithubStatus(target)
+    );
+    res.json({ success: true, workspace: target ? target.id : null, gh: status });
+  } catch (error) {
+    // `readGithubStatus` turns every failure into a status rather than an exception, so this
+    // is the registry or the environment giving way underneath it. Reported rather than
+    // swallowed: a canvas that asked why GitHub is broken must not be answered with silence
+    // by the route that exists to end silence.
+    logger.warn(`GitHub status could not be read: ${(error as Error).message}`);
+    res.status(500).json({ success: false, error: (error as Error).message });
   }
 });
 
@@ -3783,15 +3917,26 @@ app.post('/api/project-board/move', async (req: Request, res: Response) => {
 
   const resolved = await projectWorkspace(req);
   if ('error' in resolved) {
-    return res.status(404).json({ success: false, error: resolved.error });
+    return res.status(404).json({
+      success: false, reason: resolved.reason, error: resolved.error
+    });
   }
 
   try {
     const board = await moveCard(resolved.workspace, itemId, optionId);
     res.json({ success: true, board });
   } catch (error) {
+    // The same split as the read route above, and here for consistency rather than because a
+    // drag can reach it: a card cannot be dragged on a board whose mirror never drew.
+    if (error instanceof ProjectUrlUnparseable) {
+      return res.status(422).json({
+        success: false, reason: 'bad-project-url', error: (error as Error).message
+      });
+    }
     if (error instanceof NoProjectConfigured) {
-      return res.status(404).json({ success: false, error: (error as Error).message });
+      return res.status(404).json({
+        success: false, reason: 'no-project', error: (error as Error).message
+      });
     }
     if (error instanceof NotOnThisBoard) {
       return res.status(400).json({ success: false, error: (error as Error).message });
@@ -4892,7 +5037,12 @@ function canvasIdentity(): CanvasIdentity {
     // What it never carries is the command line: these are somebody's paths and permission
     // flags, and this route is unauthenticated on loopback. `backend` is a name out of a list
     // `core/agent-preflight.ts` holds and `version` is a version number, both by construction.
-    agents: AGENT_PREFLIGHT
+    agents: AGENT_PREFLIGHT,
+    // And the binary underneath every GitHub feature on the board, which failed as quietly as
+    // the agents did and had nothing here at all until #317. `resolved` and a version number
+    // only: the login, the token's scopes and `gh`'s own stderr are on `/api/github-status`,
+    // which is loopback-only. This route is not.
+    gh: GH_PREFLIGHT
   };
 }
 
@@ -5209,6 +5359,10 @@ async function startServer(): Promise<void> {
     // not sit between the port opening and the board being usable — and separately, because
     // neither depends on the other.
     void runAgentPreflight();
+    // And the same question about `gh`, which every GitHub feature on the board goes through
+    // and which fails in more ways than the agents do. Separately again: neither waits on the
+    // other, and a `gh auth status` that reaches the network must not delay either.
+    void runGithubPreflight();
   });
 
   const shutdown = (signal: NodeJS.Signals): void => {

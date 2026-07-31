@@ -292,6 +292,22 @@ export function toBoard(raw: unknown, options: ToBoardOptions = {}): ProjectBoar
 /** Raised when a workspace simply has no project — the caller answers 404, not 500. */
 export class NoProjectConfigured extends Error {}
 
+/**
+ * Raised when a workspace *has* a `githubProject` and it is not a project URL.
+ *
+ * Split out of `NoProjectConfigured` because the two are opposite instructions to the canvas
+ * and were one answer for as long as this route has existed. "This board has no project" is a
+ * board that should draw nothing and say nothing — most boards, and a toast on every one of
+ * them would be the feature making itself unusable. "The URL in your config is not a project
+ * URL" is somebody who tried, and got a blank corner of canvas and no reason, repeated every
+ * twenty seconds (#317).
+ *
+ * A sibling of `NoProjectConfigured` rather than a subclass, deliberately: a subclass would
+ * pass an `instanceof NoProjectConfigured` test somewhere and be answered 404 again by whatever
+ * caller was written before it existed, which is exactly the silence being fixed.
+ */
+export class ProjectUrlUnparseable extends Error {}
+
 function projectFieldFor(workspace: Workspace): string {
   const configured = workspace.projectField?.trim() || DEFAULT_STATUS_FIELD;
   if (!FIELD_NAME.test(configured)) {
@@ -318,11 +334,14 @@ export async function readProjectBoard(
 ): Promise<ProjectBoard> {
   const ref = parseProjectUrl(workspace.githubProject);
   if (!ref) {
-    throw new NoProjectConfigured(
-      workspace.githubProject
-        ? `"githubProject" is not a GitHub project URL: ${workspace.githubProject}`
-        : 'This board has no "githubProject" in its board.config.json.'
-    );
+    if (workspace.githubProject) {
+      throw new ProjectUrlUnparseable(
+        `"githubProject" in this board's board.config.json is not a GitHub project URL: `
+        + `${workspace.githubProject}. It should look like `
+        + 'https://github.com/users/<login>/projects/<number>.'
+      );
+    }
+    throw new NoProjectConfigured('This board has no "githubProject" in its board.config.json.');
   }
 
   const field = projectFieldFor(workspace);
