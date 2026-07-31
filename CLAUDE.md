@@ -85,7 +85,15 @@ never straight onto `main`.
 ./node_modules/.bin/vite build   # the frontend
 node scripts/check-<name>.mjs
 node scripts/check-board-map.mjs # the board and the log still describe what landed
+npm test                         # and then all of them — scripts/run-checks.mjs
 ```
+
+`npm test` is the whole suite, and it is non-zero if any check fails. It does not build: a
+missing `dist/` stops it rather than being made, because a check that only passes because the
+runner rebuilt the frontend for it is a check nobody can reproduce by hand. `--only` and
+`--skip` take globs over the file name, `--tier` selects by what a check needs, and a check that
+hangs is killed at 180 seconds with everything it started and reported as `TIMEOUT`. See
+[docs/running.md](docs/running.md).
 
 **Compiling is not working, and this project has paid for that repeatedly.** Three real defects in
 the UI layer — a panel that never opened, a race in tab initialisation, a click landing on the

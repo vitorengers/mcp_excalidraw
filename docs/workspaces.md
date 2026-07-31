@@ -83,7 +83,18 @@ left alone because on a tablist they mean *move between tabs* rather than *move 
 server: the browser cannot learn a folder path at all — `showDirectoryPicker()` returns a handle
 that deliberately exposes none, and `<input webkitdirectory>` gives only paths relative to
 whatever was chosen — while the registry needs an absolute one. With no `path` it lists the
-roots, which on Windows is the drive letters.
+roots, and what a root is depends on the machine: on Windows the accessible drive letters,
+because there is no single filesystem root to open on and a picker starting at `C:/` could
+never reach `D:/`; everywhere else the **home directory first**, then `/`, plus `/Volumes` on
+macOS when it exists. `/` is a root on those platforms and a poor place to be put — this is the
+first screen of the product, and opening on it meant clicking past `System`, `private` and
+`cores` on a mac, or `proc`, `sys` and `dev` on Linux, to reach anything a person owns. It is
+still in the same listing, so nothing above home became unreachable.
+
+The dialog's typed-path field takes its example path from the same question, asked once through
+`GET /health`, which reports the server's `platform`. It was `C:/Users/me/Projects/thing`
+everywhere before that — the only concrete path this tool ever shows, in the wrong syntax for
+two of the three platforms it runs on.
 
 ## board.config.json
 
