@@ -81,6 +81,7 @@ const CASE = {
   tracked: 'all three launchers are tracked',
   spec: 'all three invoke the same package at the same tag',
   latest: 'that tag is @latest',
+  floor: 'the Node version they name is the one engines.node requires',
   mode: 'the macOS launcher is mode 100755 in the index',
   eol: 'the .cmd is CRLF on disk and the other two are LF',
   pin: '.gitattributes pins those line endings for every clone',
@@ -143,11 +144,14 @@ function scan(cwd) {
   check(CASE.tracked, missing.length === 0,
         `${missing.length} not in git ls-files: ${missing.map((l) => l.path).join(', ')}`);
 
-  const packageName = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')).name;
+  const manifest = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8'));
+  const packageName = manifest.name;
+  const blobs = new Map();
   const specs = new Map();
   for (const launcher of LAUNCHERS) {
     if (!byPath.has(launcher.path)) continue;
-    specs.set(launcher.path, [...new Set(npmSpecs(git(cwd, ['cat-file', 'blob', `:${launcher.path}`])))]);
+    blobs.set(launcher.path, git(cwd, ['cat-file', 'blob', `:${launcher.path}`]));
+    specs.set(launcher.path, [...new Set(npmSpecs(blobs.get(launcher.path)))]);
   }
   const flat = [...new Set([...specs.values()].flat())];
   check(CASE.spec,
@@ -157,6 +161,18 @@ function scan(cwd) {
         [...specs].map(([path, found]) => `${path}: ${found.join(' + ') || 'none'}`).join(', '));
   check(CASE.latest, flat.length === 1 && flat[0] === `${packageName}@latest`,
         `${flat.join(', ') || 'nothing'} — expected ${packageName}@latest`);
+
+  // A floor spelled out in three files drifts from the manifest the first time the manifest
+  // moves — which is what raising `engines.node` to 20 did to these while they were being
+  // written. The launchers that carry no version message are silent here rather than wrong.
+  const required = /(\d+)/.exec(manifest.engines?.node ?? '')?.[1] ?? null;
+  const named = [...blobs].flatMap(([path, text]) =>
+    [...text.matchAll(/Node\.js\s+(\d+)/g)].map(([, major]) => ({ path, major })));
+  const drifted = named.filter((claim) => claim.major !== required);
+  check(CASE.floor, required !== null && named.length > 0 && drifted.length === 0,
+        required === null ? 'package.json declares no engines.node'
+          : named.length === 0 ? 'no launcher tells the user which Node to install'
+            : drifted.map((c) => `${c.path} says ${c.major}, engines.node says ${required}`).join(', '));
 
   const wrongMode = LAUNCHERS
     .filter((launcher) => byPath.has(launcher.path))
@@ -197,7 +213,8 @@ function fixtureRepo(build) {
   git(dir, ['-c', 'init.defaultBranch=main', 'init', '-q']);
   git(dir, ['config', 'core.autocrlf', 'false']);
   mkdirSync(join(dir, 'launchers'));
-  writeFileSync(join(dir, 'package.json'), '{ "name": "@acme/widget", "version": "0.0.0" }\n');
+  writeFileSync(join(dir, 'package.json'),
+                '{ "name": "@acme/widget", "version": "0.0.0", "engines": { "node": ">=20.0.0" } }\n');
   build(dir);
   git(dir, ['add', '-A', '--']);
   return dir;
@@ -217,10 +234,13 @@ function scanFixture(dir) {
 const ATTRIBUTES = '* text=auto eol=lf\n*.cmd text eol=crlf\n*.command text eol=lf\n'
   + '*.desktop text eol=lf\n';
 
-/** Every defect at once: no pin, LF in the .cmd, no executable bit, and a drifted tag. */
+/**
+ * Every defect at once: no pin, LF in the `.cmd`, no executable bit, a drifted tag, and a Node
+ * floor that no longer agrees with `engines.node`.
+ */
 const dirty = fixtureRepo((dir) => {
   writeFileSync(join(dir, 'launchers', 'vibemaxxing.cmd'),
-                '@echo off\ncall npx -y @acme/widget@latest\n');
+                '@echo off\necho Node.js 18 or newer is required.\ncall npx -y @acme/widget@latest\n');
   writeFileSync(join(dir, 'launchers', 'VibeMaxxing.command'),
                 '#!/bin/sh\nnpx -y @acme/widget@0.1.0\n');
 });
@@ -229,9 +249,9 @@ const dirty = fixtureRepo((dir) => {
 const clean = fixtureRepo((dir) => {
   writeFileSync(join(dir, '.gitattributes'), ATTRIBUTES);
   writeFileSync(join(dir, 'launchers', 'vibemaxxing.cmd'),
-                '@echo off\r\ncall npx -y @acme/widget@latest\r\n');
+                '@echo off\r\necho Node.js 20 or newer is required.\r\ncall npx -y @acme/widget@latest\r\n');
   writeFileSync(join(dir, 'launchers', 'VibeMaxxing.command'),
-                '#!/bin/sh\nnpx -y @acme/widget@latest\n');
+                '#!/bin/sh\necho Node.js 20 or newer is required.\nnpx -y @acme/widget@latest\n');
   writeFileSync(join(dir, 'launchers', 'vibemaxxing.desktop'),
                 '[Desktop Entry]\nExec=sh -c "npx -y @acme/widget@latest"\nTerminal=false\n');
 });
@@ -242,6 +262,7 @@ try {
   check('a missing launcher is caught', bad.failed.has('tracked'), bad.output.trim());
   check('two launchers asking for different versions is caught', bad.failed.has('spec'));
   check('a tag that is not @latest is caught', bad.failed.has('latest'));
+  check('a Node floor that drifted from engines.node is caught', bad.failed.has('floor'));
   check('a .command tracked at 100644 is caught', bad.failed.has('mode'));
   check('an LF .cmd is caught', bad.failed.has('eol'));
   check('an unpinned .gitattributes is caught', bad.failed.has('pin'));

@@ -19,7 +19,10 @@ All three do the same three things: check that `node` is on the path, run
 `npx -y @vitorengers/vibemaxxing@latest`, and make the failure visible instead of letting the
 window vanish. Nothing else — no bundled runtime, no configuration, no state of their own.
 `node scripts/check-launchers.mjs` holds them to it, including that all three name the same
-package at the same tag.
+package at the same tag, and that the version they tell a user to install is the one
+`package.json`'s `engines.node` requires — a floor written into three files drifts from the
+manifest the first time the manifest moves, which is what #418 did to it before this even
+landed.
 
 **They are not published in the npm tarball**, and they are not meant to be: a launcher whose
 only job is to run `npx` is useless to somebody who has already installed the package. They
