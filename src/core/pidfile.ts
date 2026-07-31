@@ -1,53 +1,16 @@
 import fs from 'fs';
 import path from 'path';
-import { homedir } from 'os';
+// Before the logger, deliberately: importing it applies the configuration layers, and the
+// logger reads LOG_LEVEL and LOG_FILE_PATH in its own module body.
+import { stateDir, stateDirCandidates } from './settings.js';
 import logger from '../utils/logger.js';
 
-/**
- * The directory the platform keeps per-user state in — the *parent*, not the application's own
- * folder inside it.
- *
- * `EXCALIDRAW_STATE_HOME` overrides it, and exists so a check can give a run a throwaway state
- * directory of its own. Without it there is no way to exercise the pidfile and the state file
- * except against the real one, which on this machine holds the board the maintainer is looking
- * at.
- */
-function stateHome(): string {
-  const override = process.env.EXCALIDRAW_STATE_HOME;
-  if (override) return override;
-  if (process.platform === 'darwin') {
-    return path.join(homedir(), 'Library', 'Application Support');
-  }
-  if (process.platform === 'win32') {
-    return process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local');
-  }
-  return process.env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state');
-}
-
-/** Read per call rather than captured: a check may be simulating another platform. */
-function leaf(name: 'next' | 'legacy'): string {
-  if (process.platform === 'win32') {
-    return name === 'next' ? 'VibeMaxxing-Canvas' : 'Excalidraw-Canvas';
-  }
-  return name === 'next' ? 'vibemaxxing-canvas' : 'excalidraw-canvas';
-}
-
-/**
- * Where runtime artifacts are written today. Still the legacy directory, deliberately, for the
- * reason `core/identity.ts` gives: a directory rename orphans the pidfile, and `stop` then
- * cannot find the server it started while the port stays held.
- */
-export function stateDir(): string {
-  return path.join(stateHome(), leaf('legacy'));
-}
-
-/**
- * Where a reader looks, new directory first. The rename flips what `stateDir()` returns; this
- * list is what makes that flip survivable, so it ships one release ahead of it.
- */
-export function stateDirCandidates(): string[] {
-  return [path.join(stateHome(), leaf('next')), stateDir()];
-}
+// The state directory this file used to choose for itself moved into `core/settings.ts` with
+// #304: `config.json` is in the same directory as the pidfile and the restart log, and the
+// module that reads the configuration cannot import the logger — so the directory has to be
+// chosen upstream of both. Re-exported, because `core/port.ts` and everything else that had
+// these from here still does.
+export { stateDir, stateDirCandidates };
 
 export function pidFilePath(port: number): string {
   return path.join(stateDir(), `server-${port}.pid`);

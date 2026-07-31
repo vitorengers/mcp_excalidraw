@@ -11,6 +11,11 @@ machine — the registry, the agent binaries, the port — is the operator's, an
 would either hardcode one person's paths or be a wrapper around this list of environment
 variables. Write the procedure down once; keep the values wherever you keep secrets and paths.
 
+Since #304 there is a place to keep them that is not a directory somebody has to be standing in:
+`config.json` in this tool's state directory, layered under a `<cwd>/.env` and under the real
+environment. [configuration.md](configuration.md) is where the layers and the file live; the
+table below is what each variable means, whichever of them supplies it.
+
 ## The short version
 
 ```bash
@@ -51,6 +56,12 @@ environment of whatever started it — which for an MCP server attached to an ed
 project tabs, no terminal, no agents, empty canvas. `workspaces: "none"` on a port you started a
 configured board on means something replaced it; kill it and start yours again.
 
+**A `config.json` in the state directory is what closes that**, since #304: an auto-started
+canvas is given the state directory as its working directory rather than the editor's project,
+so it reads the same configuration your board does whatever the editor's environment holds.
+What it still cannot inherit is a value you exported into one shell and nowhere else — that is
+the half `config.json` is for. See [configuration.md](configuration.md).
+
 ## Restarting it from the board
 
 `Restart Server`, at the right-hand end of the bar. It is the answer to the trap above rather
@@ -89,6 +100,10 @@ them is optional: unset means the feature is off, not degraded.
 The twenty-one below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
 and they are in [their own section](#windows-only-projects-inside-a-wsl-distro) rather than here.
 
+Every name in both tables can be set three ways — in `<state-dir>/config.json`, in a `<cwd>/.env`,
+or exported — and they are read in that order, the environment winning.
+[configuration.md](configuration.md) is that half.
+
 **3737 is the default port rather than one machine's habit** since #303: 3000 is the default of
 Next.js, Create React App and most tutorial servers, and it is unusable here for a reason of its
 own. A `PORT` that is set is a **pin** — the server binds that port or fails saying what is on
@@ -104,7 +119,7 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | Variable | Default | What it does |
 |---|---|---|
 | `EXCALIDRAW_CANVAS_PORT` | `3737` | The port the launch path tries first. A preference, not a pin: with `PORT` unset the search walks past it to the next free port |
-| `EXCALIDRAW_STATE_HOME` | per-OS state directory | The parent of the directory holding the pidfile, the restart log and the running board's state file. For a check that needs a throwaway one |
+| `EXCALIDRAW_STATE_HOME` | per-OS state directory | The parent of the directory holding `config.json`, the pidfile, the restart log and the running board's state file. For a check that needs a throwaway one |
 | `EXCALIDRAW_WORKSPACES` | unset | Path to the registry JSON. Unset means one `default` board and no project tabs — see [workspaces.md](workspaces.md) |
 | `EXCALIDRAW_BOARD_STATE` | beside the registry | Where each registered board is saved between processes. Unset puts them in a directory named after the registry file; with no registry, nothing is saved — [element-store.md](element-store.md) |
 | `EXCALIDRAW_DOCS_DIR` | unset | Where `GET /api/docs/:key` reads *this tool's own* documentation from. Unset disables it: serving arbitrary files from an unauthenticated local API is not a default |
@@ -122,8 +137,8 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_TERMINAL_PTY` | unset | `0` forces the pipe instead of a real pty, for a machine with no prebuilt binary |
 | `EXCALIDRAW_EXPORT_DIR` | working dir | The base directory MCP file exports may write to |
 | `EXCALIDRAW_NO_AUTOSTART` | unset | `1` stops the CLI and the MCP server auto-spawning a canvas |
-| `EXCALIDRAW_NO_DOTENV` | unset | `1` stops the server reading `<cwd>/.env` at all. The checks set it, because dotenv only ever fills in variables that are *unset* — which is exactly the set a check deleted on purpose — [trap-check-environment.md](trap-check-environment.md) |
-| `EXCALIDRAW_ENV_FILE` | `<cwd>/.env` | Read this file instead. Ignored when `EXCALIDRAW_NO_DOTENV=1` |
+| `EXCALIDRAW_NO_DOTENV` | unset | `1` stops both configuration files being read — `<cwd>/.env` and `<state-dir>/config.json` alike — leaving only the real environment. The checks set it, because a file layer only ever fills in variables that are *unset*, which is exactly the set a check deleted on purpose — [trap-check-environment.md](trap-check-environment.md) |
+| `EXCALIDRAW_ENV_FILE` | `<cwd>/.env` | Read this file instead. Ignored when `EXCALIDRAW_NO_DOTENV=1`, and it does not move `config.json` |
 
 **Pin the agents' model and effort.** Without `--model` and `--effort` on those two command
 lines the agent inherits whatever `~/.claude/settings.json` says, so changing the model of an

@@ -1,3 +1,7 @@
+// First, before every other module body in this file's graph: importing it folds
+// `<state-dir>/config.json` and `<cwd>/.env` into `process.env`, and half the modules below
+// read a variable while they are being evaluated. See `core/settings.ts`.
+import './core/env.js';
 import express, { Request, Response, NextFunction } from 'express';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
@@ -7,7 +11,6 @@ import fs from 'fs/promises';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
-import dotenv from 'dotenv';
 import logger from './utils/logger.js';
 import {
   elements,
@@ -127,15 +130,6 @@ import {
   scheduleBoardStateSave,
   SavedBoard
 } from './core/board-state.js';
-
-// Load environment variables — unless the caller said not to. See `src/core/config.ts` for why
-// `EXCALIDRAW_NO_DOTENV` exists; the short version is that dotenv only ever fills in variables
-// that are *unset*, so a `.env` beside the working directory silently undoes exactly the
-// deletions a caller made on purpose. `EXCALIDRAW_ENV_FILE` names a different file.
-if (process.env.EXCALIDRAW_NO_DOTENV !== '1') {
-  const envFile = process.env.EXCALIDRAW_ENV_FILE;
-  dotenv.config(envFile ? { path: envFile } : undefined);
-}
 
 // Every write to every store reaches the save half through here, rather than each of the
 // dozen writers remembering to. Nothing is written until a board has been registered as worth
