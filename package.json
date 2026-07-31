@@ -94,6 +94,7 @@
     "dist/**/*",
     "skills/**/*",
     "docs/*.md",
+    "config.example.json",
     "*.d.ts",
     "README.md",
     "LICENSE",

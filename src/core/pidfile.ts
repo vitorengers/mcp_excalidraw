@@ -1,23 +1,14 @@
 import fs from 'fs';
 import path from 'path';
-import { homedir } from 'os';
+// Before the logger, deliberately: importing this applies the configuration layers, and the
+// logger reads LOG_LEVEL and LOG_FILE_PATH in its own module body.
+import { stateDir } from './settings.js';
 import logger from '../utils/logger.js';
 
-/**
- * Platform-compatible state directory for runtime artifacts (pidfile),
- * mirroring the log-path convention in utils/logger.ts.
- */
-function stateDir(): string {
-  if (process.platform === 'darwin') {
-    return path.join(homedir(), 'Library', 'Application Support', 'excalidraw-canvas');
-  }
-  if (process.platform === 'win32') {
-    const base = process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local');
-    return path.join(base, 'Excalidraw-Canvas');
-  }
-  const xdgState = process.env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state');
-  return path.join(xdgState, 'excalidraw-canvas');
-}
+// The platform-compatible state directory this file used to choose for itself now lives in
+// `core/settings.ts`, because the configuration file sits in the same directory as the pidfile
+// and the restart log — one directory, one definition, and one `EXCALIDRAW_STATE_DIR` that
+// redirects all three (#304).
 
 export function pidFilePath(port: number): string {
   return path.join(stateDir(), `server-${port}.pid`);

@@ -6,6 +6,7 @@ import { getHealth, CANVAS_SERVICE_NAME, foreignServiceError, markCanvasIdentity
 
 export { foreignServiceError };
 import { readPidFile, removePidFile } from './pidfile.js';
+import { ensureStateDir, realEnvironment } from './settings.js';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
@@ -114,7 +115,18 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
     // stay: the server has to outlive the CLI, and its output already goes to the log file
     // (utils/logger.ts) rather than to a console anybody could read.
     windowsHide: true,
-    env: { ...process.env, PORT: String(canvasPort()), HOST: spawnBindHost() }
+    // The working directory the board gets, rather than the one the caller happened to be in
+    // (#304). A board is not a thing about the current directory: this spawn had no `cwd` at
+    // all, so an MCP server attached to an editor auto-started a canvas in *that editor's
+    // project*, which is where `docs/running.md` had to warn that the port is now held by
+    // something answering `status: healthy` with no workspaces, no terminal and no agents. The
+    // state directory is where `config.json` is, so it is also the directory whose `.env` the
+    // board reads — a fixed pair, wherever the command was typed.
+    cwd: ensureStateDir(),
+    // The environment this process was *started* with, not the one it read a `.env` into. The
+    // child does its own layering, from the directory above; passing `process.env` would hand
+    // it the launch directory's `.env` as though it had been exported.
+    env: { ...realEnvironment(), PORT: String(canvasPort()), HOST: spawnBindHost() }
   });
   child.unref();
   logger.info(`Auto-starting canvas server (pid ${child.pid}) at ${EXPRESS_SERVER_URL}`);
