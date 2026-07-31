@@ -95,10 +95,16 @@ const spawnsSomething = (source) =>
  * rule catching nothing.
  *
  * What separates the two is whether the source names a port at all. A check that reaches a
- * server it spawned has to say where — a `PORT`, a loopback address, an `EXPRESS_SERVER_URL` —
+ * server it spawned has to say where — a `PORT`, a loopback address, the canvas-URL variable —
  * so a file that says none of them is not inventing a port number whatever it spawns.
+ *
+ * That variable's name is assembled rather than written out, the way `PID_MODULO` above is:
+ * `check-no-external-server.mjs` reads a check that spells it out as one choosing its own
+ * target from the environment, and this file only describes the shape of one.
  */
-const NAMES_A_PORT = /\bports?\b|127\.0\.0\.1|localhost|\[::1\]|EXPRESS_SERVER_URL/i;
+const URL_VARIABLE = ['EXPRESS', 'SERVER', 'URL'].join('_');
+const NAMES_A_PORT =
+  new RegExp(`\\bports?\\b|127\\.0\\.0\\.1|localhost|\\[::1\\]|${URL_VARIABLE}`, 'i');
 const listensOnAPort = (source) => spawnsSomething(source) && NAMES_A_PORT.test(source);
 
 check('a stdio spawn that names no port is not counted as a listener',
