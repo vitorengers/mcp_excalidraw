@@ -83,7 +83,7 @@ import {
   setQueueEnabled,
   startableCards
 } from './core/implement-queue.js';
-import { MIRROR_DOC_KEY } from './core/project-board-layout.js';
+import { TOOL_DOC_KEYS } from './core/tool-docs.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
 import type { IssueDetail } from './core/github-issue.js';
 import { IssueMemo, memoWindow } from './core/issue-memo.js';
@@ -4252,28 +4252,35 @@ process.on('exit', closeAllTerminals);
 // ─── Docs API (markdown shown for the selected element) ───────
 //
 // A shape can carry `customData.docKey`; this serves the matching markdown so the
-// canvas can show the reasoning behind a box without leaving the drawing. Disabled
-// until EXCALIDRAW_DOCS_DIR points somewhere, because serving arbitrary files from
-// an unauthenticated local API is not something to enable by default.
-const DOCS_DIR_SETTING = env('DOCS_DIR');
-const DOCS_DIR = DOCS_DIR_SETTING ? path.resolve(DOCS_DIR_SETTING) : null;
+// canvas can show the reasoning behind a box without leaving the drawing.
 
 /**
  * The documentation shipped with the tool, rather than with the project on screen.
  *
- * `__dirname` is `dist/` once compiled, so this is the repository's own `docs/`.
+ * `__dirname` is `dist/` once compiled, so this is this build's own `docs/` — the repository's
+ * in a checkout, and the package's in an installed copy, where `files` ships `docs/*.md`.
  */
 const TOOL_DOCS_DIR = path.resolve(__dirname, '../docs');
 
 /**
- * Doc keys that belong to a block this server draws, not to the board it is drawn on.
+ * Where a board with no `docsDir` of its own reads documents from.
  *
- * The mirror is generated onto every project that names a `githubProject`, always carrying
- * `docKey: "project-board"` — a key that resolved inside the mirrored project, where the
- * document has no reason to exist. A tool block's documentation is a property of the tool,
- * so these resolve against the tool's own directory whatever board is asking.
+ * `EXCALIDRAW_DOCS_DIR` was the install directory retyped by hand — an absolute path into one
+ * checkout, in one operator's `.env` — and unset meant the route was off. So the tool could not
+ * serve documentation it publishes in its own package, on the machine it was installed on, and
+ * the only thing standing between a fresh clone and a dead card was a file no clone has.
+ *
+ * `undefined`, not falsy: an *explicitly empty* `EXCALIDRAW_DOCS_DIR` is how a board says it
+ * wants no fallback at all, which is a thing a setup serving only per-project documents needs
+ * to be able to say now that unset no longer means none. Serving arbitrary files from an
+ * unauthenticated local API is still not a default — this serves one directory, this build's
+ * own, and `DOC_KEY_PATTERN` plus the containment check below are what bound it to
+ * `<dir>/<key>.md`.
  */
-const TOOL_DOC_KEYS = new Set<string>([MIRROR_DOC_KEY]);
+const DOCS_DIR_SETTING = env('DOCS_DIR');
+const DOCS_DIR = DOCS_DIR_SETTING === undefined
+  ? TOOL_DOCS_DIR
+  : (DOCS_DIR_SETTING ? path.resolve(DOCS_DIR_SETTING) : null);
 
 // Keys become filenames, so anything that could climb out of DOCS_DIR is rejected
 // outright rather than normalised — a rejected key is obvious, a rewritten one is not.
@@ -4296,8 +4303,9 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: 'Invalid doc key' });
   }
 
-  // Each board reads its own project's docs. The env var stays as the fallback for
-  // single-board setups, which have no registry to resolve a directory from.
+  // Each board reads its own project's docs, except for the keys that name a block this server
+  // draws. `DOCS_DIR` is the fallback underneath both, for a canvas with no registered project
+  // to resolve a directory from and for a project that carries no `docsDir` of its own.
   const workspaceId = workspaceIdFrom(req);
   let docsDir = DOCS_DIR;
   if (TOOL_DOC_KEYS.has(key)) {

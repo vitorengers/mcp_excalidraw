@@ -104,7 +104,7 @@ export const SETTINGS = [
   { name: 'NO_AUTOSTART', fallback: 'unset', description: '1 stops the CLI and the MCP server auto-spawning a canvas' },
   { name: 'WORKSPACES', fallback: 'one default board', description: 'Path to the workspace registry JSON' },
   { name: 'BOARD_STATE', fallback: 'beside the registry', description: 'Where each registered board is saved between processes' },
-  { name: 'DOCS_DIR', fallback: 'unset', description: "Where GET /api/docs/:key reads this tool's own documentation from" },
+  { name: 'DOCS_DIR', fallback: "the shipped docs/", description: "Where GET /api/docs/:key reads from for a board with no docsDir of its own" },
   { name: 'LIBRARY', fallback: 'the shipped blocks library', description: 'An .excalidrawlib served to every board' },
   { name: 'EXPORT_DIR', fallback: 'the working directory', description: 'The base directory MCP file exports may write to' },
   { name: 'ALLOWED_HOSTS', fallback: 'loopback names only', description: 'Extra Host authorities the origin gate accepts, for a real alias or a proxy' },
