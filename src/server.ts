@@ -2648,20 +2648,6 @@ async function runImplementation(
 
     const kept = await releaseWorktreeFor(workspace, worktree, issueUrl);
 
-<<<<<<< HEAD
-=======
-    // What the agent printed is not what happened. A run that prints a pull request URL has
-    // proved that a pull request exists, and nothing more — so the one participant that knows
-    // whether it landed is asked before the record is written. Only for a run that claims to
-    // have produced one: the other paths never asked GitHub anything and must not start.
-    const pull = result.ok && result.url
-      ? await fetchPullLanding(workspace, result.url)
-      : null;
-    const landing = landingFor({
-      ok: result.ok, url: result.url, error: result.error, output: result.output, pull
-    });
-
->>>>>>> origin/main
     recordImplement(workspaceId, issueUrl, {
       state: landing.state, url: landing.url, error: landing.error, worktree: kept,
       ...carriedImplement(workspaceId, issueUrl), endedAt: new Date().toISOString()
