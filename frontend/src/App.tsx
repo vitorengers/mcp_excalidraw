@@ -181,6 +181,18 @@ const CLIENT_ID = globalThis.crypto?.randomUUID?.()
   ?? `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 /**
+ * What this tool is called, for the one place the frontend has to say it.
+ *
+ * `board.config.json`'s `name`, copied rather than imported: that file is the server's, read
+ * per request for whichever project a tab is showing, and a bundle that runs before the first
+ * response has no board to read it from. The copy in `frontend/index.html`'s `<title>` is
+ * there for the same reason and is even earlier — it is what a still-loading tab says.
+ * `scripts/check-brand-strings-browser.mjs` holds all three in agreement, the way
+ * `check-readme.mjs` already does for the README.
+ */
+const PRODUCT_NAME = 'VibeMaxxing';
+
+/**
  * How often the mirror re-reads the project.
  *
  * Polled because there is nothing to subscribe to: `projects_v2_item` webhooks are
@@ -1255,13 +1267,6 @@ function App(): JSX.Element {
   // Boards, one per project
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [activeWorkspace, setActiveWorkspace] = useState<string>('default')
-  /**
-   * Whether a registry exists at all, which is not the same as it having projects in it.
-   *
-   * An empty registry is a board waiting for its first project and has to show the `+`
-   * that adds one; no registry at all has nowhere to put it.
-   */
-  const [workspacesConfigured, setWorkspacesConfigured] = useState<boolean>(false)
   /** Which dialog is open, if any: the project picker or one project's settings. */
   const [workspaceDialog, setWorkspaceDialog] = useState<'add' | 'config' | null>(null)
   // WebSocket handlers close over their creation-time scope, so the ref is what the
@@ -4667,20 +4672,17 @@ function App(): JSX.Element {
 
     const openTheBoard = async (): Promise<void> => {
       let list: WorkspaceSummary[] = []
-      let configured = false
       try {
         const result = await (await fetch('/api/workspaces')).json()
-        if (result?.success) {
-          list = result.workspaces ?? []
-          configured = Boolean(result.configured)
-        }
+        // `configured` comes back in this payload and is deliberately not read: it is `true`
+        // on every board now, and reading it was what decided whether the tab strip existed.
+        if (result?.success) list = result.workspaces ?? []
       } catch (error) {
         console.warn('Could not load workspaces:', error)
       }
       if (cancelled) return
 
       setWorkspaces(list)
-      setWorkspacesConfigured(configured)
       const resolved = resolveInitialWorkspace(list)
       if (resolved) {
         activeWorkspaceRef.current = resolved
@@ -4714,6 +4716,30 @@ function App(): JSX.Element {
       for (const workspaceId of [...warmBoardsRef.current.keys()]) dropWarmBoard(workspaceId)
     }
   }, [])
+
+  /**
+   * What the browser tab says this window is.
+   *
+   * Since #261 the bar above the canvas has no title on it — a constant four words beside the
+   * tabs that already name the board was the least informative thing in the row — so `<title>`
+   * is the only place the name is left, and a reader with three projects open in three windows
+   * reads them apart there and nowhere else. So the board goes first and the product second:
+   * a tab strip is truncated to a handful of characters, and those characters should be the
+   * variable half.
+   *
+   * The fallbacks are the states a board really sits in rather than defensive padding. Before
+   * `/api/workspaces` has answered there is no list; a board nobody has added a project to yet
+   * has nothing to be named after (#310 gave every canvas a registry, so that is now an empty
+   * one rather than none, and the tab says the same thing either way); and this repository's
+   * own board is *called* VibeMaxxing, which would otherwise render `VibeMaxxing —
+   * VibeMaxxing`. All three land on the product name alone, which is what `index.html` already
+   * said before any of this ran.
+   */
+  useEffect(() => {
+    const board = workspaces.find((workspace) => workspace.id === activeWorkspace)
+    const name = board?.name?.trim()
+    document.title = name && name !== PRODUCT_NAME ? `${name} — ${PRODUCT_NAME}` : PRODUCT_NAME
+  }, [workspaces, activeWorkspace])
 
   /**
    * The camera this board was last left at, put back on the way in.
@@ -6170,16 +6196,16 @@ function App(): JSX.Element {
         is the least informative use of a row that now has to hold both. The document still has
         its name in `<title>`, where a browser tab reads it.
 
-        The tab strip renders nothing at all when no registry is configured, and that has to
-        mean *no tabs*, not *no bar*: a single-board setup still needs the connection pill, Sync
-        to Backend and Clear Canvas, which is why the strip is a child of the header rather
-        than the header being a branch of the strip.
+        The strip is a child of the header rather than the header being a branch of the strip,
+        and that mattered while the strip could disappear: the connection pill, Sync to Backend
+        and Clear Canvas belong to a board with no projects too. The strip stays now — it
+        carries the control that adds the first project — but the nesting is still right for
+        the same reason.
       */}
       <div className="header">
         <WorkspaceTabs
           workspaces={workspaces}
           activeId={activeWorkspace}
-          configured={workspacesConfigured}
           onSelect={switchWorkspace}
           onAdd={() => setWorkspaceDialog('add')}
           onConfigure={() => setWorkspaceDialog('config')}

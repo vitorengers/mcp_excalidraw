@@ -161,6 +161,18 @@
   margin-left: calc(2px * var(--workspace-tab-scale));
 }
 
+/*
+  The same control carrying its own name, on a board with no tabs beside it to borrow one
+  from. Smaller than the lone glyph and less transparent: it is a sentence rather than a
+  symbol, and it is the only thing in the row, so it has to read as text somebody may act on
+  rather than as a disabled label.
+*/
+.workspace-tabs__add--labelled {
+  font-size: calc(13px * var(--workspace-tab-scale));
+  padding: calc(5px * var(--workspace-tab-scale)) calc(10px * var(--workspace-tab-scale));
+  opacity: 0.85;
+}
+
 .workspace-tab__config:hover,
 .workspace-tabs__add:hover {
   opacity: 1;

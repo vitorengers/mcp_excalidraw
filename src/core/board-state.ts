@@ -54,6 +54,7 @@ import logger from '../utils/logger.js';
 import { ServerElement } from '../types.js';
 import { elementsFor, isWatchedStore, normalizeWorkspaceId } from './element-store.js';
 import { BoardScene, parseBoardScene } from './board-seed.js';
+import { registryPath } from './workspaces.js';
 
 /**
  * Kinds this board does not author and therefore does not save.
@@ -92,18 +93,24 @@ const pending = new Map<string, PendingSave>();
 const writing = new Map<string, Promise<void>>();
 
 /**
- * Where saved boards live, or nothing when there is nowhere for them.
+ * Where saved boards live.
  *
  * Derived from the registry — `board-workspaces.json` keeps its boards in
- * `board-workspaces-state/` beside it — unless an operator names a directory outright. With
- * no registry there is no answer and no saving: multi-project support stays dormant rather
- * than inventing a default project, and this is the same rule seen from the other end.
+ * `board-workspaces-state/` beside it — unless an operator names a directory outright. It
+ * follows `registryPath()` rather than the variable behind it, so a board that resolved the
+ * default registry saves beside *that*, in the per-user state directory. Reading the variable
+ * here instead would give the two halves different answers to one question, and the half that
+ * lost would be the one that keeps a draft: a project registered through the `+` on a
+ * first-run board would have had nowhere to save, which is the case this whole path exists for.
+ *
+ * Still nullable, and null is still reachable: `boardStateFile` is the only caller and a
+ * registry path is only ever empty if somebody set the variable to whitespace.
  */
 export function boardStateDir(): string | null {
   const configured = process.env.EXCALIDRAW_BOARD_STATE?.trim();
   if (configured) return configured;
 
-  const registry = process.env.EXCALIDRAW_WORKSPACES?.trim();
+  const registry = registryPath().trim();
   if (!registry) return null;
   const directory = path.dirname(registry);
   const named = path.basename(registry, path.extname(registry));

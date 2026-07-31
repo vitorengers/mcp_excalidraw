@@ -53,8 +53,9 @@ board file is a tracked artifact and a commit like any other, and a process writ
 would put diff noise into somebody's working tree. Boards are saved beside the *registry* instead, in
 a directory named after it — `board-workspaces.json` keeps them in a `board-workspaces-state` directory —
 through a temporary file and a rename, the way `workspaces.ts` writes the registry itself.
-`EXCALIDRAW_BOARD_STATE` names a different directory; with no registry configured there is nowhere
-for them and nothing is saved, which is the same dormancy `loadWorkspaces` already has.
+`EXCALIDRAW_BOARD_STATE` names a different directory. The registry it follows is the one
+`registryPath()` resolves, default included, so a project registered on a first-run board saves
+beside `workspaces.json` in the per-user state directory rather than nowhere.
 
 Beside the registry rather than in one shared directory for a reason that is not tidiness: a
 workspace id is unique *within a registry* and nowhere else, and every self-contained check in

@@ -41,7 +41,9 @@ import {
 import { spawnRestartSupervisor, type CanvasIdentity } from './core/restart-supervisor.js';
 import {
   addWorkspace,
+  hasWorkspaceRegistry,
   loadWorkspaces,
+  registryPath,
   reorderWorkspaces,
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -83,7 +85,7 @@ import {
   setQueueEnabled,
   startableCards
 } from './core/implement-queue.js';
-import { MIRROR_DOC_KEY } from './core/project-board-layout.js';
+import { TOOL_DOC_KEYS } from './core/tool-docs.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
 import type { IssueDetail } from './core/github-issue.js';
 import { IssueMemo, memoWindow } from './core/issue-memo.js';
@@ -1309,10 +1311,17 @@ app.get('/api/workspaces', async (_req: Request, res: Response) => {
   if (offLoopback(res, 'Projects are listed')) return;
 
   try {
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspaces = await loadWorkspaces(registryPath());
     res.json({
       success: true,
-      configured: Boolean(process.env.EXCALIDRAW_WORKSPACES),
+      // Constant now, and kept rather than dropped because what it says is still worth
+      // saying: this board has somewhere to record a project, so registering one will work.
+      // It used to mean "`EXCALIDRAW_WORKSPACES` is set", and the page read it as permission
+      // to draw the tab strip at all — which hid the `+` on exactly the board that needed it.
+      // `registryPath()` cannot answer nothing, so the honest value here is `true`. Whether
+      // any project has been *added* is the list below, in the same payload; the boolean that
+      // has to be read without one is `/health`'s `workspaces`.
+      configured: true,
       workspaces
     });
   } catch (error) {
@@ -1332,7 +1341,7 @@ app.post('/api/workspaces', async (req: Request, res: Response) => {
   if (offLoopback(res, 'Projects are added')) return;
 
   try {
-    const result = await addWorkspace(process.env.EXCALIDRAW_WORKSPACES, {
+    const result = await addWorkspace(registryPath(), {
       path: typeof req.body?.path === 'string' ? req.body.path : '',
       ...(typeof req.body?.id === 'string' ? { id: req.body.id } : {}),
       ...(typeof req.body?.distro === 'string' ? { distro: req.body.distro } : {})
@@ -1361,7 +1370,7 @@ app.put('/api/workspaces/order', async (req: Request, res: Response) => {
   if (offLoopback(res, 'The order of the projects is written')) return;
 
   try {
-    const result = await reorderWorkspaces(process.env.EXCALIDRAW_WORKSPACES, req.body?.ids);
+    const result = await reorderWorkspaces(registryPath(), req.body?.ids);
     if (!result.ok) {
       return res.status(result.status).json({ success: false, error: result.error });
     }
@@ -1378,7 +1387,7 @@ app.get('/api/workspaces/:id/config', async (req: Request, res: Response) => {
   if (offLoopback(res, 'Project settings are read')) return;
 
   try {
-    const result = await readWorkspaceConfig(process.env.EXCALIDRAW_WORKSPACES, req.params.id ?? '');
+    const result = await readWorkspaceConfig(registryPath(), req.params.id ?? '');
     if (!result.ok) {
       return res.status(result.status).json({ success: false, error: result.error });
     }
@@ -1394,7 +1403,7 @@ app.put('/api/workspaces/:id/config', async (req: Request, res: Response) => {
 
   try {
     const result = await writeWorkspaceConfig(
-      process.env.EXCALIDRAW_WORKSPACES,
+      registryPath(),
       req.params.id ?? '',
       req.body?.config
     );
@@ -1699,7 +1708,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: 'The block has no observation to work from.' });
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return res.status(400).json({
@@ -1885,7 +1894,7 @@ app.post('/api/issue-block/:id/adopt', async (req: Request, res: Response) => {
     });
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return res.status(400).json({
@@ -2052,7 +2061,10 @@ let AGENT_PREFLIGHT: AgentsHealth = initialAgents(AGENT_ROLES);
  */
 async function runAgentPreflight(): Promise<void> {
   try {
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => []);
+    // `registryPath()` rather than the raw variable, since #399: the registry has a per-OS
+    // default now, and a board whose only projects come from that default has projects like
+    // any other — including one inside a distro, which is the whole reason this reads it.
+    const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
     const wslWorkspace = workspaces.find(
       (workspace) => workspace.environment.kind === 'wsl' && !workspace.error
     ) ?? null;
@@ -2333,7 +2345,7 @@ async function beginImplement(
    */
   const releaseSlot = (): void => recordImplement(workspaceId, issueUrl, existing);
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     releaseSlot();
@@ -2640,7 +2652,7 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
       return;
     }
 
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspaces = await loadWorkspaces(registryPath());
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
     if (!workspace || workspace.error || !workspace.githubProject) {
       outcome = {
@@ -2884,7 +2896,7 @@ async function releaseWorktreeFor(
 async function recoverInterruptedRuns(): Promise<void> {
   let workspaces: Workspace[];
   try {
-    workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    workspaces = await loadWorkspaces(registryPath());
   } catch (error) {
     logger.warn(`Could not look for interrupted implementations: ${(error as Error).message}`);
     return;
@@ -3061,7 +3073,7 @@ async function seedBoardFromFile(workspace: Workspace): Promise<void> {
 async function seedBoardsFromFiles(): Promise<void> {
   let workspaces: Workspace[];
   try {
-    workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    workspaces = await loadWorkspaces(registryPath());
   } catch (error) {
     logger.warn(`Could not look for boards to load: ${(error as Error).message}`);
     return;
@@ -3178,7 +3190,7 @@ app.post('/api/implement/queue', async (req: Request, res: Response) => {
   logger.info(`Queue: "${workspaceId}" is ${enabled ? 'on' : 'off'}`);
   if (enabled) void dispatchQueue(workspaceId);
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => []);
+  const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
   res.json({
     success: true,
     queue: queueStateFor(workspaces.find((candidate) => candidate.id === workspaceId), workspaceId)
@@ -3259,7 +3271,7 @@ app.get('/api/implement', async (req: Request, res: Response) => {
   const offered = IMPLEMENT_AGENT_CONFIGURED
     && (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost');
   const workspaces = offered
-    ? await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => [])
+    ? await loadWorkspaces(registryPath()).catch(() => [])
     : [];
 
   res.json({
@@ -3303,7 +3315,7 @@ app.get('/api/issue', async (req: Request, res: Response) => {
   }
 
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3359,7 +3371,7 @@ app.post('/api/issue/comment', async (req: Request, res: Response) => {
   }
 
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3515,7 +3527,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
     });
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3675,7 +3687,7 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
     return res.status(404).json({ success: false, error: 'This block has no issue yet.' });
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3707,7 +3719,7 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
 /** The workspace a project-board request is about, or a reason it is not usable. */
 async function projectWorkspace(req: Request): Promise<{ workspace: Workspace } | { error: string }> {
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return { error: `Workspace "${workspaceId}" is not registered, so it has no GitHub project.` };
@@ -3831,7 +3843,7 @@ app.get('/api/library', async (req: Request, res: Response) => {
 
   const workspaceId = workspaceIdFrom(req);
   if (workspaceId !== DEFAULT_WORKSPACE_ID) {
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspaces = await loadWorkspaces(registryPath());
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace?.libraryFile) {
       sources.push({ origin: 'workspace', path: path.resolve(workspace.libraryFile) });
@@ -4062,7 +4074,7 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
   if (terminalRefused(res)) return;
 
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return res.status(400).json({
@@ -4295,29 +4307,34 @@ process.on('exit', closeAllTerminals);
 // ─── Docs API (markdown shown for the selected element) ───────
 //
 // A shape can carry `customData.docKey`; this serves the matching markdown so the
-// canvas can show the reasoning behind a box without leaving the drawing. Disabled
-// until EXCALIDRAW_DOCS_DIR points somewhere, because serving arbitrary files from
-// an unauthenticated local API is not something to enable by default.
-const DOCS_DIR = process.env.EXCALIDRAW_DOCS_DIR
-  ? path.resolve(process.env.EXCALIDRAW_DOCS_DIR)
-  : null;
+// canvas can show the reasoning behind a box without leaving the drawing.
 
 /**
  * The documentation shipped with the tool, rather than with the project on screen.
  *
- * `__dirname` is `dist/` once compiled, so this is the repository's own `docs/`.
+ * `__dirname` is `dist/` once compiled, so this is this build's own `docs/` — the repository's
+ * in a checkout, and the package's in an installed copy, where `files` ships `docs/*.md`.
  */
 const TOOL_DOCS_DIR = path.resolve(__dirname, '../docs');
 
 /**
- * Doc keys that belong to a block this server draws, not to the board it is drawn on.
+ * Where a board with no `docsDir` of its own reads documents from.
  *
- * The mirror is generated onto every project that names a `githubProject`, always carrying
- * `docKey: "project-board"` — a key that resolved inside the mirrored project, where the
- * document has no reason to exist. A tool block's documentation is a property of the tool,
- * so these resolve against the tool's own directory whatever board is asking.
+ * `EXCALIDRAW_DOCS_DIR` was the install directory retyped by hand — an absolute path into one
+ * checkout, in one operator's `.env` — and unset meant the route was off. So the tool could not
+ * serve documentation it publishes in its own package, on the machine it was installed on, and
+ * the only thing standing between a fresh clone and a dead card was a file no clone has.
+ *
+ * `undefined`, not falsy: an *explicitly empty* `EXCALIDRAW_DOCS_DIR` is how a board says it
+ * wants no fallback at all, which is a thing a setup serving only per-project documents needs
+ * to be able to say now that unset no longer means none. Serving arbitrary files from an
+ * unauthenticated local API is still not a default — this serves one directory, this build's
+ * own, and `DOC_KEY_PATTERN` plus the containment check below are what bound it to
+ * `<dir>/<key>.md`.
  */
-const TOOL_DOC_KEYS = new Set<string>([MIRROR_DOC_KEY]);
+const DOCS_DIR = process.env.EXCALIDRAW_DOCS_DIR === undefined
+  ? TOOL_DOCS_DIR
+  : (process.env.EXCALIDRAW_DOCS_DIR ? path.resolve(process.env.EXCALIDRAW_DOCS_DIR) : null);
 
 // Keys become filenames, so anything that could climb out of DOCS_DIR is rejected
 // outright rather than normalised — a rejected key is obvious, a rewritten one is not.
@@ -4340,14 +4357,15 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: 'Invalid doc key' });
   }
 
-  // Each board reads its own project's docs. The env var stays as the fallback for
-  // single-board setups, which have no registry to resolve a directory from.
+  // Each board reads its own project's docs, except for the keys that name a block this server
+  // draws. `DOCS_DIR` is the fallback underneath both, for a canvas with no registered project
+  // to resolve a directory from and for a project that carries no `docsDir` of its own.
   const workspaceId = workspaceIdFrom(req);
   let docsDir = DOCS_DIR;
   if (TOOL_DOC_KEYS.has(key)) {
     docsDir = TOOL_DOCS_DIR;
   } else if (workspaceId !== DEFAULT_WORKSPACE_ID) {
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspaces = await loadWorkspaces(registryPath());
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace?.docsDir) docsDir = path.resolve(workspace.docsDir);
   }
@@ -4853,7 +4871,12 @@ app.get('/', (req: Request, res: Response) => {
  */
 function canvasIdentity(): CanvasIdentity {
   return {
-    workspaces: process.env.EXCALIDRAW_WORKSPACES ? 'configured' : 'none',
+    // "Was this canvas pointed at a registry, or has the one it found got projects in it",
+    // not "is a variable set". The two were the same question until the registry path grew a
+    // default: every canvas resolves one now, so the old expression alone would answer
+    // `configured` for the very stand-in this field exists to unmask. See
+    // `hasWorkspaceRegistry` for why both clauses are there.
+    workspaces: hasWorkspaceRegistry() ? 'configured' : 'none',
     terminal: Boolean(TERMINAL_SETTING),
     // The agents fail the most quietly of the three: the routes answer, the blocks draw, the
     // buttons are there, and pressing one does nothing. **Per role, never one** — the
@@ -4995,7 +5018,7 @@ function readClaudeStatusMemoized(): Promise<ClaudeEnvironmentStatus[]> {
     return claudeStatusMemo.reading;
   }
   const reading = (async () => {
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => []);
+    const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
     const distros = workspaces
       .map((workspace) => workspace.environment)
       .filter((environment): environment is { kind: 'wsl'; distro: string } => environment.kind === 'wsl')

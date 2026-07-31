@@ -5,7 +5,16 @@ import { fileURLToPath } from 'url';
 import { parseArgs, CliUsageError } from '../args.js';
 import { printJson, note } from '../util.js';
 
-const SKILL_NAME = 'excalidraw-skill';
+// Exported for scripts/check-install-skill-cleanup.mjs, which asserts the whole tree spells
+// this the same way — the shipped directory, its own front matter, and scripts/sync-skills.mjs.
+export const SKILL_NAME = 'vibemaxxing-canvas';
+
+// What this skill used to be installed as. Upstream's package is published and ships its own
+// `excalidraw-skill`, so that directory already exists under the skills root of anyone who ran
+// upstream's installer — and an agent loads *every* directory it finds there. Renaming without
+// removing therefore leaves two skills loaded together, the stale one instructing a live agent
+// to run a command that resolves to a different maintainer's package.
+export const LEGACY_SKILL_NAMES = ['excalidraw-skill'];
 
 // The published package layout is <root>/{dist,skills,...}; this module
 // compiles to dist/cli/commands/, so the package root is three levels up.
@@ -42,6 +51,51 @@ function resolveSkillsRoot(target: string): string {
 function resolveTarget(target: string): { root: string; target: string; mode: string } {
   const root = resolveSkillsRoot(target);
   return { root, target: path.join(root, SKILL_NAME), mode: `target:${target}` };
+}
+
+/** The `name:` of a markdown file's YAML front matter, or undefined if it has none. */
+function frontMatterName(file: string): string | undefined {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf-8');
+  } catch {
+    return undefined;
+  }
+  const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  if (!block) return undefined;
+  const line = (block[1] ?? '').split(/\r?\n/).find((entry) => /^name:\s*\S/.test(entry));
+  return line?.replace(/^name:\s*/, '').trim().replace(/^["']|["']$/g, '');
+}
+
+/**
+ * Remove installs this skill left behind under its old names, and say which.
+ *
+ * Deleting a directory the user may never have installed from this tool is only acceptable
+ * because it is both *reported* and *evidenced*: a directory goes only when it holds a
+ * `SKILL.md` whose own front matter names one of the legacy skills. A directory that merely
+ * shares the name — somebody's notes, a hand-written skill, anything with no `SKILL.md` — is
+ * left exactly where it is. A symlink is left alone for the same reason the target is: this
+ * command does not follow one out of the skills root.
+ */
+function removeLegacyInstalls(root: string): string[] {
+  const removed: string[] = [];
+  for (const legacy of LEGACY_SKILL_NAMES) {
+    if (legacy === SKILL_NAME) continue;
+    const dir = path.join(root, legacy);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(dir);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) continue;
+    const declared = frontMatterName(path.join(dir, 'SKILL.md'));
+    if (declared === undefined || !LEGACY_SKILL_NAMES.includes(declared)) continue;
+    fs.rmSync(dir, { recursive: true, force: true });
+    removed.push(dir);
+    note(`Removed legacy skill install at ${dir}`);
+  }
+  return removed;
 }
 
 function countFiles(dir: string): number {
@@ -112,12 +166,17 @@ export async function installSkill(argv: string[]): Promise<void> {
     throw error;
   }
 
+  // After the new install is in place, never before it: a copy that fails must not take the
+  // only skill on the machine with it.
+  const removed = removeLegacyInstalls(root);
+
   printJson({
     success: true,
     skill: SKILL_NAME,
     mode,
     root,
     target,
-    files: countFiles(target)
+    files: countFiles(target),
+    removed
   });
 }
