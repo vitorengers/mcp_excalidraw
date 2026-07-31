@@ -6,7 +6,14 @@ manifest. Settings travel with the project instead of piling up in one machine's
 
 ## The registry
 
-`EXCALIDRAW_WORKSPACES` points at a JSON file:
+`EXCALIDRAW_WORKSPACES` points at a JSON file. **It is optional**: with the variable unset the
+registry is `workspaces.json` in the same per-user directory as `config.json`, the pidfile and
+the restart log — `%LOCALAPPDATA%\Excalidraw-Canvas\` on Windows,
+`~/Library/Application Support/excalidraw-canvas/` on macOS,
+`$XDG_STATE_HOME/excalidraw-canvas/` (or `~/.local/state/…`) on Linux. Nothing is written until
+the first project is added, so a board that has never had one has no file.
+
+Either way the shape is the same:
 
 ```json
 {
@@ -38,9 +45,10 @@ than to this repository:
 - **Keys it does not understand survive.** The file is read, modified and written back, never
   re-serialised from the shape this code knows, so a comment field or a setting added by hand is
   still there afterwards.
-- **No registry configured is a refusal with a reason**, naming `EXCALIDRAW_WORKSPACES`. A `+`
-  that silently did nothing would be the worse failure. A registry that is configured but does
-  not exist yet is simply the empty registry, and gets created.
+- **There is nowhere it cannot write.** A registry that does not exist yet — named or default —
+  is simply the empty registry, and the first `POST` creates it, making its directory if it has
+  to. This used to be a 503 refusal naming `EXCALIDRAW_WORKSPACES`, on the one board where the
+  strip that holds the `+` had removed itself, so nothing on screen could have shown it.
 - **A project with no `board.config.json` is given a minimal one**, so its tab does not arrive
   already marked broken by `No board.config.json at …`. A project that has one keeps it,
   untouched. Minimal is `{ name }`, plus `docsDir` when the project actually has a `docs/`

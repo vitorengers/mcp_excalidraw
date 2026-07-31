@@ -7,8 +7,10 @@
  * global config.
  */
 import fs from 'fs/promises';
+import { existsSync, readFileSync } from 'fs';
+import path from 'path';
 import logger from '../utils/logger.js';
-import { settingName } from './settings.js';
+import { env, stateDir, stateDirCandidates } from './settings.js';
 import {
   resolveWorkspacePath,
   resolveInWorkspace,
@@ -16,6 +18,81 @@ import {
   WorkspaceEnvironment,
   wslUnsupportedHere,
 } from './workspace-paths.js';
+
+/** What the registry is called when nobody has named a file for it. */
+const REGISTRY_FILENAME = 'workspaces.json';
+
+/**
+ * Where the list of projects is, and it is always somewhere.
+ *
+ * `EXCALIDRAW_WORKSPACES` used to be the whole answer, and `undefined` was a state the rest
+ * of the tool then had to have opinions about: the registry was read-only, `POST
+ * /api/workspaces` refused with a 503 naming the variable, and the tab strip — which is where
+ * the `+` that would have set it lives — removed itself. A first-run reader got a blank canvas
+ * with no tabs, no `+` and no message, and the only way out was a variable named in a document
+ * they had no reason to be reading. Nothing about "which projects are open" is unanswerable
+ * before it is configured; the answer is simply "none yet".
+ *
+ * So the variable stays the explicit answer and there is a default underneath it: a file in
+ * the same per-user directory the pidfile, the restart log and `config.json` are already in
+ * (`core/settings.ts`, which owns that choice for all of them). `readRegistry` treats a
+ * missing file as the empty registry, so nothing is written until the first project is added.
+ *
+ * Both spellings of the state directory are looked in, newest first, for the reason
+ * `settingsFilePaths()` gives: the directory rename ships one release ahead of itself, and a
+ * reader that only knew one name would orphan somebody's projects the day it flips. A *new*
+ * registry is written where `stateDir()` says, which is the same place everything else lands.
+ */
+export function registryPath(): string {
+  const named = env('WORKSPACES')?.trim();
+  if (named) return named;
+
+  for (const dir of stateDirCandidates()) {
+    const candidate = path.join(dir, REGISTRY_FILENAME);
+    if (existsSync(candidate)) return candidate;
+  }
+  return path.join(stateDir(), REGISTRY_FILENAME);
+}
+
+/**
+ * Whether this canvas is somebody's board rather than a scratch one, answered without waiting.
+ *
+ * `/health` is the one caller, and what it reports there is load-bearing: `docs/running.md`
+ * tells the operator to read it first, because an MCP server attached to an editor can
+ * auto-start a canvas onto the board's port and answer `status: healthy` while being a canvas
+ * with nothing on it.
+ *
+ * Two clauses, and both are needed once the registry path has a default:
+ *
+ *   - **the variable was set.** This is what the field used to mean on its own, and it is
+ *     still the operator saying "this is the board" out loud. It stays first because it is
+ *     also the only evidence a caller has that a value *reached* the server —
+ *     `check-env-isolation.mjs` reads this field to prove a `.env` was read at all, with a
+ *     registry path that deliberately does not exist.
+ *   - **or the registry it resolved has projects in it.** The clause the default made
+ *     necessary: with no variable set, every canvas resolves a registry, so the first clause
+ *     alone would report `configured` for the very stand-in this field exists to unmask.
+ *
+ * A board that has both, one, or neither is therefore reported as what it is, and the case the
+ * field was invented for — an editor's MCP child holding no `EXCALIDRAW_*`, on a machine whose
+ * real board names its registry — still answers `none`.
+ *
+ * Deliberately cheap and deliberately synchronous: it counts entries rather than resolving
+ * them, so a project directory that has gone missing does not change the answer, and
+ * `canvasIdentity()` stays the plain snapshot the restart supervisor compares against.
+ */
+export function hasWorkspaceRegistry(): boolean {
+  if (env('WORKSPACES')?.trim()) return true;
+
+  try {
+    const parsed = JSON.parse(readFileSync(registryPath(), 'utf-8')) as { workspaces?: unknown };
+    return Array.isArray(parsed?.workspaces) && parsed.workspaces.length > 0;
+  } catch {
+    // No file, or one nobody can parse. Either way this canvas is showing no projects, which
+    // is what the field is being asked.
+    return false;
+  }
+}
 
 /**
  * Effort levels the agent CLI accepts, as `claude --help` states them.
@@ -202,8 +279,13 @@ async function readJson(filePath: string): Promise<unknown> {
  * Through a temporary file and a rename, because the registry belongs to whoever runs the
  * board rather than to this repository: a crash halfway through a plain write would leave
  * them holding half a file, and the board reads that file on every request.
+ *
+ * The directory is made first, for the one file whose directory may genuinely not exist yet:
+ * the default registry sits in the per-user state directory, and a board that has never
+ * written a pidfile has never made it.
  */
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
   const temporary = `${filePath}.${process.pid}.tmp`;
   await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
   await fs.rename(temporary, filePath);
@@ -451,16 +533,22 @@ export async function loadAgentWorkflow(
 /**
  * Read the registry and resolve every workspace in it.
  *
- * Returns an empty list when no registry is configured — multi-project support stays
- * dormant rather than inventing a default project.
+ * Returns an empty list when there is nothing to read. A registry file that is not there is
+ * the ordinary state of a board nobody has added a project to yet — it says nothing and is
+ * logged at debug, the same reading `readRegistry` takes on the write side. A file that is
+ * there and cannot be read is a different thing and still an error.
  */
-export async function loadWorkspaces(registryPath: string | undefined): Promise<Workspace[]> {
+export async function loadWorkspaces(registryPath: string): Promise<Workspace[]> {
   if (!registryPath) return [];
 
   let registry: { workspaces?: RegistryEntry[] };
   try {
     registry = (await readJson(registryPath)) as { workspaces?: RegistryEntry[] };
   } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      logger.debug(`No workspace registry at ${registryPath} yet; this board has no projects.`);
+      return [];
+    }
     logger.error(`Could not read workspace registry at ${registryPath}: ${(error as Error).message}`);
     return [];
   }
@@ -516,12 +604,11 @@ export interface WorkspaceWritten {
 
 export type WorkspaceWriteResult = WorkspaceWritten | WorkspaceWriteRefusal;
 
-const NO_REGISTRY: WorkspaceWriteRefusal = {
-  ok: false,
-  status: 503,
-  error: 'No workspace registry is configured, so there is nowhere to record a project. '
-    + `Point ${settingName('WORKSPACES')} at a registry file and restart the board.`,
-};
+// There used to be a `NO_REGISTRY` refusal here — a 503 telling the caller to point
+// `EXCALIDRAW_WORKSPACES` at a file and restart the board, returned by every function below
+// when the path was `undefined`. `registryPath()` cannot answer `undefined`, so the refusal
+// became unreachable, and an unreachable refusal naming a variable a first-run reader has
+// never set is worse than none: it was the only thing the `+` could ever have said back.
 
 interface Registry {
   workspaces?: unknown;
@@ -538,8 +625,16 @@ async function readRegistry(registryPath: string): Promise<
   } catch (error) {
     // A registry that was configured but never created is the empty registry: the board
     // is being asked to add its first project, which is exactly that case.
+    //
+    // `entries` is the array *inside* `registry`, never a second empty one that looks the
+    // same. Every caller appends to `entries` and then writes `registry`, so two arrays here
+    // meant the first project on a not-yet-created registry was pushed into a list nobody
+    // wrote: the file appeared, held `{"workspaces": []}`, and the `+` reported a 500 saying
+    // the project did not load back. The path below never had the bug, because there the
+    // parsed object is the one both fields come from.
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { ok: true, registry: { workspaces: [] }, entries: [] };
+      const fresh: Registry = { workspaces: [] };
+      return { ok: true, registry: fresh, entries: fresh.workspaces as RegistryEntry[] };
     }
     return {
       ok: false,
@@ -644,11 +739,9 @@ export interface NewWorkspace {
  * that is plainly already registered.
  */
 export async function addWorkspace(
-  registryPath: string | undefined,
+  registryPath: string,
   request: NewWorkspace
 ): Promise<WorkspaceWriteResult> {
-  if (!registryPath) return NO_REGISTRY;
-
   const given = typeof request?.path === 'string' ? request.path.trim() : '';
   if (!given) return { ok: false, status: 400, error: 'A project needs a path.' };
 
@@ -759,11 +852,9 @@ export type WorkspaceOrderResult =
  * Kept, because deleting a line of somebody's registry is not what a reorder was asked to do.
  */
 export async function reorderWorkspaces(
-  registryPath: string | undefined,
+  registryPath: string,
   ids: unknown
 ): Promise<WorkspaceOrderResult> {
-  if (!registryPath) return NO_REGISTRY;
-
   if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string' && id.trim())) {
     return {
       ok: false,
@@ -924,11 +1015,9 @@ export function validateWorkspaceConfigPatch(
 
 /** Where a registered workspace keeps its config, and what is in it now. */
 async function configFileOf(
-  registryPath: string | undefined,
+  registryPath: string,
   id: string
 ): Promise<{ ok: true; workspace: Workspace; configPath: string; config: Record<string, unknown> } | WorkspaceWriteRefusal> {
-  if (!registryPath) return NO_REGISTRY;
-
   const workspaces = await loadWorkspaces(registryPath);
   const workspace = workspaces.find((candidate) => candidate.id === id);
   if (!workspace) return { ok: false, status: 404, error: `Workspace "${id}" is not registered.` };
@@ -963,7 +1052,7 @@ async function configFileOf(
 
 /** A project's config exactly as it is on disk, for a UI that has to edit it. */
 export async function readWorkspaceConfig(
-  registryPath: string | undefined,
+  registryPath: string,
   id: string
 ): Promise<{ ok: true; config: Record<string, unknown> } | WorkspaceWriteRefusal> {
   const found = await configFileOf(registryPath, id);
@@ -979,7 +1068,7 @@ export async function readWorkspaceConfig(
  * a model does not erase an effort configured beside it.
  */
 export async function writeWorkspaceConfig(
-  registryPath: string | undefined,
+  registryPath: string,
   id: string,
   patch: unknown
 ): Promise<WorkspaceWriteResult> {

@@ -19,14 +19,6 @@ export interface WorkspaceSummary {
 interface Props {
   workspaces: WorkspaceSummary[]
   activeId: string
-  /**
-   * Whether a registry exists at all.
-   *
-   * Separate from the list being empty, because those are different boards: with no
-   * registry there is nowhere to add a project and the strip stays hidden, while an empty
-   * registry is a board waiting for its first project and must show the `+` that adds it.
-   */
-  configured: boolean
   onSelect: (id: string) => void
   onAdd: () => void
   onConfigure: (id: string) => void
@@ -54,11 +46,16 @@ function movedTo<T>(items: T[], from: number, to: number): T[] {
 /**
  * Tab strip for switching boards.
  *
- * Hidden entirely when no registry is configured — a single-board setup should not
- * grow a row of chrome showing one tab it cannot act on.
+ * Always rendered, including with no projects at all. It used to remove itself when there
+ * was no registry — `if (!configured && workspaces.length === 0) return null` — and the
+ * argument for that was tidiness: a single-board setup should not grow a row of chrome
+ * showing one tab it cannot act on. But the `+` that registers a project is *in* this strip,
+ * so the tidying hid the only control a board with nothing on it has, on the first screen
+ * anybody sees. There is no unconfigured board any more (`registryPath()` always resolves),
+ * and an empty strip is one control wide.
  */
 export const WorkspaceTabs: React.FC<Props> = ({
-  workspaces, activeId, configured, onSelect, onAdd, onConfigure, onReorder
+  workspaces, activeId, onSelect, onAdd, onConfigure, onReorder
 }) => {
   /**
    * The tab currently being carried, by id rather than by index.
@@ -70,7 +67,8 @@ export const WorkspaceTabs: React.FC<Props> = ({
   /** Where it would land if it were dropped now, so the strip says so before the drop. */
   const [over, setOver] = useState<string | null>(null)
 
-  if (!configured && workspaces.length === 0) return null
+  /** A board with nothing on it yet, which is the one that has to explain its own `+`. */
+  const noProjectsYet = workspaces.length === 0
 
   const order = workspaces.map((workspace) => workspace.id)
 
@@ -184,13 +182,19 @@ export const WorkspaceTabs: React.FC<Props> = ({
           </div>
         )
       })}
+      {/*
+        A `+` beside tabs is unambiguous: the tabs say what it would add one of. Alone in an
+        empty header it is a glyph with nothing to be read against, on the screen where the
+        reader knows least — so with no projects it says so in words. The accessible name is
+        the same sentence either way, because it was never the ambiguous half.
+      */}
       <button
-        className="workspace-tabs__add"
+        className={`workspace-tabs__add${noProjectsYet ? ' workspace-tabs__add--labelled' : ''}`}
         aria-label="Add a project"
         title="Add a project"
         onClick={onAdd}
       >
-        +
+        {noProjectsYet ? '+ Add a project' : '+'}
       </button>
     </div>
   )

@@ -13,8 +13,14 @@
  * rewrite that dropped them would silently damage that file; the new project is listed
  * without a restart, which is what makes a `+` cheap; the two spellings of one project
  * that `workspace-paths.ts` already collapses are refused as the duplicate they are; and
- * the two refusals that must never be silent — a server not bound to loopback, and no
- * registry configured at all — say so with a reason worth reading.
+ * the refusal that must never be silent — a server not bound to loopback — says so with a
+ * reason worth reading.
+ *
+ * The last case is the one that changed shape with #310. A board with no
+ * `EXCALIDRAW_WORKSPACES` used to refuse the write with a 503 naming that variable, and
+ * nothing on screen could ever have shown it: the strip holding the `+` removed itself on
+ * exactly that board. So the case now asserts the behaviour that replaced the refusal — the
+ * project is registered, and the registry appears in the per-user state directory.
  *
  * The directory picker is here too, and for the same reason it exists at all: the
  * browser cannot learn a folder path — `showDirectoryPicker()` hands back a handle that
@@ -94,11 +100,15 @@ const readRegistry = () => JSON.parse(readFileSync(registryPath, 'utf8'));
 
 const running = [];
 
-function startCanvas(port, { host = '127.0.0.1', registry = registryPath } = {}) {
+function startCanvas(port, { host = '127.0.0.1', registry = registryPath, stateHome = null } = {}) {
   const env = { PORT: String(port), HOST: host, LOG_LEVEL: 'error' };
   // Nothing to delete in the other case: the child's environment starts with no
   // `EXCALIDRAW_*` in it at all, so "not granted" is "never named".
   if (registry) env.EXCALIDRAW_WORKSPACES = registry;
+  // A server with no registry named resolves the per-user default one, and case 10 makes it
+  // write there. Given a state directory of its own it writes inside this check's temporary
+  // directory instead of into the projects of whoever is running the check.
+  if (stateHome) env.EXCALIDRAW_STATE_HOME = stateHome;
 
   const child = spawnCanvas({
     env,
@@ -242,13 +252,47 @@ try {
   check('403 for the directory listing too', refusedBrowse.status === 403,
         `got ${refusedBrowse.status} ${JSON.stringify(refusedBrowse.body)}`);
 
-  console.log('\n10. no registry configured is a refusal with a reason, not a silent no-op');
-  const bare = startCanvas(barePort, { registry: null });
+  console.log('\n10. a board with no registry named writes one, rather than refusing');
+  // This case used to assert the opposite: a 503 whose message named `EXCALIDRAW_WORKSPACES`.
+  // It was the refusal a first-run reader could never act on — the `+` that would have shown
+  // it was inside a tab strip that removed itself when there was no registry, so the only
+  // route to the message was `curl`. `registryPath()` resolves a default now (#310), and what
+  // has to be true instead is that the board registers the project and puts the file where
+  // this machine keeps per-user state.
+  const stateHome = join(workDir, 'state-home');
+  const bare = startCanvas(barePort, { registry: null, stateHome });
   await waitForHealth(BARE_BASE, bare.child, bare.read);
-  const nowhere = await add(BARE_BASE, { path: slash(freshDir) });
-  check('the POST is refused', nowhere.status >= 400, `got ${nowhere.status} ${JSON.stringify(nowhere.body)}`);
-  check('and it names the variable that would fix it',
-        /VIBEMAXXING_WORKSPACES/.test(nowhere.body?.error ?? ''), nowhere.body?.error);
+
+  const before10 = await call(BARE_BASE, '/api/workspaces');
+  check('it lists no projects and says so', before10.body?.workspaces?.length === 0,
+        JSON.stringify(before10.body));
+  check('but reports itself as somewhere a project can be added', before10.body?.configured === true,
+        JSON.stringify(before10.body));
+  check('and nothing is written until something is added',
+        !existsSync(join(stateHome, 'Excalidraw-Canvas', 'workspaces.json'))
+        && !existsSync(join(stateHome, 'excalidraw-canvas', 'workspaces.json')),
+        stateHome);
+
+  const somewhere = await add(BARE_BASE, { path: slash(freshDir) });
+  check('the POST succeeds', somewhere.status === 201,
+        `got ${somewhere.status} ${JSON.stringify(somewhere.body)}`);
+  check('and the project comes back registered', somewhere.body?.workspace?.id === 'fresh-project',
+        JSON.stringify(somewhere.body?.workspace));
+  // Either spelling of the state directory, because which one is written is the tool's own
+  // migration in progress and not what this case is about.
+  const defaultRegistry = [
+    join(stateHome, 'Excalidraw-Canvas', 'workspaces.json'),
+    join(stateHome, 'excalidraw-canvas', 'workspaces.json'),
+  ].find((candidate) => existsSync(candidate));
+  check('the registry was created under the state directory', Boolean(defaultRegistry), stateHome);
+  const written = defaultRegistry ? JSON.parse(readFileSync(defaultRegistry, 'utf8')) : {};
+  check('and it holds the project rather than an empty list',
+        (written.workspaces ?? []).length === 1 && written.workspaces[0].id === 'fresh-project',
+        JSON.stringify(written));
+  const nowListed = await call(BARE_BASE, '/api/workspaces');
+  check('which the board lists without a restart',
+        (nowListed.body?.workspaces ?? []).some((workspace) => workspace.id === 'fresh-project'),
+        JSON.stringify(nowListed.body?.workspaces));
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);

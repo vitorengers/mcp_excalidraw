@@ -42,7 +42,9 @@ import {
 import { spawnRestartSupervisor, type CanvasIdentity } from './core/restart-supervisor.js';
 import {
   addWorkspace,
+  hasWorkspaceRegistry,
   loadWorkspaces,
+  registryPath,
   reorderWorkspaces,
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -1307,10 +1309,17 @@ app.get('/api/workspaces', async (_req: Request, res: Response) => {
   if (offLoopback(res, 'Projects are listed')) return;
 
   try {
-    const workspaces = await loadWorkspaces(env('WORKSPACES'));
+    const workspaces = await loadWorkspaces(registryPath());
     res.json({
       success: true,
-      configured: Boolean(env('WORKSPACES')),
+      // Constant now, and kept rather than dropped because what it says is still worth
+      // saying: this board has somewhere to record a project, so registering one will work.
+      // It used to mean "`EXCALIDRAW_WORKSPACES` is set", and the page read it as permission
+      // to draw the tab strip at all — which hid the `+` on exactly the board that needed it.
+      // `registryPath()` cannot answer nothing, so the honest value here is `true`. Whether
+      // any project has been *added* is the list below, in the same payload; the boolean that
+      // has to be read without one is `/health`'s `workspaces`.
+      configured: true,
       workspaces
     });
   } catch (error) {
@@ -1330,7 +1339,7 @@ app.post('/api/workspaces', async (req: Request, res: Response) => {
   if (offLoopback(res, 'Projects are added')) return;
 
   try {
-    const result = await addWorkspace(env('WORKSPACES'), {
+    const result = await addWorkspace(registryPath(), {
       path: typeof req.body?.path === 'string' ? req.body.path : '',
       ...(typeof req.body?.id === 'string' ? { id: req.body.id } : {}),
       ...(typeof req.body?.distro === 'string' ? { distro: req.body.distro } : {})
@@ -1359,7 +1368,7 @@ app.put('/api/workspaces/order', async (req: Request, res: Response) => {
   if (offLoopback(res, 'The order of the projects is written')) return;
 
   try {
-    const result = await reorderWorkspaces(env('WORKSPACES'), req.body?.ids);
+    const result = await reorderWorkspaces(registryPath(), req.body?.ids);
     if (!result.ok) {
       return res.status(result.status).json({ success: false, error: result.error });
     }
@@ -1376,7 +1385,7 @@ app.get('/api/workspaces/:id/config', async (req: Request, res: Response) => {
   if (offLoopback(res, 'Project settings are read')) return;
 
   try {
-    const result = await readWorkspaceConfig(env('WORKSPACES'), req.params.id ?? '');
+    const result = await readWorkspaceConfig(registryPath(), req.params.id ?? '');
     if (!result.ok) {
       return res.status(result.status).json({ success: false, error: result.error });
     }
@@ -1392,7 +1401,7 @@ app.put('/api/workspaces/:id/config', async (req: Request, res: Response) => {
 
   try {
     const result = await writeWorkspaceConfig(
-      env('WORKSPACES'),
+      registryPath(),
       req.params.id ?? '',
       req.body?.config
     );
@@ -1697,7 +1706,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: 'The block has no observation to work from.' });
   }
 
-  const workspaces = await loadWorkspaces(env('WORKSPACES'));
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return res.status(400).json({
@@ -1883,7 +1892,7 @@ app.post('/api/issue-block/:id/adopt', async (req: Request, res: Response) => {
     });
   }
 
-  const workspaces = await loadWorkspaces(env('WORKSPACES'));
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return res.status(400).json({
@@ -2281,7 +2290,7 @@ async function beginImplement(
    */
   const releaseSlot = (): void => recordImplement(workspaceId, issueUrl, existing);
 
-  const workspaces = await loadWorkspaces(env('WORKSPACES'));
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     releaseSlot();
@@ -2588,7 +2597,7 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
       return;
     }
 
-    const workspaces = await loadWorkspaces(env('WORKSPACES'));
+    const workspaces = await loadWorkspaces(registryPath());
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
     if (!workspace || workspace.error || !workspace.githubProject) {
       outcome = {
@@ -2832,7 +2841,7 @@ async function releaseWorktreeFor(
 async function recoverInterruptedRuns(): Promise<void> {
   let workspaces: Workspace[];
   try {
-    workspaces = await loadWorkspaces(env('WORKSPACES'));
+    workspaces = await loadWorkspaces(registryPath());
   } catch (error) {
     logger.warn(`Could not look for interrupted implementations: ${(error as Error).message}`);
     return;
@@ -3009,7 +3018,7 @@ async function seedBoardFromFile(workspace: Workspace): Promise<void> {
 async function seedBoardsFromFiles(): Promise<void> {
   let workspaces: Workspace[];
   try {
-    workspaces = await loadWorkspaces(env('WORKSPACES'));
+    workspaces = await loadWorkspaces(registryPath());
   } catch (error) {
     logger.warn(`Could not look for boards to load: ${(error as Error).message}`);
     return;
@@ -3126,7 +3135,7 @@ app.post('/api/implement/queue', async (req: Request, res: Response) => {
   logger.info(`Queue: "${workspaceId}" is ${enabled ? 'on' : 'off'}`);
   if (enabled) void dispatchQueue(workspaceId);
 
-  const workspaces = await loadWorkspaces(env('WORKSPACES')).catch(() => []);
+  const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
   res.json({
     success: true,
     queue: queueStateFor(workspaces.find((candidate) => candidate.id === workspaceId), workspaceId)
@@ -3207,7 +3216,7 @@ app.get('/api/implement', async (req: Request, res: Response) => {
   const offered = IMPLEMENT_AGENT_CONFIGURED
     && (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost');
   const workspaces = offered
-    ? await loadWorkspaces(env('WORKSPACES')).catch(() => [])
+    ? await loadWorkspaces(registryPath()).catch(() => [])
     : [];
 
   res.json({
@@ -3251,7 +3260,7 @@ app.get('/api/issue', async (req: Request, res: Response) => {
   }
 
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(env('WORKSPACES'));
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3307,7 +3316,7 @@ app.post('/api/issue/comment', async (req: Request, res: Response) => {
   }
 
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(env('WORKSPACES'));
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3463,7 +3472,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
     });
   }
 
-  const workspaces = await loadWorkspaces(env('WORKSPACES'));
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3623,7 +3632,7 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
     return res.status(404).json({ success: false, error: 'This block has no issue yet.' });
   }
 
-  const workspaces = await loadWorkspaces(env('WORKSPACES'));
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3655,7 +3664,7 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
 /** The workspace a project-board request is about, or a reason it is not usable. */
 async function projectWorkspace(req: Request): Promise<{ workspace: Workspace } | { error: string }> {
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(env('WORKSPACES'));
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return { error: `Workspace "${workspaceId}" is not registered, so it has no GitHub project.` };
@@ -3779,7 +3788,7 @@ app.get('/api/library', async (req: Request, res: Response) => {
 
   const workspaceId = workspaceIdFrom(req);
   if (workspaceId !== DEFAULT_WORKSPACE_ID) {
-    const workspaces = await loadWorkspaces(env('WORKSPACES'));
+    const workspaces = await loadWorkspaces(registryPath());
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace?.libraryFile) {
       sources.push({ origin: 'workspace', path: path.resolve(workspace.libraryFile) });
@@ -4010,7 +4019,7 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
   if (terminalRefused(res)) return;
 
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(env('WORKSPACES'));
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return res.status(400).json({
@@ -4294,7 +4303,7 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
   if (TOOL_DOC_KEYS.has(key)) {
     docsDir = TOOL_DOCS_DIR;
   } else if (workspaceId !== DEFAULT_WORKSPACE_ID) {
-    const workspaces = await loadWorkspaces(env('WORKSPACES'));
+    const workspaces = await loadWorkspaces(registryPath());
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace?.docsDir) docsDir = path.resolve(workspace.docsDir);
   }
@@ -4800,7 +4809,12 @@ app.get('/', (req: Request, res: Response) => {
  */
 function canvasIdentity(): CanvasIdentity {
   return {
-    workspaces: env('WORKSPACES') ? 'configured' : 'none',
+    // "Was this canvas pointed at a registry, or has the one it found got projects in it",
+    // not "is a variable set". The two were the same question until the registry path grew a
+    // default: every canvas resolves one now, so the old expression alone would answer
+    // `configured` for the very stand-in this field exists to unmask. See
+    // `hasWorkspaceRegistry` for why both clauses are there.
+    workspaces: hasWorkspaceRegistry() ? 'configured' : 'none',
     terminal: Boolean(TERMINAL_SETTING),
     // The agents fail the most quietly of the three: the routes answer, the blocks draw, the
     // buttons are there, and pressing one does nothing. **Two booleans, never one** — the
@@ -4937,7 +4951,7 @@ function readClaudeStatusMemoized(): Promise<ClaudeEnvironmentStatus[]> {
     return claudeStatusMemo.reading;
   }
   const reading = (async () => {
-    const workspaces = await loadWorkspaces(env('WORKSPACES')).catch(() => []);
+    const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
     const distros = workspaces
       .map((workspace) => workspace.environment)
       .filter((environment): environment is { kind: 'wsl'; distro: string } => environment.kind === 'wsl')

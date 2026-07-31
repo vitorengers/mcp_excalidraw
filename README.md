@@ -67,7 +67,9 @@ Everything from here to [What It Is](#what-it-is) is VibeMaxxing, and exists onl
 
 ### One project per board
 
-`EXCALIDRAW_WORKSPACES` points at a registry JSON listing your projects; each project then
+A registry JSON lists your projects — `EXCALIDRAW_WORKSPACES` names it, and with that unset it
+is `workspaces.json` in this machine’s per-user state directory, created when you add the first
+project; each project then
 describes its own board settings in a `board.config.json` at its root — its docs directory, its
 shape library, its GitHub repository and project, and per-agent model and effort. Settings travel
 with the project instead of piling up in one machine's global config. Tabs along the top of the
