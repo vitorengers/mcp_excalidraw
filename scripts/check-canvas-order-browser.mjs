@@ -25,8 +25,8 @@
  *     rounding once per shell?
  *   - Do `Alt+P` and `Alt+G` still land on their sections once the documentation has moved?
  *   - Does the order survive a reload, and a board switched away from and back?
- *   - And on a board with no `githubProject`, where no mirror is ever drawn, does the block
- *     take the vacant slot with the order holding for the two regions that exist?
+ *   - And on a board with no `githubProject`, where the region is the notes column alone
+ *     (#316), does the order still hold for a region one column wide?
  *
  * The project is a stub `gh` answering from a file, and the shell is a stub over pipes
  * (`EXCALIDRAW_TERMINAL_PTY=0`) — neither this check nor anybody's real board is touched.
@@ -81,7 +81,7 @@ for (const path of [terminalPath, layoutPath]) {
 // them here would be a second definition to drift from the one under test.
 const { TERMINAL_KIND, TERMINAL_GAP, TERMINAL_GRID, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, terminalSizeFor } =
   await import(pathToFileURL(terminalPath).href);
-const { MIRROR_GAP } = await import(pathToFileURL(layoutPath).href);
+const { MIRROR_GAP, boardWidth } = await import(pathToFileURL(layoutPath).href);
 
 let failures = 0;
 const check = (name, condition, detail = '') => {
@@ -158,8 +158,9 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
-// No project on this one, so no mirror is ever drawn on it — which is the case the last
-// phase is about, and somewhere else to switch to for the phase before it.
+// No project on this one, so the region it draws is the notes column and nothing else (#316)
+// — which is the case the last phase is about, and somewhere else to switch to for the phase
+// before it.
 writeFileSync(join(plainDir, 'board.config.json'), JSON.stringify({ name: 'Plain Board' }), 'utf8');
 
 const PORT = await freePort();
@@ -593,26 +594,39 @@ try {
   await shot('06-switched-back');
   inOrder(scene, 'after a switch away and back');
 
-  // ─── 6. A board with no project, so no mirror ────────────────
+  // ─── 6. A board with no project: the region is one column wide ──
 
-  console.log('\n6. with no githubProject the block takes the vacant mirror slot');
+  console.log('\n6. with no githubProject the region is the notes column alone');
   await send('Page.navigate', { url: `${BASE}/?workspace=${PLAIN}` });
   await sleep(1500);
   await waitFor(() => evaluate(GRAB_API), 'the API handle on the plain board');
   await waitFor(async () => (await evaluate(PROBE)).docs, 'the plain board\'s content');
   await pressKey('KeyT', 't', 1, 84);
+  // The region is waited for as well: it arrives with the first poll rather than with the
+  // scene, so asking about the order before it lands would be asking about a board that is
+  // still being drawn.
   scene = await waitFor(async () => {
     const now = await evaluate(PROBE);
-    return now.terminal && now.docs ? now : null;
-  }, 'the block on the plain board', 200);
-  await wide('07-no-mirror');
+    return now.terminal && now.docs && now.mirror ? now : null;
+  }, 'the block and the notes column on the plain board', 200);
+  await wide('07-notes-column-only');
 
-  check('no mirror is drawn on a board with no project', scene.mirror === null,
-        JSON.stringify(scene.mirror));
-  inOrder(scene, 'with no mirror', { mirror: false });
-  check('the block is one gap left of the content, in the slot the mirror would have had',
+  // A board with no project drew *nothing* here until #316, and the notes column with it: the
+  // `+` is on that column, so the issue block was unreachable until a `githubProject` was
+  // written down. What is drawn now is the canvas's own column and only that — one column
+  // wide, where a project's mirror is as wide as its columns — and it takes its place in the
+  // same order, because it is placed by the same `placeMirror`.
+  check('the region is drawn with no project, and is the notes column alone',
+        Boolean(scene.mirror)
+          && Math.abs((scene.mirror.maxX - scene.mirror.minX) - boardWidth(1)) < 1,
+        `${JSON.stringify(scene.mirror)} against one column of ${boardWidth(1)}`);
+  inOrder(scene, 'with no project');
+  check('the block is still one gap left of the content, which is what places it',
         Math.abs((scene.docs.minX - scene.terminal.maxX) - TERMINAL_GAP) < 1,
         `the gap is ${Math.round(scene.docs.minX - scene.terminal.maxX)}`);
+  check('and the one-column region one gap left of the block, which is what places it',
+        Math.abs((scene.terminal.minX - scene.mirror.maxX) - MIRROR_GAP) < 1,
+        `the gap is ${Math.round(scene.terminal.minX - scene.mirror.maxX)}, not ${MIRROR_GAP}`);
   // Derived rather than named: since #199 the default is 125 × 30 cells, and what that is in
   // scene units depends on the cell this page measured. Same arithmetic the page ran, off the
   // same measurement — the grid itself is `check-terminal-default-grid-browser.mjs`'s question.
