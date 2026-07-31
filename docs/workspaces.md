@@ -100,7 +100,7 @@ two of the three platforms it runs on.
 
 ```json
 {
-  "name": "Board Tool",
+  "name": "VibeMaxxing",
   "language": "English",
   "docsDir": "docs",
   "board": "docs/board.excalidraw",

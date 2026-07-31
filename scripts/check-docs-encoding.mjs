@@ -2,7 +2,8 @@
 /**
  * Checks that no tracked text file has been through a wrong decoder.
  *
- * A board was seen rendering `Board Tool â€" the tool, mapped` and `1 Â· How the pieces fit`
+ * A board was seen rendering its title as `VibeMaxxing â€" the tool, mapped` and a section mark
+ * as `1 Â· How the pieces fit`
  * — UTF-8 bytes decoded as cp1252 and re-encoded, the signature of a shell pipeline that
  * announced no error at all. The tracked file was clean that time. Nothing in this
  * repository would have noticed if it had not been: `check-board-map.mjs` and
@@ -113,8 +114,8 @@ console.log('1. the detector fires on text that has been decoded twice');
 
 const encode = (text) => Buffer.from(text, 'utf8');
 
-/** The two sequences the board was actually seen rendering. */
-const SEEN_ON_SCREEN = 'Board Tool â€" the tool, mapped\n1 Â· How the pieces fit';
+/** The two sequences the board was actually seen rendering, over today's title. */
+const SEEN_ON_SCREEN = 'VibeMaxxing â€" the tool, mapped\n1 Â· How the pieces fit';
 
 check('the em dash and middle dot from the screenshot are both caught',
       faults(encode(SEEN_ON_SCREEN), 'fixture').length === 2,
@@ -134,8 +135,8 @@ check('a whole board is caught when its text has been through the wrong decoder'
 
 console.log('\n1b. and stays quiet on the characters this project legitimately writes');
 check('a real em dash, middle dot, arrow and accented name pass',
-      faults(encode('Board Tool — the tool · mapped → ção ↻ ⌘'), 'fixture').length === 0,
-      JSON.stringify(faults(encode('Board Tool — the tool · mapped → ção ↻ ⌘'), 'fixture')));
+      faults(encode('VibeMaxxing — the tool · mapped → ção ↻ ⌘'), 'fixture').length === 0,
+      JSON.stringify(faults(encode('VibeMaxxing — the tool · mapped → ção ↻ ⌘'), 'fixture')));
 
 // ─── 2. Every tracked text file ───────────────────────────────
 
