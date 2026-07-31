@@ -118,7 +118,7 @@ loopback only, and capped per board.
 | `GET /api/snapshots` | List the names |
 | `GET /api/snapshots/:name` | Restore one |
 | `GET /` | The built frontend |
-| `GET /health` | Liveness, plus the `pid` of whatever is actually answering |
+| `GET /health` | Liveness, plus the `pid` of whatever is actually answering and the `platform` it is answering from |
 | `POST /api/restart` | Replace this server with a new one on the same port (loopback only) |
 | `GET /api/sync/status` | What the store and the connected browsers currently hold |
 | `GET /api/claude-status` | What each Claude Code environment on this machine has spent (loopback only) — [claude-status.md](claude-status.md) |

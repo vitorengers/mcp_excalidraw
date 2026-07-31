@@ -22,6 +22,7 @@
     "production": "npm run build && npm run canvas",
     "prepublishOnly": "npm run build",
     "sync:skills": "node scripts/sync-skills.mjs",
+    "test": "node scripts/run-checks.mjs",
     "test:bind": "npm run build:server && node scripts/check-local-bind.mjs",
     "type-check": "npx tsc --noEmit"
   },

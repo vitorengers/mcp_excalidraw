@@ -523,56 +523,34 @@ This fork publishes its own to `ghcr.io/vitorengers/mcp_excalidraw` and `ghcr.io
 
 ## Testing
 
-### CLI Smoke Test
+This fork's tests are `scripts/check-*.mjs`: one per behaviour that has ever broken, each a
+plain Node script with no test framework. `npm test` runs all of them.
 
 ```bash
-npx -y @vitorengers/vibemaxxing start
-npx -y @vitorengers/vibemaxxing status
-npx -y @vitorengers/vibemaxxing add --one '{"type":"rectangle","x":100,"y":100,"width":300,"height":200}'
-npx -y @vitorengers/vibemaxxing describe
+npm run build     # the checks load dist/, and the runner refuses to start without it
+npm test          # every check
 ```
 
-### Canvas Smoke Test (HTTP)
+`npm test` is `node scripts/run-checks.mjs`, and the runner takes a selection:
 
 ```bash
-curl http://127.0.0.1:3000/health
+node scripts/run-checks.mjs --tier fast,browser    # the contributor gate
+node scripts/run-checks.mjs --only 'check-docs-*'  # just the documentation checks
+node scripts/run-checks.mjs --skip '*-browser'     # everything that needs no Chrome
+node scripts/run-checks.mjs --list                 # what would run, and nothing else
+node scripts/run-checks.mjs --help                 # every flag, including --jobs and --timeout
 ```
 
-### Local Bind Regression Test
+Every check declares a `Tier:` — `fast`, `browser`, `windows`, `wsl` or `repo` — saying what it
+needs beyond Node and a built `dist/`. A tier whose tool this machine has not got is reported as
+`EXPECTED-SKIP` rather than passing quietly, and `browser` is the one that fails instead: a
+runner that was meant to have a Chrome and has not is set up wrong, not a machine that was never
+going to run those checks. A check that hangs is killed at 180 seconds, with every process it
+started, and reported as `TIMEOUT`. Output is buffered and printed only for the checks that
+failed, and the run ends on a table of pass, fail, skip and timeout.
 
-```bash
-npm run test:bind
-```
-
-### MCP Smoke Test (MCP Inspector)
-
-List tools:
-```bash
-npx @modelcontextprotocol/inspector --cli \
-  -e EXPRESS_SERVER_URL=http://127.0.0.1:3000 \
-  -e ENABLE_CANVAS_SYNC=true -- \
-  node dist/index.js --method tools/list
-```
-
-Create a rectangle:
-```bash
-npx @modelcontextprotocol/inspector --cli \
-  -e EXPRESS_SERVER_URL=http://127.0.0.1:3000 \
-  -e ENABLE_CANVAS_SYNC=true -- \
-  node dist/index.js --method tools/call --tool-name create_element \
-  --tool-arg type=rectangle --tool-arg x=100 --tool-arg y=100 \
-  --tool-arg width=300 --tool-arg height=200
-```
-
-### Frontend Screenshots (agent-browser)
-
-If you use `agent-browser` for UI checks:
-```bash
-agent-browser install
-agent-browser open http://127.0.0.1:3000
-agent-browser wait --load networkidle
-agent-browser screenshot /tmp/canvas.png
-```
+[docs/running.md](docs/running.md) has the tier table, the environment the checks run in, and how
+to run a single one by hand.
 
 ## FAQ
 
@@ -628,6 +606,7 @@ Contributions welcome!
 ```bash
 npm run type-check
 npm run build
+npm test                   # every scripts/check-*.mjs — see Testing above
 npm run cli -- status      # run the CLI from the local build
 npm run sync:skills        # after editing skills/excalidraw-skill, sync the repo-local agent copy
 ```
