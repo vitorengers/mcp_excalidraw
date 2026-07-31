@@ -24,9 +24,9 @@ Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Merma
 
 ## Demo
 
-![AI agent drawing an architecture diagram on a live Excalidraw canvas via MCP](demo.gif)
+![The upstream project's demo: an AI agent drawing an architecture diagram on a live Excalidraw canvas via MCP](demo.gif)
 
-*AI agent creates a complete architecture diagram from a single prompt (4x speed). [Watch full video on YouTube](https://youtu.be/ufW78Amq5qA)*
+*The upstream project's demo, not this fork's — `demo.gif` and the video are upstream's work, kept because they still show what the canvas does ([NOTICE.md](NOTICE.md)). An AI agent creates a complete architecture diagram from a single prompt (4x speed). [Watch the upstream demo video on YouTube](https://youtu.be/ufW78Amq5qA)*
 
 ## Table of Contents
 

@@ -96,7 +96,8 @@
     "docs/*.md",
     "*.d.ts",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE.md"
   ],
   "optionalDependencies": {
     "@lydell/node-pty": "^1.2.0-beta.14"
