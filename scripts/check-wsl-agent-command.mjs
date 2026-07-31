@@ -138,19 +138,19 @@ console.log('\n3. a command that is not there says which environment it was not 
     check('issue-agent exports commandNotFoundHint', false,
           'exit 127 from a distro reports a Windows path and nothing about the distro');
   } else {
-    const hint = commandNotFoundHint(WSL, 'C:/Users/x/.local/bin/claude.exe -p', 'EXCALIDRAW_ISSUE_AGENT_WSL');
+    const hint = commandNotFoundHint(WSL, 'C:/Users/x/.local/bin/claude.exe -p', 'VIBEMAXXING_ISSUE_AGENT_WSL');
 
     check('it names the distro the command was not found in',
           typeof hint === 'string' && hint.includes('Some-Distro'),
           `hint was ${JSON.stringify(hint)}`);
     check('it names the variable that overrides it',
-          typeof hint === 'string' && hint.includes('EXCALIDRAW_ISSUE_AGENT_WSL'),
+          typeof hint === 'string' && hint.includes('VIBEMAXXING_ISSUE_AGENT_WSL'),
           `hint was ${JSON.stringify(hint)}`);
     check('it says the command is missing inside the distro, not on the host',
           typeof hint === 'string' && /inside/i.test(hint),
           `hint was ${JSON.stringify(hint)}`);
     check('a native workspace gets no such hint',
-          commandNotFoundHint(NATIVE, 'claude -p', 'EXCALIDRAW_ISSUE_AGENT_WSL') === null,
+          commandNotFoundHint(NATIVE, 'claude -p', 'VIBEMAXXING_ISSUE_AGENT_WSL') === null,
           'there is no distro to name');
   }
 }
@@ -184,14 +184,14 @@ console.log('\n4. a real run in a real distro reports it');
       expects: 'issues',
       what: 'the WSL agent command check',
       timeoutMs: 30_000,
-      notFoundVariable: 'EXCALIDRAW_ISSUE_AGENT_WSL',
+      notFoundVariable: 'VIBEMAXXING_ISSUE_AGENT_WSL',
     });
 
     check('the run fails', run.ok === false);
     check('the error names the distro', typeof run.error === 'string' && run.error.includes(distro),
           `error was ${JSON.stringify(run.error)}`);
     check('the error names the variable to set',
-          typeof run.error === 'string' && run.error.includes('EXCALIDRAW_ISSUE_AGENT_WSL'),
+          typeof run.error === 'string' && run.error.includes('VIBEMAXXING_ISSUE_AGENT_WSL'),
           `error was ${JSON.stringify(run.error)}`);
   }
 }

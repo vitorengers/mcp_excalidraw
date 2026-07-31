@@ -15,10 +15,15 @@
  *    real `claude.exe -p --dangerously-skip-permissions` back and started a coding agent against
  *    a fabricated issue.
  *
- * So: every inherited `EXCALIDRAW_*` is deleted before the check's own values are applied, and
- * `EXCALIDRAW_NO_DOTENV=1` tells the server not to read the file at all. `PORT` and `HOST` go the
- * same way — `PORT=3737` is in this machine's session environment, and a check that inherited it
- * would health-check the operator's live board instead of its own server.
+ * So: every inherited configuration variable is deleted before the check's own values are
+ * applied, and `EXCALIDRAW_NO_DOTENV=1` tells the server not to read the file at all. `PORT` and
+ * `HOST` go the same way — `PORT=3737` is in this machine's session environment, and a check that
+ * inherited it would health-check the operator's live board instead of its own server.
+ *
+ * **Both prefixes**, since #311: the server reads `VIBEMAXXING_*` as well as `EXCALIDRAW_*`, and
+ * a loop that strips one strips nothing under the other. That is the whole leak coming back
+ * under a new name, in ~130 checks at once, on the machine where it matters most — the one with
+ * a live board configured in its shell.
  */
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -28,6 +33,9 @@ import { freePort } from './free-port.mjs';
 
 export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const serverPath = join(repoRoot, 'dist', 'server.js');
+
+/** Every prefix the server reads configuration under. Adding one here is what un-leaks it. */
+export const SETTING_PREFIXES = ['VIBEMAXXING_', 'EXCALIDRAW_'];
 
 /**
  * The environment a canvas server should be started with: this process's, with everything the
@@ -40,7 +48,7 @@ export const serverPath = join(repoRoot, 'dist', 'server.js');
 export function canvasEnvironment(overrides = {}) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (key.startsWith('EXCALIDRAW_')) delete env[key];
+    if (SETTING_PREFIXES.some((prefix) => key.startsWith(prefix))) delete env[key];
   }
   delete env.PORT;
   delete env.HOST;

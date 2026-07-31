@@ -163,7 +163,7 @@ async function disabledCases() {
   const id = await issueBlock(0, 'The docs panel is slow to open on large boards');
   const off = await call(`/api/issue-block/${id}`, { method: 'POST' });
   check('404 when EXCALIDRAW_ISSUE_AGENT is unset', off.status === 404, `got ${off.status}`);
-  check('says how to enable it', /EXCALIDRAW_ISSUE_AGENT/.test(off.body.error ?? ''), off.body.error);
+  check('says how to enable it', /VIBEMAXXING_ISSUE_AGENT/.test(off.body.error ?? ''), off.body.error);
   await call('/api/elements/clear', { method: 'DELETE' });
 }
 

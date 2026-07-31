@@ -292,7 +292,7 @@ try {
   });
   const offBody = await offRes.json().catch(() => ({}));
   check('404 when EXCALIDRAW_IMPLEMENT_AGENT is unset', offRes.status === 404, `got ${offRes.status}`);
-  check('and it says how to enable it', /EXCALIDRAW_IMPLEMENT_AGENT/.test(offBody.error ?? ''), offBody.error);
+  check('and it says how to enable it', /VIBEMAXXING_IMPLEMENT_AGENT/.test(offBody.error ?? ''), offBody.error);
   check('reading the issue still works with implementing off',
         (await (await fetch(`${offBase}/api/issue?workspace=mirror-card&url=${encodeURIComponent(ISSUE_URL)}`)).json())
           ?.issue?.number === 46,
