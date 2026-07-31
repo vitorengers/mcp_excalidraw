@@ -241,7 +241,7 @@ npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>
 npx -y @vitorengers/vibemaxxing install-skill --print-source  # inspect bundled source path
 ```
 
-> **Security note:** The canvas server binds `127.0.0.1` only by default. If you expose it on a network interface (`HOST=0.0.0.0`), put network-level access controls in front — the API has no built-in authentication.
+> **Security note:** The canvas server binds `127.0.0.1` only by default, and the GitHub half of the board is bound to that: off loopback every GitHub-backed route answers `403` — the project mirror, a card move, the issue blocks, `/api/github-status` and the workspace registry — so what you get on a network interface is a drawing canvas and nothing else. The board says so on itself rather than showing you an empty region. If you expose it (`HOST=0.0.0.0`) anyway, put network-level access controls in front — the API has no built-in authentication.
 
 ## Agent Skill
 
@@ -304,7 +304,7 @@ The MCP server runs over stdio. Since v1.1 the simplest config is `npx` — no c
 | `ENABLE_CANVAS_SYNC` | Enable real-time canvas sync | `true` |
 | `EXCALIDRAW_NO_AUTOSTART` | Set `1` to disable canvas auto-start | (unset) |
 | `EXCALIDRAW_EXPORT_DIR` | Base directory MCP file exports may write to | current working dir |
-| `PORT` / `HOST` | Canvas server bind address. `PORT` pins the port and is never scanned past | `3737` (next free port above it if taken) / `127.0.0.1` |
+| `PORT` / `HOST` | Canvas server bind address. `PORT` pins the port and is never scanned past; a `HOST` that is not loopback turns every GitHub-backed route into a `403` (see the security note above) | `3737` (next free port above it if taken) / `127.0.0.1` |
 | `EXCALIDRAW_CANVAS_PORT` | Preferred port to try first — a preference, not a pin: the search may walk past it | `3737` |
 | `EXCALIDRAW_STATE_HOME` | Parent directory for the pidfile and the running board's state file | per-OS state directory |
 | `VIBEMAXXING_NO_OPEN` | Set `1` so a launch never opens a browser (`--no-open` sets it). A stdout that is not a terminal already suppresses it | (unset) |

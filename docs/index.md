@@ -19,6 +19,7 @@ The board itself is cut into two halves, each with a key that scrolls onto it â€
 | [launchers.md](launchers.md) | The three double-click launchers, and why not a SEA, an Electron shell or a signed app |
 | [configuration.md](configuration.md) | Where those values are read from: `config.json` in the state directory, a `<cwd>/.env`, the environment |
 | [workspaces.md](workspaces.md) | One project per board â€” the registry, `board.config.json`, and the settings dialog |
+| [without-github.md](without-github.md) | The four levels of absent GitHub, and what each one keeps and loses |
 | [board-sections.md](board-sections.md) | The two halves of the board and the keys that reach them |
 | [whats-next.md](whats-next.md) | What has not shipped |
 | [development-log.md](development-log.md) | One dated entry per merged pull request: the issue, the pull request, and what was decided |
