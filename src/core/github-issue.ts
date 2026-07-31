@@ -7,11 +7,9 @@
  * issue on GitHub. Only the title is kept on the element, because a card has to read
  * correctly with nothing selected and with no network.
  */
-import { spawn } from 'child_process';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
-import { agentPath, buildAgentCommand } from './issue-agent.js';
-import { ghCommandFor, runGh as runGhCommand } from './gh.js';
+import { runGh as runGhCommand } from './gh.js';
 import { issueUrlRefusal } from './github-host.js';
 
 /** How long a read may take. Far shorter than an agent run — this is one API call. */
@@ -80,54 +78,31 @@ export function isIssueUrl(url: string): boolean {
 }
 
 /**
- * How many times to run `gh` before giving up, and how long to wait between tries.
+ * Fetch one issue.
  *
- * `gh` intermittently fails here with socket buffer exhaustion and succeeds on the next
- * attempt seconds later. Without a retry that fault reaches the panel as a hard error,
- * which reads as a broken block rather than as the blip it is.
- */
-const ATTEMPTS = 3;
-const BACKOFF_MS = [400, 1200];
-
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Fetch one issue, retrying a failing `gh`.
- *
- * Every failure is retried rather than only the socket error: matching a localised OS
- * message is not something to depend on, and a genuinely missing issue costs two extra
- * fast failures. A malformed response is the exception — that is deterministic, so
- * retrying it would only delay the error.
+ * How often a failing `gh` is asked again is not decided here. This file kept its own
+ * `ATTEMPTS` and `BACKOFF_MS`, and its own policy — retry everything, because matching a
+ * localised OS message is not something to depend on — which meant a `gh` that is not
+ * installed, or a login without the `project` scope, was asked three times over 1.6 seconds
+ * to give the same answer, once per panel opened. `runGh` owns that now, and
+ * `classifyGhFailure` is the one place that reads a failure and says whether repeating it
+ * could help (#319).
  */
 export async function fetchIssue(workspace: Workspace, issueUrl: string): Promise<IssueDetail> {
-  let lastError: Error = new Error('gh was never run');
-  // Dropped to the older field list once a `gh` says it does not know the newer one.
-  // Without this, adding a field to the query would turn every issue read on an older CLI
-  // into a hard error in the panel — a regression paid by everyone, for a link.
-  let fields = FIELDS;
-
-  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-    try {
-      return await runGh(workspace, issueUrl, fields);
-    } catch (error) {
-      if (error instanceof MalformedResponse) throw error;
-      if (fields === FIELDS && /unknown json field/i.test((error as Error).message)) {
-        logger.warn(`gh does not know what closed an issue; reading ${issueUrl} without it`);
-        fields = FIELDS_WITHOUT_CLOSURE;
-        // Not an attempt: the query was wrong for this `gh`, and the next one is different.
-        attempt--;
-        continue;
-      }
-      // Report the last failure, not the first: it describes what kept happening.
-      lastError = error as Error;
-      if (attempt < ATTEMPTS - 1) {
-        logger.warn(`gh failed reading ${issueUrl} (attempt ${attempt + 1}/${ATTEMPTS}): ${lastError.message}`);
-        await wait(BACKOFF_MS[attempt] ?? 1200);
-      }
-    }
+  try {
+    return await readIssue(workspace, issueUrl, FIELDS);
+  } catch (error) {
+    // Dropped to the older field list once a `gh` says it does not know the newer one.
+    // Without this, adding a field to the query would turn every issue read on an older CLI
+    // into a hard error in the panel — a regression paid by everyone, for a link.
+    //
+    // It costs one refused call rather than three, because an unknown field is deterministic
+    // and `classifyGhFailure` says so: the second query is a different question, not a
+    // repeat of the first.
+    if (!/unknown json field/i.test((error as Error).message)) throw error;
+    logger.warn(`gh does not know what closed an issue; reading ${issueUrl} without it`);
+    return readIssue(workspace, issueUrl, FIELDS_WITHOUT_CLOSURE);
   }
-
-  throw lastError;
 }
 
 /** A response `gh` returned but we could not read — never worth retrying. */
@@ -205,79 +180,48 @@ function closingPullRequests(value: unknown): ClosingPullRequest[] {
 }
 
 /**
- * One `gh` run. Rejects with a message fit to show in the panel — the caller has no
- * better context to add, and a raw `gh` stderr is more useful than "request failed".
+ * One `gh` run, through the shared runner.
+ *
+ * It used to spawn `gh` here, which is how this file came to own a second copy of the retry
+ * policy, a second `ghCommandFor` call site — the one door #252 had to be fixed at twice — and
+ * a second answer to what a failure means.
+ * Everything that made this call different is now an option on `runGh`, and what is left is
+ * the query and the shape of the answer.
+ *
+ * A rejection carries a message fit to show in the panel: `runGh` reports what `gh` said —
+ * the caller has no better context to add — with a remedy on the end when the failure has one.
  */
-async function runGh(workspace: Workspace, issueUrl: string, fields: string): Promise<IssueDetail> {
+async function readIssue(
+  workspace: Workspace,
+  issueUrl: string,
+  fields: string
+): Promise<IssueDetail> {
   if (!isIssueUrl(issueUrl)) {
     throw new MalformedResponse(issueUrlRefusal(issueUrl));
   }
 
-  // `ghCommandFor` rather than a constant, because this call site is spawned here rather
-  // than through `runGh` and would otherwise be the one door left open: a WSL workspace
-  // reading an issue would go on asking `bash` for the host's binary (#252).
-  const { command, args, cwd } = buildAgentCommand(
-    workspace,
-    `${ghCommandFor(workspace)} issue view ${issueUrl} --json ${fields}`
-  );
-
-  logger.info(`Reading ${issueUrl} for workspace "${workspace.id}"`);
-
-  return new Promise<IssueDetail>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      env: { ...process.env, PATH: agentPath() },
-      windowsHide: true,
-    });
-
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill();
-      reject(new Error(`Timed out reading the issue after ${TIMEOUT_MS / 1000}s`));
-    }, TIMEOUT_MS);
-
-    child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
-    child.stderr?.on('data', (chunk) => { stderr += chunk.toString(); });
-
-    child.on('error', (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      reject(error);
-    });
-
-    child.on('close', (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-
-      if (code !== 0) {
-        reject(new Error(stderr.trim().slice(-300) || `gh exited with code ${code}`));
-        return;
-      }
-
-      try {
-        const parsed = JSON.parse(stdout) as Record<string, unknown>;
-        resolve({
-          number: Number(parsed.number ?? 0),
-          title: String(parsed.title ?? ''),
-          body: String(parsed.body ?? ''),
-          state: String(parsed.state ?? ''),
-          url: issueUrl,
-          comments: readComments(parsed.comments),
-          stateReason: typeof parsed.stateReason === 'string' && parsed.stateReason
-            ? parsed.stateReason
-            : null,
-          closedBy: closingPullRequests(parsed.closedByPullRequestsReferences),
-        });
-      } catch (error) {
-        reject(new MalformedResponse(`Could not parse the gh response: ${(error as Error).message}`));
-      }
-    });
+  const stdout = await runGhCommand(workspace, `issue view ${issueUrl} --json ${fields}`, {
+    what: `the read of ${issueUrl}`,
+    timeoutMs: TIMEOUT_MS,
   });
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(stdout) as Record<string, unknown>;
+  } catch (error) {
+    throw new MalformedResponse(`Could not parse the gh response: ${(error as Error).message}`);
+  }
+
+  return {
+    number: Number(parsed.number ?? 0),
+    title: String(parsed.title ?? ''),
+    body: String(parsed.body ?? ''),
+    state: String(parsed.state ?? ''),
+    url: issueUrl,
+    comments: readComments(parsed.comments),
+    stateReason: typeof parsed.stateReason === 'string' && parsed.stateReason
+      ? parsed.stateReason
+      : null,
+    closedBy: closingPullRequests(parsed.closedByPullRequestsReferences),
+  };
 }
