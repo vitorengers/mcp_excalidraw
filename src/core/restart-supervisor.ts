@@ -39,6 +39,7 @@ import { appendFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { isMainModule } from './entry.js';
+import { isAcceptedCanvasService } from './identity.js';
 
 /** What the replacement has to be, beyond answering at all. Same shape `/health` reports. */
 export interface CanvasIdentity {
@@ -57,7 +58,6 @@ export interface RestartPlan {
   log: string;
 }
 
-const SERVICE = 'mcp-excalidraw-canvas';
 const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost', '0.0.0.0', '::']);
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
@@ -158,7 +158,7 @@ async function healthOf(url: string): Promise<Health | null> {
 /** The new server is the board again, or it is not — and `status: healthy` cannot tell. */
 export function matchesIdentity(health: Health | null, expect: CanvasIdentity, pid: number): boolean {
   return health !== null
-    && health.service === SERVICE
+    && isAcceptedCanvasService(health.service)
     && health.pid === pid
     && health.workspaces === expect.workspaces
     && health.terminal === expect.terminal

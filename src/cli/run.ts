@@ -1,5 +1,6 @@
 import { CliUsageError } from './args.js';
 import { packageVersion } from '../core/version.js';
+import { DEFAULT_CANVAS_PORT } from '../core/port.js';
 import * as server from './commands/server.js';
 import * as elements from './commands/elements.js';
 import * as scene from './commands/scene.js';
@@ -54,7 +55,9 @@ function printHelp(): void {
     '  Diagnostics go to stderr.',
     '  Exit codes: 0 ok, 1 error, 2 usage, 3 canvas unreachable, 4 browser tab required.',
     '  Canvas-driving commands auto-start the server (disable with EXCALIDRAW_NO_AUTOSTART=1).',
-    '  Canvas URL comes from EXPRESS_SERVER_URL (default http://127.0.0.1:3000) or --url.',
+    `  Canvas URL comes from EXPRESS_SERVER_URL or --url; otherwise the running board`,
+    `  named in the state file, or port ${DEFAULT_CANVAS_PORT} — the next free one above it if that is taken.`,
+    '  PORT pins the port instead, and is never scanned past.',
     '',
     'Run `vibemaxxing help <command>` for per-command usage.'
   ];

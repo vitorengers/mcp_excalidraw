@@ -9,18 +9,24 @@ import { homedir, tmpdir } from 'os';
  * across unrelated project and cloud-synced folders.
  *
  * LOG_FILE_PATH can still override this default.
+ *
+ * This one carries the new name already, ahead of the identity marker and the state directory
+ * beside it, and deliberately: nothing reads the log path back. A marker is matched on the wire
+ * and a state directory is where `stop` looks for a pidfile, so both have to accept their old
+ * values for a release before they change (see core/identity.ts). A log file only has to be
+ * somewhere, and the worst a rename costs is that yesterday's log is in the other folder.
  */
 function defaultLogPath(): string {
   if (process.platform === 'darwin') {
-    return path.join(homedir(), 'Library', 'Logs', 'excalidraw-mcp.log');
+    return path.join(homedir(), 'Library', 'Logs', 'vibemaxxing-mcp.log');
   }
   if (process.platform === 'win32') {
     const base = process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local');
-    return path.join(base, 'Excalidraw-MCP', 'excalidraw.log');
+    return path.join(base, 'VibeMaxxing-MCP', 'vibemaxxing.log');
   }
   // Linux and other POSIX platforms: follow the XDG state convention.
   const xdgState = process.env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state');
-  return path.join(xdgState, 'excalidraw-mcp', 'excalidraw.log');
+  return path.join(xdgState, 'vibemaxxing-mcp', 'vibemaxxing.log');
 }
 
 const LOG_FILE_PATH = process.env.LOG_FILE_PATH || defaultLogPath();
@@ -41,7 +47,7 @@ function resolveLogFilePath(): string {
     }
   }
 
-  return ensureWritableLogFile(path.join(tmpdir(), 'excalidraw-mcp.log'));
+  return ensureWritableLogFile(path.join(tmpdir(), 'vibemaxxing-mcp.log'));
 }
 
 const RESOLVED_LOG_FILE_PATH = resolveLogFilePath();
