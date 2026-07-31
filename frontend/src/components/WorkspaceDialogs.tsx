@@ -11,6 +11,49 @@ interface DirectoryEntry {
 }
 
 /**
+ * An example of a path, in the syntax of the machine the server is on.
+ *
+ * This is the only concrete path the tool ever shows, and it was `C:/Users/me/Projects/thing`
+ * on every platform — so on a mac the first screen of the product stated the wrong syntax for
+ * the machine the reader was standing on. Anything that is not win32 or darwin gets the Linux
+ * spelling: every other platform Node reports is a POSIX one.
+ */
+const pathPlaceholder = (platform: string): string =>
+  platform === 'win32' ? 'C:/Users/me/Projects/thing'
+    : platform === 'darwin' ? '/Users/me/Projects/thing'
+      : '/home/me/projects/thing'
+
+/**
+ * Which platform the server is on, asked once and remembered.
+ *
+ * `GET /health` already answers it, so no route was added for this. Asked at module load
+ * rather than when the dialog opens, which is the point of choosing `/health` over the
+ * directory listing: the answer is in hand before the `+` is ever pressed, and the field never
+ * shows one platform's example and then corrects itself to another's.
+ */
+let serverPlatform: string | null = null
+
+const platformAsked: Promise<string | null> = fetch('/health', { cache: 'no-store' })
+  .then((response) => (response.ok ? response.json() as Promise<{ platform?: unknown }> : null))
+  .then((body) => {
+    serverPlatform = typeof body?.platform === 'string' ? body.platform : null
+    return serverPlatform
+  })
+  .catch(() => null)
+
+/** The answer, or null while it is still on its way — which is not a platform to guess at. */
+function useServerPlatform(): string | null {
+  const [platform, setPlatform] = useState<string | null>(serverPlatform)
+  useEffect(() => {
+    if (platform !== null) return undefined
+    let cancelled = false
+    void platformAsked.then((value) => { if (!cancelled) setPlatform(value) })
+    return () => { cancelled = true }
+  }, [platform])
+  return platform
+}
+
+/**
  * Pick a folder and register it as a project.
  *
  * The listing comes from the server, which is not a workaround: the browser cannot learn
@@ -31,6 +74,7 @@ export const AddWorkspaceDialog: React.FC<{
   const [parent, setParent] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const platform = useServerPlatform()
 
   const browse = (target: string): void => {
     fetch(`/api/fs/directories?path=${encodeURIComponent(target)}`)
@@ -82,7 +126,9 @@ export const AddWorkspaceDialog: React.FC<{
           className="workspace-dialog__path"
           type="text"
           value={path}
-          placeholder="C:/Users/me/Projects/thing"
+          // Blank until the server has said which machine it is, rather than a guess that
+          // reads as an instruction and then changes under the reader.
+          placeholder={platform ? pathPlaceholder(platform) : ''}
           aria-label="Project folder"
           onChange={(event) => setPath(event.target.value)}
           onKeyDown={(event) => { if (event.key === 'Enter') submit() }}
