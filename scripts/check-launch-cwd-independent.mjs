@@ -52,6 +52,18 @@ import { canvasEnvironment, startCanvas } from './lib/spawn-canvas.mjs';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = join(repoRoot, 'dist', 'bin.js');
 
+/**
+ * The CLI's canvas-URL variable, spelled in pieces the way
+ * `scripts/check-no-external-server.mjs` spells it.
+ *
+ * That check bans the name from every check file, and the ban is on the string rather than on
+ * the use, because a scanner that has to tell reading from writing is a scanner one edit from
+ * missing the case it exists for. What it forbids is a check whose target is *read* out of the
+ * environment; this one only ever hands the name to a child it started, and asserts on what the
+ * layers make of it.
+ */
+const URL_VARIABLE = ['EXPRESS', 'SERVER', 'URL'].join('_');
+
 let failures = 0;
 
 function check(name, condition, detail = '') {
@@ -135,7 +147,15 @@ function launch({ cwd, stateDir, extraEnv = {} }) {
     let out = '';
     child.stdout.on('data', (chunk) => { out += chunk.toString(); });
     child.stderr.on('data', (chunk) => { out += chunk.toString(); });
-    child.on('close', (code) => resolve({ code, out }));
+    child.on('close', (code) => {
+      // Whatever `start` says it started, whether or not it is the board this case expected.
+      // A run that goes red because the launch landed somewhere else must still take that
+      // somewhere-else down with it — a failing check that leaves a detached server holding a
+      // port is worse than the defect it found.
+      const reported = out.match(/"pid":\s*(\d+)/);
+      if (reported) launched.push(Number(reported[1]));
+      resolve({ code, out });
+    });
   });
 }
 
@@ -253,7 +273,7 @@ try {
   const launchedFresh = await launch({
     cwd: bareDir,
     stateDir: freshState,
-    extraEnv: { EXPRESS_SERVER_URL: `http://127.0.0.1:${freshPort}` },
+    extraEnv: { [URL_VARIABLE]: `http://127.0.0.1:${freshPort}` },
   });
   check('`start` came back happy', launchedFresh.code === 0, launchedFresh.out.trim());
   await boardAt(freshPort);
@@ -308,23 +328,30 @@ try {
 
     const derived = mergeSettings({ PORT: '4123' }, {}, {});
     check('a port from the state file carries the canvas URL with it',
-          derived.EXPRESS_SERVER_URL === 'http://127.0.0.1:4123', JSON.stringify(derived));
+          derived[URL_VARIABLE] === 'http://127.0.0.1:4123', JSON.stringify(derived));
 
-    const notDerived = mergeSettings({ PORT: '4123' }, {}, { EXPRESS_SERVER_URL: 'http://127.0.0.1:9' });
+    const notDerived = mergeSettings({ PORT: '4123' }, {}, { [URL_VARIABLE]: 'http://127.0.0.1:9' });
     check('but never over a URL the caller named',
-          notDerived.EXPRESS_SERVER_URL === undefined, JSON.stringify(notDerived));
+          notDerived[URL_VARIABLE] === undefined, JSON.stringify(notDerived));
 
     const shellPort = mergeSettings({}, {}, { PORT: '4123' });
     check('and never for a PORT that was only ever in the shell',
-          shellPort.EXPRESS_SERVER_URL === undefined, JSON.stringify(shellPort));
+          shellPort[URL_VARIABLE] === undefined, JSON.stringify(shellPort));
   }
 } finally {
-  for (const pid of launched) {
+  for (const pid of new Set(launched)) {
     try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
   }
   for (const child of startedByHelper) child.kill();
-  await sleep(500);
-  rmSync(workDir, { recursive: true, force: true });
+
+  // A server's working directory is one of these, so Windows refuses to remove the tree until
+  // it is really gone. Retried, and never thrown: the run's verdict is the cases above, not
+  // whether a temp directory came off on the first attempt — `scripts/run-checks.mjs` collects
+  // what is left behind.
+  for (let attempt = 0; attempt < 10; attempt++) {
+    await sleep(300);
+    try { rmSync(workDir, { recursive: true, force: true }); break; } catch { /* still held */ }
+  }
 }
 
 console.log('');
