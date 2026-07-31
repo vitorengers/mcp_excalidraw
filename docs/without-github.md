@@ -35,6 +35,11 @@ When a board that *does* name a `githubProject` cannot read it, `GET /api/projec
 502 with whatever `gh` said, the canvas draws a strip saying so where the mirror would have been,
 and announces it once per board rather than once per twenty-second poll.
 
+A CLI that is not there is asked **once**, not three times: `classifyGhFailure`
+(`src/core/gh.ts`) reads `command not found` and the spawn errnos as terminal and puts the
+command that fixes it on the end of `gh`'s own sentence, so what reaches the canvas is a remedy
+rather than the same refusal 1.6 seconds later.
+
 What is unaffected is everything that is not GitHub: the element store, the sync, the export, the
 documentation cards, the terminal blocks, the project tabs, the settings dialog. None of those
 routes reaches `gh` at all.
