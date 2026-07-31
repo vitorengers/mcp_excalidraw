@@ -1,11 +1,15 @@
 import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
 import { EXPRESS_SERVER_URL, ENABLE_CANVAS_SYNC, EXCALIDRAW_NO_AUTOSTART } from './config.js';
 import { getHealth, CANVAS_SERVICE_NAME, foreignServiceError, markCanvasIdentityVerified } from './canvas-client.js';
+import { isAcceptedCanvasService } from './identity.js';
+import { DEFAULT_CANVAS_PORT, removeCanvasState, whatIsOn } from './port.js';
 
 export { foreignServiceError };
-import { readPidFile, removePidFile } from './pidfile.js';
+import { readPidFile, removePidFile, spawnLogPath } from './pidfile.js';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
@@ -14,7 +18,7 @@ export function canvasPort(): number {
     const url = new URL(EXPRESS_SERVER_URL);
     return parseInt(url.port, 10) || (url.protocol === 'https:' ? 443 : 80);
   } catch {
-    return 3000;
+    return DEFAULT_CANVAS_PORT;
   }
 }
 
@@ -55,10 +59,40 @@ async function healthOrNull(timeoutMs = 500) {
   }
 }
 
-// True only for a /health payload from OUR canvas server (v1.1+ identity
-// marker). Anything else answering the port is a foreign service.
+// True only for a /health payload from OUR canvas server. Anything else
+// answering the port is a foreign service.
+//
+// "Ours" is a list rather than one string: the marker is renamed in a later
+// release than the one that starts accepting the new value, so that a canvas
+// already running from the old build is still ours. See core/identity.ts.
 export function isCanvasHealth(health: { service?: string } | null): boolean {
-  return health !== null && health.service === CANVAS_SERVICE_NAME;
+  return health !== null && isAcceptedCanvasService(health.service);
+}
+
+/**
+ * The port is taken by something that is not us, and no scan is going to help — either the
+ * caller pinned it or the resolution already walked past everything free. Naming the port and
+ * what answers on it is the whole of the improvement: the old path spawned a server that could
+ * not bind, threw its complaint into a log file, and told the caller only that eight seconds
+ * had gone by.
+ */
+function portConflictError(port: number, occupant: string): Error {
+  const error = new Error(
+    `Canvas server cannot start on port ${port}: ${occupant} is already listening there. `
+    + `Stop it, or set PORT to a free port — with PORT unset the launch path picks one itself.`
+  );
+  (error as any).code = 'CANVAS_UNREACHABLE';
+  return error;
+}
+
+/** The last of what the spawned server said before it gave up, or '' if it said nothing. */
+function spawnLogTail(file: string, limit = 900): string {
+  try {
+    const text = fs.readFileSync(file, 'utf-8').trim();
+    return text.length > limit ? `...${text.slice(-limit)}` : text;
+  } catch {
+    return '';
+  }
 }
 
 export interface EnsureResult {
@@ -104,14 +138,39 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
     throw unreachableError('refusing to auto-start a non-loopback canvas URL');
   }
 
+  const port = canvasPort();
+  const bindHost = spawnBindHost();
+
+  // Asked before spawning, not after failing to. Nothing answered /health above, so anything
+  // holding the port is either not HTTP or not a canvas — and a server we spawn onto it will
+  // exit on EADDRINUSE eight seconds before the caller hears about it.
+  const occupant = await whatIsOn(port, bindHost);
+  if (occupant) {
+    throw portConflictError(port, occupant);
+  }
+
+  // Its stderr, in a file the parent can read back. `stdio: 'ignore'` was why a startup failure
+  // reached nobody: the server does say what went wrong, and it said it into the void.
+  const logFile = spawnLogPath(port);
+  let logFd: number | null = null;
+  try {
+    fs.mkdirSync(path.dirname(logFile), { recursive: true });
+    logFd = fs.openSync(logFile, 'w');
+  } catch { /* the spawn is worth more than its log */ }
+
   // dist/core/spawn.js -> dist/server.js; spawn args must be path strings
   const serverJs = fileURLToPath(new URL('../server.js', import.meta.url));
   const child = spawn(process.execPath, [serverJs], {
     detached: true,
-    stdio: 'ignore',
-    env: { ...process.env, PORT: String(canvasPort()), HOST: spawnBindHost() }
+    stdio: ['ignore', 'ignore', logFd ?? 'ignore'],
+    env: { ...process.env, PORT: String(port), HOST: bindHost }
   });
   child.unref();
+  // Ours is closed once the child holds its own; leaving it open would keep this process alive.
+  if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* already closed */ } }
+
+  let exitCode: number | null = null;
+  child.once('exit', code => { exitCode = code ?? 0; });
   logger.info(`Auto-starting canvas server (pid ${child.pid}) at ${EXPRESS_SERVER_URL}`);
 
   const deadline = Date.now() + timeoutMs;
@@ -130,10 +189,25 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
       );
       return { url: EXPRESS_SERVER_URL, spawned: true };
     }
+    // It died rather than came up. Relayed with what it said, and now — waiting out the
+    // remaining seven seconds to then report a timeout is describing the wrong event.
+    if (exitCode !== null) {
+      const said = spawnLogTail(logFile);
+      throw unreachableError(
+        `the canvas server started on port ${port} exited with code ${exitCode} before answering /health`
+        + (said ? `. It said:\n${said}` : `. Its output is in ${logFile}`)
+      );
+    }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
 
-  throw unreachableError(`auto-started server did not become healthy within ${timeoutMs}ms`);
+  const stillThere = await whatIsOn(port, bindHost);
+  const said = spawnLogTail(logFile);
+  throw unreachableError(
+    `the server auto-started on port ${port} did not answer /health within ${timeoutMs}ms `
+    + `(${stillThere ?? 'and nothing is listening on that port now'})`
+    + (said ? `. It said:\n${said}` : '')
+  );
 }
 
 export interface StopResult {
@@ -156,8 +230,10 @@ export async function stopCanvas(): Promise<StopResult> {
   if (!health) {
     if (filePid !== null) {
       removePidFile(port);
+      removeCanvasState(port);
       return { stopped: false, pid: filePid, message: `Canvas server is not running; stale pidfile removed (pid ${filePid}).` };
     }
+    removeCanvasState(port);
     return { stopped: false, message: 'Canvas server is not running.' };
   }
 
@@ -180,6 +256,7 @@ export async function stopCanvas(): Promise<StopResult> {
   while (Date.now() < deadline) {
     if (!(await healthOrNull(300))) {
       removePidFile(port);
+      removeCanvasState(port);
       return { stopped: true, pid, message: `Canvas server (pid ${pid}) stopped.` };
     }
     await new Promise(resolve => setTimeout(resolve, 200));

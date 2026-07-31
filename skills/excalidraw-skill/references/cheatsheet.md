@@ -2,7 +2,7 @@
 
 ## Defaults
 
-- Canvas base URL: `EXPRESS_SERVER_URL` (default `http://127.0.0.1:3000`); CLI also accepts `--url <canvasUrl>`
+- Canvas base URL: `EXPRESS_SERVER_URL`, else the running board's state file, else `http://127.0.0.1:3737` (next free port above it if taken); CLI also accepts `--url <canvasUrl>`
 - Canvas health: `GET /health` or `npx -y mcp-excalidraw-server status`
 - Auto-start: any canvas-touching CLI command starts the server if it's down (opt out with `EXCALIDRAW_NO_AUTOSTART=1`)
 

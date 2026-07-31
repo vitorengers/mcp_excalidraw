@@ -14,10 +14,10 @@ Three interfaces drive the same live canvas. Pick the first one that applies:
    ```bash
    npx -y mcp-excalidraw-server <command>
    ```
-   No setup needed — any canvas-touching command **auto-starts the canvas server** on `http://127.0.0.1:3000` (first `npx` run downloads the package). If the CLI is installed globally (`npm i -g mcp-excalidraw-server`), the shorter alias `excalidraw-canvas <command>` works too.
-3. **REST API** (last resort, e.g. from application code): HTTP endpoints on `http://127.0.0.1:3000` — see `references/cheatsheet.md` for payloads. The server must already be running.
+   No setup needed — any canvas-touching command **auto-starts the canvas server** on `http://127.0.0.1:3737`, or the next free port above it when something else already holds that one (first `npx` run downloads the package). If the CLI is installed globally (`npm i -g mcp-excalidraw-server`), the shorter alias `excalidraw-canvas <command>` works too.
+3. **REST API** (last resort, e.g. from application code): HTTP endpoints on the canvas URL — `npx -y mcp-excalidraw-server status` prints it — see `references/cheatsheet.md` for payloads. The server must already be running.
 
-The canvas URL comes from `EXPRESS_SERVER_URL` (default `http://127.0.0.1:3000`). Remind the user to open that URL in a browser — screenshots, image export, mermaid conversion, and viewport control need an open tab (CLI exits with code 4 when it's missing).
+The canvas URL comes from `EXPRESS_SERVER_URL`, else the running board's own state file, else `http://127.0.0.1:3737` (the next free port above it if that is taken); `status` prints the one in use. Remind the user to open that URL in a browser — screenshots, image export, mermaid conversion, and viewport control need an open tab (CLI exits with code 4 when it's missing).
 
 ### CLI Quick Reference
 
@@ -262,7 +262,7 @@ Round-trips are safe: text-element block references follow the plugin's own id r
 ## Error Recovery
 
 - **Exit code 3 (canvas unreachable)?** Auto-start is disabled (`EXCALIDRAW_NO_AUTOSTART=1`) or a non-loopback `EXPRESS_SERVER_URL` is set. Run `start` explicitly or fix the env.
-- **Exit code 4 (browser required)?** Open `http://127.0.0.1:3000` in a browser, then retry — screenshots, image export, viewport, and mermaid conversion render in the frontend.
+- **Exit code 4 (browser required)?** Open the canvas URL (`status` prints it) in a browser, then retry — screenshots, image export, viewport, and mermaid conversion render in the frontend.
 - **Elements not appearing?** Check `describe` — they may be off-screen. In MCP mode, use `set_viewport` with `scrollToContent: true`, or `scrollToElementIds` plus optional `viewportZoomFactor` to focus on a specific subgraph; in a browser, press the zoom-to-fit button.
 - **Arrow not connecting?** Verify element IDs with `get <id>`. Make sure `startElementId`/`endElementId` match existing element IDs.
 - **Canvas in a bad state?** `snapshot save` first, then `clear --yes` and rebuild. Or `snapshot restore` to go back.

@@ -4,23 +4,58 @@ import { homedir } from 'os';
 import logger from '../utils/logger.js';
 
 /**
- * Platform-compatible state directory for runtime artifacts (pidfile),
- * mirroring the log-path convention in utils/logger.ts.
+ * The directory the platform keeps per-user state in — the *parent*, not the application's own
+ * folder inside it.
+ *
+ * `EXCALIDRAW_STATE_HOME` overrides it, and exists so a check can give a run a throwaway state
+ * directory of its own. Without it there is no way to exercise the pidfile and the state file
+ * except against the real one, which on this machine holds the board the maintainer is looking
+ * at.
  */
-function stateDir(): string {
+function stateHome(): string {
+  const override = process.env.EXCALIDRAW_STATE_HOME;
+  if (override) return override;
   if (process.platform === 'darwin') {
-    return path.join(homedir(), 'Library', 'Application Support', 'excalidraw-canvas');
+    return path.join(homedir(), 'Library', 'Application Support');
   }
   if (process.platform === 'win32') {
-    const base = process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local');
-    return path.join(base, 'Excalidraw-Canvas');
+    return process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local');
   }
-  const xdgState = process.env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state');
-  return path.join(xdgState, 'excalidraw-canvas');
+  return process.env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state');
+}
+
+/** Read per call rather than captured: a check may be simulating another platform. */
+function leaf(name: 'next' | 'legacy'): string {
+  if (process.platform === 'win32') {
+    return name === 'next' ? 'VibeMaxxing-Canvas' : 'Excalidraw-Canvas';
+  }
+  return name === 'next' ? 'vibemaxxing-canvas' : 'excalidraw-canvas';
+}
+
+/**
+ * Where runtime artifacts are written today. Still the legacy directory, deliberately, for the
+ * reason `core/identity.ts` gives: a directory rename orphans the pidfile, and `stop` then
+ * cannot find the server it started while the port stays held.
+ */
+export function stateDir(): string {
+  return path.join(stateHome(), leaf('legacy'));
+}
+
+/**
+ * Where a reader looks, new directory first. The rename flips what `stateDir()` returns; this
+ * list is what makes that flip survivable, so it ships one release ahead of it.
+ */
+export function stateDirCandidates(): string[] {
+  return [path.join(stateHome(), leaf('next')), stateDir()];
 }
 
 export function pidFilePath(port: number): string {
   return path.join(stateDir(), `server-${port}.pid`);
+}
+
+/** Every place a pidfile for `port` could be, in the order a reader should try them. */
+export function pidFilePaths(port: number): string[] {
+  return stateDirCandidates().map(dir => path.join(dir, `server-${port}.pid`));
 }
 
 /**
@@ -33,6 +68,18 @@ export function pidFilePath(port: number): string {
  */
 export function restartLogPath(port: number): string {
   return path.join(stateDir(), `restart-${port}.log`);
+}
+
+/**
+ * Where an auto-started server's stderr goes.
+ *
+ * The same argument as the restart log, one door along: the launch path spawns the server
+ * detached, so anything it says on the way down used to go to `stdio: 'ignore'` and the caller
+ * was left with a health timeout naming nothing. A file the parent can read back turns that
+ * into the server's own words.
+ */
+export function spawnLogPath(port: number): string {
+  return path.join(stateDir(), `spawn-${port}.log`);
 }
 
 // Written by the canvas server once it is actually listening, so `stop` and
@@ -48,17 +95,20 @@ export function writePidFile(port: number, pid: number): void {
 }
 
 export function readPidFile(port: number): number | null {
-  try {
-    const raw = fs.readFileSync(pidFilePath(port), 'utf-8').trim();
-    const pid = parseInt(raw, 10);
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
-  } catch {
-    return null;
+  for (const file of pidFilePaths(port)) {
+    try {
+      const raw = fs.readFileSync(file, 'utf-8').trim();
+      const pid = parseInt(raw, 10);
+      if (Number.isInteger(pid) && pid > 0) return pid;
+    } catch { /* not in this directory */ }
   }
+  return null;
 }
 
 export function removePidFile(port: number): void {
-  try {
-    fs.unlinkSync(pidFilePath(port));
-  } catch { /* already gone */ }
+  for (const file of pidFilePaths(port)) {
+    try {
+      fs.unlinkSync(file);
+    } catch { /* already gone */ }
+  }
 }
