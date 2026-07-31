@@ -78,55 +78,233 @@ export const LEGACY_SETTING_PREFIX = 'EXCALIDRAW_';
 export interface SettingDeclaration {
   /** The bare name, without a prefix. `WORKSPACES` is `VIBEMAXXING_WORKSPACES`. */
   name: string;
-  /** What the tool does when it is unset. */
+  /** What the tool does when it is unset, as the **Default** column of the table says it. */
   fallback: string;
-  /** One line, and the same line `docs/running.md` carries. */
+  /** The **What it does** cell, verbatim — Markdown, including any link to another document. */
   description: string;
 }
 
 /**
- * Every variable this tool reads at runtime, declared once.
+ * Every prefixed variable this tool reads at runtime, declared once.
  *
- * The list is here rather than derived by grepping because it is what `docs/running.md` and the
- * README are checked against: a count asserted in prose against a number nobody could read out
- * of the code said "fifteen" for ten variables' worth of merges. `check-env-prefix-compat.mjs`
- * fails on a name in one and not the other.
+ * The list is here rather than derived by grepping because it is what `docs/running.md` is
+ * *generated from*: `node scripts/generate-settings-docs.mjs` writes the tables in that document
+ * out of these three fields, and `check-settings-documented.mjs` fails when what is tracked
+ * there is not byte-identical to what this produces. Which is why `description` is the whole
+ * table cell and not a summary of one — a second, longer description kept beside the table was
+ * the duplication that let a count in prose say "fifteen" for ten variables' worth of merges.
+ *
+ * A name ending in `_WSL` is Windows-only and is written into the second table, under the
+ * section about projects inside a distro. Nothing else keys on the suffix.
  *
  * `PORT` and `HOST` are not here on purpose — they are per-invocation, and `PORT` is a pin the
- * launch path never scans past. Nor are `EXPRESS_SERVER_URL`, `ENABLE_CANVAS_SYNC`, `LOG_LEVEL`
- * and `LOG_FILE_PATH`, which carry no prefix and never did.
+ * launch path never scans past. Nor are `EXPRESS_SERVER_URL` and `ENABLE_CANVAS_SYNC`, which
+ * carry no prefix, are per-invocation in the same way, and are documented in the README beside
+ * the MCP client configuration they belong to. The three unprefixed variables that *are* the
+ * tool's own are `PLAIN_SETTINGS` below.
  */
 export const SETTINGS = [
-  { name: 'CANVAS_PORT', fallback: '3737', description: 'The port the launch path tries first — a preference, not a pin' },
-  { name: 'STATE_HOME', fallback: 'the per-OS state directory', description: 'The parent of the directory holding config.json, the pidfile and the state files' },
-  { name: 'ENV_FILE', fallback: '<cwd>/.env', description: 'Read this .env instead of the one beside the working directory' },
-  { name: 'NO_DOTENV', fallback: 'unset', description: '1 stops both configuration files being read, leaving only the environment' },
-  { name: 'NO_AUTOSTART', fallback: 'unset', description: '1 stops the CLI and the MCP server auto-spawning a canvas' },
-  { name: 'WORKSPACES', fallback: 'workspaces.json in the state directory', description: 'Path to the registry JSON — unset resolves the per-user default' },
-  { name: 'BOARD_STATE', fallback: 'beside the registry', description: 'Where each registered board is saved between processes' },
-  { name: 'DOCS_DIR', fallback: "the shipped docs/", description: "Where GET /api/docs/:key reads from for a board with no docsDir of its own" },
-  { name: 'LIBRARY', fallback: 'the shipped blocks library', description: 'An .excalidrawlib served to every board' },
-  { name: 'EXPORT_DIR', fallback: 'the working directory', description: 'The base directory MCP file exports may write to' },
-  { name: 'ALLOWED_HOSTS', fallback: 'loopback names only', description: 'Extra Host authorities the origin gate accepts, for a real alias or a proxy' },
-  { name: 'TERMINAL', fallback: 'unset', description: '1 for the default shell, or a command line of your own' },
-  { name: 'TERMINAL_PTY', fallback: 'unset', description: '0 forces the pipe instead of a real pty' },
-  { name: 'CLAUDE_STATUS', fallback: 'unset', description: 'The directory your Claude Code status line command writes its usage files into' },
-  { name: 'GH_COMMAND', fallback: 'gh', description: 'The GitHub CLI on this machine, when it is not on PATH' },
-  { name: 'GH_COMMAND_WSL', fallback: 'gh', description: 'The GitHub CLI inside a WSL-backed project\'s distro' },
-  { name: 'ISSUE_AGENT', fallback: 'unset', description: 'The command line that researches an observation and opens the issue' },
-  { name: 'ISSUE_AGENT_WSL', fallback: 'the host command', description: 'The issue command as a WSL-backed project\'s distro spells it' },
-  { name: 'ISSUE_AGENT_TIMEOUT', fallback: 'no ceiling', description: 'Seconds before a wedged issue run is given up on' },
-  { name: 'IMPLEMENT_AGENT', fallback: 'unset', description: 'The command line that implements an issue' },
-  { name: 'IMPLEMENT_AGENT_WSL', fallback: 'the host command', description: 'The implement command as a WSL-backed project\'s distro spells it' },
-  { name: 'IMPLEMENT_AGENT_TIMEOUT', fallback: 'no ceiling', description: 'Seconds before a wedged implement run is given up on' },
-  { name: 'IMPLEMENT_CONCURRENCY', fallback: '4', description: 'Implement runs at once — 0 is no cap, 1 serialises' },
-  { name: 'IMPLEMENT_QUEUE_MS', fallback: '30000', description: 'How often a workspace with its queue on looks for a free slot' },
-  { name: 'ISSUE_MEMO_MS', fallback: '30000', description: 'How long one gh read of an issue is reused — 0 turns the memo off' },
-  { name: 'GH_STATUS_MEMO_MS', fallback: '30000', description: 'How long one answer about gh itself is reused — 0 turns the memo off' }
+  {
+    name: 'CANVAS_PORT',
+    fallback: '`3737`',
+    description: 'The port the launch path tries first. A preference, not a pin: with `PORT` unset the search walks past it to the next free port'
+  },
+  {
+    name: 'STATE_HOME',
+    fallback: 'per-OS state directory',
+    description: 'The parent of the directory holding `config.json`, the pidfile, the restart log and the running board\'s state file. For a check that needs a throwaway one'
+  },
+  {
+    name: 'WORKSPACES',
+    fallback: '`workspaces.json` in the state directory',
+    description: 'Path to the registry JSON. Unset resolves the per-user default, which is created when the first project is added — see [workspaces.md](workspaces.md)'
+  },
+  {
+    name: 'BOARD_STATE',
+    fallback: 'beside the registry',
+    description: 'Where each registered board is saved between processes. Unset puts them in a directory named after the registry file, default registry included — [element-store.md](element-store.md)'
+  },
+  {
+    name: 'DOCS_DIR',
+    fallback: 'the shipped `docs/`',
+    description: 'Where `GET /api/docs/:key` reads from for a board with no `docsDir` of its own. Set it **empty** for a setup that wants per-project documents and no fallback — [docs-block.md](docs-block.md)'
+  },
+  {
+    name: 'LIBRARY',
+    fallback: 'the shipped `docs/blocks.excalidrawlib`',
+    description: 'An `.excalidrawlib` served to every board, alongside each project\'s own. Set it **empty** for a board that wants no shared shapes at all — [shared-library.md](shared-library.md)'
+  },
+  {
+    name: 'ISSUE_AGENT',
+    fallback: 'unset',
+    description: 'The command line that researches an observation and opens the issue. Unset means issue blocks do nothing'
+  },
+  {
+    name: 'IMPLEMENT_AGENT',
+    fallback: 'unset',
+    description: 'The command line that implements one. Unset means the button is not offered'
+  },
+  {
+    name: 'ISSUE_AGENT_TIMEOUT',
+    fallback: 'none',
+    description: 'Seconds. Unset means no ceiling; a wedged run is handled by the block\'s reset instead'
+  },
+  {
+    name: 'IMPLEMENT_AGENT_TIMEOUT',
+    fallback: 'none',
+    description: 'The same, for implementing'
+  },
+  {
+    name: 'IMPLEMENT_CONCURRENCY',
+    fallback: '`4`',
+    description: 'Runs at once. `0` is no cap, `1` serialises. Each one is a whole coding agent building on this machine'
+  },
+  {
+    name: 'IMPLEMENT_QUEUE_MS',
+    fallback: '`30000`',
+    description: 'How often a workspace with its queue on looks for a free slot. The timer does not exist until a queue is turned on'
+  },
+  {
+    name: 'ISSUE_MEMO_MS',
+    fallback: '`30000`',
+    description: 'How long one `gh` read of an issue is reused. `0` turns the memo off'
+  },
+  {
+    name: 'GH_STATUS_MEMO_MS',
+    fallback: '`30000`',
+    description: 'How long one answer about `gh` *itself* — installed, logged in, which scopes — is reused before `GET /api/github-status` asks again. `0` turns the memo off. The canvas asks on a failing poll, so without it a board whose `gh` is broken would spawn two processes every twenty seconds to be told the same thing'
+  },
+  {
+    name: 'GH_COMMAND',
+    fallback: '`gh`',
+    description: 'The GitHub CLI on **this machine**, when it is not on `PATH` — [trap-gh-path.md](trap-gh-path.md)'
+  },
+  {
+    name: 'CLAUDE_STATUS',
+    fallback: 'unset',
+    description: 'The directory your Claude Code status line command writes its usage files into. Unset means `GET /api/claude-status` answers 404 and the header shows nothing — [claude-status.md](claude-status.md)'
+  },
+  {
+    name: 'TERMINAL',
+    fallback: 'unset',
+    description: '`1` for the default shell, or a command line of your own. Unset means the terminal routes answer 404 — [terminal.md](terminal.md)'
+  },
+  {
+    name: 'TERMINAL_PTY',
+    fallback: 'unset',
+    description: '`0` forces the pipe instead of a real pty, for a machine with no prebuilt binary'
+  },
+  {
+    name: 'EXPORT_DIR',
+    fallback: 'working dir',
+    description: 'The base directory MCP file exports may write to'
+  },
+  {
+    name: 'ALLOWED_HOSTS',
+    fallback: 'loopback names only',
+    description: 'Extra `Host` authorities the origin gate accepts, comma-separated, for a real alias or a proxy in front of the board. The refusal names the authority it expected, so a lockout says what to put here'
+  },
+  {
+    name: 'NO_AUTOSTART',
+    fallback: 'unset',
+    description: '`1` stops the CLI and the MCP server auto-spawning a canvas'
+  },
+  {
+    name: 'NO_DOTENV',
+    fallback: 'unset',
+    description: '`1` stops both configuration files being read — `<cwd>/.env` and `<state-dir>/config.json` alike — leaving only the real environment. The checks set it, because a file layer only ever fills in variables that are *unset*, which is exactly the set a check deleted on purpose — [trap-check-environment.md](trap-check-environment.md)'
+  },
+  {
+    name: 'ENV_FILE',
+    fallback: '`<cwd>/.env`',
+    description: 'Read this file instead. Ignored when `EXCALIDRAW_NO_DOTENV=1`, and it does not move `config.json`'
+  },
+  {
+    name: 'ISSUE_AGENT_WSL',
+    fallback: 'unset',
+    description: 'The issue command, spelled as a **WSL-backed** project\'s distro spells it. Unset falls back to `EXCALIDRAW_ISSUE_AGENT`, which only resolves inside a distro if it was written without an absolute path'
+  },
+  {
+    name: 'IMPLEMENT_AGENT_WSL',
+    fallback: 'unset',
+    description: 'The same, for implementing. A pair rather than one variable for the reason `EXCALIDRAW_ISSUE_AGENT` and `EXCALIDRAW_IMPLEMENT_AGENT` are a pair: granting a distro research must not thereby grant it repository writes'
+  },
+  {
+    name: 'GH_COMMAND_WSL',
+    fallback: '`gh`',
+    description: 'The GitHub CLI inside a **WSL-backed** project\'s distro. Unlike the agents\' `_WSL` pair this does **not** fall back to the host value: a host path is exactly what cannot run there'
+  }
+] as const satisfies readonly SettingDeclaration[];
+
+/**
+ * The variables this tool reads that carry no prefix and never did.
+ *
+ * They are declared here for one reason: until #312 no table anywhere named them, and
+ * `LOG_FILE_PATH` is the one a person needs most. The console transport is warn-and-above
+ * (`utils/logger.ts`), so every `logger.info` in the server — the deprecation notices this file
+ * emits included — goes to the log file and nowhere else, and a reader with no way to find that
+ * file concludes the server said nothing.
+ *
+ * They are *not* in `SETTINGS` and are not reachable through `env()`: `utils/logger.ts` reads
+ * them in its own module body, before any layer has been applied, and it must — a logger that
+ * imported this module could not be imported *by* it, and `core/env.ts` exists to order the two.
+ * So a `config.json` cannot supply them, which is exactly what the generated row says.
+ */
+export const PLAIN_SETTINGS = [
+  {
+    name: 'LOG_LEVEL',
+    fallback: '`info`',
+    description: 'The lowest level written to the log file — `error`, `warn`, `info`, `debug`. The console transport is fixed at warn-and-above whatever this says, so `info` here is how a server\'s own account of a start is read back'
+  },
+  {
+    name: 'LOG_FILE_PATH',
+    fallback: 'a per-OS log file',
+    description: 'Where that file is. Unset it is `%LOCALAPPDATA%\\VibeMaxxing-MCP\\vibemaxxing.log` on Windows, `~/Library/Logs/vibemaxxing-mcp.log` on macOS and `$XDG_STATE_HOME/vibemaxxing-mcp/vibemaxxing.log` elsewhere. Set and unwritable is a refusal to start; unset and unwritable falls back to the temp directory'
+  },
+  {
+    name: 'DEBUG',
+    fallback: 'unset',
+    description: '`true` writes one line saying debug mode is on. Nothing else reads it — `LOG_LEVEL=debug` is what turns the detail on'
+  }
 ] as const satisfies readonly SettingDeclaration[];
 
 /** What a caller may ask `env()` for. A free string would make a typo resolve to `undefined`. */
 export type SettingName = (typeof SETTINGS)[number]['name'];
+
+/** A declaration together with the name a person actually types into a shell or a file. */
+export interface DocumentedSetting extends SettingDeclaration {
+  /** The full variable name, prefix and all. */
+  variable: string;
+  /** Windows-only, because it is about a project inside a WSL distro. */
+  windowsOnly: boolean;
+  /** Whether the prefix applies at all — a `false` here is one of `PLAIN_SETTINGS`. */
+  prefixed: boolean;
+}
+
+/**
+ * Every variable the documentation has to describe, in the order the tables carry them.
+ *
+ * The legacy prefix, deliberately: it is still what every board on this machine is spelled with
+ * and what `config.example.json` ships, and `docs/running.md` says in one sentence above the
+ * table that each name can be written `VIBEMAXXING_*` instead. Twenty-odd rows repeating that is
+ * twenty-odd places to correct on the day the old prefix is dropped.
+ */
+export function documentedSettings(): DocumentedSetting[] {
+  return [
+    ...SETTINGS.map((setting) => ({
+      ...setting,
+      variable: `${LEGACY_SETTING_PREFIX}${setting.name}`,
+      windowsOnly: setting.name.endsWith('_WSL'),
+      prefixed: true
+    })),
+    ...PLAIN_SETTINGS.map((setting) => ({
+      ...setting,
+      variable: setting.name,
+      windowsOnly: false,
+      prefixed: false
+    }))
+  ];
+}
 
 /**
  * How to spell a setting to somebody who has to go and set it.
