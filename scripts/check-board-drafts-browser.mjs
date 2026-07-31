@@ -136,10 +136,10 @@ const item = (id, number, title, createdAt, option) => ({
     __typename: 'Issue',
     number,
     title,
-    url: `https://github.com/vitorengers/mcp_excalidraw/issues/${number}`,
+    url: `https://github.com/vitorengers/vibemaxxing/issues/${number}`,
     createdAt,
     state: 'OPEN',
-    repository: { nameWithOwner: 'vitorengers/mcp_excalidraw' },
+    repository: { nameWithOwner: 'vitorengers/vibemaxxing' },
   },
 });
 
@@ -170,7 +170,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Mirror Check',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
 
@@ -642,7 +642,7 @@ try {
   // than into the scene, so the update reaches the browser the way a real run's does —
   // over the socket.
   const researched = scene.drafts[0];
-  const RESEARCHED_URL = 'https://github.com/vitorengers/mcp_excalidraw/issues/9';
+  const RESEARCHED_URL = 'https://github.com/vitorengers/vibemaxxing/issues/9';
   check('the card for that issue really is in another column',
         scene.cards.some((card) => card.col === TODO.id),
         JSON.stringify(scene.cards.map((card) => card.col)));

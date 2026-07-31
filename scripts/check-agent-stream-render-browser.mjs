@@ -144,7 +144,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Render Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 // The stub the session runs. `\n` is what the renderer put there and nothing here adds to it —

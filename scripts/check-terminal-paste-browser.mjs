@@ -122,7 +122,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Paste Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const PORT = await freePort();

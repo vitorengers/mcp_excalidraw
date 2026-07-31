@@ -100,7 +100,7 @@ function makeProject(id, config, workflows = {}) {
   return dir;
 }
 
-const repo = 'vitorengers/mcp_excalidraw';
+const repo = 'vitorengers/vibemaxxing';
 
 /** Selects nothing at all — the byte-for-byte case. */
 makeProject('plain', { name: 'Plain', repo });
@@ -154,8 +154,8 @@ const AGENT_COMMAND = `node "${slash(stub)}" --output-format stream-json`;
 /** What the stub must see on its command line whatever a project selected. */
 const BASE_ARGV = ['--output-format', 'stream-json'];
 
-const ISSUE_URL = 'https://github.com/vitorengers/mcp_excalidraw/issues/193';
-const PULL_URL = 'https://github.com/vitorengers/mcp_excalidraw/pull/194';
+const ISSUE_URL = 'https://github.com/vitorengers/vibemaxxing/issues/193';
+const PULL_URL = 'https://github.com/vitorengers/vibemaxxing/pull/194';
 const OBSERVATION = 'the board cannot say how its agents work';
 
 const workspaces = await loadWorkspaces(registryPath);

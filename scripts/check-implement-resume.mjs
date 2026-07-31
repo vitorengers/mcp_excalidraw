@@ -76,7 +76,7 @@ const registryPath = join(workDir, 'registry.json');
 rmSync(workDir, { recursive: true, force: true });
 mkdirSync(workDir, { recursive: true });
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 
 /** A real git repository, because worktrees are the thing detection reads. */
 function makeProject(name) {

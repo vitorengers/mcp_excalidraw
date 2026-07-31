@@ -228,11 +228,11 @@ writeFileSync(registryPath, JSON.stringify({
 // the board itself and every bound measured here is the board's own.
 writeFileSync(join(otherDir, 'board.config.json'), JSON.stringify({
   name: 'Alpha',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Board',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   board: 'board.excalidraw',
 }), 'utf8');
 

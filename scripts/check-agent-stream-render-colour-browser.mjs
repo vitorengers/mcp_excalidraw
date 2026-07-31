@@ -206,7 +206,7 @@ writeFileSync(registryPath, JSON.stringify({
 // No githubProject: the mirror stays dormant, so nothing else is drawing on this board.
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Colour Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 // The stub the session runs. It stays alive afterwards: a shell that exits is dropped from the

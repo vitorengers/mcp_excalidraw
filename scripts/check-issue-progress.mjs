@@ -75,7 +75,7 @@ const registryPath = join(workDir, 'registry.json');
 rmSync(workDir, { recursive: true, force: true });
 mkdirSync(workDir, { recursive: true });
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 const issue = (n) => `https://github.com/${REPO}/issues/${n}`;
 
 /** No `githubProject`, so the mirror stays dormant and no `gh` is spent moving a card. */

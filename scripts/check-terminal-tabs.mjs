@@ -74,7 +74,7 @@ mkdirSync(workDir, { recursive: true });
 const projectDir = join(workDir, 'project');
 mkdirSync(projectDir, { recursive: true });
 writeFileSync(join(projectDir, 'board.config.json'),
-  JSON.stringify({ name: 'Terminal Tabs Check', repo: 'vitorengers/mcp_excalidraw' }), 'utf8');
+  JSON.stringify({ name: 'Terminal Tabs Check', repo: 'vitorengers/vibemaxxing' }), 'utf8');
 
 const registryPath = join(workDir, 'workspaces.json');
 const WORKSPACE = 'tabs-check';

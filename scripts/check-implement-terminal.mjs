@@ -86,7 +86,7 @@ function makeProject(name) {
   git(dir, ['config', 'user.name', 'Check']);
   git(dir, ['config', 'commit.gpgsign', 'false']);
   writeFileSync(join(dir, 'board.config.json'),
-                JSON.stringify({ name, repo: 'vitorengers/mcp_excalidraw' }), 'utf8');
+                JSON.stringify({ name, repo: 'vitorengers/vibemaxxing' }), 'utf8');
   writeFileSync(join(dir, 'README.md'), `# ${name}\n`, 'utf8');
   git(dir, ['add', '.']);
   git(dir, ['commit', '-m', 'initial']);
@@ -131,7 +131,7 @@ process.stdin.on('end', async () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
-  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/pull/' + number + '\\n');
+  process.stdout.write('https://github.com/vitorengers/vibemaxxing/pull/' + number + '\\n');
 });
 `, 'utf8');
 
@@ -233,7 +233,7 @@ async function call(base, workspace, path, options = {}) {
   throw last;
 }
 
-const issue = (n) => `https://github.com/vitorengers/mcp_excalidraw/issues/${n}`;
+const issue = (n) => `https://github.com/vitorengers/vibemaxxing/issues/${n}`;
 const release = (n) => writeFileSync(join(workDir, `release-${n}`), '', 'utf8');
 const started = (n) => existsSync(join(workDir, `run-${n}.json`));
 const runReport = (n) => JSON.parse(readFileSync(join(workDir, `run-${n}.json`), 'utf8'));

@@ -125,10 +125,10 @@ writeFileSync(fixturePath, JSON.stringify({
         __typename: 'Issue',
         number: 3,
         title: 'Something already on the board',
-        url: 'https://github.com/vitorengers/mcp_excalidraw/issues/3',
+        url: 'https://github.com/vitorengers/vibemaxxing/issues/3',
         createdAt: '2026-07-01T10:00:00Z',
         state: 'OPEN',
-        repository: { nameWithOwner: 'vitorengers/mcp_excalidraw' },
+        repository: { nameWithOwner: 'vitorengers/vibemaxxing' },
       },
     }] },
   } } },
@@ -146,7 +146,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Add Once',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
 
@@ -523,7 +523,7 @@ try {
   const empty = scene.drafts.find((draft) => draft.id !== first.id);
   // Issue 999, which has no card on the fixture: a draft whose issue *is* on the board is
   // reconciled away, and this one has to stay put to be in the way.
-  const RESEARCHED_URL = 'https://github.com/vitorengers/mcp_excalidraw/issues/999';
+  const RESEARCHED_URL = 'https://github.com/vitorengers/vibemaxxing/issues/999';
   const held = await (await fetch(`${BASE}/api/elements/${empty.id}?workspace=${WORKSPACE}`)).json();
   await fetch(`${BASE}/api/elements/${empty.id}?workspace=${WORKSPACE}`, {
     method: 'PUT',

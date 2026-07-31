@@ -185,7 +185,7 @@ function makeWslProject(name) {
   try {
     mkdirSync(inner, { recursive: true });
     writeFileSync(join(inner, 'board.config.json'), JSON.stringify({
-      name: 'Keys WSL', repo: 'vitorengers/mcp_excalidraw',
+      name: 'Keys WSL', repo: 'vitorengers/vibemaxxing',
     }), 'utf8');
     return inner;
   } catch { return null; }
@@ -200,7 +200,7 @@ const registryPath = join(workDir, 'workspaces.json');
 writeFileSync(registryPath, JSON.stringify({ workspaces }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Keys Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const PORT = await freePort();

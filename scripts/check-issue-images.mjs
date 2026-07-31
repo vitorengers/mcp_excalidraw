@@ -48,7 +48,7 @@ async function importDist(relative, what) {
   return import(pathToFileURL(modulePath).href);
 }
 
-const ISSUE_URL = 'https://github.com/vitorengers/mcp_excalidraw/issues/46';
+const ISSUE_URL = 'https://github.com/vitorengers/vibemaxxing/issues/46';
 
 /** A real 1×1 PNG and a real 1×1 GIF: two files, two mime types, two byte counts. */
 const PNG_BASE64 =
@@ -132,7 +132,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Issue Images Check',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const running = [];

@@ -75,7 +75,7 @@ const registryPath = join(workDir, 'registry.json');
 rmSync(workDir, { recursive: true, force: true });
 mkdirSync(projectDir, { recursive: true });
 
-const ISSUE_URL = 'https://github.com/vitorengers/mcp_excalidraw/issues/57';
+const ISSUE_URL = 'https://github.com/vitorengers/vibemaxxing/issues/57';
 
 /**
  * A slow agent, and slow in the way that matters: it prints nothing until it is done.
@@ -114,7 +114,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Issue Timeout Check',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const running = [];

@@ -95,7 +95,7 @@ const workspace = {
   error: null,
 };
 
-const ISSUE = (n) => `https://github.com/vitorengers/mcp_excalidraw/issues/${n}`;
+const ISSUE = (n) => `https://github.com/vitorengers/vibemaxxing/issues/${n}`;
 
 /** Whatever `ensureWorktree` answered — the worktree, or the message it threw. */
 async function attempt(issueUrl) {

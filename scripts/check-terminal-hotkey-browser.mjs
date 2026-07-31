@@ -94,7 +94,7 @@ writeFileSync(registryPath, JSON.stringify({
 // too — a mirror is derived, so it is never in the store.
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Hotkey Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const PORT = await freePort();
