@@ -110,7 +110,8 @@ function asString(value: unknown): string | null {
  * "nothing known", not as a fifth state the panel has no branch for.
  */
 function asRunState(value: unknown): PanelRunState {
-  return value === 'running' || value === 'done' || value === 'failed' || value === 'interrupted'
+  return value === 'running' || value === 'done' || value === 'failed'
+    || value === 'interrupted' || value === 'blocked'
     ? value
     : null;
 }

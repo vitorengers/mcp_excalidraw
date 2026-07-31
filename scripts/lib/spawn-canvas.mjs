@@ -19,6 +19,15 @@
  * `EXCALIDRAW_NO_DOTENV=1` tells the server not to read the file at all. `PORT` and `HOST` go the
  * same way — `PORT=3737` is in this machine's session environment, and a check that inherited it
  * would health-check the operator's live board instead of its own server.
+ *
+ * 3. And `gh`, which is the same trap one door along. Deleting the inherited
+ *    `EXCALIDRAW_GH_COMMAND` leaves it *unset*, and unset means the server runs whatever `gh` is
+ *    on the operator's PATH — logged in as them, against a repository that really exists. That
+ *    cost nothing while the implement path never called `gh`; the moment a run started asking
+ *    GitHub whether its pull request had merged, every check that stubs an agent but not a `gh`
+ *    would have spawned the real one against a fabricated pull request URL. So the variable is
+ *    *sealed* rather than merely cleared: it points at `lib/gh-unstubbed.mjs`, which answers the
+ *    one question whose honest reply is "nobody could say" and refuses everything else loudly.
  */
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -28,6 +37,7 @@ import { freePort } from './free-port.mjs';
 
 export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const serverPath = join(repoRoot, 'dist', 'server.js');
+const unstubbedGh = join(repoRoot, 'scripts', 'lib', 'gh-unstubbed.mjs');
 
 /**
  * The environment a canvas server should be started with: this process's, with everything the
@@ -45,6 +55,10 @@ export function canvasEnvironment(overrides = {}) {
   delete env.PORT;
   delete env.HOST;
   env.EXCALIDRAW_NO_DOTENV = '1';
+  // Before the overrides, so a check that stubs `gh` itself still wins. Quoted and with forward
+  // slashes because the server tokenizes this string and spawns argv[0] directly — there is no
+  // shell to forgive a space in the path.
+  env.EXCALIDRAW_GH_COMMAND = `node "${unstubbedGh.replace(/\\/g, '/')}"`;
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete env[key];
     else env[key] = String(value);

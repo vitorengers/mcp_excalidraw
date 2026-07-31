@@ -20,9 +20,18 @@
 
 import type { IssueData } from './components/DocsPanel'
 
-/** What is known about implementing the issue, as the server last reported it. */
+/**
+ * What is known about implementing the issue, as the server last reported it.
+ *
+ * `PanelRunState` rather than a fourth hand-written copy of the same strings. This one had
+ * silently fallen a state behind — `interrupted` never made it here — and nothing caught it:
+ * `frontend/` is not type-checked by `tsc` and `vite build` only strips types, so a remembered
+ * run in a state this union did not list came back on the next selection as something else.
+ */
+import type { PanelRunState } from '../../src/core/issue-appearance'
+
 export interface CachedImplement {
-  state: 'running' | 'done' | 'failed' | null
+  state: PanelRunState
   url: string | null
   error: string | null
 }

@@ -92,7 +92,7 @@ const isClosed = (githubState: string | null | undefined): boolean =>
   typeof githubState === 'string' && githubState.toUpperCase() === 'CLOSED';
 
 /** A run as a shape or a record reports it, including "nothing known about one". */
-export type PanelRunState = 'running' | 'done' | 'failed' | 'interrupted' | null;
+export type PanelRunState = 'running' | 'done' | 'failed' | 'interrupted' | 'blocked' | null;
 
 /**
  * Whether the panel offers **Implement / Fix**.
