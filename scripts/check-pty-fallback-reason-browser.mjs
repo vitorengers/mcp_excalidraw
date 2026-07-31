@@ -77,7 +77,13 @@ const slash = (value) => String(value).replace(/\\/g, '/');
 
 /** The sentence the block has always shown for a pipe. The reason is appended to it. */
 const THE_SENTENCE = 'No PTY on this machine, so the shell is on pipes';
+/**
+ * The variable in both spellings, because since #311 they are no longer the same string: the
+ * board is *started* with the legacy name an existing installation holds, and the sentence it
+ * shows names the one to migrate to.
+ */
 const PTY_SETTING = 'EXCALIDRAW_TERMINAL_PTY';
+const PTY_SETTING_REPORTED = 'VIBEMAXXING_TERMINAL_PTY';
 
 // ─── A project with a terminal ────────────────────────────────
 
@@ -234,11 +240,11 @@ try {
   check('the tooltip still says what it always said', pipeChip.title.includes(THE_SENTENCE),
         JSON.stringify(pipeChip.title));
   check('and now says why there is no PTY here',
-        pipeChip.title.includes(`${PTY_SETTING}=0`),
+        pipeChip.title.includes(`${PTY_SETTING_REPORTED}=0`),
         `${JSON.stringify(pipeChip.title)} — the cause was a line in the log file, and the `
         + 'block said only that the mode was different');
   check('the reason comes after the sentence rather than instead of it',
-        pipeChip.title.indexOf(`${PTY_SETTING}=0`) > pipeChip.title.indexOf(THE_SENTENCE),
+        pipeChip.title.indexOf(`${PTY_SETTING_REPORTED}=0`) > pipeChip.title.indexOf(THE_SENTENCE),
         JSON.stringify(pipeChip.title));
 
   // ─── 2 ──────────────────────────────────────────────────────

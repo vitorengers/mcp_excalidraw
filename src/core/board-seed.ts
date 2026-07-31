@@ -43,8 +43,12 @@ const IMPLEMENT_FIELDS = [
  * being the only participant that was still there, so a seeded copy would either be
  * restated a moment later or be a claim that there is a checkout to resume when there is
  * not.
+ *
+ * `blocked` is settled and seedable for the same reason `failed` is: the run is over, and what
+ * it left is a pull request somebody has to look at — which is precisely the thing a seeded
+ * board should still be saying.
  */
-const SETTLED_IMPLEMENT_STATES = new Set(['done', 'failed']);
+const SETTLED_IMPLEMENT_STATES = new Set(['done', 'failed', 'blocked']);
 
 export interface BoardScene {
   elements: ServerElement[];

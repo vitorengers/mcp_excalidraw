@@ -181,8 +181,8 @@ writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
-// The board switched to and back from. No project on it, so nothing here draws a mirror —
-// it exists to be somewhere else, which is all the switch needs it to be.
+// The board switched to and back from. No project on it, so the region it draws is the notes
+// column alone (#316) — it exists to be somewhere else, which is all the switch needs it to be.
 writeFileSync(join(otherDir, 'board.config.json'), JSON.stringify({ name: 'Somewhere Else' }), 'utf8');
 
 const PORT = await freePort();
@@ -484,8 +484,13 @@ try {
   })()`);
 
   check('the other board has a tab to switch to', await clickTab('Somewhere Else'));
-  await waitFor(async () => (await evaluate(PROBE)).columns.length === 0,
-                'the other board to take the canvas', 80);
+  // The other board has no project, so what it draws is the notes column and nothing else
+  // (#316). Waiting for *no* columns waited for a board that no longer exists: the mirrored
+  // ones going is what says the switch landed, and the canvas's own column stays.
+  await waitFor(async () => {
+    const ids = columnIds(await evaluate(PROBE));
+    return ids.length === 1 && ids[0] === NOTES.NOTES_OPTION_ID;
+  }, 'the other board to take the canvas', 80);
   await shot('05-other-board');
   await sleep(1500);
 

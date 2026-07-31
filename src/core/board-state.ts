@@ -55,6 +55,7 @@ import { ServerElement } from '../types.js';
 import { elementsFor, normalizeWorkspaceId } from './element-store.js';
 import { BoardScene, parseBoardScene } from './board-seed.js';
 import { registryPath } from './workspaces.js';
+import { env } from './settings.js';
 
 /**
  * Kinds this board does not author and therefore does not save.
@@ -107,7 +108,7 @@ const writing = new Map<string, Promise<void>>();
  * registry path is only ever empty if somebody set the variable to whitespace.
  */
 export function boardStateDir(): string | null {
-  const configured = process.env.EXCALIDRAW_BOARD_STATE?.trim();
+  const configured = env('BOARD_STATE')?.trim();
   if (configured) return configured;
 
   const registry = registryPath().trim();

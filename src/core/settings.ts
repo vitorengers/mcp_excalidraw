@@ -13,17 +13,29 @@ import dotenv from 'dotenv';
  * no workspaces, no terminal and no agents while answering `status: healthy` on the port the
  * real board was meant to hold.
  *
- * So there are three sources now, layered explicitly, lowest first:
+ * So there are four sources now, layered explicitly, lowest first:
  *
  *   1. `<state-dir>/config.json` — a flat JSON object of the same variable names, in a
  *      directory chosen from the platform rather than from the caller. `config.example.json`
  *      at the root of this repository is the tracked copy of what it can hold.
- *   2. `<cwd>/.env` — unchanged, for every caller that already had one. A *launched* board's
- *      working directory is the state directory (`core/spawn.ts` passes it explicitly), so for
- *      a board this is the `.env` beside `config.json`; for a CLI or MCP process it is still
- *      the one beside the shell.
- *   3. **the real environment** — what the process was actually started with, and it wins.
- *      An operator who exports `EXCALIDRAW_TERMINAL=1` for one run gets it for that run.
+ *   2. `<cwd>/.env` — **deprecated**, and kept for every caller that already had one. A
+ *      *launched* board's working directory is the state directory (`core/spawn.ts` passes it
+ *      explicitly), so for a board this is the `.env` beside `config.json`; for a CLI or MCP
+ *      process it is still the one beside the shell. A process that loads one says so, once,
+ *      naming the file — so an existing installation migrates by being told rather than by
+ *      breaking.
+ *   3. **the real environment** — what the process was actually started with. An operator who
+ *      exports `EXCALIDRAW_TERMINAL=1` for one run gets it for that run, and it is what keeps
+ *      the ~130 checks in `scripts/` working: every one of them configures a throwaway server
+ *      by setting variables in the spawn environment.
+ *   4. **an explicit override** — what a command-line flag supplies, and it wins. No flag maps
+ *      to a setting today (`--url` overrides the canvas URL, which is not one of these), so
+ *      `overrideSetting` is the layer's whole surface; it is here because the order has to be
+ *      stated in one place before there is a second caller to get it wrong.
+ *
+ * `resolveSetting` is that order as a pure function, and `env(name)` is the accessor every read
+ * site uses. Layers 1 and 2 reach it by being folded into `process.env` at import; layers 3 and
+ * 4 are read at the call.
  *
  * Loading is idempotent and happens on import, so no entry point can read `process.env` before
  * the layers are applied: the hazard with `dotenv.config()` called in a module *body* is that
@@ -48,17 +60,229 @@ import dotenv from 'dotenv';
 export type SettingsMap = Record<string, string>;
 
 /**
+ * What a setting is called, and what it used to be called.
+ *
+ * `EXCALIDRAW_*` is the whole of the user's configuration and the product is VibeMaxxing now,
+ * so the prefix has to move — and it cannot move in one commit. An operator whose `config.json`,
+ * `.env` or shell profile names the old spelling would otherwise come up with no registry, no
+ * terminal and no agents, on a board that answers `status: healthy` and looks fine. So both are
+ * read, the new one first, and the old one says so once in the log file.
+ *
+ * Two names that match this prefix are deliberately *not* settings and are not read through
+ * here: `window.EXCALIDRAW_ASSET_PATH` in `frontend/index.html`, which is Excalidraw's own, and
+ * the `EXCALIDRAW_ELEMENT_TYPES` constant in `src/index.ts`.
+ */
+export const SETTING_PREFIX = 'VIBEMAXXING_';
+export const LEGACY_SETTING_PREFIX = 'EXCALIDRAW_';
+
+export interface SettingDeclaration {
+  /** The bare name, without a prefix. `WORKSPACES` is `VIBEMAXXING_WORKSPACES`. */
+  name: string;
+  /** What the tool does when it is unset. */
+  fallback: string;
+  /** One line, and the same line `docs/running.md` carries. */
+  description: string;
+}
+
+/**
+ * Every variable this tool reads at runtime, declared once.
+ *
+ * The list is here rather than derived by grepping because it is what `docs/running.md` and the
+ * README are checked against: a count asserted in prose against a number nobody could read out
+ * of the code said "fifteen" for ten variables' worth of merges. `check-env-prefix-compat.mjs`
+ * fails on a name in one and not the other.
+ *
+ * `PORT` and `HOST` are not here on purpose — they are per-invocation, and `PORT` is a pin the
+ * launch path never scans past. Nor are `EXPRESS_SERVER_URL`, `ENABLE_CANVAS_SYNC`, `LOG_LEVEL`
+ * and `LOG_FILE_PATH`, which carry no prefix and never did.
+ */
+export const SETTINGS = [
+  { name: 'CANVAS_PORT', fallback: '3737', description: 'The port the launch path tries first — a preference, not a pin' },
+  { name: 'STATE_HOME', fallback: 'the per-OS state directory', description: 'The parent of the directory holding config.json, the pidfile and the state files' },
+  { name: 'ENV_FILE', fallback: '<cwd>/.env', description: 'Read this .env instead of the one beside the working directory' },
+  { name: 'NO_DOTENV', fallback: 'unset', description: '1 stops both configuration files being read, leaving only the environment' },
+  { name: 'NO_AUTOSTART', fallback: 'unset', description: '1 stops the CLI and the MCP server auto-spawning a canvas' },
+  { name: 'WORKSPACES', fallback: 'workspaces.json in the state directory', description: 'Path to the registry JSON — unset resolves the per-user default' },
+  { name: 'BOARD_STATE', fallback: 'beside the registry', description: 'Where each registered board is saved between processes' },
+  { name: 'DOCS_DIR', fallback: "the shipped docs/", description: "Where GET /api/docs/:key reads from for a board with no docsDir of its own" },
+  { name: 'LIBRARY', fallback: 'the shipped blocks library', description: 'An .excalidrawlib served to every board' },
+  { name: 'EXPORT_DIR', fallback: 'the working directory', description: 'The base directory MCP file exports may write to' },
+  { name: 'ALLOWED_HOSTS', fallback: 'loopback names only', description: 'Extra Host authorities the origin gate accepts, for a real alias or a proxy' },
+  { name: 'TERMINAL', fallback: 'unset', description: '1 for the default shell, or a command line of your own' },
+  { name: 'TERMINAL_PTY', fallback: 'unset', description: '0 forces the pipe instead of a real pty' },
+  { name: 'CLAUDE_STATUS', fallback: 'unset', description: 'The directory your Claude Code status line command writes its usage files into' },
+  { name: 'GH_COMMAND', fallback: 'gh', description: 'The GitHub CLI on this machine, when it is not on PATH' },
+  { name: 'GH_COMMAND_WSL', fallback: 'gh', description: 'The GitHub CLI inside a WSL-backed project\'s distro' },
+  { name: 'ISSUE_AGENT', fallback: 'unset', description: 'The command line that researches an observation and opens the issue' },
+  { name: 'ISSUE_AGENT_WSL', fallback: 'the host command', description: 'The issue command as a WSL-backed project\'s distro spells it' },
+  { name: 'ISSUE_AGENT_TIMEOUT', fallback: 'no ceiling', description: 'Seconds before a wedged issue run is given up on' },
+  { name: 'IMPLEMENT_AGENT', fallback: 'unset', description: 'The command line that implements an issue' },
+  { name: 'IMPLEMENT_AGENT_WSL', fallback: 'the host command', description: 'The implement command as a WSL-backed project\'s distro spells it' },
+  { name: 'IMPLEMENT_AGENT_TIMEOUT', fallback: 'no ceiling', description: 'Seconds before a wedged implement run is given up on' },
+  { name: 'IMPLEMENT_CONCURRENCY', fallback: '4', description: 'Implement runs at once — 0 is no cap, 1 serialises' },
+  { name: 'IMPLEMENT_QUEUE_MS', fallback: '30000', description: 'How often a workspace with its queue on looks for a free slot' },
+  { name: 'ISSUE_MEMO_MS', fallback: '30000', description: 'How long one gh read of an issue is reused — 0 turns the memo off' },
+  { name: 'GH_STATUS_MEMO_MS', fallback: '30000', description: 'How long one answer about gh itself is reused — 0 turns the memo off' }
+] as const satisfies readonly SettingDeclaration[];
+
+/** What a caller may ask `env()` for. A free string would make a typo resolve to `undefined`. */
+export type SettingName = (typeof SETTINGS)[number]['name'];
+
+/**
+ * How to spell a setting to somebody who has to go and set it.
+ *
+ * Every refusal that says "set X to enable this" builds its X here rather than writing it out.
+ * Hand-spelled, they are a second list of variable names — one that no compiler and no check
+ * reads, and that therefore goes stale exactly when it matters most, which is during a rename.
+ * The new prefix, because that is what a message should be teaching; the old one keeps working
+ * and is not something to send anybody towards.
+ */
+export function settingName(name: SettingName): string {
+  return `${SETTING_PREFIX}${name}`;
+}
+
+/**
+ * What this module has to say that only a logger can say properly.
+ *
+ * A sink rather than an import, because this module must not reach the logger: `utils/logger.ts`
+ * reads `LOG_LEVEL` and `LOG_FILE_PATH` in its own body, so importing it here would evaluate it
+ * before the layers below have been applied and pin the log level to the un-layered environment.
+ * `core/env.ts` imports this module first and the logger second, and registers the sink — which
+ * is exactly the ordering that makes the layers real. Anything said before then is held.
+ */
+export interface SettingNotice {
+  level: 'warn' | 'info';
+  message: string;
+}
+
+const heldNotices: SettingNotice[] = [];
+let noticeSink: ((notice: SettingNotice) => void) | null = null;
+
+export function onSettingNotice(write: (notice: SettingNotice) => void): void {
+  noticeSink = write;
+  for (const held of heldNotices.splice(0)) write(held);
+}
+
+function notice(level: SettingNotice['level'], message: string): void {
+  if (noticeSink) noticeSink({ level, message });
+  else heldNotices.push({ level, message });
+}
+
+const announcedLegacy = new Set<string>();
+
+/**
+ * Say that a name is the old spelling — once for that name, however often it is read.
+ *
+ * `EXCALIDRAW_WORKSPACES` alone is read from a dozen places in `server.ts`, and a line per read
+ * is a line nobody finishes. `info` rather than `warn` for the same reason: the console
+ * transport is warn and above, and today every board on this machine is legacy-spelled, so a
+ * warning per variable would be a paragraph of stderr on every start. The `.env` notice below
+ * *is* a warning, because there is exactly one of it.
+ */
+function noteLegacyName(name: string): void {
+  if (announcedLegacy.has(name)) return;
+  announcedLegacy.add(name);
+  notice('info', `${LEGACY_SETTING_PREFIX}${name} is deprecated; rename it to `
+    + `${SETTING_PREFIX}${name}. Both spellings are read for now.`);
+}
+
+/** The layers a setting can come from, lowest first. `undefined` is "this layer is not there". */
+export interface SettingLayers {
+  /** `<state-dir>/config.json`. */
+  file?: SettingsMap | undefined;
+  /** `<cwd>/.env`, deprecated. */
+  envFile?: SettingsMap | undefined;
+  /** What the process was started with. */
+  environment?: NodeJS.ProcessEnv | undefined;
+  /** What an explicit command-line flag said. */
+  flag?: SettingsMap | undefined;
+}
+
+/**
+ * One layer's answer for `name`, new spelling first.
+ *
+ * `undefined` and the empty string are different answers and both are kept: an *explicitly
+ * empty* `LIBRARY` is how a board says it wants no shared shapes at all, so a check for
+ * truthiness here would turn that into the default library.
+ */
+function fromLayer(
+  layer: SettingsMap | NodeJS.ProcessEnv | undefined,
+  name: string
+): { value: string; legacy: boolean } | null {
+  if (!layer) return null;
+  const next = layer[`${SETTING_PREFIX}${name}`];
+  if (next !== undefined) return { value: next, legacy: false };
+  const legacy = layer[`${LEGACY_SETTING_PREFIX}${name}`];
+  if (legacy !== undefined) return { value: legacy, legacy: true };
+  return null;
+}
+
+/**
+ * The precedence, stated once: flag beats environment beats `.env` beats `config.json`.
+ *
+ * Pure and exported so that the order can be asserted as four maps and an expected answer
+ * rather than by starting four servers — which is worth having, but is not what
+ * `check-settings-precedence.mjs` mostly does: the failure this guards against is a *read site*
+ * resolving to the wrong layer at runtime while compiling perfectly, and only a real server can
+ * be wrong about that.
+ */
+export function resolveSetting(name: string, layers: SettingLayers): string | undefined {
+  return resolveSettingSource(name, layers)?.value;
+}
+
+function resolveSettingSource(
+  name: string,
+  layers: SettingLayers
+): { value: string; legacy: boolean } | null {
+  return fromLayer(layers.flag, name)
+    ?? fromLayer(layers.environment, name)
+    ?? fromLayer(layers.envFile, name)
+    ?? fromLayer(layers.file, name)
+    ?? null;
+}
+
+const overrides: SettingsMap = {};
+
+/**
+ * The flag layer: what an explicit command-line argument says a setting is.
+ *
+ * Nothing calls it yet — no flag maps to one of these, and inventing one would be a feature
+ * rather than an ordering. It is the seam a flag attaches to, and the reason the resolver above
+ * has four arguments instead of three.
+ */
+export function overrideSetting(name: SettingName, value: string): void {
+  overrides[`${SETTING_PREFIX}${name}`] = value;
+}
+
+/**
+ * **The** accessor. Every `EXCALIDRAW_*` read in `src/` is a call to this.
+ *
+ * Reading `process.env` directly was never wrong on its own; what it cost was that twenty-odd
+ * variables had no list, two prefixes could not be read at once, and each site decided for
+ * itself whether an empty string meant "off" or "unset". The two file layers are already in
+ * `process.env` by the time this runs — `loadSettings()` folds them in at import, under
+ * whatever the process was started with — so what is left to resolve here is the flag layer and
+ * the two spellings.
+ */
+export function env(name: SettingName): string | undefined {
+  const found = resolveSettingSource(name, { flag: overrides, environment: process.env });
+  if (!found) return undefined;
+  if (found.legacy) noteLegacyName(name);
+  return found.value;
+}
+
+/**
  * The directory the platform keeps per-user state in — the *parent*, not the application's own
  * folder inside it.
  *
- * `EXCALIDRAW_STATE_HOME` overrides it, and exists so a check can give a run a throwaway state
+ * The `STATE_HOME` setting overrides it, and exists so a check can give a run a throwaway state
  * directory of its own. Without it there is no way to exercise the pidfile and the state files
  * except against the real one, which on this machine holds the board the maintainer is looking
  * at. Read from the environment only, never from `config.json`: the file would be naming the
  * directory it is in.
  */
 function stateHome(): string {
-  const override = process.env.EXCALIDRAW_STATE_HOME;
+  const override = env('STATE_HOME');
   if (override) return override;
   if (process.platform === 'darwin') {
     return path.join(homedir(), 'Library', 'Application Support');
@@ -162,21 +386,39 @@ function readSettingsFiles(): SettingsMap {
   return {};
 }
 
-/** The `.env` layer: `EXCALIDRAW_ENV_FILE`, or the file beside this process's working directory. */
+/** The `.env` layer: the `ENV_FILE` setting, or the file beside this process's working directory. */
 export function envFilePath(): string {
-  const named = process.env.EXCALIDRAW_ENV_FILE;
+  const named = env('ENV_FILE');
   return named && named.trim() ? named : path.join(process.cwd(), '.env');
 }
 
+/**
+ * The deprecated layer, and it says so — once, naming the file it read.
+ *
+ * A `.env` is gitignored, has no tracked example, and sits wherever the caller's shell happened
+ * to be; `config.json` in the state directory is where these values belong now. Warning rather
+ * than dropping the layer is the whole point: an installation that has one migrates by being
+ * told, not by coming up empty on a board that still answers `status: healthy`. Silence when
+ * there is no file, and silence when there is one with nothing in it — a notice about a file
+ * that changed nothing is a notice that trains people to skip the next one.
+ */
 function readEnvFile(): SettingsMap {
+  const file = envFilePath();
+  let values: SettingsMap;
   try {
     // `dotenv.parse` rather than `dotenv.config`, which writes straight into `process.env` and
     // would put the file above the real environment for anything it happened to reach first.
     // Same parser, and here the layering is decided in one place instead.
-    return dotenv.parse(fs.readFileSync(envFilePath()));
+    values = dotenv.parse(fs.readFileSync(file));
   } catch {
     return {};
   }
+  if (Object.keys(values).length > 0) {
+    notice('warn', `Loaded configuration from ${file}. A .env in the working directory is `
+      + `deprecated: move these values into ${settingsFilePath()}, which is found whatever `
+      + 'directory the tool is started from.');
+  }
+  return values;
 }
 
 /**
@@ -214,7 +456,7 @@ export function loadSettings(): void {
   loaded = true;
   realEnv = { ...process.env };
 
-  if (process.env.EXCALIDRAW_NO_DOTENV === '1') return;
+  if (env('NO_DOTENV') === '1') return;
 
   const applied = mergeSettings(readSettingsFiles(), readEnvFile(), realEnv);
   for (const [key, value] of Object.entries(applied)) process.env[key] = value;

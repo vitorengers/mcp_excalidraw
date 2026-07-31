@@ -15,10 +15,25 @@
  *    real `claude.exe -p --dangerously-skip-permissions` back and started a coding agent against
  *    a fabricated issue.
  *
- * So: every inherited `EXCALIDRAW_*` is deleted before the check's own values are applied, and
- * `EXCALIDRAW_NO_DOTENV=1` tells the server not to read the file at all. `PORT` and `HOST` go the
- * same way — `PORT=3737` is in this machine's session environment, and a check that inherited it
- * would health-check the operator's live board instead of its own server.
+ * 3. And `gh`, which is the same trap one door along. Deleting the inherited command leaves it
+ *    *unset*, and unset means the server runs whatever `gh` is on the operator's PATH — logged
+ *    in as them, against a repository that really exists. That cost nothing while the implement
+ *    path never called `gh`; the moment a run started asking GitHub whether its pull request had
+ *    merged (#409), every check that stubs an agent but not a `gh` would have spawned the real
+ *    one against a fabricated pull request URL.
+ *
+ * So: every inherited configuration variable is deleted before the check's own values are
+ * applied, and `EXCALIDRAW_NO_DOTENV=1` tells the server not to read the file at all. `PORT` and
+ * `HOST` go the same way — `PORT=3737` is in this machine's session environment, and a check that
+ * inherited it would health-check the operator's live board instead of its own server. `gh` is
+ * the one that is *sealed* rather than merely cleared: it points at `lib/gh-unstubbed.mjs`, which
+ * answers the one question whose honest reply is "nobody could say" and refuses everything else
+ * loudly. Cleared, it would fall back to the machine; sealed, it cannot.
+ *
+ * **Both prefixes**, since #311: the server reads `VIBEMAXXING_*` as well as `EXCALIDRAW_*`, and
+ * a loop that strips one strips nothing under the other. That is the whole leak coming back
+ * under a new name, in ~130 checks at once, on the machine where it matters most — the one with
+ * a live board configured in its shell.
  */
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -28,6 +43,10 @@ import { freePort } from './free-port.mjs';
 
 export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const serverPath = join(repoRoot, 'dist', 'server.js');
+const unstubbedGh = join(repoRoot, 'scripts', 'lib', 'gh-unstubbed.mjs');
+
+/** Every prefix the server reads configuration under. Adding one here is what un-leaks it. */
+export const SETTING_PREFIXES = ['VIBEMAXXING_', 'EXCALIDRAW_'];
 
 /**
  * The environment a canvas server should be started with: this process's, with everything the
@@ -40,11 +59,21 @@ export const serverPath = join(repoRoot, 'dist', 'server.js');
 export function canvasEnvironment(overrides = {}) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (key.startsWith('EXCALIDRAW_')) delete env[key];
+    if (SETTING_PREFIXES.some((prefix) => key.startsWith(prefix))) delete env[key];
   }
   delete env.PORT;
   delete env.HOST;
   env.EXCALIDRAW_NO_DOTENV = '1';
+  // Before the overrides, so a check that stubs `gh` itself still wins. Quoted and with forward
+  // slashes because the server tokenizes this string and spawns argv[0] directly — there is no
+  // shell to forgive a space in the path.
+  //
+  // **Deliberately the legacy spelling, and it has to stay that way.** `fromLayer` prefers
+  // `VIBEMAXXING_` over `EXCALIDRAW_` within a layer, so a default written under the new prefix
+  // would outrank the seven checks that stub `EXCALIDRAW_GH_COMMAND` and silently replace their
+  // fixtures with this. Written under the old one, both spellings beat it: the new prefix by
+  // precedence, the old by overwriting this very key below.
+  env.EXCALIDRAW_GH_COMMAND = `node "${unstubbedGh.replace(/\\/g, '/')}"`;
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete env[key];
     else env[key] = String(value);
