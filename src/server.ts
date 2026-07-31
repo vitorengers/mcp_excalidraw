@@ -14,7 +14,6 @@ import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import logger from './utils/logger.js';
 import {
-  elements,
   files,
   snapshots,
   generateId,
@@ -3223,8 +3222,20 @@ function chooseSeed(
  */
 async function seedBoardFromFile(workspace: Workspace): Promise<void> {
   if (workspace.error) return;
+  await seedBoard(normalizeWorkspaceId(workspace.id), workspace.boardFile);
+}
 
-  const workspaceId = normalizeWorkspaceId(workspace.id);
+/**
+ * The same, for a board that is not a registered project: `default`.
+ *
+ * Which is the board of somebody who has registered nothing at all, and it used to be the
+ * only board on the canvas that structurally could not be saved (#314) — seeding walked the
+ * registry, so nothing ever called `persistBoardFor` for it, and the store itself was a plain
+ * `Map` that could not have reported a change if anything had. It has no tracked board file
+ * and never will: nothing on disk is a project's, so there is nothing to seed it from but the
+ * state this canvas keeps of it.
+ */
+async function seedBoard(workspaceId: string, boardFile: string | null): Promise<void> {
   const store = elementsFor(workspaceId);
   if (store.size) {
     // Empty at startup, which is when this runs. Said out loud rather than assumed, because
@@ -3235,7 +3246,7 @@ async function seedBoardFromFile(workspace: Workspace): Promise<void> {
 
   const [saved, fromFile] = await Promise.all([
     readBoardState(workspaceId),
-    workspace.boardFile ? readBoardFile(workspaceId, workspace.boardFile) : Promise.resolve(null)
+    boardFile ? readBoardFile(workspaceId, boardFile) : Promise.resolve(null)
   ]);
 
   // After the read and before the first write, so a board that could not be read is still
@@ -3243,7 +3254,7 @@ async function seedBoardFromFile(workspace: Workspace): Promise<void> {
   // to read before anybody has seen it.
   persistBoardFor(workspaceId);
 
-  const chosen = chooseSeed(workspaceId, workspace.boardFile, saved, fromFile);
+  const chosen = chooseSeed(workspaceId, boardFile, saved, fromFile);
   if (!chosen) return;
   const scene = chosen.scene;
 
@@ -3260,28 +3271,43 @@ async function seedBoardFromFile(workspace: Workspace): Promise<void> {
 }
 
 /**
- * Give every registered board back the scene it was saved with.
+ * Give every board back the scene it was saved with — the registered ones, and `default`.
  *
  * Boards are read concurrently rather than in turn: one of them lives on the `wsl$` share,
  * where a read crosses the distro boundary and is slow when the distro is running and
  * refused when it is not — and none of that is a reason for the three local boards to wait.
  * A board that cannot be read is warned about and skipped, one board at a time, for the
  * reason `loadWorkspace` returns a broken project instead of hiding it.
+ *
+ * `default` is seeded whatever the registry says, including when it could not be read at all:
+ * a canvas whose registry is unreadable is precisely a canvas somebody is about to draw on
+ * with no project of their own, and that is the board this exists for. It is skipped only if
+ * a registered project happens to carry that id, which would otherwise seed one store twice.
  */
 async function seedBoardsFromFiles(): Promise<void> {
-  let workspaces: Workspace[];
+  let workspaces: Workspace[] = [];
   try {
     workspaces = await loadWorkspaces(registryPath());
   } catch (error) {
     logger.warn(`Could not look for boards to load: ${(error as Error).message}`);
-    return;
   }
 
-  await Promise.all(workspaces.map(async (workspace) => {
+  const seeds = workspaces.map((workspace) => ({
+    id: workspace.id,
+    seed: () => seedBoardFromFile(workspace)
+  }));
+  if (!workspaces.some((workspace) => normalizeWorkspaceId(workspace.id) === DEFAULT_WORKSPACE_ID)) {
+    seeds.push({
+      id: DEFAULT_WORKSPACE_ID,
+      seed: () => seedBoard(DEFAULT_WORKSPACE_ID, null)
+    });
+  }
+
+  await Promise.all(seeds.map(async ({ id, seed }) => {
     try {
-      await seedBoardFromFile(workspace);
+      await seed();
     } catch (error) {
-      logger.warn(`Could not load the board for "${workspace.id}": ${(error as Error).message}`);
+      logger.warn(`Could not load the board for "${id}": ${(error as Error).message}`);
     }
   }));
 }

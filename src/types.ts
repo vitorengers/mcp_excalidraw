@@ -350,8 +350,13 @@ export interface Snapshot {
   createdAt: string;
 }
 
-// In-memory storage for Excalidraw elements
-export const elements = new Map<string, ServerElement>();
+// Elements are not here. They live in `core/element-store.ts`, one store per workspace, and
+// the `Map` this module used to export was the `default` one — kept here so that a caller
+// importing it directly stayed on the same object. By #314 nothing imported it, and being a
+// plain `Map` was the reason the board a user with no project registered draws on could never
+// report a change and therefore could never be saved. Removed rather than left as an alias: a
+// second `Map` that merely looks like the store is a silent, empty canvas for whoever imports
+// it next.
 
 // In-memory storage for snapshots
 export const snapshots = new Map<string, Snapshot>();

@@ -11,7 +11,7 @@
  * project is listed in the registry, and a typo costs an empty canvas instead of
  * corrupting a real one.
  */
-import { elements as defaultElements, ServerElement } from '../types.js';
+import { ServerElement } from '../types.js';
 
 /** Store used when a request names no workspace. Keeps single-board setups working. */
 export const DEFAULT_WORKSPACE_ID = 'default';
@@ -69,13 +69,18 @@ class WatchedElementStore extends Map<string, ServerElement> {
   }
 }
 
-const stores = new Map<string, Map<string, ServerElement>>([
-  // The default store is the Map exported from types.ts, so anything still importing
-  // it directly — the CLI, for one — keeps operating on the same data. It is therefore
-  // the one store that is not watched; `isWatchedStore` is how a caller finds that out
-  // rather than discovering it as silence.
-  [DEFAULT_WORKSPACE_ID, defaultElements],
-]);
+/**
+ * Every store, `default` included.
+ *
+ * `default` used to be seeded here with the plain `Map` that `types.ts` exported, so that
+ * anything importing that Map directly kept operating on the same data. It was therefore the
+ * one store that could not report its own changes — and the one board a user with no project
+ * registered draws on, which made it the one board that structurally could not be saved
+ * (#314). Nothing imported the Map any more by then, so the export went and the special case
+ * with it: `default` is created on first use like every other store, and is watched like
+ * every other store.
+ */
+const stores = new Map<string, Map<string, ServerElement>>();
 
 /** Element store for a workspace, created empty on first use. */
 export function elementsFor(workspaceId: string | undefined | null): Map<string, ServerElement> {
@@ -86,11 +91,6 @@ export function elementsFor(workspaceId: string | undefined | null): Map<string,
     stores.set(id, store);
   }
   return store;
-}
-
-/** Whether a workspace's store reports its own changes. False for the default store alone. */
-export function isWatchedStore(workspaceId: string | undefined | null): boolean {
-  return elementsFor(workspaceId) instanceof WatchedElementStore;
 }
 
 /**
@@ -129,10 +129,7 @@ export function activeWorkspaceIds(): string[] {
   return [...stores.keys()];
 }
 
-/** Test seam: drop every store but the default, which is emptied in place. */
+/** Test seam: drop every store, `default` included — it is no longer anyone else's object. */
 export function resetStores(): void {
-  for (const [id, store] of stores) {
-    if (id === DEFAULT_WORKSPACE_ID) store.clear();
-    else stores.delete(id);
-  }
+  stores.clear();
 }

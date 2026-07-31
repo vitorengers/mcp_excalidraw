@@ -22,8 +22,12 @@ Ids are normalised to `^[a-z0-9][a-z0-9._-]{0,63}$` before they are compared or 
 yields an empty store instead of an error. A board can exist before its project is listed in
 the registry, and a typo costs an empty canvas instead of corrupting a real one.
 
-**The default store is the `Map` exported from `types.ts`.** Anything still importing it
-directly — the CLI, for one — keeps operating on the same data.
+**`default` is a store like any other.** It used to be the `Map` exported from `types.ts`, kept
+that way so anything importing it directly stayed on the same data. By #314 nothing did, and
+being a plain `Map` had a cost that landed on exactly one board: it could not report its own
+changes, so the board a user with no project registered draws on was the one board that
+structurally could never be saved. The export is gone and `default` is created on first use,
+watched, and seeded and saved like every registered project.
 
 ## It is read at startup, and written as it changes
 
@@ -31,7 +35,10 @@ The store no longer starts empty. After `listen`, `seedBoardsFromFiles` reads ea
 project's `boardFile` — the `board` field of its `board.config.json`, resolved in
 `src/core/workspaces.ts` — and puts the scene into that workspace's store. A project that declares
 no `board` is left empty: seeding from a *tracked file* is opt-in, so a board that is meant to start
-blank can.
+blank can. `default` is seeded too, even though it is nobody's project and has no tracked file —
+it has only the state this canvas keeps of it, and it is the board somebody who has registered
+nothing is drawing on. It is skipped only when a registered project carries that id, which would
+otherwise seed one store twice.
 
 Boards are read concurrently and none of it is awaited, for the reason recovery is not: one of these
 projects lives on the `wsl$` share, where the read crosses a distro boundary and is refused outright
@@ -43,8 +50,8 @@ that connected while the read was in flight took its `initial_elements` from an 
 
 ## The save half
 
-Every board a registry lists is written back, a second after it last changed, by
-`src/core/board-state.ts`. That is what makes a My Notes draft survive a restart: a draft has no
+Every board a registry lists — and `default`, which no registry lists — is written back, a second
+after it last changed, by `src/core/board-state.ts`. That is what makes a My Notes draft survive a restart: a draft has no
 issue, no branch and no project item behind it, so the canvas was the only place it existed and a
 process that stopped took it with it (#225).
 
@@ -66,9 +73,8 @@ check's `board-tool` write over the real `board-tool`'s saved drafts.
 listener `onElementStoreChanged` registered, so the dozen writers — the element routes, the batch,
 the sync reconciliation, the issue and implement writers, the seed — do not each have to remember to
 save. A writer that was missed would be a change that is silently never written, which is the
-failure this closes. The one store that is not watched is the `default` one, which is the `Map`
-`types.ts` exports and shares with the CLI; a project registered under that id is warned about
-rather than left quietly unsaved.
+failure this closes. Every store is watched, `default` included since #314 — there is no longer
+a store that reports nothing, and so no warning left to read.
 
 The write is debounced by a second, with a five-second ceiling so that continuous editing cannot
 push it back indefinitely, and what a shutdown still owes is written synchronously on the way out.

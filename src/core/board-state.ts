@@ -52,7 +52,7 @@ import { renameSync, writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
 import { ServerElement } from '../types.js';
-import { elementsFor, isWatchedStore, normalizeWorkspaceId } from './element-store.js';
+import { elementsFor, normalizeWorkspaceId } from './element-store.js';
 import { BoardScene, parseBoardScene } from './board-seed.js';
 import { registryPath } from './workspaces.js';
 import { env } from './settings.js';
@@ -128,20 +128,17 @@ export function boardStateFile(workspaceId: string): string | null {
 /**
  * Say that this workspace's board is worth keeping.
  *
- * Registered projects and nothing else. A request naming a workspace nobody registered gets
- * a store — that is `elementsFor` being deliberately forgiving — and a file per typo is not
- * something a forgiving lookup should be able to create.
+ * Registered projects, and `default` — which is nobody's project and is exactly why it is
+ * here: it is the board a user who has registered nothing draws on, and it was the one board
+ * that could never be saved (#314). Everything else is still left out. A request naming a
+ * workspace nobody registered gets a store — that is `elementsFor` being deliberately
+ * forgiving — and a file per typo is not something a forgiving lookup should be able to
+ * create. A typo costs at worst an element in `default.excalidraw`, because that is where
+ * `normalizeWorkspaceId` sends anything malformed.
  */
 export function persistBoardFor(workspaceId: string): void {
   const id = normalizeWorkspaceId(workspaceId);
   if (!boardStateDir()) return;
-  if (!isWatchedStore(id)) {
-    // The default store is the Map `types.ts` exports, shared with the CLI and the MCP
-    // tools, and it cannot report its own changes. Said out loud: a project registered
-    // under that id would otherwise be the one board that quietly never saved.
-    logger.warn(`Board state for "${id}" will not be saved: that id is the shared default store.`);
-    return;
-  }
   persisted.add(id);
 }
 
