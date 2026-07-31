@@ -47,9 +47,9 @@ async function importDist(relative, what) {
   return import(pathToFileURL(modulePath).href);
 }
 
-const ISSUE_URL = 'https://github.com/vitorengers/mcp_excalidraw/issues/46';
-const OTHER_URL = 'https://github.com/vitorengers/mcp_excalidraw/issues/12';
-const PR_URL = 'https://github.com/vitorengers/mcp_excalidraw/pull/99';
+const ISSUE_URL = 'https://github.com/vitorengers/vibemaxxing/issues/46';
+const OTHER_URL = 'https://github.com/vitorengers/vibemaxxing/issues/12';
+const PR_URL = 'https://github.com/vitorengers/vibemaxxing/pull/99';
 
 // ─── 1. The panel resolves a mirror card ──────────────────────
 //
@@ -133,7 +133,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Mirror Card Check',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const running = [];

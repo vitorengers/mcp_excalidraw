@@ -254,7 +254,7 @@ writeFileSync(registryPath, JSON.stringify({
 // No githubProject: the mirror stays dormant, so nothing else is drawing on this board.
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Ink Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 // The stub prints the **raw** stream and the server renders it, because the command carries

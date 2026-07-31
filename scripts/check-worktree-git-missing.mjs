@@ -132,7 +132,7 @@ function workspaceAt(id, at) {
   };
 }
 
-const ISSUE = (n) => `https://github.com/vitorengers/mcp_excalidraw/issues/${n}`;
+const ISSUE = (n) => `https://github.com/vitorengers/vibemaxxing/issues/${n}`;
 
 /** Whatever the call answered — its value, or the message it threw. */
 async function attempt(run) {

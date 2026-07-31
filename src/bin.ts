@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-// Single bin entry for every package bin (vibemaxxing, mcp-excalidraw-server and
-// excalidraw-canvas):
+// Single bin entry for every command this package installs (see package.json
+// `bin`, and BIN_NAMES in core/version.ts):
 //
 //   no arguments  -> MCP stdio server (backward compatible with MCP clients)
 //   <subcommand>  -> CLI

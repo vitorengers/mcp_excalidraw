@@ -104,7 +104,7 @@ two of the three platforms it runs on.
   "language": "English",
   "docsDir": "docs",
   "board": "docs/board.excalidraw",
-  "repo": "vitorengers/mcp_excalidraw",
+  "repo": "vitorengers/vibemaxxing",
   "githubProject": "https://github.com/users/vitorengers/projects/5",
   "agents": {
     "issue":     { "model": "claude-fable-5", "effort": "high" },

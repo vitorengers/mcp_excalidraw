@@ -51,10 +51,10 @@ function card(itemId, title) {
     contentType: 'Issue',
     number: Number(itemId.replace(/\D/g, '')) || 1,
     title,
-    url: `https://github.com/vitorengers/mcp_excalidraw/issues/${itemId}`,
+    url: `https://github.com/vitorengers/vibemaxxing/issues/${itemId}`,
     state: 'OPEN',
     createdAt: '2026-07-01T10:00:00Z',
-    repository: 'vitorengers/mcp_excalidraw',
+    repository: 'vitorengers/vibemaxxing',
     draggable: true,
   };
 }

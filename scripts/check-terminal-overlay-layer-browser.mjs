@@ -88,7 +88,7 @@ writeFileSync(registryPath, JSON.stringify({
 // No githubProject: the mirror stays dormant, so nothing else is drawing on this board.
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Layer Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const PORT = await freePort();

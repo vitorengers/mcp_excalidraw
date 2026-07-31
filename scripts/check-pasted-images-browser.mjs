@@ -89,7 +89,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Paste Check',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const PORT = await freePort();
@@ -305,7 +305,7 @@ try {
   const draftId = await makeBlock(0, 0, 'The panel is picker-only', {});
   const createdId = await makeBlock(0, 400, 'Already an issue', {
     issueState: 'created',
-    issueUrl: 'https://github.com/vitorengers/mcp_excalidraw/issues/1',
+    issueUrl: 'https://github.com/vitorengers/vibemaxxing/issues/1',
     issueTitle: 'Already an issue',
   });
   if (!draftId || !createdId) throw new Error(`the blocks were not created\n${serverLog}`);

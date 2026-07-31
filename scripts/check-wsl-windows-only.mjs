@@ -282,7 +282,7 @@ try {
 
   const started = await call(mac.base, '/api/implement?workspace=wsl-project', {
     method: 'POST',
-    body: JSON.stringify({ url: 'https://github.com/vitorengers/mcp_excalidraw/issues/286' }),
+    body: JSON.stringify({ url: 'https://github.com/vitorengers/vibemaxxing/issues/286' }),
   });
   check('a run against it is refused', started.status === 400,
         `got ${started.status} ${JSON.stringify(started.body)}`);

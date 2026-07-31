@@ -77,7 +77,7 @@ function makeProject(name, { config = true } = {}) {
   git(dir, ['config', 'commit.gpgsign', 'false']);
   if (config) {
     writeFileSync(join(dir, 'board.config.json'),
-                  JSON.stringify({ name, repo: 'vitorengers/mcp_excalidraw' }), 'utf8');
+                  JSON.stringify({ name, repo: 'vitorengers/vibemaxxing' }), 'utf8');
   }
   writeFileSync(join(dir, 'README.md'), `# ${name}\n`, 'utf8');
   git(dir, ['add', '.']);
@@ -111,7 +111,7 @@ process.stdin.on('end', async () => {
   }
 
   process.stdout.write('done\\n');
-  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/pull/' + number + '\\n');
+  process.stdout.write('https://github.com/vitorengers/vibemaxxing/pull/' + number + '\\n');
 });
 `, 'utf8');
 
@@ -165,7 +165,7 @@ async function call(workspace, path, options = {}) {
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
 
-const issue = (n) => `https://github.com/vitorengers/mcp_excalidraw/issues/${n}`;
+const issue = (n) => `https://github.com/vitorengers/vibemaxxing/issues/${n}`;
 const start = (workspace, n) =>
   call(workspace, '/api/implement', { method: 'POST', body: JSON.stringify({ url: issue(n) }) });
 const release = (n) => writeFileSync(join(workDir, `release-${n}`), '', 'utf8');

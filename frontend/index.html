@@ -435,9 +435,12 @@
         been a wait on a round trip to somebody else's server.
 
         `/assets/` is the mount `src/server.ts` already had, pointing at the copy inside
-        `node_modules/@excalidraw/excalidraw` — a runtime dependency, so it is there wherever the
-        server runs. The CDN stays on as the second `src()` of every face, so a build without
-        that directory degrades to what it did before rather than losing the font.
+        `@excalidraw/excalidraw` — a runtime dependency, so it is there wherever the server runs,
+        though *where* it is is the module resolver's answer and not a path built out of
+        `__dirname`: npm hoists it to the consumer root of an installed copy, where the old
+        relative guess pointed at the package's own empty `node_modules` (#305). The CDN stays on
+        as the second `src()` of every face, so a server that cannot resolve it at all — which it
+        says once, at warn — degrades to what it did before rather than losing the font.
 
         Before the module script, because the value is read while Excalidraw's own chunk is
         evaluating.

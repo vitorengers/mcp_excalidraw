@@ -69,10 +69,10 @@ function card(number) {
     contentType: 'Issue',
     number,
     title: `Issue ${number}`,
-    url: `https://github.com/vitorengers/mcp_excalidraw/issues/${number}`,
+    url: `https://github.com/vitorengers/vibemaxxing/issues/${number}`,
     state: 'OPEN',
     createdAt: '2026-07-01T10:00:00Z',
-    repository: 'vitorengers/mcp_excalidraw',
+    repository: 'vitorengers/vibemaxxing',
     draggable: true,
   };
 }

@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**VibeMaxxing** (`vitorengers/mcp_excalidraw`) is a fork of the upstream project
+**VibeMaxxing** (`vitorengers/vibemaxxing`) is a fork of the upstream project
 `yctimlin/mcp_excalidraw`. It keeps everything upstream does — a live
 [Excalidraw](https://excalidraw.com) canvas agents draw on, drive from a CLI, or reach over MCP —
 and builds a **workbench for running a software project on that canvas** on top of it: registered
@@ -14,7 +14,7 @@ project's pipeline or package would say nothing true about this tree. What this 
 publish is `@vitorengers/vibemaxxing` on npm, from a GitHub Release
 ([`.github/workflows/npm-publish.yml`](.github/workflows/npm-publish.yml)), and it runs its own
 checks on Linux, macOS and Windows ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). It
-publishes no container image: [#300](https://github.com/vitorengers/mcp_excalidraw/issues/300)
+publishes no container image: [#300](https://github.com/vitorengers/vibemaxxing/issues/300)
 deleted the Docker path rather than half-supporting it.
 
 One canvas, three ways to drive it:
@@ -62,7 +62,7 @@ Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Merma
 ## What This Fork Adds
 
 Everything from here to [What It Is](#what-it-is) is VibeMaxxing, and exists only in
-`vitorengers/mcp_excalidraw`. Every document referenced below is in
+`vitorengers/vibemaxxing`. Every document referenced below is in
 [docs/index.md](docs/index.md).
 
 ### One project per board
@@ -154,7 +154,7 @@ own. The release line below is what that version contains.
 
 ### v1.1 — CLI-First
 
-- **First-class CLI**: every capability is now a composable command — `npx -y @vitorengers/vibemaxxing add|query|describe|screenshot|export|import|mermaid|snapshot|arrange|share|...` — JSON on stdout, meaningful exit codes. Also installed as the `excalidraw-canvas` alias.
+- **First-class CLI**: every capability is now a composable command — `npx -y @vitorengers/vibemaxxing add|query|describe|screenshot|export|import|mermaid|snapshot|arrange|share|...` — JSON on stdout, meaningful exit codes. Also installed as the `vibemax` alias.
 - **Zero-setup**: canvas-driving CLI commands and the MCP server **auto-start the canvas server** if it isn't running (closes #66). Opt out with `EXCALIDRAW_NO_AUTOSTART=1`.
 - **`apply`**: multi-op patches (`{"create":[...],"update":[{"id":"a","set":{...}}],"delete":[...]}`) in a single invocation.
 - **`install-skill`**: `npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>` copies the portable agent skill into the directory your agent chooses (project or global), cleanly replacing older versions.
@@ -251,7 +251,7 @@ Where the skill shines:
 
 ## CLI Reference
 
-`npx -y @vitorengers/vibemaxxing <command>` or (after `npm i -g @vitorengers/vibemaxxing`) `vibemaxxing <command>` — `excalidraw-canvas` and `mcp-excalidraw-server` are kept as aliases of the same binary, so an existing MCP client configuration survives the rename.
+`npx -y @vitorengers/vibemaxxing <command>` or (after `npm i -g @vitorengers/vibemaxxing`) `vibemaxxing <command>`, with `vibemax` installed beside it as a shorter alias of the same binary. The inherited names `mcp-excalidraw-server` and `excalidraw-canvas` are **gone**: upstream's published package installs both, so keeping them meant a global install of the two packages fighting over the same command. If you had either in a script, change it to `vibemaxxing`.
 
 Conventions: JSON results on stdout — except `describe` (plain text by design) and raw-content output when `--out` is omitted (`export` prints the scene JSON, `screenshot --format svg` prints SVG). Diagnostics on stderr. Exit codes: `0` ok, `1` error, `2` usage, `3` canvas unreachable, `4` browser tab required. Canvas URL from `EXPRESS_SERVER_URL` or `--url`. Canvas-driving commands auto-start the server; `status` only reports current state. Explicit `start` overrides the `EXCALIDRAW_NO_AUTOSTART=1` opt-out (it's user intent, not auto-start).
 
@@ -304,7 +304,7 @@ Config location:
 ```json
 {
   "mcpServers": {
-    "excalidraw": {
+    "vibemaxxing": {
       "command": "npx",
       "args": ["-y", "@vitorengers/vibemaxxing"]
     }
@@ -312,11 +312,13 @@ Config location:
 }
 ```
 
+> **If you had this server configured as `excalidraw`**, the key is what a client turns into tool ids, so `mcp__excalidraw__*` becomes `mcp__vibemaxxing__*` — update any `--allowedTools mcp__excalidraw__*` pattern with it, because an agent whose allowed-tools list no longer matches is refused and exits 0 with nothing to say why (see [`docs/trap-allowed-tools.md`](docs/trap-allowed-tools.md)). Keep the old key if you also have upstream's package configured; two servers cannot share one key.
+
 **Local (node)**
 ```json
 {
   "mcpServers": {
-    "excalidraw": {
+    "vibemaxxing": {
       "command": "node",
       "args": ["/absolute/path/to/mcp_excalidraw/dist/index.js"],
       "env": {
@@ -334,14 +336,14 @@ Config location:
 
 **npx (recommended)**
 ```bash
-claude mcp add excalidraw --scope user -- npx -y @vitorengers/vibemaxxing
+claude mcp add vibemaxxing --scope user -- npx -y @vitorengers/vibemaxxing
 ```
 
 > Tip: for coding agents, the skill + CLI often beats MCP config entirely — let the agent pick its skill root, then run `npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>`.
 
 **Local (node)** - User-level (available across all projects):
 ```bash
-claude mcp add excalidraw --scope user \
+claude mcp add vibemaxxing --scope user \
   -e EXPRESS_SERVER_URL=http://127.0.0.1:3737 \
   -e ENABLE_CANVAS_SYNC=true \
   -- node /absolute/path/to/mcp_excalidraw/dist/index.js
@@ -350,7 +352,7 @@ claude mcp add excalidraw --scope user \
 **Manage servers:**
 ```bash
 claude mcp list              # List configured servers
-claude mcp remove excalidraw # Remove a server
+claude mcp remove vibemaxxing # Remove a server
 ```
 
 ---
@@ -363,7 +365,7 @@ Config location: `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json
 ```json
 {
   "mcpServers": {
-    "excalidraw": {
+    "vibemaxxing": {
       "command": "npx",
       "args": ["-y", "@vitorengers/vibemaxxing"]
     }
@@ -377,13 +379,13 @@ Config location: `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json
 
 **npx (recommended)**
 ```bash
-codex mcp add excalidraw -- npx -y @vitorengers/vibemaxxing
+codex mcp add vibemaxxing -- npx -y @vitorengers/vibemaxxing
 ```
 
 **Manage servers:**
 ```bash
 codex mcp list              # List configured servers
-codex mcp remove excalidraw # Remove a server
+codex mcp remove vibemaxxing # Remove a server
 ```
 
 ---
@@ -396,7 +398,7 @@ Config location: `~/.config/opencode/opencode.json` or project-level `opencode.j
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "excalidraw": {
+    "vibemaxxing": {
       "type": "local",
       "command": ["npx", "-y", "@vitorengers/vibemaxxing"],
       "enabled": true
@@ -414,7 +416,7 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
 ```json
 {
   "mcpServers": {
-    "excalidraw": {
+    "vibemaxxing": {
       "command": "npx",
       "args": ["-y", "@vitorengers/vibemaxxing"]
     }
@@ -467,7 +469,7 @@ node dist/index.js                # MCP server over stdio (terminal 2, usually l
 node dist/bin.js status           # or drive the CLI straight from the build
 ```
 
-There is no container path. It was deleted rather than repaired ([#300](https://github.com/vitorengers/mcp_excalidraw/issues/300)): the image bound every interface on a server whose API has no authentication, and carried neither `gh` nor `git`, so the issue blocks, the project-board mirror and the terminal — most of what this fork is — could not have run inside it. Run it on the host, from `npx` or from a clone.
+There is no container path. It was deleted rather than repaired ([#300](https://github.com/vitorengers/vibemaxxing/issues/300)): the image bound every interface on a server whose API has no authentication, and carried neither `gh` nor `git`, so the issue blocks, the project-board mirror and the terminal — most of what this fork is — could not have run inside it. Run it on the host, from `npx` or from a clone.
 
 ## Testing
 
@@ -565,11 +567,11 @@ branch, pull request, self-merge — is in [CLAUDE.md](CLAUDE.md), and
 [docs/development-log.md](docs/development-log.md) is one dated entry per merged pull request.
 
 Bug reports and pull requests for **this fork** belong on
-[its own issue tracker](https://github.com/vitorengers/mcp_excalidraw/issues) and its
+[its own issue tracker](https://github.com/vitorengers/vibemaxxing/issues) and its
 [project board](https://github.com/users/vitorengers/projects/5).
 
 ## License
 
 [MIT](LICENSE). The upstream project is `yctimlin/mcp_excalidraw` and its copyright is upstream's; this fork carries the same licence and is not affiliated with the Excalidraw team. [Excalidraw](https://github.com/excalidraw/excalidraw) is its own MIT-licensed project; this toolkit builds on it with love.
 
-**Links:** [this fork](https://github.com/vitorengers/mcp_excalidraw) · [its issues](https://github.com/vitorengers/mcp_excalidraw/issues) · [documentation index](docs/index.md) · the upstream project's [npm package](https://www.npmjs.com/package/mcp-excalidraw-server) and [demo video](https://youtu.be/ufW78Amq5qA)
+**Links:** [this fork](https://github.com/vitorengers/vibemaxxing) · [its issues](https://github.com/vitorengers/vibemaxxing/issues) · [documentation index](docs/index.md) · the upstream project's [npm package](https://www.npmjs.com/package/mcp-excalidraw-server) and [demo video](https://youtu.be/ufW78Amq5qA)

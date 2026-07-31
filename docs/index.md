@@ -15,7 +15,8 @@ The board itself is cut into two halves, each with a key that scrolls onto it â€
 
 | Document | What it covers |
 |---|---|
-| [running.md](running.md) | How to start the board: the build, the port, and all fifteen `EXCALIDRAW_*` variables |
+| [running.md](running.md) | How to start the board: the build, the port, and what every `EXCALIDRAW_*` variable means |
+| [configuration.md](configuration.md) | Where those values are read from: `config.json` in the state directory, a `<cwd>/.env`, the environment |
 | [workspaces.md](workspaces.md) | One project per board â€” the registry, `board.config.json`, and the settings dialog |
 | [board-sections.md](board-sections.md) | The two halves of the board and the keys that reach them |
 | [whats-next.md](whats-next.md) | What has not shipped |

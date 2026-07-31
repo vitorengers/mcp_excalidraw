@@ -110,7 +110,7 @@ check('everything blocked yields nothing rather than throwing', allBlocked.lengt
 
 // ─── The throwaway world ──────────────────────────────────────
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 const issueUrl = (n) => `https://github.com/${REPO}/issues/${n}`;
 const TODO = { id: 'f75ad846', name: 'Todo' };
 const DOING = { id: '47fc9ee4', name: 'In Progress' };

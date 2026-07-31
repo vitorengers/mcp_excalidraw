@@ -3,12 +3,14 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
 import { EXPRESS_SERVER_URL, ENABLE_CANVAS_SYNC, EXCALIDRAW_NO_AUTOSTART } from './config.js';
+import { BIN_NAME } from './version.js';
 import { getHealth, CANVAS_SERVICE_NAME, foreignServiceError, markCanvasIdentityVerified } from './canvas-client.js';
 import { isAcceptedCanvasService } from './identity.js';
 import { DEFAULT_CANVAS_PORT, removeCanvasState, whatIsOn } from './port.js';
 
 export { foreignServiceError };
 import { readPidFile, removePidFile, startupLogPath } from './pidfile.js';
+import { ensureStateDir, realEnvironment } from './settings.js';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
@@ -47,7 +49,7 @@ function isLoopbackUrl(): boolean {
 function unreachableError(reason: string): Error {
   const error = new Error(
     `Canvas server is not reachable at ${EXPRESS_SERVER_URL} (${reason}). ` +
-    `Start it with \`vibemaxxing start\` or \`node dist/server.js\`.`
+    `Start it with \`${BIN_NAME} start\` or \`node dist/server.js\`.`
   );
   (error as any).code = 'CANVAS_UNREACHABLE';
   return error;
@@ -173,7 +175,20 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
     // stay: the server has to outlive the CLI, and its output already goes to the log file
     // (utils/logger.ts) rather than to a console anybody could read.
     windowsHide: true,
-    env: { ...process.env, PORT: String(port), HOST: bindHost }
+    // The working directory the board gets, rather than the one the caller happened to be in
+    // (#304). This spawn passed no `cwd` at all, so an MCP server attached to an editor
+    // auto-started a canvas in *that editor's project* — which is where the warning in
+    // `docs/running.md` comes from: the port is then held by something answering
+    // `status: healthy` with no workspaces, no terminal and no agents. The state directory is
+    // where `config.json` is, so it is also the directory whose `.env` the board reads: a
+    // fixed pair, wherever the command was typed.
+    cwd: ensureStateDir(),
+    // The environment this process was *started* with, not the one it read its own files into.
+    // The child does its own layering, from the directory above; passing `process.env` would
+    // hand it the launch directory's `.env` as though it had been exported. `PORT` and `HOST`
+    // are the exception on purpose — the caller has already resolved where this board goes
+    // (`core/port.ts`), and the child must not resolve it a second time and differently.
+    env: { ...realEnvironment(), PORT: String(port), HOST: bindHost }
   });
   child.unref();
 

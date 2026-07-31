@@ -43,7 +43,7 @@ if (!existsSync(modulePath)) {
 }
 const { layoutBoard } = await import(pathToFileURL(modulePath).href);
 
-const REPO = 'https://github.com/vitorengers/mcp_excalidraw';
+const REPO = 'https://github.com/vitorengers/vibemaxxing';
 
 function card(itemId, number, title, { draggable = true, contentType = 'Issue' } = {}) {
   return {
@@ -54,7 +54,7 @@ function card(itemId, number, title, { draggable = true, contentType = 'Issue' }
     url: `${REPO}/issues/${number}`,
     state: 'OPEN',
     createdAt: '2026-07-01T00:00:00Z',
-    repository: 'vitorengers/mcp_excalidraw',
+    repository: 'vitorengers/vibemaxxing',
     draggable,
   };
 }

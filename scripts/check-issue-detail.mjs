@@ -78,7 +78,7 @@ let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', () => {
   process.stdout.write('Investigated, and opened one issue.\\n');
-  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/issues/7\\n');
+  process.stdout.write('https://github.com/vitorengers/vibemaxxing/issues/7\\n');
 });
 `, 'utf8');
 
@@ -120,7 +120,7 @@ if (reading) {
   }), 'utf8');
   writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
     name: 'Issue Detail Check',
-    repo: 'vitorengers/mcp_excalidraw',
+    repo: 'vitorengers/vibemaxxing',
   }), 'utf8');
 }
 

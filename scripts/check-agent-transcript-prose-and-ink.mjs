@@ -261,7 +261,7 @@ const whole = feed(
   thinking,
   tool('Write', { file_path: 'docs/terminal.md', content: 'x' }, 'toolu_w'),
   answer('Wrote 1 line', 'toolu_w'),
-  prose('Done: https://github.com/vitorengers/mcp_excalidraw/pull/258'),
+  prose('Done: https://github.com/vitorengers/vibemaxxing/pull/258'),
   finished,
 );
 const stripped = render.stripFoldMarks(whole);
@@ -277,7 +277,7 @@ check('and it is still `\\n`-terminated with no carriage return in it',
 
 console.log('\n6. and the two readers that parse the same bytes are untouched');
 
-const PULL = 'https://github.com/vitorengers/mcp_excalidraw/pull/258';
+const PULL = 'https://github.com/vitorengers/vibemaxxing/pull/258';
 check('extractGithubUrl still finds the pull request in the transcript',
   extractGithubUrl(whole, 'pull') === PULL, String(extractGithubUrl(whole, 'pull')));
 check('and finds it once the marks are off as well',

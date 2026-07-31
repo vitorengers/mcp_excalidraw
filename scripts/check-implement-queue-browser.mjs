@@ -96,7 +96,7 @@ const agentPath = join(workDir, 'stub-agent.mjs');
 const fixturePath = join(workDir, 'fixture.json');
 const registryPath = join(workDir, 'workspaces.json');
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 const TODO = { id: 'f75ad846', name: 'Todo' };
 const DOING = { id: '47fc9ee4', name: 'In Progress' };
 const DONE = { id: '98236657', name: 'Done' };
