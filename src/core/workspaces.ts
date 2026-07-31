@@ -18,6 +18,9 @@ import {
   WorkspaceEnvironment,
   wslUnsupportedHere,
 } from './workspace-paths.js';
+// The shapes module rather than the reader: this is the write path, and `project-board.ts`
+// spawns `gh`. What is needed here is the pattern the reader will hold the value to.
+import { githubProjectRefusal, parseProjectUrl } from './project-board-types.js';
 
 /** What the registry is called when nobody has named a file for it. */
 const REGISTRY_FILENAME = 'workspaces.json';
@@ -922,6 +925,17 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Why a `githubProject` was refused, in the words the settings dialog will show.
+ *
+ * The diagnosis is `githubProjectRefusal` in `project-board-types.ts`, shared with the read
+ * path that refuses the same value when a config was edited by hand (#317). Only the tail is
+ * this caller's: "Nothing was written" is true of a refused save and false of a refused read.
+ */
+function refuseGithubProject(value: string): string {
+  return `${githubProjectRefusal(value)} Nothing was written.`;
+}
+
+/**
  * Check a config edit before any of it reaches disk.
  *
  * This is the half of the "one broken project should not hide the others" promise that a
@@ -950,6 +964,15 @@ export function validateWorkspaceConfigPatch(
     if ((STRING_FIELDS as readonly string[]).includes(key)) {
       if (value !== null && typeof value !== 'string') {
         return { ok: false, error: `"${key}" must be text, or null to clear it.` };
+      }
+      // The one string field with a shape, because it is the one whose failure is silent:
+      // the mirror answers 404 for a URL it cannot parse, the canvas reads 404 as "this
+      // board has no project", and a board configured with a value that can never resolve
+      // is indistinguishable from a board that named none. Refused here, where somebody is
+      // looking at the field they just typed into.
+      if (key === 'githubProject' && typeof value === 'string' && value.trim()
+          && !parseProjectUrl(value)) {
+        return { ok: false, error: refuseGithubProject(value.trim()) };
       }
       continue;
     }
