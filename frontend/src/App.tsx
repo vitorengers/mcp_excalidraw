@@ -35,6 +35,8 @@ import {
   mirrorAnchors,
   resolveMirrorOrigin,
   layoutUnreadable,
+  notesOnlyBoard,
+  isNotesOnlyBoard,
   UNREADABLE_WIDTH,
   MIRROR_KIND,
   NOTES_OPTION_ID
@@ -2480,12 +2482,19 @@ function App(): JSX.Element {
    * strip itself is a mirror element, so a scene-side test would call the board warm the
    * moment the strip landed and never correct the words on it again.
    *
+   * **Read from GitHub** is the whole of that test, which is why `notesOnlyBoard` is excluded
+   * from it: since #316 a board with no project sets `board` too, so that the notes column
+   * exists there, and counting that as warm would put the silence back — a project configured
+   * afterwards, and unreadable, would draw its notes column and say nothing about why the rest
+   * of the region never arrived.
+   *
    * `layoutUnreadable` says what it draws and why it is a strip rather than a toast.
    */
   const renderUnreadable = (reason: string): void => {
     const api = excalidrawAPIRef.current
     if (!api) return
-    if (projectBoardRef.current.board) return
+    const warm = projectBoardRef.current.board
+    if (warm && !isNotesOnlyBoard(warm)) return
     // Same reason as every other write to this region: a redraw under a pointer or a caret
     // takes the thing being worked on out from under it.
     if (busyOnCanvas(api)) return
@@ -2533,7 +2542,8 @@ function App(): JSX.Element {
     // this function is built to skip, and a board that came back meanwhile keeps its own.
     if (document.fonts && document.fonts.status !== 'loaded') {
       void document.fonts.ready.then(() => {
-        if (projectBoardRef.current.board) return
+        const settled = projectBoardRef.current.board
+        if (settled && !isNotesOnlyBoard(settled)) return
         projectBoardRef.current = { ...projectBoardRef.current, signature: '' }
         renderUnreadable(reason)
       })
@@ -2712,6 +2722,33 @@ function App(): JSX.Element {
       ] as ExcalidrawElement[],
       captureUpdate: CaptureUpdateAction.NEVER
     })
+  }
+
+  /**
+   * Draw the one column the canvas owns, on a board that has no project to mirror.
+   *
+   * The 404 branch used to be `clearMirror()`, and the notes column is drawn by the mirror —
+   * so a workspace with no `githubProject` had no column, no `+`, and therefore no route to
+   * the issue block, which is the feature this tool is built around. Registration writes a
+   * `board.config.json` with `name` and never a project, so that was every newly registered
+   * one: the headline feature was reachable only after a step nothing on the canvas asked for.
+   *
+   * `notesOnlyBoard` is a board of no sections, so the same `layoutMirror` draws the same
+   * column it draws in front of a project's four. Nothing here decides geometry — that is the
+   * whole reason it goes through the layout rather than drawing a column of its own.
+   *
+   * The mirrored state is dropped **once**, on the pass that finds the project gone: a board
+   * that was read from GitHub leaves cards, move errors and a queue behind it, and every one
+   * of them belongs to a project this board no longer has. Guarded by `isNotesOnlyBoard` so
+   * the twenty-second poll does not clear and redraw the region for ever after — `renderMirror`
+   * skips a pass whose layout has not changed, and a `signature` reset every time would be
+   * the reader's selection fought on a timer.
+   */
+  const renderNotesOnly = (): void => {
+    if (projectBoardRef.current.board && !isNotesOnlyBoard(projectBoardRef.current.board)) {
+      clearMirror()
+    }
+    renderMirror(notesOnlyBoard())
   }
 
   /**
@@ -2940,7 +2977,7 @@ function App(): JSX.Element {
     sayOnCanvas(api, `The project board could not be read. ${reported}${advice}`)
   }
 
-  /** Re-read the project and redraw. A board with no project configured stays blank. */
+  /** Re-read the project and redraw. A board with no project configured keeps its notes column. */
   const refreshProjectBoard = async (): Promise<void> => {
     const api = excalidrawAPIRef.current
     if (!api) return
@@ -2955,13 +2992,18 @@ function App(): JSX.Element {
       // A tab switched while the request was in flight would draw one project's board
       // over another project's canvas.
       if (activeWorkspaceRef.current !== workspace) return
+      // The one status that means "this board has no project", and the only one that says
+      // nothing. Since #317 it means only that: a `githubProject` that is not a project URL
+      // answers 422 and falls through to the branch below, where it is said out loud. Most
+      // boards are this one, and a toast on every one of them would be the feature making
+      // itself unusable.
+      //
+      // Saying nothing is not the same as drawing nothing, which is what it used to do and
+      // what #316 is about: the notes column and its `+` are the canvas's own and need no
+      // project, so what a 404 clears is the *mirrored* half of the region. There is no
+      // failure here to announce — a board with no project is not a board that failed.
       if (response.status === 404) {
-        // The one status that means "this board has no project", and the only one that draws
-        // nothing and says nothing. Since #317 it means only that: a `githubProject` that is
-        // not a project URL answers 422 and falls through to the branch below, where it is
-        // said out loud. Most boards are this one, and a toast on every one of them would be
-        // the feature making itself unusable.
-        clearMirror()
+        renderNotesOnly()
         announcedBoardFailureRef.current[workspace] = ''
         return
       }
@@ -3160,11 +3202,19 @@ function App(): JSX.Element {
 
     if (!board) return
 
-    // Nothing on the canvas for this: no column means no mirror was drawn, and the `+` is
-    // drawn by the mirror, so there is no button here to have been pressed.
-    const column = columns.find((candidate) => candidate.optionId === sectionOptionId) ?? columns[0]
+    // The notes column, whatever the press named. It is where every draft is laid out — a
+    // stamp on a block decides nothing, which `layoutMirror` states — and it is the one column
+    // that is there whether or not this board has a project at all, because the canvas draws
+    // it rather than mirroring it. Falling back to `columns[0]` said the same thing only for
+    // as long as the notes column happened to be first.
+    const column = columns.find((candidate) => candidate.optionId === sectionOptionId)
+      ?? columns.find((candidate) => candidate.optionId === NOTES_OPTION_ID)
     if (!column) {
-      console.warn('The mirror has no column to drop a block into.')
+      // Nothing on the canvas for this: no column means no mirror was drawn, and the `+` is
+      // drawn by the mirror, so there is no button here to have been pressed. Said out loud
+      // all the same — a `+` that answers nothing is what #244 is about, and a console
+      // warning is a thing nobody has open.
+      sayOnCanvas(api, 'The board has no notes column to drop a block into.')
       return
     }
 

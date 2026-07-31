@@ -92,7 +92,7 @@ import {
 } from './core/implement-queue.js';
 import { TOOL_DOC_KEYS } from './core/tool-docs.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
-import { issueUrlRefusal } from './core/github-host.js';
+import { GITHUB_HOST, issueUrlRefusal } from './core/github-host.js';
 import type { IssueDetail } from './core/github-issue.js';
 import { IssueMemo, memoWindow } from './core/issue-memo.js';
 import {
@@ -120,6 +120,7 @@ import {
   HeldWorktree,
   ImplementWorktree,
   ensureWorktree,
+  originRemote,
   releaseWorktree
 } from './core/implement-worktree.js';
 import { describeInterrupted, interruptedRuns } from './core/implement-recovery.js';
@@ -1724,6 +1725,41 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   }
   if (workspace.error) {
     return res.status(400).json({ success: false, error: `Workspace is unusable: ${workspace.error}` });
+  }
+
+  /**
+   * Where the issue would be created — and a refusal, on the block, when there is nowhere.
+   *
+   * Writing an observation down is the part that has to work before GitHub is connected, and
+   * since #316 it does: the notes column and its `+` are the canvas's own and need no project.
+   * Turning one into an issue is not. The agent is told to create it "with `gh` in this
+   * repository", so a project with no repository at all sends a coding agent off to spend
+   * minutes discovering that — a run that looks exactly like a working one until it fails with
+   * whatever `gh` said. Refused here instead, before the spawn, which is the decision #316
+   * records: refuse at the run rather than at the `+`.
+   *
+   * `repo` in `board.config.json` first and the `origin` remote second, the way
+   * `interruptedRuns` already resolves it: a checkout that has a GitHub remote has told us
+   * where its issues go, and asking it to repeat that in a config file would refuse a project
+   * that works. A remote that is not on `github.com` names itself in the refusal rather than
+   * being reported as no remote at all — #322's rule, and the case where the reader is looking
+   * at an `origin` and being told there is none.
+   *
+   * The reason goes onto the block as well as into the response. The panel showing it is one
+   * selection away from being closed, and the block is what the reader comes back to.
+   */
+  const origin = await originRemote(workspace);
+  const repo = workspace.repo || origin.repo;
+  if (!repo) {
+    const reason = 'This project has no GitHub repository to create the issue in'
+      + (origin.url
+        ? ` — its "origin" is ${origin.url}, which is not a ${GITHUB_HOST} remote. `
+          + `This board only opens issues on ${GITHUB_HOST}. `
+        : `. Set "repo" in board.config.json, or add a ${GITHUB_HOST} "origin" remote. `)
+      + 'The observation is kept either way.';
+    markIssueState(workspaceId, elementId, 'failed', { issueError: reason });
+    logger.warn(`Issue block ${elementId} refused: workspace "${workspaceId}" names no repository`);
+    return res.status(400).json({ success: false, error: reason });
   }
 
   const agentCommand = agentCommandOrRefuse(

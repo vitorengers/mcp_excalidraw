@@ -53,6 +53,18 @@ export interface ProjectBoard {
    * deliberately names no column.
    */
   todoColumn?: string | null;
+  /**
+   * True for the board the canvas invents when there is no project to mirror.
+   *
+   * Nothing reads a project board from GitHub and sets this. It is the mark on
+   * `notesOnlyBoard()` — a board of no sections at all, drawn so the notes column and its
+   * `+` exist on a workspace with no `githubProject`, which is every newly registered one.
+   * The mark is what keeps that board from being mistaken for a project that was read: the
+   * canvas treats "a board is up" as "the mirror is warm and a failed read must not wipe
+   * it", and a warm board with no project behind it would swallow the sentence #254 exists
+   * to put on the canvas.
+   */
+  noProject?: boolean;
 }
 
 /** The section for items the project holds but never gave a status. */

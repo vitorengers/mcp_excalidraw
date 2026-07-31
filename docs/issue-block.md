@@ -24,6 +24,35 @@ A second click while a run is in flight gets 409. So does a block that already h
 There is no time limit on the run, and a block stuck in `running` can be reset —
 [No time limit, and the way back](#no-time-limit-and-the-way-back) covers both agents.
 
+### A run needs a repository to create the issue in
+
+The `+` does not. Since #316 the notes column and its `+` are drawn on a board with **no**
+GitHub project at all (`docs/project-board.md`), because writing an observation down is the part
+that has to work before GitHub is connected — a first-run reader has nowhere else to put one, and
+a canvas that refuses the note is a canvas with nothing to offer until a config file is edited.
+
+Turning that note into an issue is the other half, and it is where the refusal belongs. The agent
+is told to *create the issue with `gh` in this repository*, so a project with no repository sends
+it off to spend minutes finding that out and comes back with whatever `gh` said. `POST
+/api/issue-block/:id` therefore answers **400** before the spawn when the workspace names no
+repository — `repo` in `board.config.json`, or an `origin` remote pointing at GitHub, resolved in
+that order, the same way `interruptedRuns` resolves it. A checkout with a GitHub remote has
+already said where its issues go; asking it to repeat that in a config file would refuse a
+project that works.
+
+An `origin` that is not on `github.com` is **named in the refusal** rather than reported as no
+remote at all, which is #322's rule (`src/core/github-host.ts`): a reader looking straight at an
+`origin` and told there is none goes hunting for something that is not wrong.
+
+The reason goes **onto the block** as `issueState: "failed"` and `issueError`, not only into the
+response: the panel showing it is one selection away from being closed, and the block is what the
+reader comes back to. The observation is kept, the run button stays offered, and configuring the
+repository is all it takes to press it again.
+
+`scripts/check-notes-column-without-project-browser.mjs` presses that button in a browser on a
+project with neither a `githubProject` nor a remote, and asserts the refusal is on the screen and
+that no agent was spawned to produce it.
+
 ## Writing the observation
 
 Writing into a block is typing into Excalidraw's own bound-label editor, and that editor

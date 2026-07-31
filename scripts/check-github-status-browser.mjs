@@ -16,7 +16,9 @@
  *  - **it is said once.** The failure is the same failure every twenty seconds, so a toast per
  *    poll would be the fix becoming its own nuisance — the risk the issue names;
  *  - **a board with no project still says nothing at all.** Most boards are that board, and a
- *    toast on every one of them would make the feature unusable;
+ *    toast on every one of them would make the feature unusable. It mirrors nothing either —
+ *    what it draws since #316 is the notes column, which is the canvas's own and has no project
+ *    behind it to have failed;
  *  - **a `githubProject` that is not a project URL is not that board.** The two shared one 404
  *    until now, which is why somebody who wrote a URL and got a typo in it got the silence
  *    meant for somebody who wrote nothing;
@@ -282,7 +284,7 @@ const GRAB_API = `(() => {
   return false;
 })()`;
 
-/** Every mirror element on the scene, which is what "draws nothing" has to be measured against. */
+/** Every mirror element on the scene, by role, which is what case 6 is measured against. */
 const MIRROR = `(() => {
   const api = window.__boardCheckApi;
   if (!api) return null;
@@ -436,13 +438,22 @@ try {
   check('and still once after three more refreshes', after === 1, String(after));
   });
 
-  await stage('6. a board with no githubProject draws nothing and says nothing', async () => {
+  await stage('6. a board with no githubProject mirrors nothing and says nothing', async () => {
   await openBoard(refuses.base, 'no-project');
   // Long enough for the first poll to have landed and been answered 404.
   await sleep(4000);
   await shot('02-no-project');
   const quietMirror = await evaluate(MIRROR);
-  check('nothing of the mirror is drawn', Array.isArray(quietMirror) && quietMirror.length === 0,
+  // Since #316 a 404 is not a blank corner of canvas: the notes column and its `+` are the
+  // canvas's own and need no project, so what is drawn is one column with nothing in it. The
+  // silence is what this check is about and is unchanged — *mirroring* nothing is the half
+  // that has to hold here, and a card would mean a project had been read.
+  check('nothing mirrored is drawn', Array.isArray(quietMirror) && !quietMirror.includes('card'),
+        JSON.stringify(quietMirror));
+  check('and the one column drawn is the canvas\'s own, with its +',
+        Array.isArray(quietMirror)
+          && quietMirror.filter((role) => role === 'section').length === 1
+          && quietMirror.filter((role) => role === 'add').length === 1,
         JSON.stringify(quietMirror));
   check('and nothing is said', (await saidCount()) === 0,
         JSON.stringify(await evaluate('window.__warns || []')));
