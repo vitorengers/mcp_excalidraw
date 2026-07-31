@@ -133,7 +133,7 @@ const FILES_FIXTURE = ['src/**/*', 'dist/**/*', 'skills/**/*', 'docs/*.md', '*.d
 
 const CLEAN_LISTING = ['package.json', 'README.md', 'LICENSE', 'index.d.ts',
                        'src/index.ts', 'src/core/spawn.ts', 'dist/frontend/assets/index.js',
-                       'skills/excalidraw-skill/SKILL.md', 'docs/running.md'];
+                       'skills/vibemaxxing-canvas/SKILL.md', 'docs/running.md'];
 const DIRTY_LISTING = [...CLEAN_LISTING, '.env', 'scripts/export-board.mjs',
                        'docs/board.excalidraw', 'board.config.json'];
 

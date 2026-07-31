@@ -34,7 +34,7 @@
  *   - **README.md** must label per block. It is the front page and a reader arrives in the
  *     middle of it from the table of contents, so a disclaimer at the top labels nothing
  *     that a reader of the Cursor section will ever see.
- *   - **skills/excalidraw-skill/SKILL.md** may declare once, in its first section. It is a
+ *   - **skills/vibemaxxing-canvas/SKILL.md** may declare once, in its first section. It is a
  *     portable skill that `install-skill` copies onto machines that have no clone of this
  *     repository, so it *has* to name a package on the registry; and it is one document an
  *     agent reads from the top before running anything in it. A single line there naming the
@@ -207,7 +207,7 @@ function offence({ name, headings, declared }) {
 
 console.log('1. no document hands out a command that fetches somebody else\'s package');
 
-for (const relative of ['README.md', 'skills/excalidraw-skill/SKILL.md']) {
+for (const relative of ['README.md', 'skills/vibemaxxing-canvas/SKILL.md']) {
   const text = read(relative);
   const declared = relative.endsWith('SKILL.md') ? declaredUpstream(text) : new Set();
   const offences = [];
