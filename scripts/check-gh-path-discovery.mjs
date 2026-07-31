@@ -2,9 +2,11 @@
 /**
  * Checks that `gh` is found on macOS and Linux the way it is already found on Windows.
  *
- * Every `gh` this server spawns runs with `env: { ...process.env, PATH: agentPath() }` —
- * `src/core/gh.ts` for the project board, and `src/core/github-issue.ts` for the issue read,
- * two independent spawns that must keep sharing one answer. `agentPath()` appended the two
+ * Every `gh` this server spawns runs with `env: { ...process.env, PATH: agentPath() }`. That
+ * used to be two independent spawns that had to keep sharing one answer — `src/core/gh.ts` for
+ * the project board and `src/core/github-issue.ts` for the issue read — and since #319 it is
+ * one: the issue read goes through `runGh` like everything else, so section 3 asserts the
+ * absence of the second spawn rather than its agreement with the first. `agentPath()` appended the two
  * Windows GitHub CLI directories and returned the inherited PATH untouched everywhere else.
  * That is correct as long as the server is started from a shell, where a brew- or
  * apt-installed `gh` is already on PATH. It stops being correct the moment the release ships
@@ -138,13 +140,18 @@ try {
 
   // ─── 3. Both gh runners still ask the same function ─────────
 
-  console.log('\n3. the two gh spawns share the one answer');
+  console.log('\n3. there is one gh spawn, and it asks for the repaired PATH');
 
-  for (const file of ['src/core/gh.ts', 'src/core/github-issue.ts']) {
-    const source = readFileSync(join(repoRoot, file), 'utf8');
-    check(`${file} spawns with the repaired PATH`, /PATH:\s*agentPath\(\)/.test(source),
-          'a second spawn building its own environment is how the two drift apart');
-  }
+  const runner = readFileSync(join(repoRoot, 'src', 'core', 'gh.ts'), 'utf8');
+  check('src/core/gh.ts spawns with the repaired PATH', /PATH:\s*agentPath\(\)/.test(runner),
+        'a spawn building its own environment is how a PATH repair stops reaching gh');
+
+  // Stronger than the agreement this used to assert, and for the reason that made the
+  // agreement worth asserting: a second spawn is what drifts. #319 removed it — the issue
+  // read is a `runGh` call now — so what is checked is that it has not come back.
+  const reader = readFileSync(join(repoRoot, 'src', 'core', 'github-issue.ts'), 'utf8');
+  check('src/core/github-issue.ts spawns nothing of its own', !/\bspawn\s*\(/.test(reader),
+        'a second spawn building its own environment is how the two drift apart');
 } catch (error) {
   if (String(error?.message) !== 'nothing to drive') {
     failures++;
