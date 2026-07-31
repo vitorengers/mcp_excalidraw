@@ -81,9 +81,11 @@ const NO_LITERALS_IN = ['src/cli/run.ts', 'src/core/spawn.ts'];
  * term, exact count, and why it is not a command.
  */
 const NOT_COMMANDS = [
-  { file: 'src/core/pidfile.ts', term: 'excalidraw-canvas', count: 1,
+  { file: 'src/core/settings.ts', term: 'excalidraw-canvas', count: 1,
     why: 'the POSIX leaf of the state directory a running server\'s pidfile already sits in; '
-         + '#303 named its successor and left the rename for later, since it orphans that pidfile' },
+         + '#303 named its successor and left the rename for later, since it orphans that pidfile. '
+         + 'It moved out of core/pidfile.ts with #304, which put the configuration file in the '
+         + 'same directory and had to choose it upstream of the logger' },
   { file: 'src/core/scene-io.ts', term: 'mcp-excalidraw-server', count: 1,
     why: 'the "source" field of an exported scene; nothing reads it back (#293)' },
 ];
