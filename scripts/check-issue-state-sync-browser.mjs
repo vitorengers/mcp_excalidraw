@@ -89,7 +89,7 @@ const stubAgentPath = join(workDir, 'stub-agent.mjs');
 const fixturePath = join(workDir, 'fixture.json');
 const registryPath = join(workDir, 'workspaces.json');
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 const RESEARCHED_URL = `https://github.com/${REPO}/issues/123`;
 const ADOPTED_URL = `https://github.com/${REPO}/issues/94`;
 const ADOPTED_TITLE = 'The terminal should have tabs on top';

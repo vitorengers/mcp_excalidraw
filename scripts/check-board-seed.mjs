@@ -61,7 +61,7 @@ function makeProject(name, config) {
   return dir;
 }
 
-const issue = (n) => `https://github.com/vitorengers/mcp_excalidraw/issues/${n}`;
+const issue = (n) => `https://github.com/vitorengers/vibemaxxing/issues/${n}`;
 
 /** A shape as `scripts/export-board.mjs` writes one: no server bookkeeping, a version. */
 function shape(id, extra = {}) {
@@ -118,7 +118,7 @@ const interesting = [
     ...CREATED_LOOK,
     customData: {
       kind: 'issue', issueState: 'created', issueUrl: issue(95), issueTitle: 'Implemented',
-      implementState: 'done', implementUrl: 'https://github.com/vitorengers/mcp_excalidraw/pull/95',
+      implementState: 'done', implementUrl: 'https://github.com/vitorengers/vibemaxxing/pull/95',
       implementError: null, implementStartedAt: '2026-07-01T00:00:00.000Z', implementEndedAt: '2026-07-01T00:10:00.000Z',
     },
   }),
@@ -308,7 +308,7 @@ try {
   const done = byId.get('implement-done');
   check('a finished implementation keeps its pull request',
     done?.customData?.implementState === 'done'
-    && done?.customData?.implementUrl === 'https://github.com/vitorengers/mcp_excalidraw/pull/95'
+    && done?.customData?.implementUrl === 'https://github.com/vitorengers/vibemaxxing/pull/95'
     && done?.customData?.implementStartedAt === '2026-07-01T00:00:00.000Z',
     JSON.stringify(done?.customData));
 

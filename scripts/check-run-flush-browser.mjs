@@ -89,7 +89,7 @@ const stubAgentPath = join(workDir, 'stub-agent.mjs');
 const fixturePath = join(workDir, 'fixture.json');
 const registryPath = join(workDir, 'workspaces.json');
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 const TODO = { id: 'f75ad846', name: 'Todo' };
 
 writeFileSync(fixturePath, JSON.stringify({

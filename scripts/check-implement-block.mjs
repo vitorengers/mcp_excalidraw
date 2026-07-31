@@ -84,7 +84,7 @@ if (!url) {
   git(projectDir, ['config', 'commit.gpgsign', 'false']);
   writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
     name: 'Implement Block Check',
-    repo: 'vitorengers/mcp_excalidraw',
+    repo: 'vitorengers/vibemaxxing',
   }), 'utf8');
   writeFileSync(join(projectDir, 'README.md'), '# Implement Block Check\n', 'utf8');
   git(projectDir, ['add', '.']);
@@ -103,7 +103,7 @@ process.stdin.on('end', async () => {
   // backstop for a check that failed before it released anything, not a timing assumption.
   for (let attempt = 0; attempt < 1800 && !existsSync(releaseFile); attempt++) await sleep(100);
   process.stdout.write('Implemented, and opened one pull request.\\n');
-  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/pull/99\\n');
+  process.stdout.write('https://github.com/vitorengers/vibemaxxing/pull/99\\n');
 });
 `, 'utf8');
 
@@ -135,7 +135,7 @@ async function blockWithIssue(y) {
       customData: {
         kind: 'issue',
         issueState: 'created',
-        issueUrl: 'https://github.com/vitorengers/mcp_excalidraw/issues/1',
+        issueUrl: 'https://github.com/vitorengers/vibemaxxing/issues/1',
       },
     }),
   });

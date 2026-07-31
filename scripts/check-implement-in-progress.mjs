@@ -52,7 +52,7 @@ const DOING = { id: '47fc9ee4', name: 'In Progress' };
 const WORKING = { id: 'aa11bb22', name: 'Working' };
 const DONE = { id: '98236657', name: 'Done' };
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 const issueUrl = (number) => `https://github.com/${REPO}/issues/${number}`;
 
 function item(id, { number, option, createdAt = '2026-07-20T10:00:00Z' }) {

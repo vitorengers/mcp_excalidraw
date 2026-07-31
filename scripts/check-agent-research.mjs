@@ -64,7 +64,7 @@ let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', () => {
   writeFileSync(process.env.CAPTURE_TO, input, 'utf8');
-  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/issues/1\\n');
+  process.stdout.write('https://github.com/vitorengers/vibemaxxing/issues/1\\n');
 });
 `, 'utf8');
 
@@ -123,7 +123,7 @@ try {
   const issuePrompt = await capture(() =>
     runIssueAgent(workspace, 'An observation.', { agentCommand, timeoutMs: 60_000 }));
   const implementPrompt = await capture(() =>
-    runImplementAgent(workspace, 'https://github.com/vitorengers/mcp_excalidraw/issues/77',
+    runImplementAgent(workspace, 'https://github.com/vitorengers/vibemaxxing/issues/77',
                       { agentCommand, timeoutMs: 60_000 }));
 
   console.log('1. both prompts reached their agent');

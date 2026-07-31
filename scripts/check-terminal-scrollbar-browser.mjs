@@ -160,7 +160,7 @@ writeFileSync(registryPath, JSON.stringify({
 // No githubProject: the mirror stays dormant, so nothing else is drawing on this board.
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Scrollbar Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 /** More lines than the block can show, so there is a scrollback for a thumb to stand for. */

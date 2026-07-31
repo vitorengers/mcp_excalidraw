@@ -1,6 +1,6 @@
 # Notice
 
-VibeMaxxing (`vitorengers/mcp_excalidraw`) is an MIT-licensed fork of the upstream project
+VibeMaxxing (`vitorengers/vibemaxxing`) is an MIT-licensed fork of the upstream project
 `yctimlin/mcp_excalidraw` (the original work), taken at commit
 `505f4c6e0ca1fe2489b4c18c9fedc24ac50a9002` (2026-07-22), the last commit this repository
 inherited from upstream. Everything at or below that commit is the original work and its
@@ -11,7 +11,7 @@ halves are under the MIT licence in [LICENSE](LICENSE), which carries a copyrigh
 
 This fork is not affiliated with the upstream project and the upstream project does not endorse
 it. Bug reports and pull requests for this fork belong on
-[its own issue tracker](https://github.com/vitorengers/mcp_excalidraw/issues), not upstream's.
+[its own issue tracker](https://github.com/vitorengers/vibemaxxing/issues), not upstream's.
 
 ## Excalidraw
 

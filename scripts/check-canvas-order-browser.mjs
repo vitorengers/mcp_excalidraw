@@ -125,10 +125,10 @@ writeFileSync(fixturePath, JSON.stringify({
         __typename: 'Issue',
         number: 7,
         title: 'Waiting to be picked up',
-        url: 'https://github.com/vitorengers/mcp_excalidraw/issues/7',
+        url: 'https://github.com/vitorengers/vibemaxxing/issues/7',
         createdAt: '2026-07-20T10:00:00Z',
         state: 'OPEN',
-        repository: { nameWithOwner: 'vitorengers/mcp_excalidraw' },
+        repository: { nameWithOwner: 'vitorengers/vibemaxxing' },
       },
     }] },
   } } },
@@ -155,7 +155,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Order Check',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
 // No project on this one, so no mirror is ever drawn on it — which is the case the last

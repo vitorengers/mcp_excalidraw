@@ -54,7 +54,7 @@ const stubGhPath = join(workDir, 'stub-gh.mjs');
 const stubAgentPath = join(workDir, 'stub-agent.mjs');
 const registryPath = join(workDir, 'workspaces.json');
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 const ISSUE_URL = `https://github.com/${REPO}/issues/94`;
 const ISSUE_TITLE = 'The terminal should have tabs on top';
 const OTHER_ISSUE_URL = `https://github.com/${REPO}/issues/95`;

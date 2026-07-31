@@ -98,7 +98,7 @@ git(projectDir, ['config', 'user.email', 'check@example.com']);
 git(projectDir, ['config', 'user.name', 'Check']);
 git(projectDir, ['config', 'commit.gpgsign', 'false']);
 writeFileSync(join(projectDir, 'board.config.json'),
-  JSON.stringify({ name: 'Comment Check', repo: 'vitorengers/mcp_excalidraw' }), 'utf8');
+  JSON.stringify({ name: 'Comment Check', repo: 'vitorengers/vibemaxxing' }), 'utf8');
 writeFileSync(join(projectDir, 'README.md'), '# comment check\n', 'utf8');
 git(projectDir, ['add', '.']);
 git(projectDir, ['commit', '-m', 'initial']);
@@ -135,7 +135,7 @@ if (args[0] === 'issue' && args[1] === 'comment') {
       author: { login: 'vitorengers' },
       body: input,
       createdAt: '2026-07-27T12:00:00Z',
-      url: 'https://github.com/vitorengers/mcp_excalidraw/issues/7#issuecomment-' + (all.length + 1),
+      url: 'https://github.com/vitorengers/vibemaxxing/issues/7#issuecomment-' + (all.length + 1),
     });
     writeFileSync(store, JSON.stringify(all), 'utf8');
     process.stdout.write(all[all.length - 1].url + '\\n');
@@ -160,7 +160,7 @@ writeFileSync(agentStub, `#!/usr/bin/env node
 let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', () => {
-  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/pull/7\\n');
+  process.stdout.write('https://github.com/vitorengers/vibemaxxing/pull/7\\n');
 });
 `, 'utf8');
 
@@ -227,7 +227,7 @@ const ghCalls = () =>
   readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
 const commentCalls = () => ghCalls().filter((entry) => entry.args[1] === 'comment');
 
-const ISSUE = 'https://github.com/vitorengers/mcp_excalidraw/issues/7';
+const ISSUE = 'https://github.com/vitorengers/vibemaxxing/issues/7';
 
 const postComment = (body, url = ISSUE) =>
   call('/api/issue/comment', { method: 'POST', body: JSON.stringify({ url, body }) });
@@ -277,7 +277,7 @@ try {
   check('400 for an empty body', empty.status === 400, `got ${empty.status}`);
   const blank = await postComment('  \n\t  ');
   check('400 for whitespace only', blank.status === 400, `got ${blank.status}`);
-  const notAnIssue = await postComment('something', 'https://github.com/vitorengers/mcp_excalidraw');
+  const notAnIssue = await postComment('something', 'https://github.com/vitorengers/vibemaxxing');
   check('400 for a URL that is not an issue', notAnIssue.status === 400, `got ${notAnIssue.status}`);
   check('no gh was spawned by any of them', ghCalls().length === before,
         `${ghCalls().length - before} extra call(s)`);
@@ -350,7 +350,7 @@ try {
   check('the finished implementation is not cleared', recordAfter?.state === 'done',
         JSON.stringify(recordAfter));
   check('so the block does not become runnable again',
-        recordAfter?.url === 'https://github.com/vitorengers/mcp_excalidraw/pull/7',
+        recordAfter?.url === 'https://github.com/vitorengers/vibemaxxing/pull/7',
         JSON.stringify(recordAfter));
 
   console.log('\n8. it writes to GitHub, so it refuses to run off loopback');

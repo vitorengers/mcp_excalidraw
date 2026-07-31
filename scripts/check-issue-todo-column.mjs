@@ -75,7 +75,7 @@ const ICEBOX = { id: 'bb000002', name: 'Icebox' };
 const DOING = { id: '47fc9ee4', name: 'In Progress' };
 const DONE = { id: '98236657', name: 'Done' };
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 const issueUrl = (number) => `https://github.com/${REPO}/issues/${number}`;
 
 function item(id, { number, option }) {

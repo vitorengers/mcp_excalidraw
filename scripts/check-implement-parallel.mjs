@@ -91,7 +91,7 @@ function makeProject(name) {
   git(dir, ['config', 'user.email', 'check@example.com']);
   git(dir, ['config', 'user.name', 'Check']);
   git(dir, ['config', 'commit.gpgsign', 'false']);
-  writeFileSync(join(dir, 'board.config.json'), JSON.stringify({ name, repo: 'vitorengers/mcp_excalidraw' }), 'utf8');
+  writeFileSync(join(dir, 'board.config.json'), JSON.stringify({ name, repo: 'vitorengers/vibemaxxing' }), 'utf8');
   writeFileSync(join(dir, 'README.md'), `# ${name}\n`, 'utf8');
   git(dir, ['add', '.']);
   git(dir, ['commit', '-m', 'initial']);
@@ -134,7 +134,7 @@ process.stdin.on('end', async () => {
   }
 
   process.stdout.write('done\\n');
-  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/pull/' + number + '\\n');
+  process.stdout.write('https://github.com/vitorengers/vibemaxxing/pull/' + number + '\\n');
 });
 `, 'utf8');
 
@@ -193,7 +193,7 @@ async function call(base, workspace, path, options = {}) {
 const canvas = (path, options) => call(BASE, 'parallel', path, options);
 const capped = (path, options) => call(CAPPED_BASE, 'capped', path, options);
 
-const issue = (n) => `https://github.com/vitorengers/mcp_excalidraw/issues/${n}`;
+const issue = (n) => `https://github.com/vitorengers/vibemaxxing/issues/${n}`;
 const start = (fn, n) => fn('/api/implement', { method: 'POST', body: JSON.stringify({ url: issue(n) }) });
 const release = (n) => writeFileSync(join(workDir, `release-${n}`), '', 'utf8');
 const runReport = (n) => JSON.parse(readFileSync(join(workDir, `run-${n}.json`), 'utf8'));

@@ -55,7 +55,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ─── The projects the stub serves ─────────────────────────────
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 const issueUrl = (number) => `https://github.com/${REPO}/issues/${number}`;
 
 const TODO = { id: 'f75ad846', name: 'Todo' };

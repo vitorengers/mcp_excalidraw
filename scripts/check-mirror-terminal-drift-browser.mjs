@@ -135,10 +135,10 @@ const item = (id, number, title, option) => ({
     __typename: 'Issue',
     number,
     title,
-    url: `https://github.com/vitorengers/mcp_excalidraw/issues/${number}`,
+    url: `https://github.com/vitorengers/vibemaxxing/issues/${number}`,
     createdAt: '2026-07-20T10:00:00Z',
     state: 'OPEN',
-    repository: { nameWithOwner: 'vitorengers/mcp_excalidraw' },
+    repository: { nameWithOwner: 'vitorengers/vibemaxxing' },
   },
 });
 
@@ -178,7 +178,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Drift Check',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
 // The board switched to and back from. No project on it, so nothing here draws a mirror —

@@ -55,7 +55,7 @@ const workDir = join(tmpdir(), `recovery-merged-${process.pid}`);
 rmSync(workDir, { recursive: true, force: true });
 mkdirSync(workDir, { recursive: true });
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 
 /** A real git repository — worktrees and merges are the thing detection reads. */
 function makeProject(name) {

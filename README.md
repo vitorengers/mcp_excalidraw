@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**VibeMaxxing** (`vitorengers/mcp_excalidraw`) is a fork of the upstream project
+**VibeMaxxing** (`vitorengers/vibemaxxing`) is a fork of the upstream project
 `yctimlin/mcp_excalidraw`. It keeps everything upstream does — a live
 [Excalidraw](https://excalidraw.com) canvas agents draw on, drive from a CLI, or reach over MCP —
 and builds a **workbench for running a software project on that canvas** on top of it: registered
@@ -14,7 +14,7 @@ project's pipeline or package would say nothing true about this tree. What this 
 publish is `@vitorengers/vibemaxxing` on npm, from a GitHub Release
 ([`.github/workflows/npm-publish.yml`](.github/workflows/npm-publish.yml)), and it runs its own
 checks on Linux, macOS and Windows ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). It
-publishes no container image: [#300](https://github.com/vitorengers/mcp_excalidraw/issues/300)
+publishes no container image: [#300](https://github.com/vitorengers/vibemaxxing/issues/300)
 deleted the Docker path rather than half-supporting it.
 
 One canvas, three ways to drive it:
@@ -62,7 +62,7 @@ Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Merma
 ## What This Fork Adds
 
 Everything from here to [What It Is](#what-it-is) is VibeMaxxing, and exists only in
-`vitorengers/mcp_excalidraw`. Every document referenced below is in
+`vitorengers/vibemaxxing`. Every document referenced below is in
 [docs/index.md](docs/index.md).
 
 ### One project per board
@@ -469,7 +469,7 @@ node dist/index.js                # MCP server over stdio (terminal 2, usually l
 node dist/bin.js status           # or drive the CLI straight from the build
 ```
 
-There is no container path. It was deleted rather than repaired ([#300](https://github.com/vitorengers/mcp_excalidraw/issues/300)): the image bound every interface on a server whose API has no authentication, and carried neither `gh` nor `git`, so the issue blocks, the project-board mirror and the terminal — most of what this fork is — could not have run inside it. Run it on the host, from `npx` or from a clone.
+There is no container path. It was deleted rather than repaired ([#300](https://github.com/vitorengers/vibemaxxing/issues/300)): the image bound every interface on a server whose API has no authentication, and carried neither `gh` nor `git`, so the issue blocks, the project-board mirror and the terminal — most of what this fork is — could not have run inside it. Run it on the host, from `npx` or from a clone.
 
 ## Testing
 
@@ -567,11 +567,11 @@ branch, pull request, self-merge — is in [CLAUDE.md](CLAUDE.md), and
 [docs/development-log.md](docs/development-log.md) is one dated entry per merged pull request.
 
 Bug reports and pull requests for **this fork** belong on
-[its own issue tracker](https://github.com/vitorengers/mcp_excalidraw/issues) and its
+[its own issue tracker](https://github.com/vitorengers/vibemaxxing/issues) and its
 [project board](https://github.com/users/vitorengers/projects/5).
 
 ## License
 
 [MIT](LICENSE). The upstream project is `yctimlin/mcp_excalidraw` and its copyright is upstream's; this fork carries the same licence and is not affiliated with the Excalidraw team. [Excalidraw](https://github.com/excalidraw/excalidraw) is its own MIT-licensed project; this toolkit builds on it with love.
 
-**Links:** [this fork](https://github.com/vitorengers/mcp_excalidraw) · [its issues](https://github.com/vitorengers/mcp_excalidraw/issues) · [documentation index](docs/index.md) · the upstream project's [npm package](https://www.npmjs.com/package/mcp-excalidraw-server) and [demo video](https://youtu.be/ufW78Amq5qA)
+**Links:** [this fork](https://github.com/vitorengers/vibemaxxing) · [its issues](https://github.com/vitorengers/vibemaxxing/issues) · [documentation index](docs/index.md) · the upstream project's [npm package](https://www.npmjs.com/package/mcp-excalidraw-server) and [demo video](https://youtu.be/ufW78Amq5qA)

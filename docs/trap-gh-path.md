@@ -114,4 +114,4 @@ fails with "not recognized"; use the full path, or prepend the directory first.
 
 And `gh` resolves the repository from the git remotes, where `upstream` wins — so
 `gh issue list` in this checkout lists **yctimlin/mcp_excalidraw's** issues, not this fork's.
-Pass `--repo vitorengers/mcp_excalidraw` to mean this one.
+Pass `--repo vitorengers/vibemaxxing` to mean this one.

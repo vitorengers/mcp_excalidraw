@@ -85,7 +85,7 @@ git(projectDir, ['config', 'commit.gpgsign', 'false']);
 // No githubProject: the mirror stays dormant, so nothing else is drawing on this board.
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Run Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 writeFileSync(join(projectDir, 'README.md'), '# run project\n', 'utf8');
 git(projectDir, ['add', '.']);
@@ -120,14 +120,14 @@ process.stdin.on('end', async () => {
     if (existsSync(workDir + '/release')) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/pull/' + number + '\\n');
+  process.stdout.write('https://github.com/vitorengers/vibemaxxing/pull/' + number + '\\n');
 });
 `, 'utf8');
 
 const PORT = await freePort();
 const CDP_PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
-const ISSUE = 'https://github.com/vitorengers/mcp_excalidraw/issues/128';
+const ISSUE = 'https://github.com/vitorengers/vibemaxxing/issues/128';
 const children = [];
 
 let serverLog = '';
