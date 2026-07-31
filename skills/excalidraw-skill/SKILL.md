@@ -1,6 +1,6 @@
 ---
 name: excalidraw-skill
-description: Excalidraw canvas toolkit for creating, editing, and refining diagrams on a live canvas. Use when an agent needs to (1) draw or lay out diagrams, (2) iteratively refine them by describing the scene and screenshotting its own work, (3) export/import .excalidraw files or PNG/SVG images, (4) save/restore canvas snapshots, (5) convert Mermaid to Excalidraw, or (6) perform element-level CRUD, alignment, distribution, grouping, duplication, and locking. Primary interface is the bundled CLI (npx -y mcp-excalidraw-server <command>) which auto-starts the canvas server; MCP tools and a REST API are equivalent alternatives.
+description: Excalidraw canvas toolkit for creating, editing, and refining diagrams on a live canvas. Use when an agent needs to (1) draw or lay out diagrams, (2) iteratively refine them by describing the scene and screenshotting its own work, (3) export/import .excalidraw files or PNG/SVG images, (4) save/restore canvas snapshots, (5) convert Mermaid to Excalidraw, or (6) perform element-level CRUD, alignment, distribution, grouping, duplication, and locking. Primary interface is upstream's published mcp-excalidraw-server CLI (npx -y mcp-excalidraw-server <command>) which auto-starts the canvas server; MCP tools and a REST API are equivalent alternatives. Diagramming only — it does not cover the board tooling in the vitorengers/mcp_excalidraw fork.
 ---
 
 # Excalidraw Skill
@@ -14,6 +14,7 @@ Three interfaces drive the same live canvas. Pick the first one that applies:
    ```bash
    npx -y mcp-excalidraw-server <command>
    ```
+   That fetches the upstream project's published `mcp-excalidraw-server` package (`yctimlin/mcp_excalidraw`), which is what this skill covers: **diagramming on a live canvas, and nothing else.** The board tooling in the `vitorengers/mcp_excalidraw` fork — workspaces, the `issue`, `project-board` and `terminal` blocks, the agents — is a different product, is not installed by this command, and is not described anywhere below.
    No setup needed — any canvas-touching command **auto-starts the canvas server** on `http://127.0.0.1:3000` (first `npx` run downloads the package). If the CLI is installed globally (`npm i -g mcp-excalidraw-server`), the shorter alias `excalidraw-canvas <command>` works too.
 3. **REST API** (last resort, e.g. from application code): HTTP endpoints on `http://127.0.0.1:3000` — see `references/cheatsheet.md` for payloads. The server must already be running.
 
