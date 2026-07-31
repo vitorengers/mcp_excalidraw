@@ -4,8 +4,9 @@ import { createServer } from 'http';
 import net from 'net';
 import path from 'path';
 import fs from 'fs/promises';
-import { mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import dotenv from 'dotenv';
 import logger from './utils/logger.js';
 import {
@@ -203,10 +204,67 @@ const staticDir = path.join(__dirname, '../dist');
 app.use(express.static(staticDir));
 // Also serve frontend assets
 app.use(express.static(path.join(__dirname, '../dist/frontend')));
-// Serve Excalidraw fonts so the font subsetting worker can fetch them for export
-app.use('/assets/fonts', express.static(
-  path.join(__dirname, '../node_modules/@excalidraw/excalidraw/dist/prod/fonts')
-));
+/**
+ * Where the Excalidraw package unpacked to, asked of the module resolver rather than guessed.
+ *
+ * The guess was `path.join(__dirname, '../node_modules/@excalidraw/excalidraw')`. In a source
+ * checkout `__dirname` is `<repo>/dist` and that is exactly right; in an npm-installed copy it
+ * points inside the package's own — empty — `node_modules`, while npm has hoisted the dependency
+ * to the consumer root, so the mount was over a directory that was not there. pnpm's symlinked
+ * store puts it somewhere else again. The resolver knows all three.
+ *
+ * Not `resolve('@excalidraw/excalidraw/package.json')`, which is the obvious spelling and throws:
+ * the package's `exports` map defines `./*` as types only, so no subpath but `.` and
+ * `./index.css` is reachable at all. The entry point is resolved instead and the package root
+ * found by walking up from it to the `package.json` that names the package, rather than by
+ * counting directories off the entry — `main` is `./dist/prod/index.js` today and where it
+ * points is the package's business, not ours.
+ */
+function excalidrawPackageRoot(): string | null {
+  let directory: string;
+  try {
+    directory = path.dirname(createRequire(import.meta.url).resolve('@excalidraw/excalidraw'));
+  } catch {
+    return null;
+  }
+  for (let up = 0; up < 8; up++) {
+    const manifest = path.join(directory, 'package.json');
+    try {
+      if (existsSync(manifest)
+          && JSON.parse(readFileSync(manifest, 'utf-8'))?.name === '@excalidraw/excalidraw') {
+        return directory;
+      }
+    } catch { /* not the manifest we are after */ }
+    const parent = path.dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  return null;
+}
+
+// Serve Excalidraw fonts so the font subsetting worker can fetch them for export, and so the
+// canvas draws its own faces instead of fetching them from esm.sh — see the comment on
+// `window.EXCALIDRAW_ASSET_PATH` in `frontend/index.html`.
+const excalidrawRoot = excalidrawPackageRoot();
+const excalidrawFonts = excalidrawRoot
+  ? path.join(excalidrawRoot, 'dist', 'prod', 'fonts')
+  : null;
+if (excalidrawFonts && existsSync(excalidrawFonts)) {
+  app.use('/assets/fonts', express.static(excalidrawFonts));
+} else {
+  // Said once, at warn, and the server comes up regardless: every face names the CDN as its
+  // second source, so this degrades the board to what it did before the mount existed rather
+  // than breaking it. Mounting the missing directory anyway would have answered 404 in silence
+  // — and the two ways to get here are told apart, because "the dependency is not installed"
+  // and "this build of it has no fonts" are answered by different things.
+  logger.warn(
+    excalidrawRoot
+      ? `${excalidrawRoot} ships no dist/prod/fonts, so /assets/fonts is not mounted — `
+        + 'the canvas will fetch its fonts from esm.sh instead.'
+      : '@excalidraw/excalidraw could not be resolved, so /assets/fonts is not mounted — '
+        + 'the canvas will fetch its fonts from esm.sh instead.'
+  );
+}
 
 /**
  * Whether `incoming` should win over `current` when both describe the same element.
@@ -3698,11 +3756,30 @@ async function readLibrary(filePath: string): Promise<unknown[]> {
   return parsed.libraryItems;
 }
 
+/**
+ * The shared library this build ships with, beside the server rather than beside the caller.
+ *
+ * `docs/shared-library.md` says every board without a library of its own depends on this one
+ * file, and it is the only place an issue block comes from — `customData.kind = "issue"` is not
+ * something any Excalidraw control sets. It was reachable only through `EXCALIDRAW_LIBRARY`, so
+ * an installed copy, or a checkout whose operator never exported the variable, offered no shared
+ * source at all and the `+` on the notes column answered a toast.
+ *
+ * Resolved from this module rather than from the working directory: `__dirname` is `<root>/dist`
+ * in a checkout and `<package>/dist` in an installed copy, and `../docs` is the shipped file in
+ * both.
+ */
+const packagedLibrary = path.join(__dirname, '..', 'docs', 'blocks.excalidrawlib');
+
 app.get('/api/library', async (req: Request, res: Response) => {
   const sources: { origin: string; path: string }[] = [];
 
-  if (process.env.EXCALIDRAW_LIBRARY) {
-    sources.push({ origin: 'shared', path: path.resolve(process.env.EXCALIDRAW_LIBRARY) });
+  // `??`, not `||`: an *explicitly empty* `EXCALIDRAW_LIBRARY` is how a board says it wants no
+  // shared shapes at all, which is a thing a workspace shipping its own set needs to be able to
+  // say now that unset no longer means none.
+  const shared = process.env.EXCALIDRAW_LIBRARY ?? packagedLibrary;
+  if (shared) {
+    sources.push({ origin: 'shared', path: path.resolve(shared) });
   }
 
   const workspaceId = workspaceIdFrom(req);
