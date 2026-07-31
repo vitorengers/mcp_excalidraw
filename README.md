@@ -149,7 +149,7 @@ own. The release line below is what that version contains.
 
 ### v1.1 — CLI-First
 
-- **First-class CLI**: every capability is now a composable command — `npx -y @vitorengers/vibemaxxing add|query|describe|screenshot|export|import|mermaid|snapshot|arrange|share|...` — JSON on stdout, meaningful exit codes. Also installed as the `excalidraw-canvas` alias.
+- **First-class CLI**: every capability is now a composable command — `npx -y @vitorengers/vibemaxxing add|query|describe|screenshot|export|import|mermaid|snapshot|arrange|share|...` — JSON on stdout, meaningful exit codes. Also installed as the `vibemax` alias.
 - **Zero-setup**: canvas-driving CLI commands and the MCP server **auto-start the canvas server** if it isn't running (closes #66). Opt out with `EXCALIDRAW_NO_AUTOSTART=1`.
 - **`apply`**: multi-op patches (`{"create":[...],"update":[{"id":"a","set":{...}}],"delete":[...]}`) in a single invocation.
 - **`install-skill`**: `npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>` copies the portable agent skill into the directory your agent chooses (project or global), cleanly replacing older versions.
@@ -246,7 +246,7 @@ Where the skill shines:
 
 ## CLI Reference
 
-`npx -y @vitorengers/vibemaxxing <command>` or (after `npm i -g @vitorengers/vibemaxxing`) `vibemaxxing <command>` — `excalidraw-canvas` and `mcp-excalidraw-server` are kept as aliases of the same binary, so an existing MCP client configuration survives the rename.
+`npx -y @vitorengers/vibemaxxing <command>` or (after `npm i -g @vitorengers/vibemaxxing`) `vibemaxxing <command>`, with `vibemax` installed beside it as a shorter alias of the same binary. The inherited names `mcp-excalidraw-server` and `excalidraw-canvas` are **gone**: upstream's published package installs both, so keeping them meant a global install of the two packages fighting over the same command. If you had either in a script, change it to `vibemaxxing`.
 
 Conventions: JSON results on stdout — except `describe` (plain text by design) and raw-content output when `--out` is omitted (`export` prints the scene JSON, `screenshot --format svg` prints SVG). Diagnostics on stderr. Exit codes: `0` ok, `1` error, `2` usage, `3` canvas unreachable, `4` browser tab required. Canvas URL from `EXPRESS_SERVER_URL` or `--url`. Canvas-driving commands auto-start the server; `status` only reports current state. Explicit `start` overrides the `EXCALIDRAW_NO_AUTOSTART=1` opt-out (it's user intent, not auto-start).
 
@@ -297,7 +297,7 @@ Config location:
 ```json
 {
   "mcpServers": {
-    "excalidraw": {
+    "vibemaxxing": {
       "command": "npx",
       "args": ["-y", "@vitorengers/vibemaxxing"]
     }
@@ -305,11 +305,13 @@ Config location:
 }
 ```
 
+> **If you had this server configured as `excalidraw`**, the key is what a client turns into tool ids, so `mcp__excalidraw__*` becomes `mcp__vibemaxxing__*` — update any `--allowedTools mcp__excalidraw__*` pattern with it, because an agent whose allowed-tools list no longer matches is refused and exits 0 with nothing to say why (see [`docs/trap-allowed-tools.md`](docs/trap-allowed-tools.md)). Keep the old key if you also have upstream's package configured; two servers cannot share one key.
+
 **Local (node)**
 ```json
 {
   "mcpServers": {
-    "excalidraw": {
+    "vibemaxxing": {
       "command": "node",
       "args": ["/absolute/path/to/mcp_excalidraw/dist/index.js"],
       "env": {
@@ -325,7 +327,7 @@ Config location:
 ```json
 {
   "mcpServers": {
-    "excalidraw": {
+    "vibemaxxing": {
       "command": "docker",
       "args": [
         "run", "-i", "--rm",
@@ -344,14 +346,14 @@ Config location:
 
 **npx (recommended)**
 ```bash
-claude mcp add excalidraw --scope user -- npx -y @vitorengers/vibemaxxing
+claude mcp add vibemaxxing --scope user -- npx -y @vitorengers/vibemaxxing
 ```
 
 > Tip: for coding agents, the skill + CLI often beats MCP config entirely — let the agent pick its skill root, then run `npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>`.
 
 **Local (node)** - User-level (available across all projects):
 ```bash
-claude mcp add excalidraw --scope user \
+claude mcp add vibemaxxing --scope user \
   -e EXPRESS_SERVER_URL=http://127.0.0.1:3000 \
   -e ENABLE_CANVAS_SYNC=true \
   -- node /absolute/path/to/mcp_excalidraw/dist/index.js
@@ -359,7 +361,7 @@ claude mcp add excalidraw --scope user \
 
 **Docker**
 ```bash
-claude mcp add excalidraw --scope user \
+claude mcp add vibemaxxing --scope user \
   -- docker run -i --rm \
   -e EXPRESS_SERVER_URL=http://host.docker.internal:3000 \
   -e ENABLE_CANVAS_SYNC=true \
@@ -369,7 +371,7 @@ claude mcp add excalidraw --scope user \
 **Manage servers:**
 ```bash
 claude mcp list              # List configured servers
-claude mcp remove excalidraw # Remove a server
+claude mcp remove vibemaxxing # Remove a server
 ```
 
 ---
@@ -382,7 +384,7 @@ Config location: `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json
 ```json
 {
   "mcpServers": {
-    "excalidraw": {
+    "vibemaxxing": {
       "command": "npx",
       "args": ["-y", "@vitorengers/vibemaxxing"]
     }
@@ -394,7 +396,7 @@ Config location: `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json
 ```json
 {
   "mcpServers": {
-    "excalidraw": {
+    "vibemaxxing": {
       "command": "docker",
       "args": [
         "run", "-i", "--rm",
@@ -413,12 +415,12 @@ Config location: `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json
 
 **npx (recommended)**
 ```bash
-codex mcp add excalidraw -- npx -y @vitorengers/vibemaxxing
+codex mcp add vibemaxxing -- npx -y @vitorengers/vibemaxxing
 ```
 
 **Docker**
 ```bash
-codex mcp add excalidraw \
+codex mcp add vibemaxxing \
   -- docker run -i --rm \
   -e EXPRESS_SERVER_URL=http://host.docker.internal:3000 \
   -e ENABLE_CANVAS_SYNC=true \
@@ -428,7 +430,7 @@ codex mcp add excalidraw \
 **Manage servers:**
 ```bash
 codex mcp list              # List configured servers
-codex mcp remove excalidraw # Remove a server
+codex mcp remove vibemaxxing # Remove a server
 ```
 
 ---
@@ -441,7 +443,7 @@ Config location: `~/.config/opencode/opencode.json` or project-level `opencode.j
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "excalidraw": {
+    "vibemaxxing": {
       "type": "local",
       "command": ["npx", "-y", "@vitorengers/vibemaxxing"],
       "enabled": true
@@ -459,7 +461,7 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
 ```json
 {
   "mcpServers": {
-    "excalidraw": {
+    "vibemaxxing": {
       "command": "npx",
       "args": ["-y", "@vitorengers/vibemaxxing"]
     }

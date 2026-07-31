@@ -14,7 +14,7 @@ Three interfaces drive the same live canvas. Pick the first one that applies:
    ```bash
    npx -y @vitorengers/vibemaxxing <command>
    ```
-   No setup needed — any canvas-touching command **auto-starts the canvas server** on `http://127.0.0.1:3000` (first `npx` run downloads the package). If the CLI is installed globally (`npm i -g @vitorengers/vibemaxxing`), the shorter alias `excalidraw-canvas <command>` works too.
+   No setup needed — any canvas-touching command **auto-starts the canvas server** on `http://127.0.0.1:3000` (first `npx` run downloads the package). If the CLI is installed globally (`npm i -g @vitorengers/vibemaxxing`), `vibemaxxing <command>` — or its shorter alias `vibemax <command>` — works too.
 3. **REST API** (last resort, e.g. from application code): HTTP endpoints on `http://127.0.0.1:3000` — see `references/cheatsheet.md` for payloads. The server must already be running.
 
 The canvas URL comes from `EXPRESS_SERVER_URL` (default `http://127.0.0.1:3000`). Remind the user to open that URL in a browser — screenshots, image export, mermaid conversion, and viewport control need an open tab (CLI exits with code 4 when it's missing).
