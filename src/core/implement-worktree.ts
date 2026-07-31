@@ -22,6 +22,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
+import { repoFromRemoteUrl } from './github-host.js';
 import { AgentDirectory, agentEnv } from './issue-agent.js';
 import { foldPathCase } from './workspace-paths.js';
 import { Workspace } from './workspaces.js';
@@ -604,18 +605,31 @@ export async function worktreesHoldingWork(workspace: Workspace): Promise<HeldWo
   return held;
 }
 
+/** What `origin` says a checkout is: the remote as configured, and the repository if it is ours. */
+export interface OriginRemote {
+  /** Whatever `git remote get-url origin` printed, or null when there is no `origin` at all. */
+  url: string | null;
+  /** `owner/name`, only when that remote is on github.com. */
+  repo: string | null;
+}
+
 /**
- * `owner/name` as the repository's own `origin` declares it, or null.
+ * `owner/name` as the repository's own `origin` declares it, and the remote it read it from.
  *
  * The fallback for a board whose `board.config.json` names no `repo`. Read rather than
  * guessed: reconstructing an issue URL from a branch name needs a repository, and inventing
  * one would point the panel at somebody else's issue.
+ *
+ * Both halves are returned because "there is no `origin`" and "`origin` is not on github.com"
+ * are different facts and the caller says different things about them — a warning that offers
+ * `repo` in `board.config.json` to somebody whose remote is GitLab is answering a question
+ * they did not ask. The parse itself is `github-host.ts`'s: the host is one decision.
  */
-export async function originRepo(workspace: Workspace): Promise<string | null> {
+export async function originRemote(workspace: Workspace): Promise<OriginRemote> {
   const remote = await git(workspace, workspaceDirectory(workspace), ['remote', 'get-url', 'origin']);
-  if (!remote.ok) return null;
-  const match = remote.stdout.trim().match(/github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/*$/i);
-  return match ? `${match[1]}/${match[2]}` : null;
+  if (!remote.ok) return { url: null, repo: null };
+  const url = remote.stdout.trim() || null;
+  return { url, repo: repoFromRemoteUrl(url) };
 }
 
 export interface WorktreeRelease {

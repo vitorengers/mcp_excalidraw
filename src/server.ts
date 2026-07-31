@@ -87,6 +87,7 @@ import {
 } from './core/implement-queue.js';
 import { TOOL_DOC_KEYS } from './core/tool-docs.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
+import { issueUrlRefusal } from './core/github-host.js';
 import type { IssueDetail } from './core/github-issue.js';
 import { IssueMemo, memoWindow } from './core/issue-memo.js';
 import {
@@ -1890,7 +1891,9 @@ app.post('/api/issue-block/:id/adopt', async (req: Request, res: Response) => {
   if (!isIssueUrl(issueUrl)) {
     return res.status(400).json({
       success: false,
-      error: 'Expected the URL of a GitHub issue, like https://github.com/owner/repo/issues/1.'
+      // The same sentence the other four take, since #322: one refusal, naming the host it
+      // requires, wherever an issue URL is typed rather than clicked.
+      error: issueUrlRefusal(issueUrl)
     });
   }
 
@@ -2254,7 +2257,7 @@ async function beginImplement(
   options: { resume?: boolean; interactive?: boolean } = {}
 ): Promise<ImplementAnswer> {
   if (!isIssueUrl(issueUrl)) {
-    return { status: 400, body: { success: false, error: `Not a GitHub issue URL: ${issueUrl}` } };
+    return { status: 400, body: { success: false, error: issueUrlRefusal(issueUrl) } };
   }
 
   const existing = readImplement(workspaceId, issueUrl);
@@ -3311,7 +3314,7 @@ app.get('/api/issue', async (req: Request, res: Response) => {
 
   const issueUrl = typeof req.query.url === 'string' ? req.query.url : '';
   if (!isIssueUrl(issueUrl)) {
-    return res.status(400).json({ success: false, error: `Not a GitHub issue URL: ${issueUrl}` });
+    return res.status(400).json({ success: false, error: issueUrlRefusal(issueUrl) });
   }
 
   const workspaceId = workspaceIdFrom(req);
@@ -3359,7 +3362,7 @@ app.post('/api/issue/comment', async (req: Request, res: Response) => {
 
   const issueUrl = typeof req.body?.url === 'string' ? req.body.url : '';
   if (!isIssueUrl(issueUrl)) {
-    return res.status(400).json({ success: false, error: `Not a GitHub issue URL: ${issueUrl}` });
+    return res.status(400).json({ success: false, error: issueUrlRefusal(issueUrl) });
   }
 
   // Posted as typed, trailing newlines and all — the point of this route is that the text
@@ -3502,7 +3505,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
 
   const issueUrl = typeof req.body?.url === 'string' ? req.body.url : '';
   if (!isIssueUrl(issueUrl)) {
-    return res.status(400).json({ success: false, error: `Not a GitHub issue URL: ${issueUrl}` });
+    return res.status(400).json({ success: false, error: issueUrlRefusal(issueUrl) });
   }
 
   // Kept as typed, trailing newlines and all: the observations are what the run is *about*,

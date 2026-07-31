@@ -824,6 +824,13 @@ The issue URL is reconstructed from the checkout name and the repository — `re
 board that declares neither gets a warning and no records rather than a URL pointing at somebody
 else's issue.
 
+That `origin` has to be a **github.com** remote, which is the one host this board reads
+([running.md](running.md), `src/core/github-host.ts`). The parse is anchored at the host now:
+`https://mygithub.com/acme/tools.git` used to match — the host's *name* contains github.com —
+and an interrupted run in that checkout was announced with a link to `github.com/acme/tools`, a
+repository belonging to somebody else on a host nobody had named. A remote elsewhere is reported
+as not being a github.com one, rather than turned into a path on this one.
+
 **Two things this deliberately does not do.** It does not commit on anyone's behalf: a commit
 nobody wrote, with a message claiming nothing, is a commit somebody has to interpret later. And it
 does not move the card. A stranded `In Progress` card is wrong, but a card that walks backwards on

@@ -110,6 +110,10 @@ checkout: four agents building in one working tree is four agents overwriting ea
 
 ### Starting it
 
+The workbench half reads **github.com and only github.com** — issue blocks, the project mirror,
+implementations and interrupted-run recovery all require it, there is no host setting, and a
+GitHub Enterprise Server or a GitLab is out of scope. The canvas itself requires none of it.
+
 The canvas server is `node dist/server.js` after `npm run build`, and everything else is
 environment. [docs/running.md](docs/running.md) is the procedure: the port (3737 by default, and
 3000 is unusable on the development machine — [docs/trap-port-3000.md](docs/trap-port-3000.md)), the kill-the-stale-server
