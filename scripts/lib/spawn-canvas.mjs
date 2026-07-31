@@ -34,6 +34,9 @@ import { freePort } from './free-port.mjs';
 export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const serverPath = join(repoRoot, 'dist', 'server.js');
 
+/** Every prefix the server reads configuration under. Adding one here is what un-leaks it. */
+export const SETTING_PREFIXES = ['VIBEMAXXING_', 'EXCALIDRAW_'];
+
 /**
  * The environment a canvas server should be started with: this process's, with everything the
  * machine could smuggle in removed, and `overrides` applied on top. Exported for the checks that
@@ -42,9 +45,6 @@ export const serverPath = join(repoRoot, 'dist', 'server.js');
  * A key whose value is `undefined` in `overrides` is left unset rather than becoming the string
  * `"undefined"`, so `{ EXCALIDRAW_TERMINAL_PTY: undefined }` reads as "this one is off".
  */
-/** Every prefix the server reads configuration under. Adding one here is what un-leaks it. */
-export const SETTING_PREFIXES = ['VIBEMAXXING_', 'EXCALIDRAW_'];
-
 export function canvasEnvironment(overrides = {}) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
