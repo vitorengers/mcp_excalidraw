@@ -176,6 +176,28 @@ the pipes described below.
 the block shows it in the header, because a feature that behaves differently on two machines
 with no way to tell which is which is worse than one that only does less.
 
+**And why, when the pipe is a fallback.** `pipeReason` sits beside the mode. The mode said
+that this board is not the board in the documentation; the cause was a `logger.info` line in
+`~/.local/state/excalidraw-mcp/excalidraw.log`, which the console transport never printed
+because it is `warn` and up — so on Alpine, on musl, on an older glibc, on linux-armv7 or on
+any seventh platform, every session quietly became a pipe and the one line naming which of
+the three causes it was sat in a file nobody had a reason to open. It is now three answers:
+
+- **the import error's own message** where the binding could not be loaded, passed through
+  verbatim rather than rephrased — it names the missing package (`@lydell/node-pty-linux-x64`)
+  or the link failure, which is the part anybody can act on. The same message goes to `warn`
+  as well, so a board started in a terminal says it once without anybody opening a file.
+- **`EXCALIDRAW_TERMINAL_PTY=0`** where the fallback was asked for. No warning for this one: a
+  board told to use pipes is doing what it was told.
+- **`null`** where nothing needs explaining — a working PTY, or a session whose stdin was
+  spent on a prompt. That one is on pipes by construction on *every* machine, since a
+  pseudoterminal has no end of file, so labelling it with this machine's missing binding would
+  explain a tab with something that did not decide it.
+
+The reason is appended to the mode chip's tooltip, after the sentence that was always there.
+`scripts/check-pty-fallback-reason.mjs` covers the summary and the warning,
+`scripts/check-pty-fallback-reason-browser.mjs` the tooltip.
+
 ```
 EXCALIDRAW_TERMINAL_PTY=0
 ```
@@ -687,11 +709,34 @@ gives.
 
 ## Closing takes the tree
 
-`DELETE` kills the process — on Windows through `taskkill /T`, because killing the shell alone
-leaves the command running inside it. A session closed while something was running would
-otherwise leave that something behind with nothing left to stop it, which is the constraint
+`DELETE` kills the process, and the tree under it, because killing the shell alone leaves the
+command running inside it. A session closed while something was running would otherwise leave
+that something behind with nothing left to stop it, which is the constraint
 `docs/issue-block.md` already records about a reset: nothing here can reach into a process the
 server no longer owns.
+
+**How the tree is reached is the platform's answer.** Windows has `taskkill /PID … /T /F`, which
+walks the parent links; it is the first thing `close()` tries and the end of it when it works.
+POSIX has no such walk and does not need one — a piped shell is spawned `detached`, so it leads
+a **process group** of its own, and the close signals the group: `SIGTERM` first, so a
+`npm run build` can remove its half-written output and a dev server can release its port, then
+`SIGKILL` after a short grace for whatever did not take the hint. The grace is scheduled rather
+than waited through, because `close()` is called from a route and from the process's own `exit`
+handler and both are synchronous; a close on the way out of the server therefore sends the
+polite signal only, which is what a shutdown should be sending anyway. Where the group signal
+finds nothing — no group, or a platform that has none — the close falls back to the single-pid
+kill it always did.
+
+Without the group there was nothing to aim at: the child sat in the *server's* own group, and
+that is not a group anything may be signalled. So on macOS and Linux, closing a tab running a
+build, a dev server or a `claude` run used to leave the command orphaned and still holding its
+port, while the same close on Windows took the tree down. Pipes are not the exotic case here —
+a session opened with a prompt on stdin drops the PTY binding deliberately, which is every
+non-interactive agent run, and a machine with no prebuilt binding gets pipes for everything.
+
+The pseudoterminal path is left on the binding's own `kill()`. Closing a pty master already
+hangs up the foreground process group, so a second group kill there would be answering a
+question that has an answer, on a path with no measurement behind it.
 
 Every session is closed when the server goes down, and with a PTY that promise needs help. A
 piped shell kept it by itself — its stdin was the server's, and a closed pipe is an EOF it exits
@@ -1846,6 +1891,16 @@ it. A board returned to puts its block back where it was left.
 - `scripts/check-terminal-pty.mjs` — that the shell sees a tty, that the echo moved with it,
   that a resize reaches the child, that the scrollback is cut between sequences, and that with
   no binding the server still starts and says `pipe`.
+- `scripts/check-pty-fallback-reason.mjs` — that a session on pipes says *why*: the variable
+  where the fallback was asked for, the import error's own message where the binding could not
+  be loaded — on stderr at `warn` as well as in the summary, and on the second session of a
+  board's life as well as the first, because the load is memoised — and nothing at all for a
+  session whose stdin went to a prompt, which would be a pipe on any machine. The missing
+  binding is simulated by a module resolution hook that throws for the one specifier, since
+  this repository is maintained on a box where the prebuilt binary is present.
+- `scripts/check-pty-fallback-reason-browser.mjs` — the other half, in Chrome: the mode chip's
+  tooltip keeps the sentence it always had and carries the reason after it, and a `pty` chip
+  has nothing appended to it.
 - `scripts/check-terminal-default-shell.mjs` — which shell a bare `EXCALIDRAW_TERMINAL=1`
   starts: `$SHELL` for a native workspace on macOS and Linux in both modes, an absolute
   fallback where the machine names none, `bash` still for a WSL one, and both PowerShell
@@ -1853,6 +1908,17 @@ it. A board returned to puts its block back where it was left.
   `process.platform` before importing the module, because this repository is maintained on a
   box that reports `win32` and a check that asked the real platform would pass without ever
   reaching the branch it is about.
+- `scripts/check-terminal-tree-kill.mjs` — that closing a piped session takes the tree, not just
+  the shell: a session whose shell has started a grandchild is closed and the grandchild has to
+  be gone, found by the port it listens on rather than by a pid nobody holds a handle to. The
+  prompt on stdin and the end of file that follows it are asserted beside it, because a group of
+  one's own is a new session on POSIX and detaching is the kind of change that quietly costs a
+  child its stdin. What each platform can honestly answer is split: the group kill is what the
+  first section runs on macOS and Linux and `taskkill /T` is what it runs on Windows, the
+  ordering of the Windows branch is asserted on a POSIX box with a stand-in for `taskkill` on
+  `PATH` — Node will not run a `.cmd` without a shell, so one cannot be installed on Windows —
+  and the fallback for a machine with no process groups is asserted on Windows, where a negative
+  pid always throws.
 - `scripts/check-child-session-env.mjs` — that `CLAUDE_CODE_CHILD_SESSION` is not passed on,
   on the PTY path, the pipe path and the agent path, and that a sentinel variable beside it
   still arrives — the board strips one key rather than filtering the environment. It starts
