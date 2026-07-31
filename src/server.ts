@@ -2,6 +2,7 @@
 // `<state-dir>/config.json` and `<cwd>/.env` into `process.env`, and half the modules below
 // read a variable while they are being evaluated. See `core/settings.ts`.
 import './core/env.js';
+import { env, settingName } from './core/settings.js';
 import express, { Request, Response, NextFunction } from 'express';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
@@ -151,7 +152,7 @@ const server = createServer(app);
 let authorities: Set<string> | null = null;
 function boardAuthorities(): Set<string> {
   if (!authorities) {
-    authorities = allowedAuthorities(HOST, PORT, process.env.EXCALIDRAW_ALLOWED_HOSTS);
+    authorities = allowedAuthorities(HOST, PORT, env('ALLOWED_HOSTS'));
   }
   return authorities;
 }
@@ -1306,10 +1307,10 @@ app.get('/api/workspaces', async (_req: Request, res: Response) => {
   if (offLoopback(res, 'Projects are listed')) return;
 
   try {
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspaces = await loadWorkspaces(env('WORKSPACES'));
     res.json({
       success: true,
-      configured: Boolean(process.env.EXCALIDRAW_WORKSPACES),
+      configured: Boolean(env('WORKSPACES')),
       workspaces
     });
   } catch (error) {
@@ -1329,7 +1330,7 @@ app.post('/api/workspaces', async (req: Request, res: Response) => {
   if (offLoopback(res, 'Projects are added')) return;
 
   try {
-    const result = await addWorkspace(process.env.EXCALIDRAW_WORKSPACES, {
+    const result = await addWorkspace(env('WORKSPACES'), {
       path: typeof req.body?.path === 'string' ? req.body.path : '',
       ...(typeof req.body?.id === 'string' ? { id: req.body.id } : {}),
       ...(typeof req.body?.distro === 'string' ? { distro: req.body.distro } : {})
@@ -1358,7 +1359,7 @@ app.put('/api/workspaces/order', async (req: Request, res: Response) => {
   if (offLoopback(res, 'The order of the projects is written')) return;
 
   try {
-    const result = await reorderWorkspaces(process.env.EXCALIDRAW_WORKSPACES, req.body?.ids);
+    const result = await reorderWorkspaces(env('WORKSPACES'), req.body?.ids);
     if (!result.ok) {
       return res.status(result.status).json({ success: false, error: result.error });
     }
@@ -1375,7 +1376,7 @@ app.get('/api/workspaces/:id/config', async (req: Request, res: Response) => {
   if (offLoopback(res, 'Project settings are read')) return;
 
   try {
-    const result = await readWorkspaceConfig(process.env.EXCALIDRAW_WORKSPACES, req.params.id ?? '');
+    const result = await readWorkspaceConfig(env('WORKSPACES'), req.params.id ?? '');
     if (!result.ok) {
       return res.status(result.status).json({ success: false, error: result.error });
     }
@@ -1391,7 +1392,7 @@ app.put('/api/workspaces/:id/config', async (req: Request, res: Response) => {
 
   try {
     const result = await writeWorkspaceConfig(
-      process.env.EXCALIDRAW_WORKSPACES,
+      env('WORKSPACES'),
       req.params.id ?? '',
       req.body?.config
     );
@@ -1431,8 +1432,8 @@ app.get('/api/fs/directories', async (req: Request, res: Response) => {
 // back to the native one, which is what keeps a command written without an absolute path
 // working in both.
 const ISSUE_AGENT_COMMANDS: AgentCommands = {
-  native: process.env.EXCALIDRAW_ISSUE_AGENT || null,
-  wsl: process.env.EXCALIDRAW_ISSUE_AGENT_WSL || null,
+  native: env('ISSUE_AGENT') || null,
+  wsl: env('ISSUE_AGENT_WSL') || null,
 };
 
 /** Whether any board at all may research. A workspace's own answer comes later. */
@@ -1651,7 +1652,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   if (!ISSUE_AGENT_CONFIGURED) {
     return res.status(404).json({
       success: false,
-      error: 'Issue blocks are disabled. Set EXCALIDRAW_ISSUE_AGENT to the agent command to enable them.'
+      error: `Issue blocks are disabled. Set ${settingName('ISSUE_AGENT')} to the agent command to enable them.`
     });
   }
 
@@ -1696,7 +1697,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: 'The block has no observation to work from.' });
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(env('WORKSPACES'));
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return res.status(400).json({
@@ -1709,7 +1710,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   }
 
   const agentCommand = agentCommandOrRefuse(
-    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching', 'EXCALIDRAW_ISSUE_AGENT'
+    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching', settingName('ISSUE_AGENT')
   );
   if (!agentCommand) return;
 
@@ -1762,7 +1763,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     const result = await runIssueAgent(workspace, observation, {
       agentCommand,
       imagePaths: images.paths,
-      notFoundVariable: 'EXCALIDRAW_ISSUE_AGENT_WSL',
+      notFoundVariable: settingName('ISSUE_AGENT_WSL'),
       onUsage: (usage) => recordIssueUsage(elementId, usage)
     });
     if (result.ok && result.issueUrl) {
@@ -1882,7 +1883,7 @@ app.post('/api/issue-block/:id/adopt', async (req: Request, res: Response) => {
     });
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(env('WORKSPACES'));
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return res.status(400).json({
@@ -1995,7 +1996,7 @@ app.delete('/api/issue-block/:id', (req: Request, res: Response) => {
  * Only the issue is memoised. The implement record is read fresh on every request, because
  * it costs nothing to read and is the fact most likely to have changed since.
  */
-const issueMemo = new IssueMemo<IssueDetail>(memoWindow(process.env.EXCALIDRAW_ISSUE_MEMO_MS));
+const issueMemo = new IssueMemo<IssueDetail>(memoWindow(env('ISSUE_MEMO_MS')));
 
 // ─── Implementing an issue ────────────────────────────────────
 //
@@ -2006,8 +2007,8 @@ const issueMemo = new IssueMemo<IssueDetail>(memoWindow(process.env.EXCALIDRAW_I
 // half is a pair rather than one variable: a board that granted a distro an agent for
 // research must not thereby have granted it one that writes.
 const IMPLEMENT_AGENT_COMMANDS: AgentCommands = {
-  native: process.env.EXCALIDRAW_IMPLEMENT_AGENT || null,
-  wsl: process.env.EXCALIDRAW_IMPLEMENT_AGENT_WSL || null,
+  native: env('IMPLEMENT_AGENT') || null,
+  wsl: env('IMPLEMENT_AGENT_WSL') || null,
 };
 
 /** Whether any board at all may implement. A workspace's own answer comes later. */
@@ -2025,7 +2026,7 @@ const IMPLEMENT_AGENT_CONFIGURED = Boolean(
  * machine. `0` means no cap; `1` serialises.
  */
 const IMPLEMENT_CONCURRENCY = (() => {
-  const configured = process.env.EXCALIDRAW_IMPLEMENT_CONCURRENCY;
+  const configured = env('IMPLEMENT_CONCURRENCY');
   if (configured === undefined || configured.trim() === '') return 4;
   const parsed = Number(configured);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : 4;
@@ -2244,7 +2245,7 @@ async function beginImplement(
       body: {
         success: false,
         error: `This workspace already has ${inFlight.length} implementation(s) running, which is the limit `
-          + `set by EXCALIDRAW_IMPLEMENT_CONCURRENCY. In flight: ${inFlight.map((run) => run.issueUrl).join(', ')}`,
+          + `set by ${settingName('IMPLEMENT_CONCURRENCY')}. In flight: ${inFlight.map((run) => run.issueUrl).join(', ')}`,
         running: inFlight.map((run) => run.issueUrl)
       }
     };
@@ -2280,7 +2281,7 @@ async function beginImplement(
    */
   const releaseSlot = (): void => recordImplement(workspaceId, issueUrl, existing);
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(env('WORKSPACES'));
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     releaseSlot();
@@ -2303,7 +2304,7 @@ async function beginImplement(
   // After the claim, so it goes through `releaseSlot` like every other late refusal: a
   // workspace whose environment was never granted a command must not hold a slot for it.
   const agentRefusal = agentCommandRefusal(
-    workspace, IMPLEMENT_AGENT_COMMANDS, 'Implementing', 'EXCALIDRAW_IMPLEMENT_AGENT'
+    workspace, IMPLEMENT_AGENT_COMMANDS, 'Implementing', settingName('IMPLEMENT_AGENT')
   );
   if (agentRefusal) {
     releaseSlot();
@@ -2346,7 +2347,7 @@ function interactiveCommand(agentCommand: string, interactive?: boolean): string
 async function interactiveTabRefusal(workspaceId: string): Promise<string | null> {
   if (!terminalAvailable()) {
     return 'An interactive run needs a terminal tab to run in, and the terminal is off on '
-      + 'this board. Set EXCALIDRAW_TERMINAL to turn it on, or start the run without asking '
+      + `this board. Set ${settingName('TERMINAL')} to turn it on, or start the run without asking `
       + 'for a tab to answer.';
   }
   if (!await loadPty()) {
@@ -2426,7 +2427,7 @@ async function runImplementation(
       agentCommand: interactiveCommand(
         agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS) as string, options.interactive
       ),
-      notFoundVariable: 'EXCALIDRAW_IMPLEMENT_AGENT_WSL',
+      notFoundVariable: settingName('IMPLEMENT_AGENT_WSL'),
       worktree,
       resuming,
       // Reached only when the configured command already streams. Otherwise the agent
@@ -2484,7 +2485,7 @@ async function runImplementation(
  * the cap is full, and why the timer does not exist at all until something turns a queue on.
  */
 const IMPLEMENT_QUEUE_MS = (() => {
-  const configured = process.env.EXCALIDRAW_IMPLEMENT_QUEUE_MS;
+  const configured = env('IMPLEMENT_QUEUE_MS');
   if (configured === undefined || configured.trim() === '') return 30_000;
   const parsed = Number(configured);
   return Number.isFinite(parsed) && parsed >= 250 ? parsed : 30_000;
@@ -2587,7 +2588,7 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
       return;
     }
 
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspaces = await loadWorkspaces(env('WORKSPACES'));
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
     if (!workspace || workspace.error || !workspace.githubProject) {
       outcome = {
@@ -2712,7 +2713,7 @@ function capFullOutcome(workspaceId: string, said = ''): { reason: QueuePassReas
   return {
     reason: 'cap-full',
     detail: said || `All ${inFlight.length} slot(s) are taken, which is the limit set by `
-      + `EXCALIDRAW_IMPLEMENT_CONCURRENCY. Holding them: ${inFlight.map((run) => run.issueUrl).join(', ')}`
+      + `${settingName('IMPLEMENT_CONCURRENCY')}. Holding them: ${inFlight.map((run) => run.issueUrl).join(', ')}`
   };
 }
 
@@ -2831,7 +2832,7 @@ async function releaseWorktreeFor(
 async function recoverInterruptedRuns(): Promise<void> {
   let workspaces: Workspace[];
   try {
-    workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    workspaces = await loadWorkspaces(env('WORKSPACES'));
   } catch (error) {
     logger.warn(`Could not look for interrupted implementations: ${(error as Error).message}`);
     return;
@@ -3008,7 +3009,7 @@ async function seedBoardFromFile(workspace: Workspace): Promise<void> {
 async function seedBoardsFromFiles(): Promise<void> {
   let workspaces: Workspace[];
   try {
-    workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    workspaces = await loadWorkspaces(env('WORKSPACES'));
   } catch (error) {
     logger.warn(`Could not look for boards to load: ${(error as Error).message}`);
     return;
@@ -3028,7 +3029,7 @@ function implementingRefused(res: Response): boolean {
   if (!IMPLEMENT_AGENT_CONFIGURED) {
     res.status(404).json({
       success: false,
-      error: 'Implementing is disabled. Set EXCALIDRAW_IMPLEMENT_AGENT to the agent command to enable it.'
+      error: `Implementing is disabled. Set ${settingName('IMPLEMENT_AGENT')} to the agent command to enable it.`
     });
     return true;
   }
@@ -3125,7 +3126,7 @@ app.post('/api/implement/queue', async (req: Request, res: Response) => {
   logger.info(`Queue: "${workspaceId}" is ${enabled ? 'on' : 'off'}`);
   if (enabled) void dispatchQueue(workspaceId);
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => []);
+  const workspaces = await loadWorkspaces(env('WORKSPACES')).catch(() => []);
   res.json({
     success: true,
     queue: queueStateFor(workspaces.find((candidate) => candidate.id === workspaceId), workspaceId)
@@ -3206,7 +3207,7 @@ app.get('/api/implement', async (req: Request, res: Response) => {
   const offered = IMPLEMENT_AGENT_CONFIGURED
     && (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost');
   const workspaces = offered
-    ? await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => [])
+    ? await loadWorkspaces(env('WORKSPACES')).catch(() => [])
     : [];
 
   res.json({
@@ -3250,7 +3251,7 @@ app.get('/api/issue', async (req: Request, res: Response) => {
   }
 
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(env('WORKSPACES'));
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3306,7 +3307,7 @@ app.post('/api/issue/comment', async (req: Request, res: Response) => {
   }
 
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(env('WORKSPACES'));
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3430,7 +3431,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
   if (!ISSUE_AGENT_CONFIGURED) {
     return res.status(404).json({
       success: false,
-      error: 'Researching an issue again is disabled. Set EXCALIDRAW_ISSUE_AGENT to the agent command to enable it.'
+      error: `Researching an issue again is disabled. Set ${settingName('ISSUE_AGENT')} to the agent command to enable it.`
     });
   }
   if (offLoopback(res, 'Issues are researched again')) return;
@@ -3462,7 +3463,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
     });
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(env('WORKSPACES'));
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3472,7 +3473,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
   }
 
   const agentCommand = agentCommandOrRefuse(
-    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching an issue again', 'EXCALIDRAW_ISSUE_AGENT'
+    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching an issue again', settingName('ISSUE_AGENT')
   );
   if (!agentCommand) return;
 
@@ -3551,7 +3552,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
 
     const result = await runReviseAgent(workspace, issueUrl, observations, {
       agentCommand,
-      notFoundVariable: 'EXCALIDRAW_ISSUE_AGENT_WSL',
+      notFoundVariable: settingName('ISSUE_AGENT_WSL'),
       onUsage: takeUsage
     });
 
@@ -3622,7 +3623,7 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
     return res.status(404).json({ success: false, error: 'This block has no issue yet.' });
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(env('WORKSPACES'));
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3654,7 +3655,7 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
 /** The workspace a project-board request is about, or a reason it is not usable. */
 async function projectWorkspace(req: Request): Promise<{ workspace: Workspace } | { error: string }> {
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(env('WORKSPACES'));
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return { error: `Workspace "${workspaceId}" is not registered, so it has no GitHub project.` };
@@ -3771,14 +3772,14 @@ app.get('/api/library', async (req: Request, res: Response) => {
   // `??`, not `||`: an *explicitly empty* `EXCALIDRAW_LIBRARY` is how a board says it wants no
   // shared shapes at all, which is a thing a workspace shipping its own set needs to be able to
   // say now that unset no longer means none.
-  const shared = process.env.EXCALIDRAW_LIBRARY ?? packagedLibrary;
+  const shared = env('LIBRARY') ?? packagedLibrary;
   if (shared) {
     sources.push({ origin: 'shared', path: path.resolve(shared) });
   }
 
   const workspaceId = workspaceIdFrom(req);
   if (workspaceId !== DEFAULT_WORKSPACE_ID) {
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspaces = await loadWorkspaces(env('WORKSPACES'));
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace?.libraryFile) {
       sources.push({ origin: 'workspace', path: path.resolve(workspace.libraryFile) });
@@ -3819,7 +3820,7 @@ app.get('/api/library', async (req: Request, res: Response) => {
 // `EXCALIDRAW_TERMINAL` unset means these routes do not exist. Not "answer 403", not
 // "answer with an empty session": 404, the same shape the issue block uses, so a canvas
 // that never turned it on cannot tell a disabled feature from an absent one.
-const TERMINAL_SETTING = process.env.EXCALIDRAW_TERMINAL || null;
+const TERMINAL_SETTING = env('TERMINAL') || null;
 
 /**
  * Every session, by board and then by id.
@@ -3864,7 +3865,7 @@ function terminalRefused(res: Response): boolean {
   if (!TERMINAL_SETTING) {
     res.status(404).json({
       success: false,
-      error: 'The terminal is disabled. Set EXCALIDRAW_TERMINAL to enable it.'
+      error: `The terminal is disabled. Set ${settingName('TERMINAL')} to enable it.`
     });
     return true;
   }
@@ -4009,7 +4010,7 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
   if (terminalRefused(res)) return;
 
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(env('WORKSPACES'));
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return res.status(400).json({
@@ -4035,7 +4036,7 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
   if (!shellCommand) {
     return res.status(404).json({
       success: false,
-      error: 'The terminal is disabled. Set EXCALIDRAW_TERMINAL to enable it.'
+      error: `The terminal is disabled. Set ${settingName('TERMINAL')} to enable it.`
     });
   }
   // One path, spelled the way the caller's own environment spells it: inside a WSL distro
@@ -4245,9 +4246,8 @@ process.on('exit', closeAllTerminals);
 // canvas can show the reasoning behind a box without leaving the drawing. Disabled
 // until EXCALIDRAW_DOCS_DIR points somewhere, because serving arbitrary files from
 // an unauthenticated local API is not something to enable by default.
-const DOCS_DIR = process.env.EXCALIDRAW_DOCS_DIR
-  ? path.resolve(process.env.EXCALIDRAW_DOCS_DIR)
-  : null;
+const DOCS_DIR_SETTING = env('DOCS_DIR');
+const DOCS_DIR = DOCS_DIR_SETTING ? path.resolve(DOCS_DIR_SETTING) : null;
 
 /**
  * The documentation shipped with the tool, rather than with the project on screen.
@@ -4294,7 +4294,7 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
   if (TOOL_DOC_KEYS.has(key)) {
     docsDir = TOOL_DOCS_DIR;
   } else if (workspaceId !== DEFAULT_WORKSPACE_ID) {
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspaces = await loadWorkspaces(env('WORKSPACES'));
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace?.docsDir) docsDir = path.resolve(workspace.docsDir);
   }
@@ -4303,7 +4303,7 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
     return res.status(404).json({
       success: false,
       code: NO_DOCS_DIR,
-      error: 'No docs directory for this board. Set docsDir in board.config.json, or EXCALIDRAW_DOCS_DIR.'
+      error: `No docs directory for this board. Set docsDir in board.config.json, or ${settingName('DOCS_DIR')}.`
     });
   }
 
@@ -4800,7 +4800,7 @@ app.get('/', (req: Request, res: Response) => {
  */
 function canvasIdentity(): CanvasIdentity {
   return {
-    workspaces: process.env.EXCALIDRAW_WORKSPACES ? 'configured' : 'none',
+    workspaces: env('WORKSPACES') ? 'configured' : 'none',
     terminal: Boolean(TERMINAL_SETTING),
     // The agents fail the most quietly of the three: the routes answer, the blocks draw, the
     // buttons are there, and pressing one does nothing. **Two booleans, never one** — the
@@ -4919,7 +4919,7 @@ app.post('/api/restart', (_req: Request, res: Response) => {
  * Claude Code by default, and a route that answered `[]` would look like a board whose
  * sessions had never run rather than one that was never asked to look.
  */
-const CLAUDE_STATUS_DIR = (process.env.EXCALIDRAW_CLAUDE_STATUS ?? '').trim();
+const CLAUDE_STATUS_DIR = (env('CLAUDE_STATUS') ?? '').trim();
 
 /**
  * One read of that directory, however many tabs asked.
@@ -4937,7 +4937,7 @@ function readClaudeStatusMemoized(): Promise<ClaudeEnvironmentStatus[]> {
     return claudeStatusMemo.reading;
   }
   const reading = (async () => {
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => []);
+    const workspaces = await loadWorkspaces(env('WORKSPACES')).catch(() => []);
     const distros = workspaces
       .map((workspace) => workspace.environment)
       .filter((environment): environment is { kind: 'wsl'; distro: string } => environment.kind === 'wsl')
@@ -4966,7 +4966,7 @@ app.get('/api/claude-status', async (req: Request, res: Response) => {
   if (!CLAUDE_STATUS_DIR) {
     return res.status(404).json({
       success: false,
-      error: 'Claude Code status is off. Set EXCALIDRAW_CLAUDE_STATUS to the directory your '
+      error: `Claude Code status is off. Set ${settingName('CLAUDE_STATUS')} to the directory your `
         + 'status line command writes into.'
     });
   }

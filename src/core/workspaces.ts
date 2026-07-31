@@ -8,6 +8,7 @@
  */
 import fs from 'fs/promises';
 import logger from '../utils/logger.js';
+import { settingName } from './settings.js';
 import {
   resolveWorkspacePath,
   resolveInWorkspace,
@@ -519,7 +520,7 @@ const NO_REGISTRY: WorkspaceWriteRefusal = {
   ok: false,
   status: 503,
   error: 'No workspace registry is configured, so there is nowhere to record a project. '
-    + 'Point EXCALIDRAW_WORKSPACES at a registry file and restart the board.',
+    + `Point ${settingName('WORKSPACES')} at a registry file and restart the board.`,
 };
 
 interface Registry {

@@ -111,7 +111,9 @@ checkout: four agents building in one working tree is four agents overwriting ea
 The canvas server is `node dist/server.js` after `npm run build`, and everything else is
 environment. [docs/running.md](docs/running.md) is the procedure: the port (3737 by default, and
 3000 is unusable on the development machine — [docs/trap-port-3000.md](docs/trap-port-3000.md)), the kill-the-stale-server
-step that comes before it, and all fifteen `EXCALIDRAW_*` variables with their defaults.
+step that comes before it, and all twenty-five `EXCALIDRAW_*` variables with their defaults —
+which can each be spelled `VIBEMAXXING_*` instead, and are read from
+[`config.json`](docs/configuration.md) in a per-OS directory as well as from the environment.
 
 ## What It Is
 

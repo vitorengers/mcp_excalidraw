@@ -7,6 +7,7 @@ import * as scene from './commands/scene.js';
 import { snapshot } from './commands/snapshot.js';
 import { arrange } from './commands/arrange.js';
 import { installSkill } from './commands/install-skill.js';
+import { settingName } from '../core/settings.js';
 
 interface Command {
   handler: (argv: string[]) => Promise<void>;
@@ -64,7 +65,7 @@ function printHelp(): void {
     '  output when --out is omitted (`export` scene JSON, `screenshot --format svg`).',
     '  Diagnostics go to stderr.',
     '  Exit codes: 0 ok, 1 error, 2 usage, 3 canvas unreachable, 4 browser tab required.',
-    '  Canvas-driving commands auto-start the server (disable with EXCALIDRAW_NO_AUTOSTART=1).',
+    `  Canvas-driving commands auto-start the server (disable with ${settingName('NO_AUTOSTART')}=1).`,
     `  Canvas URL comes from EXPRESS_SERVER_URL or --url; otherwise the running board`,
     `  named in the state file, or port ${DEFAULT_CANVAS_PORT} — the next free one above it if that is taken.`,
     '  PORT pins the port instead, and is never scanned past.',

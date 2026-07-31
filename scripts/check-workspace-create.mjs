@@ -248,7 +248,7 @@ try {
   const nowhere = await add(BARE_BASE, { path: slash(freshDir) });
   check('the POST is refused', nowhere.status >= 400, `got ${nowhere.status} ${JSON.stringify(nowhere.body)}`);
   check('and it names the variable that would fix it',
-        /EXCALIDRAW_WORKSPACES/.test(nowhere.body?.error ?? ''), nowhere.body?.error);
+        /VIBEMAXXING_WORKSPACES/.test(nowhere.body?.error ?? ''), nowhere.body?.error);
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);

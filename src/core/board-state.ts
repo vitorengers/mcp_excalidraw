@@ -54,6 +54,7 @@ import logger from '../utils/logger.js';
 import { ServerElement } from '../types.js';
 import { elementsFor, isWatchedStore, normalizeWorkspaceId } from './element-store.js';
 import { BoardScene, parseBoardScene } from './board-seed.js';
+import { env } from './settings.js';
 
 /**
  * Kinds this board does not author and therefore does not save.
@@ -100,10 +101,10 @@ const writing = new Map<string, Promise<void>>();
  * than inventing a default project, and this is the same rule seen from the other end.
  */
 export function boardStateDir(): string | null {
-  const configured = process.env.EXCALIDRAW_BOARD_STATE?.trim();
+  const configured = env('BOARD_STATE')?.trim();
   if (configured) return configured;
 
-  const registry = process.env.EXCALIDRAW_WORKSPACES?.trim();
+  const registry = env('WORKSPACES')?.trim();
   if (!registry) return null;
   const directory = path.dirname(registry);
   const named = path.basename(registry, path.extname(registry));

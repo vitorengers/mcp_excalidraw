@@ -97,12 +97,18 @@ the port goes to whatever auto-starts first.
 `PORT` and `HOST` decide where it listens. Everything else is `EXCALIDRAW_*`, and every one of
 them is optional: unset means the feature is off, not degraded.
 
-The twenty-one below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
+**Every name below can also be spelled `VIBEMAXXING_*`**, since #311, and that is the spelling to
+write new configuration in. Both are read, the new one first, and a variable found under the old
+prefix says so once in the log file. Nothing breaks on the day the old one is dropped that has
+not been named in that file for a release first — `src/core/settings.ts` is the one list, and
+`node scripts/check-env-prefix-compat.mjs` fails if it and this table disagree.
+
+The twenty-two below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
 and they are in [their own section](#windows-only-projects-inside-a-wsl-distro) rather than here.
 
-Every name in both tables can be set three ways — in `<state-dir>/config.json`, in a `<cwd>/.env`,
-or exported — and they are read in that order, the environment winning.
-[configuration.md](configuration.md) is that half.
+Every name in both tables can be set four ways — in `<state-dir>/config.json`, in a `<cwd>/.env`,
+exported, or by a command-line flag — and they are read in that order, each beating the one
+before it. [configuration.md](configuration.md) is that half.
 
 **3737 is the default port rather than one machine's habit** since #303: 3000 is the default of
 Next.js, Create React App and most tutorial servers, and it is unusable here for a reason of its
@@ -136,6 +142,7 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_TERMINAL` | unset | `1` for the default shell, or a command line of your own. Unset means the terminal routes answer 404 — [terminal.md](terminal.md) |
 | `EXCALIDRAW_TERMINAL_PTY` | unset | `0` forces the pipe instead of a real pty, for a machine with no prebuilt binary |
 | `EXCALIDRAW_EXPORT_DIR` | working dir | The base directory MCP file exports may write to |
+| `EXCALIDRAW_ALLOWED_HOSTS` | loopback names only | Extra `Host` authorities the origin gate accepts, comma-separated, for a real alias or a proxy in front of the board. The refusal names the authority it expected, so a lockout says what to put here |
 | `EXCALIDRAW_NO_AUTOSTART` | unset | `1` stops the CLI and the MCP server auto-spawning a canvas |
 | `EXCALIDRAW_NO_DOTENV` | unset | `1` stops both configuration files being read — `<cwd>/.env` and `<state-dir>/config.json` alike — leaving only the real environment. The checks set it, because a file layer only ever fills in variables that are *unset*, which is exactly the set a check deleted on purpose — [trap-check-environment.md](trap-check-environment.md) |
 | `EXCALIDRAW_ENV_FILE` | `<cwd>/.env` | Read this file instead. Ignored when `EXCALIDRAW_NO_DOTENV=1`, and it does not move `config.json` |

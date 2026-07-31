@@ -234,7 +234,7 @@ try {
   check('the PUT is refused as unavailable rather than as absent', nowhere.status === 503,
         `got ${nowhere.status} ${JSON.stringify(nowhere.body)}`);
   check('and it names the variable that would fix it',
-        /EXCALIDRAW_WORKSPACES/.test(nowhere.body?.error ?? ''), nowhere.body?.error);
+        /VIBEMAXXING_WORKSPACES/.test(nowhere.body?.error ?? ''), nowhere.body?.error);
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);

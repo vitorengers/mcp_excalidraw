@@ -144,7 +144,7 @@ console.log('\n3. a command that is not there says which environment it was not 
           typeof hint === 'string' && hint.includes('Some-Distro'),
           `hint was ${JSON.stringify(hint)}`);
     check('it names the variable that overrides it',
-          typeof hint === 'string' && hint.includes('EXCALIDRAW_ISSUE_AGENT_WSL'),
+          typeof hint === 'string' && hint.includes('VIBEMAXXING_ISSUE_AGENT_WSL'),
           `hint was ${JSON.stringify(hint)}`);
     check('it says the command is missing inside the distro, not on the host',
           typeof hint === 'string' && /inside/i.test(hint),
@@ -191,7 +191,7 @@ console.log('\n4. a real run in a real distro reports it');
     check('the error names the distro', typeof run.error === 'string' && run.error.includes(distro),
           `error was ${JSON.stringify(run.error)}`);
     check('the error names the variable to set',
-          typeof run.error === 'string' && run.error.includes('EXCALIDRAW_ISSUE_AGENT_WSL'),
+          typeof run.error === 'string' && run.error.includes('VIBEMAXXING_ISSUE_AGENT_WSL'),
           `error was ${JSON.stringify(run.error)}`);
   }
 }

@@ -27,6 +27,7 @@ import { Workspace } from './workspaces.js';
 import { AgentDirectory, agentEnv, buildAgentCommand, resolveExecutable } from './issue-agent.js';
 import { streamsUsage } from './agent-usage.js';
 import { AgentStreamRenderer } from './agent-stream-render.js';
+import { env as settingValue, settingName } from './settings.js';
 
 /**
  * How much transcript is kept for a socket that connects late.
@@ -120,7 +121,7 @@ const PTY_SPECIFIER = '@lydell/node-pty';
 let ptyLoad: Promise<PtyModule | null> | null = null;
 
 /** What the setting reads as, when the setting is what turned the binding off. */
-const PTY_DISABLED_REASON = 'EXCALIDRAW_TERMINAL_PTY=0';
+const PTY_DISABLED_REASON = `${settingName('TERMINAL_PTY')}=0`;
 
 /**
  * Why the import produced no binding, written once, inside the memoised load below.
@@ -139,7 +140,7 @@ let ptyImportReason: string | null = null;
  */
 let ptyReason: string | null = null;
 
-export function ptyDisabled(setting: string | undefined | null = process.env.EXCALIDRAW_TERMINAL_PTY): boolean {
+export function ptyDisabled(setting: string | undefined | null = settingValue('TERMINAL_PTY')): boolean {
   return /^(0|false|off|no|disabled)$/i.test((setting ?? '').trim());
 }
 

@@ -17,6 +17,7 @@ import path from 'path';
 import logger from '../utils/logger.js';
 import { AgentUsage, streamsUsage, UsageMeter } from './agent-usage.js';
 import { AgentSettings, loadAgentWorkflow, Workspace } from './workspaces.js';
+import { env as settingValue } from './settings.js';
 
 /**
  * The language paragraph — the one thing in these prompts a project gets to set.
@@ -455,7 +456,7 @@ export function agentEnv(probe: AgentPathProbe = {}): NodeJS.ProcessEnv {
  * no ceiling a wedged run holds the block in `running`, so the block offers a reset.
  */
 export const DEFAULT_TIMEOUT_MS: number | null = (() => {
-  const configured = Number(process.env.EXCALIDRAW_ISSUE_AGENT_TIMEOUT);
+  const configured = Number(settingValue('ISSUE_AGENT_TIMEOUT'));
   return Number.isFinite(configured) && configured > 0 ? configured * 1000 : null;
 })();
 
