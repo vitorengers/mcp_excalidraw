@@ -228,7 +228,7 @@ try {
   check('the decoy .env configures a registry', decoyHealth?.workspaces === 'configured',
         `/health said ${JSON.stringify(decoyHealth?.workspaces)}`);
   check('and a terminal, and an issue agent',
-        decoyHealth?.terminal === true && decoyHealth?.agents?.issue === true,
+        decoyHealth?.terminal === true && decoyHealth?.agents?.issue?.configured === true,
         JSON.stringify({ terminal: decoyHealth?.terminal, agents: decoyHealth?.agents }));
   const decoyList = await workspacesAt(decoyPort);
   check('and the projects it lists are the decoy registry\'s',
@@ -262,7 +262,7 @@ try {
   check('not the decoy\'s', !ids.includes('decoy-project'), JSON.stringify(ids));
   check('the decoy\'s terminal did not arrive', health?.terminal === false,
         `/health said terminal: ${JSON.stringify(health?.terminal)}`);
-  check('nor the decoy\'s agent', health?.agents?.issue === false,
+  check('nor the decoy\'s agent', health?.agents?.issue?.configured === false,
         JSON.stringify(health?.agents));
 
   // ─── 2. no .env anywhere, an arbitrary directory ───────────────

@@ -7,6 +7,7 @@ import * as scene from './commands/scene.js';
 import { snapshot } from './commands/snapshot.js';
 import { arrange } from './commands/arrange.js';
 import { installSkill } from './commands/install-skill.js';
+import { doctor } from './commands/doctor.js';
 
 interface Command {
   handler: (argv: string[]) => Promise<void>;
@@ -18,6 +19,7 @@ const COMMANDS: Record<string, Command> = {
   start: { handler: server.start, summary: 'Start the canvas server (detached)', usage: 'start' },
   stop: { handler: server.stop, summary: 'Stop the canvas server', usage: 'stop' },
   status: { handler: server.status, summary: 'Canvas health, element count, browser clients', usage: 'status' },
+  doctor: { handler: doctor, summary: 'Whether the configured agents can actually run, per role and environment', usage: 'doctor' },
   apply: { handler: elements.apply, summary: 'Apply a {create,update,delete} patch in one call', usage: 'apply [patch.json|-] (update entries accept direct fields or {id,set:{...}})' },
   add: { handler: elements.add, summary: 'Create elements from a JSON array', usage: 'add [elements.json] (or stdin) | add --one \'{"type":"rectangle",...}\'' },
   update: { handler: elements.update, summary: 'Update one element', usage: 'update <id> --set \'{"backgroundColor":"#ffc9c9"}\'' },

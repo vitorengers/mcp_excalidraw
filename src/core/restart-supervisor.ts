@@ -40,12 +40,16 @@ import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { isMainModule } from './entry.js';
 import { isAcceptedCanvasService } from './identity.js';
+// Type only, and it has to stay that way: this module is spawned detached as its own entry
+// point, and an import that survived compilation would pull the agent preflight — and the
+// child spawns it reaches for — into a supervisor whose whole job is to poll a URL.
+import type { AgentsHealth } from './agent-preflight.js';
 
 /** What the replacement has to be, beyond answering at all. Same shape `/health` reports. */
 export interface CanvasIdentity {
   workspaces: string;
   terminal: boolean;
-  agents: { issue: boolean; implement: boolean };
+  agents: AgentsHealth;
 }
 
 export interface RestartPlan {
@@ -143,7 +147,7 @@ interface Health {
   pid?: number;
   workspaces?: string;
   terminal?: boolean;
-  agents?: { issue?: boolean; implement?: boolean };
+  agents?: Partial<AgentsHealth>;
 }
 
 async function healthOf(url: string): Promise<Health | null> {
@@ -155,15 +159,27 @@ async function healthOf(url: string): Promise<Health | null> {
   }
 }
 
-/** The new server is the board again, or it is not — and `status: healthy` cannot tell. */
+/**
+ * The new server is the board again, or it is not — and `status: healthy` cannot tell.
+ *
+ * The agents are compared on `configured` alone, and only on that. What the preflight
+ * *resolved* is a fact about the machine at the moment it was asked — a distro that was cold,
+ * a probe still running a second after `listen` — and a replacement that answered `probing`
+ * where the old one answered `found` is the same board, not a different one. Comparing it
+ * would turn a slow `wsl.exe` into a restart that reports failure and leaves the supervisor
+ * waiting. Whether a command is configured at all is the thing a stand-in cannot fake, and
+ * that is the thing this checks.
+ */
 export function matchesIdentity(health: Health | null, expect: CanvasIdentity, pid: number): boolean {
+  const configured = (health: Health | null, role: 'issue' | 'implement'): boolean =>
+    Boolean(health?.agents?.[role]?.configured);
   return health !== null
     && isAcceptedCanvasService(health.service)
     && health.pid === pid
     && health.workspaces === expect.workspaces
     && health.terminal === expect.terminal
-    && Boolean(health.agents?.issue) === expect.agents.issue
-    && Boolean(health.agents?.implement) === expect.agents.implement;
+    && configured(health, 'issue') === expect.agents.issue.configured
+    && configured(health, 'implement') === expect.agents.implement.configured;
 }
 
 /** The whole restart, from outside the process tree it replaces. */
