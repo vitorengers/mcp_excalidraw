@@ -83,23 +83,23 @@ the port goes to whatever auto-starts first.
 
 ## The environment
 
-`PORT` and `HOST` decide where it listens. **3737 is now the default rather than one machine's
-habit** (#303): 3000 is the default of Next.js, Create React App and most tutorial servers, and
-it is unusable here for a reason of its own. A `PORT` that is set is a **pin** — the server binds
-that port or fails saying what is on it, which is what keeps a Docker image and a scripted start
-deterministic. With `PORT` unset, the launch path tries `EXCALIDRAW_CANVAS_PORT` or 3737 and, if
-something else is already there, walks up to the next free port; `start` prints the URL and
-writes it into a state file beside the pidfile, so `status` and `stop` find a board on a port
-nobody typed. `EXPRESS_SERVER_URL`, when set, overrides all of it and is never scanned past.
-
-The checks never use any of them: each starts its own instance on a port the kernel just handed
-out, and neither `PORT` nor anything else in the environment reaches it.
-
-Everything else is `EXCALIDRAW_*`, and every one of them is optional. Unset means the feature is
-off, not degraded.
+`PORT` and `HOST` decide where it listens. Everything else is `EXCALIDRAW_*`, and every one of
+them is optional: unset means the feature is off, not degraded.
 
 The twenty-one below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
 and they are in [their own section](#windows-only-projects-inside-a-wsl-distro) rather than here.
+
+**3737 is the default port rather than one machine's habit** since #303: 3000 is the default of
+Next.js, Create React App and most tutorial servers, and it is unusable here for a reason of its
+own. A `PORT` that is set is a **pin** — the server binds that port or fails saying what is on
+it, which is what keeps a scripted start and a published container deterministic. With `PORT`
+unset, the launch path tries `EXCALIDRAW_CANVAS_PORT` or 3737 and, if something else is already
+there, walks up to the next free port; `start` prints the URL and writes it into a state file
+beside the pidfile, so `status` and `stop` find a board on a port nobody typed.
+`EXPRESS_SERVER_URL`, when set, overrides all of it and is never scanned past.
+
+The checks never use any of them: each starts its own instance on a port the kernel just handed
+out, and neither `PORT` nor anything else in the environment reaches it.
 
 | Variable | Default | What it does |
 |---|---|---|

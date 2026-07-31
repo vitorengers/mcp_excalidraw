@@ -35,10 +35,10 @@ export function canvasUrlFor(port: number, host: string = HOST_FALLBACK): string
 /**
  * The port the caller pinned, or null.
  *
- * A pinned port is a hard override that never scans: a Docker image publishing a fixed port and
- * a script that starts the board on the port its other half will talk to both need the answer
- * to be the number they gave, and a helpful move to the next free port would be a board neither
- * of them can find.
+ * A pinned port is a hard override that never scans: a script that starts the board on the port
+ * its other half will talk to, a published container, a firewall rule — each needs the answer to
+ * be the number it gave, and a helpful move to the next free port would be a board none of them
+ * can find.
  */
 export function explicitPort(env: NodeJS.ProcessEnv = process.env): number | null {
   const raw = env.PORT;

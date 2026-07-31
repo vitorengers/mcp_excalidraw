@@ -12,6 +12,9 @@ import { readPidFile, removePidFile, startupLogPath } from './pidfile.js';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
+/** How long a spawned server's death is allowed to be somebody else winning the race. */
+const CONCURRENT_START_GRACE_MS = 2000;
+
 export function canvasPort(): number {
   try {
     const url = new URL(EXPRESS_SERVER_URL);
@@ -175,6 +178,7 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
   child.unref();
 
   let exitCode: number | null = null;
+  let diedAt: number | null = null;
   child.once('exit', code => { exitCode = code ?? 0; });
   logger.info(`Auto-starting canvas server (pid ${child.pid}) at ${EXPRESS_SERVER_URL}`);
 
@@ -196,12 +200,21 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
     }
     // It died rather than came up. Relayed with what it said, and now — waiting out the
     // remaining seven seconds to then report a timeout is describing the wrong event.
+    //
+    // But not instantly, because of the one case where our own child dying is not the answer:
+    // two callers auto-starting at once. The loser exits on the loopback guard or EADDRINUSE
+    // and the winner is a moment from healthy, and this path has always been allowed to end in
+    // success for that reason. So the death opens a short window rather than closing the door,
+    // and the loop above is still the one that decides.
     if (exitCode !== null) {
-      const said = startupLogTail(startupLog);
-      throw unreachableError(
-        `the canvas server started on port ${port} exited with code ${exitCode} before answering /health`
-        + (said ? `. It said:\n${said}` : `. It wrote nothing to ${startupLog}; the rest is in the platform log file`)
-      );
+      if (diedAt === null) diedAt = Date.now();
+      if (Date.now() - diedAt >= CONCURRENT_START_GRACE_MS) {
+        const said = startupLogTail(startupLog);
+        throw unreachableError(
+          `the canvas server started on port ${port} exited with code ${exitCode} before answering /health`
+          + (said ? `. It said:\n${said}` : `. It wrote nothing to ${startupLog}; the rest is in the platform log file`)
+        );
+      }
     }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
