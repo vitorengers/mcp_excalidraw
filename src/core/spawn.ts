@@ -109,6 +109,11 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
   const child = spawn(process.execPath, [serverJs], {
     detached: true,
     stdio: 'ignore',
+    // What every other spawn in this tree sets, and this one did not — including the other
+    // detached one, the PTY reaper in terminal-session.ts. `detached` and `stdio: 'ignore'`
+    // stay: the server has to outlive the CLI, and its output already goes to the log file
+    // (utils/logger.ts) rather than to a console anybody could read.
+    windowsHide: true,
     env: { ...process.env, PORT: String(canvasPort()), HOST: spawnBindHost() }
   });
   child.unref();
