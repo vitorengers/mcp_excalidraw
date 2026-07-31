@@ -18,8 +18,12 @@
  * out of `GET /api/workspaces` in the new order; keys nobody here knows about survive the
  * rewrite, at both levels; a list that adds, drops or repeats an id is refused with a reason
  * and leaves the file on disk **byte for byte** unchanged, rather than partially applied; and
- * the route refuses off loopback and with no registry configured, like every other route that
- * writes to this machine.
+ * the route refuses off loopback, like every other route that writes to this machine.
+ *
+ * The last case used to be the second half of that refusal — no registry configured, a 503
+ * naming `EXCALIDRAW_WORKSPACES`. Since #310 there is no such board: the registry path always
+ * resolves, so a canvas with the variable unset has an empty registry rather than none, and
+ * what a reorder must do there is refuse the *ids*, which name projects it has never heard of.
  *
  * Self-contained: throwaway registry and project directories, its own canvas servers on free
  * ports, all killed at the end. Nothing here talks to GitHub. Run `./node_modules/.bin/tsc`
@@ -30,7 +34,7 @@
  * Tier: fast
  */
 
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -95,8 +99,12 @@ const fileOrder = () => readRegistry().workspaces.map((entry) => entry.id);
 
 const running = [];
 
-function startCanvas(port, { host = '127.0.0.1', registry = registryPath } = {}) {
+function startCanvas(port, { host = '127.0.0.1', registry = registryPath, stateHome = null } = {}) {
   const env = { PORT: String(port), HOST: host, LOG_LEVEL: 'error' };
+  // A server with no registry named resolves the per-user default one. A state directory of
+  // its own keeps that inside this check's temporary directory, well away from whoever is
+  // running it.
+  if (stateHome) env.EXCALIDRAW_STATE_HOME = stateHome;
   // Nothing to delete in the other case: the child's environment starts with no
   // `EXCALIDRAW_*` in it at all, so "not granted" is "never named".
   if (registry) env.EXCALIDRAW_WORKSPACES = registry;
@@ -227,14 +235,20 @@ try {
         JSON.stringify(fileOrder()) === JSON.stringify(['gamma', 'alpha', 'beta']),
         JSON.stringify(fileOrder()));
 
-  console.log('\n7. no registry configured is a refusal with a reason, not a silent no-op');
-  const bare = startCanvas(barePort, { registry: null });
+  console.log('\n7. a board with no projects refuses an order naming some, with a reason');
+  const bare = startCanvas(barePort, { registry: null, stateHome: join(workDir, 'state-home') });
   await waitForHealth(BARE_BASE, bare.child, bare.read);
   const nowhere = await reorder(BARE_BASE, { ids: ['alpha'] });
-  check('the PUT is refused as unavailable rather than as absent', nowhere.status === 503,
-        `got ${nowhere.status} ${JSON.stringify(nowhere.body)}`);
-  check('and it names the variable that would fix it',
-        /EXCALIDRAW_WORKSPACES/.test(nowhere.body?.error ?? ''), nowhere.body?.error);
+  check('the PUT is refused as a bad request rather than as a missing service',
+        nowhere.status === 400, `got ${nowhere.status} ${JSON.stringify(nowhere.body)}`);
+  check('and it says the id is not registered here', /alpha/.test(nowhere.body?.error ?? ''),
+        nowhere.body?.error);
+  check('naming what the board does have, which is nothing',
+        /no projects/.test(nowhere.body?.error ?? ''), nowhere.body?.error);
+  check('and nothing was written to the registry it resolved',
+        !existsSync(join(workDir, 'state-home', 'Excalidraw-Canvas', 'workspaces.json'))
+        && !existsSync(join(workDir, 'state-home', 'excalidraw-canvas', 'workspaces.json')),
+        join(workDir, 'state-home'));
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);
