@@ -41,9 +41,14 @@
  * Offline and self-contained: `git ls-files` and tracked files. No server, no browser, no
  * network, and — pointedly — no Docker.
  *
+ * `fast`, not `repo`, though it is a discipline check: `repo` is the roster that needs this
+ * repository's own board or its full history, and this needs neither. It reads the tracked file
+ * list and four of the files in it, which a `--depth 1` clone on any of the three runner
+ * operating systems can answer — `check-fork-identity.mjs` is the same shape and the same tier.
+ *
  * Usage: node scripts/check-no-docker-path.mjs
  *
- * Tier: repo
+ * Tier: fast
  */
 
 import { execFileSync } from 'node:child_process';
