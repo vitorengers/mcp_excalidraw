@@ -194,8 +194,10 @@ plain.close();
 function runProbe() {
   const env = { ...process.env, LOG_LEVEL: 'error', LOG_FILE_PATH: join(workDir, 'probe.log') };
   // The machine's own setting decides nothing here: the absent binding is the hook's doing,
-  // and a shell that exported the variable would make case 3 assert the wrong cause.
+  // and a shell that exported the variable would make case 3 assert the wrong cause. Both
+  // spellings, since #311 — deleting one and leaving the other is the leak this check is about.
   delete env[PTY_SETTING];
+  delete env[PTY_SETTING_REPORTED];
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [probePath], {
       cwd: repoRoot,
