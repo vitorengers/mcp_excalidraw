@@ -97,7 +97,7 @@ const shotDir = argOf('--shots') ?? join(workDir, 'shots');
 mkdirSync(profileDir, { recursive: true });
 mkdirSync(shotDir, { recursive: true });
 
-const PROJECT_URL = 'https://github.com/users/vitorengers/projects/5';
+const PROJECT_URL = 'https://github.com/users/someone/projects/5';
 /** What `gh` says when the credential is there and refused. The words the toast must carry. */
 const REFUSAL = 'gh: Bad credentials (HTTP 401)';
 /** What `gh` says when nobody is logged in at all. */

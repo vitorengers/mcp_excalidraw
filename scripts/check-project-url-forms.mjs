@@ -74,7 +74,7 @@ const { validateWorkspaceConfigPatch } =
 
 console.log('1. the address bar\'s own URLs parse');
 
-const USER = 'https://github.com/users/vitorengers/projects/5';
+const USER = 'https://github.com/users/someone/projects/5';
 const ORG = 'https://github.com/orgs/acme/projects/12';
 
 /** Owner type, login and number as one comparable string, or what went wrong instead. */
@@ -84,40 +84,40 @@ const parsed = (url) => {
 };
 
 check('a bare user project still parses, as it always did',
-      parsed(USER) === 'user/vitorengers/5', parsed(USER));
+      parsed(USER) === 'user/someone/5', parsed(USER));
 check('and a bare organisation one',
       parsed(ORG) === 'organization/acme/12', parsed(ORG));
 
 check('the view the address bar adds is accepted and dropped',
-      parsed(`${USER}/views/1`) === 'user/vitorengers/5', parsed(`${USER}/views/1`));
+      parsed(`${USER}/views/1`) === 'user/someone/5', parsed(`${USER}/views/1`));
 check('for an organisation too',
       parsed(`${ORG}/views/3`) === 'organization/acme/12', parsed(`${ORG}/views/3`));
 check('and with the trailing slash a copied link sometimes carries',
-      parsed(`${USER}/views/1/`) === 'user/vitorengers/5', parsed(`${USER}/views/1/`));
+      parsed(`${USER}/views/1/`) === 'user/someone/5', parsed(`${USER}/views/1/`));
 
 // What the address bar holds while a card's side panel is open. The item and the issue are
 // GitHub's own encoding, pipes and all, and none of it is this board's business.
 const PANE = `${USER}/views/1?pane=issue&itemId=115447583&issue=vitorengers%7Cvibemaxxing%7C318`;
 check('a project with a card open in the side panel parses to the project',
-      parsed(PANE) === 'user/vitorengers/5', parsed(PANE));
+      parsed(PANE) === 'user/someone/5', parsed(PANE));
 check('a query on the bare form parses too',
-      parsed(`${USER}?pane=info`) === 'user/vitorengers/5', parsed(`${USER}?pane=info`));
+      parsed(`${USER}?pane=info`) === 'user/someone/5', parsed(`${USER}?pane=info`));
 check('and a fragment is dropped the same way',
-      parsed(`${USER}/views/1#board`) === 'user/vitorengers/5', parsed(`${USER}/views/1#board`));
+      parsed(`${USER}/views/1#board`) === 'user/someone/5', parsed(`${USER}/views/1#board`));
 check('surrounding whitespace is still trimmed',
-      parsed(`  ${USER}/views/1  `) === 'user/vitorengers/5', parsed(`  ${USER}/views/1  `));
+      parsed(`  ${USER}/views/1  `) === 'user/someone/5', parsed(`  ${USER}/views/1  `));
 
 console.log('\n2. and it is still a whitelist');
 
 const refused = (url) => parseProjectUrl(url) === null;
 
 check('another host is refused', refused('https://example.com/users/x/projects/5'));
-check('http is refused', refused('http://github.com/users/vitorengers/projects/5'));
+check('http is refused', refused('http://github.com/users/someone/projects/5'));
 check('a login that is a command line is refused',
       refused('https://github.com/users/a;rm -rf b/projects/5'),
       JSON.stringify(parseProjectUrl('https://github.com/users/a;rm -rf b/projects/5')));
 check('a number that is a command line is refused',
-      refused('https://github.com/users/vitorengers/projects/5;rm -rf b'));
+      refused('https://github.com/users/someone/projects/5;rm -rf b'));
 check('a path segment this board has never heard of is refused',
       refused(`${USER}/settings`), JSON.stringify(parseProjectUrl(`${USER}/settings`)));
 check('a view that is not a number is refused', refused(`${USER}/views/one`));
@@ -290,7 +290,7 @@ try {
   // `length > 0` on each of the three: `every` over nothing is true, so a run where `gh` was
   // never called would otherwise report the command line as correct.
   check('with the login the URL named',
-        graphql.length > 0 && graphql.every((line) => /(^| )login=vitorengers( |$)/.test(line)),
+        graphql.length > 0 && graphql.every((line) => /(^| )login=someone( |$)/.test(line)),
         JSON.stringify(graphql).slice(0, 400));
   check('and the number, normalised out of the address bar\'s decoration',
         graphql.length > 0 && graphql.every((line) => /(^| )number=5( |$)/.test(line)),
