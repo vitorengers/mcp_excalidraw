@@ -41,7 +41,7 @@ function isLoopbackUrl(): boolean {
 function unreachableError(reason: string): Error {
   const error = new Error(
     `Canvas server is not reachable at ${EXPRESS_SERVER_URL} (${reason}). ` +
-    `Start it with \`mcp-excalidraw-server start\` or \`node dist/server.js\`.`
+    `Start it with \`vibemaxxing start\` or \`node dist/server.js\`.`
   );
   (error as any).code = 'CANVAS_UNREACHABLE';
   return error;

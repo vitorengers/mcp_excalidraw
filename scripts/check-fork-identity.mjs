@@ -26,7 +26,7 @@
  * `upstream`, `original`, `fork` or `copyright`. An unmarked one still fails, and the third
  * package name is never permitted anywhere.
  *
- * Three rules:
+ * Four rules:
  *
  *  1. **no scanned artifact names `yctimlin` or `excalidraw-mcp`.** The list is fixed —
  *     `package.json`, `LICENSE`, `NOTICE.md`, `Dockerfile`, `Dockerfile.canvas`,
@@ -40,13 +40,22 @@
  *  3. **`LICENSE` names a copyright holder**, an account this repository can be traced to,
  *     rather than a product string. `Copyright (c) 2024 MCP Excalidraw Server` names nobody,
  *     and MIT requires that notice be carried into every copy.
+ *  4. **no workflow spells a package identity out.** `npm-publish.yml` decided whether to
+ *     publish by asking the registry about `mcp-excalidraw-server` — a package this fork does
+ *     not own — so the probe always succeeded, both publish steps were skipped, and the run
+ *     printed *"Please bump the version in package.json"*, advice that could never help. A
+ *     literal is what made that possible: it agreed with `package.json` on the day it was
+ *     written and nothing tied the two together afterwards. So a package name in a workflow
+ *     has to come from `package.json`, and in the workflow that actually publishes a
+ *     currently-correct literal fails too — being right today is not the property being
+ *     asked for.
  *
  * A match is a whole token: `yctimlin` and `excalidraw-mcp` are an account and a package name,
  * so `mcp-excalidraw-mcp` — a container name in `docker-compose.yml` — is a different word and
  * not a hit. Reporting it as the third package would be false.
  *
  * **This check is red on the tree it lands on, on purpose.** It is the guard written before the
- * renames it guards, so section 0 is what says its rules work: it drives all three over an
+ * renames it guards, so section 0 is what says its rules work: it drives all four over an
  * in-memory tree carrying each defect, and over one carrying none, so a future green run is
  * known to mean the tree was fixed rather than the scanner having stopped looking.
  *
@@ -89,7 +98,7 @@ function check(name, condition, detail = '') {
   else { failures++; console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`); }
 }
 
-// ─── The three rules, as functions over text ──────────────────
+// ─── The four rules, as functions over text ───────────────────
 
 /** What counts as part of a name, and therefore as *not* a boundary around one. */
 const NAME_CHAR = 'A-Za-z0-9_-';
@@ -167,6 +176,86 @@ function licenceIssues(text, owner) {
           + `MIT carries this notice into every copy: ${lines.join(' | ')}`];
 }
 
+/**
+ * The three places a workflow names a package: the first non-flag argument of an `npm`
+ * sub-command that takes one, an npmjs.com URL, and the filename of a release artifact.
+ *
+ * `npm ci` and `npm run build` are deliberately not on the verb list — neither takes a
+ * package name, and both are on every workflow in the repository.
+ */
+const NPM_VERB = /\bnpm\s+(?:view|info|show|publish|install|add|i)\s+(\S+)/g;
+const NPM_URL = /npmjs\.com\/package\/([^\s"'`)]+)/g;
+const ARTIFACT = /(\S+)\.(?:tgz|tar\.gz)\b/g;
+
+/**
+ * A GitHub expression, a shell substitution, or a shell variable — anything whose value comes
+ * from somewhere else at run time.
+ *
+ * Each is replaced by one sentinel character before the line is read, so that what is left is
+ * exactly the part somebody typed. `mcp-excalidraw-server-${{ … }}.tar.gz` has to keep saying
+ * `mcp-excalidraw-server` after the substitution, or the hardcoded half of a half-derived
+ * name goes unseen — which is the shape line 85 actually had.
+ */
+const EXPRESSION = /\$\{\{[^}]*\}\}|\$\((?:[^()]|\([^()]*\))*\)|\$\{[^}]*\}/g;
+const SUPPLIED = '%';
+const literalOnly = (line) => line.replace(EXPRESSION, SUPPLIED);
+
+/** npm's own rule for what a package name may contain, scope and all. */
+const NAME_SHAPE = /^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i;
+
+/**
+ * The package name inside a raw token, or `''` when there is no literal one left.
+ *
+ * `kind` says which suffix to drop: a registry query carries `@<version>`, an artifact
+ * filename carries `-<version>`. What a substitution supplied is dropped with it, so a fully
+ * derived token normalises to nothing and is not compared against anything.
+ */
+function packageToken(raw, kind) {
+  let token = raw.replace(/^[\s'"`]+|[\s'"`,;:]+$/g, '');
+  if (kind === 'artifact') {
+    token = token.replace(/\.(?:tgz|tar\.gz)$/i, '').replace(/-v?[\d][\w.+-]*$/i, '');
+  } else {
+    const at = token.lastIndexOf('@');
+    if (at > 0 && !token.slice(at).includes('/')) token = token.slice(0, at);
+  }
+  token = token.split(SUPPLIED).join('').replace(/^[-_.]+|[-_.]+$/g, '');
+  return NAME_SHAPE.test(token) ? token : '';
+}
+
+/** Every package-identity position on a line, paired with the rule that reads it. */
+function positions(line) {
+  const bare = literalOnly(line);
+  const out = [];
+  for (const [, raw] of bare.matchAll(NPM_VERB)) if (!raw.startsWith('-')) out.push([raw, 'npm']);
+  for (const [, raw] of bare.matchAll(NPM_URL)) out.push([raw, 'npm']);
+  for (const [, raw] of bare.matchAll(ARTIFACT)) out.push([raw, 'artifact']);
+  return out;
+}
+
+/**
+ * Where a workflow names a package rather than reading one.
+ *
+ * `publishes` is the stricter half: the workflow that runs `npm publish` is the one whose
+ * identity has to survive a rename, so a literal there fails even when it is right.
+ */
+function workflowIssues(path, text, packageName, publishes) {
+  const issues = [];
+  text.split(/\r?\n/).forEach((line, index) => {
+    for (const [raw, kind] of positions(line)) {
+      const token = packageToken(raw, kind);
+      if (!token) continue;
+      const where = `${path}:${index + 1}`;
+      if (fold(token) !== fold(packageName)) {
+        issues.push(`${where} names "${token}" — package.json is "${packageName}"`);
+      } else if (publishes) {
+        issues.push(`${where} spells "${token}" out — the workflow that publishes has to read `
+                    + `the name from package.json, so a rename cannot leave it behind`);
+      }
+    }
+  });
+  return issues;
+}
+
 // ─── 0. The rules catch each defect, and clear a fixed tree ───
 
 console.log('0. the rules catch each defect, and clear a tree that has none');
@@ -239,6 +328,57 @@ check('a copyright line naming the account is accepted, spelled as a person',
 check('a licence with no copyright line at all is caught',
       licenceIssues('MIT License\n', 'someone').length === 1);
 
+/**
+ * The publish workflow as it stood, and as it has to stand: the same four positions, spelled
+ * out on one side and read from `package.json` on the other. The last two lines of each are
+ * the sub-commands that take no package name and are on every workflow in the repository.
+ */
+const WORKFLOW_DIRTY = [
+  '          if npm view their-tool-server@${{ steps.package-version.outputs.version }} version; then',
+  '          tar -czf their-tool-server-${{ steps.package-version.outputs.version }}.tar.gz dist/',
+  '            their-tool-server-${{ steps.package-version.outputs.version }}.tar.gz',
+  '          echo "View at: https://www.npmjs.com/package/their-tool-server"',
+  '        run: npm publish --provenance --access public',
+  '        run: npm ci',
+  '        run: npm run build',
+].join('\n');
+
+const WORKFLOW_CLEAN = [
+  '          if npm view "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}" version; then',
+  '          tar -czf ${{ steps.package.outputs.slug }}-${{ steps.package.outputs.version }}.tar.gz dist/',
+  '            ${{ steps.package.outputs.slug }}-${{ steps.package.outputs.version }}.tar.gz',
+  '          echo "View at: https://www.npmjs.com/package/${{ needs.publish.outputs.name }}"',
+  '        run: npm publish --provenance --access public',
+  '        run: npm ci',
+  '        run: npm run build',
+].join('\n');
+
+const FIXTURE_NAME = '@someone/their-tool';
+const dirtyWorkflow = workflowIssues('publish.yml', WORKFLOW_DIRTY, FIXTURE_NAME, true);
+check('all four positions are caught when a workflow spells another package out',
+      dirtyWorkflow.length === 4, dirtyWorkflow.join(' / ') || 'nothing caught');
+check('a hardcoded name is still caught when only the version is derived',
+      dirtyWorkflow.some((issue) => issue.startsWith('publish.yml:2')),
+      'the tarball line supplies its version from an expression and its name from nobody');
+check('a workflow that reads every position from package.json is accepted',
+      workflowIssues('publish.yml', WORKFLOW_CLEAN, FIXTURE_NAME, true).length === 0,
+      workflowIssues('publish.yml', WORKFLOW_CLEAN, FIXTURE_NAME, true).join(' / '));
+check('npm ci and npm run build are not package references',
+      workflowIssues('ci.yml', '        run: npm ci\n        run: npm run build\n',
+                     FIXTURE_NAME, false).length === 0);
+check('the scoped name and the tarball slug it packs to are the same identity',
+      workflowIssues('publish.yml',
+                     '          tar -czf someone-their-tool-1.2.3.tar.gz dist/',
+                     FIXTURE_NAME, false).length === 0,
+      'npm packs @someone/their-tool as someone-their-tool-<version>.tgz');
+check('a correct literal still fails in the workflow that publishes',
+      workflowIssues('publish.yml', `          run: npm view ${FIXTURE_NAME}@1.2.3 version`,
+                     FIXTURE_NAME, true).length === 1,
+      'being right today is not the property being asked for');
+check('the same literal passes in a workflow that does not publish',
+      workflowIssues('ci.yml', `          run: npm view ${FIXTURE_NAME}@1.2.3 version`,
+                     FIXTURE_NAME, false).length === 0);
+
 // ─── The real tree ────────────────────────────────────────────
 
 const config = JSON.parse(readFileSync(join(repoRoot, 'board.config.json'), 'utf8'));
@@ -257,6 +397,23 @@ function rootJsonFiles() {
   } catch {
     console.log('  note  git ls-files is unavailable; reading the root directory instead');
     return readdirSync(repoRoot).filter((name) => name.endsWith('.json'));
+  }
+}
+
+/**
+ * Every tracked workflow, not the one this issue was about. A second workflow that learned to
+ * publish, or to print an npm URL, is exactly the drift rule 4 exists to stop.
+ */
+function trackedWorkflows() {
+  const dir = '.github/workflows';
+  try {
+    return execFileSync('git', ['ls-files', '-z', dir], { cwd: repoRoot, encoding: 'utf8' })
+      .split('\0').filter((path) => /\.ya?ml$/i.test(path));
+  } catch {
+    console.log('  note  git ls-files is unavailable; reading .github/workflows instead');
+    if (!existsSync(join(repoRoot, dir))) return [];
+    return readdirSync(join(repoRoot, dir)).filter((name) => /\.ya?ml$/i.test(name))
+      .map((name) => `${dir}/${name}`);
   }
 }
 
@@ -300,6 +457,20 @@ const licence = licenceIssues(readFileSync(join(repoRoot, 'LICENSE'), 'utf8'), r
 if (licence.length && !offenders.includes('LICENSE')) offenders.push('LICENSE');
 check('LICENSE carries a copyright line naming a person or entity', licence.length === 0,
       licence.join('\n        '));
+
+console.log('\n4. no workflow spells a package identity out');
+
+const workflows = trackedWorkflows();
+check(`there were workflows to scan (${workflows.length})`, workflows.length > 0);
+
+for (const path of workflows) {
+  const text = readFileSync(join(repoRoot, path), 'utf8');
+  const publishes = /\bnpm\s+publish\b/.test(text);
+  const issues = workflowIssues(path, text, String(pkg.name ?? ''), publishes);
+  if (issues.length) offenders.push(path);
+  check(`${path} reads the package name from package.json`, issues.length === 0,
+        issues.join('\n        '));
+}
 
 console.log('');
 if (failures) {

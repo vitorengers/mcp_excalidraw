@@ -21,7 +21,7 @@
     },
     {
       "id": 3,
-      "prompt": "Without using any MCP tools (assume none are configured), use only the CLI (`npx -y mcp-excalidraw-server <command>`) to: (1) build a three-tier diagram with boxes 'Frontend', 'API', and 'Postgres' connected by arrows, (2) query for all rectangles and confirm the count is 3, (3) save a snapshot named 'v1', (4) export the scene to /tmp/three-tier.excalidraw, and (5) report the canvas status including how many browser tabs are connected.",
+      "prompt": "Without using any MCP tools (assume none are configured), use only the CLI (`npx -y @vitorengers/vibemaxxing <command>`) to: (1) build a three-tier diagram with boxes 'Frontend', 'API', and 'Postgres' connected by arrows, (2) query for all rectangles and confirm the count is 3, (3) save a snapshot named 'v1', (4) export the scene to /tmp/three-tier.excalidraw, and (5) report the canvas status including how many browser tabs are connected.",
       "expected_output": "All five steps completed via CLI commands only: elements created with bound arrows (the canvas server auto-starts), a query result showing 3 rectangles, a saved snapshot 'v1', a valid .excalidraw file at /tmp/three-tier.excalidraw, and a status report with element and browser-client counts.",
       "files": []
     },
