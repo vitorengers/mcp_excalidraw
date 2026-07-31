@@ -242,7 +242,7 @@ npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>
 
 The command copies the bundled `vibemaxxing-canvas/` directory into `<skills-root>/vibemaxxing-canvas`. Let your agent choose whether that root should be project-level or global. Re-running `install-skill` upgrades in place — it replaces the target directory, so files removed upstream don't linger.
 
-This skill used to install as `excalidraw-skill`, which is also the name upstream's published package installs. An agent loads every directory under its skills root, so `install-skill` removes a legacy `excalidraw-skill/` from the root it is writing to — but only when that directory holds a `SKILL.md` whose own front matter names the legacy skill, so a directory of yours that happens to share the name is left alone. Whatever it removed is listed under `removed` in the command's JSON output.
+This skill used to install as `excalidraw-skill`, which is also the name upstream's published package installs. An agent loads every directory under its skills root, so `install-skill` removes a legacy `excalidraw-skill` directory from the root it is writing to — but only when that directory holds a `SKILL.md` whose own front matter names the legacy skill, so a directory of yours that happens to share the name is left alone. Whatever it removed is listed under `removed` in the command's JSON output.
 
 Where the skill shines:
 
