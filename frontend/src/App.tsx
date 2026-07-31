@@ -181,6 +181,18 @@ const CLIENT_ID = globalThis.crypto?.randomUUID?.()
   ?? `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 /**
+ * What this tool is called, for the one place the frontend has to say it.
+ *
+ * `board.config.json`'s `name`, copied rather than imported: that file is the server's, read
+ * per request for whichever project a tab is showing, and a bundle that runs before the first
+ * response has no board to read it from. The copy in `frontend/index.html`'s `<title>` is
+ * there for the same reason and is even earlier — it is what a still-loading tab says.
+ * `scripts/check-brand-strings-browser.mjs` holds all three in agreement, the way
+ * `check-readme.mjs` already does for the README.
+ */
+const PRODUCT_NAME = 'VibeMaxxing';
+
+/**
  * How often the mirror re-reads the project.
  *
  * Polled because there is nothing to subscribe to: `projects_v2_item` webhooks are
@@ -4704,6 +4716,30 @@ function App(): JSX.Element {
       for (const workspaceId of [...warmBoardsRef.current.keys()]) dropWarmBoard(workspaceId)
     }
   }, [])
+
+  /**
+   * What the browser tab says this window is.
+   *
+   * Since #261 the bar above the canvas has no title on it — a constant four words beside the
+   * tabs that already name the board was the least informative thing in the row — so `<title>`
+   * is the only place the name is left, and a reader with three projects open in three windows
+   * reads them apart there and nowhere else. So the board goes first and the product second:
+   * a tab strip is truncated to a handful of characters, and those characters should be the
+   * variable half.
+   *
+   * The fallbacks are the states a board really sits in rather than defensive padding. Before
+   * `/api/workspaces` has answered there is no list; a board nobody has added a project to yet
+   * has nothing to be named after (#310 gave every canvas a registry, so that is now an empty
+   * one rather than none, and the tab says the same thing either way); and this repository's
+   * own board is *called* VibeMaxxing, which would otherwise render `VibeMaxxing —
+   * VibeMaxxing`. All three land on the product name alone, which is what `index.html` already
+   * said before any of this ran.
+   */
+  useEffect(() => {
+    const board = workspaces.find((workspace) => workspace.id === activeWorkspace)
+    const name = board?.name?.trim()
+    document.title = name && name !== PRODUCT_NAME ? `${name} — ${PRODUCT_NAME}` : PRODUCT_NAME
+  }, [workspaces, activeWorkspace])
 
   /**
    * The camera this board was last left at, put back on the way in.
