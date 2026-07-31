@@ -9,8 +9,13 @@ and builds a **workbench for running a software project on that canvas** on top 
 projects, a mirrored GitHub project board, blocks that open issues and implement them, and real
 shells.
 
-There are no CI or package badges here on purpose. This fork publishes no package and runs no
-pipeline of its own; a green badge for somebody else's would say nothing true about this tree.
+There are no badges here beyond the licence, on purpose: a green badge for the upstream
+project's pipeline or package would say nothing true about this tree. What this repository does
+publish is `@vitorengers/vibemaxxing` on npm, from a GitHub Release
+([`.github/workflows/npm-publish.yml`](.github/workflows/npm-publish.yml)), and it runs its own
+checks on Linux, macOS and Windows ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). It
+publishes no container image: [#300](https://github.com/vitorengers/mcp_excalidraw/issues/300)
+deleted the Docker path rather than half-supporting it.
 
 One canvas, three ways to drive it:
 
@@ -46,7 +51,7 @@ Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Merma
   - [OpenCode](#opencode)
   - [Antigravity (Google)](#antigravity-google)
 - [MCP Tools (26 Total)](#mcp-tools-26-total)
-- [Quick Start (From Source / Docker)](#quick-start-from-source--docker)
+- [Quick Start (From Source)](#quick-start-from-source)
 - [Testing](#testing)
 - [FAQ](#faq)
 - [Troubleshooting](#troubleshooting)
@@ -186,7 +191,7 @@ Install the Excalidraw canvas toolkit so you can draw diagrams for me:
 | **Codex shortcut** | `npx -y @vitorengers/vibemaxxing install-skill --target codex` | Installs to `~/.codex/skills` for backward compatibility |
 | **MCP client user** (Claude Desktop, Cursor, ...) | Add the npx config below | See [Configure MCP Clients](#configure-mcp-clients) |
 | **CLI user / scripting** | Nothing — `npx -y @vitorengers/vibemaxxing <command>` | See [CLI Reference](#cli-reference) |
-| **Contributor / from source** | `git clone` + `npm ci` + `npm run build` | See [Quick Start (From Source / Docker)](#quick-start-from-source--docker) |
+| **Contributor / from source** | `git clone` + `npm ci` + `npm run build` | See [Quick Start (From Source)](#quick-start-from-source) |
 
 There is no separate server setup: any drawing command auto-starts the local canvas server on `http://127.0.0.1:3000`.
 
@@ -321,23 +326,6 @@ Config location:
 }
 ```
 
-**Docker**
-```json
-{
-  "mcpServers": {
-    "excalidraw": {
-      "command": "docker",
-      "args": [
-        "run", "-i", "--rm",
-        "-e", "EXPRESS_SERVER_URL=http://host.docker.internal:3000",
-        "-e", "ENABLE_CANVAS_SYNC=true",
-        "ghcr.io/yctimlin/mcp_excalidraw:latest"
-      ]
-    }
-  }
-}
-```
-
 ---
 
 ### Claude Code
@@ -355,15 +343,6 @@ claude mcp add excalidraw --scope user \
   -e EXPRESS_SERVER_URL=http://127.0.0.1:3000 \
   -e ENABLE_CANVAS_SYNC=true \
   -- node /absolute/path/to/mcp_excalidraw/dist/index.js
-```
-
-**Docker**
-```bash
-claude mcp add excalidraw --scope user \
-  -- docker run -i --rm \
-  -e EXPRESS_SERVER_URL=http://host.docker.internal:3000 \
-  -e ENABLE_CANVAS_SYNC=true \
-  ghcr.io/yctimlin/mcp_excalidraw:latest
 ```
 
 **Manage servers:**
@@ -390,23 +369,6 @@ Config location: `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json
 }
 ```
 
-**Docker**
-```json
-{
-  "mcpServers": {
-    "excalidraw": {
-      "command": "docker",
-      "args": [
-        "run", "-i", "--rm",
-        "-e", "EXPRESS_SERVER_URL=http://host.docker.internal:3000",
-        "-e", "ENABLE_CANVAS_SYNC=true",
-        "ghcr.io/yctimlin/mcp_excalidraw:latest"
-      ]
-    }
-  }
-}
-```
-
 ---
 
 ### Codex CLI
@@ -414,15 +376,6 @@ Config location: `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json
 **npx (recommended)**
 ```bash
 codex mcp add excalidraw -- npx -y @vitorengers/vibemaxxing
-```
-
-**Docker**
-```bash
-codex mcp add excalidraw \
-  -- docker run -i --rm \
-  -e EXPRESS_SERVER_URL=http://host.docker.internal:3000 \
-  -e ENABLE_CANVAS_SYNC=true \
-  ghcr.io/yctimlin/mcp_excalidraw:latest
 ```
 
 **Manage servers:**
@@ -471,7 +424,7 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
 
 ### Notes
 
-- **Docker networking**: Use `host.docker.internal` to reach the canvas server running on your host machine. On Linux, you may need `--add-host=host.docker.internal:host-gateway` or use `172.17.0.1`. The Docker MCP image sets `EXCALIDRAW_NO_AUTOSTART=1` (it has no frontend build) — run the canvas as its own container.
+- **No container**: this repository publishes no image and ships no `Dockerfile`. The MCP server and the canvas both run from `npx -y @vitorengers/vibemaxxing` or from a clone, on the host, where the `gh` and `git` a container has not got are the ones the issue blocks and the terminal need.
 - **In-memory storage**: The canvas server stores elements in memory. Restarting the server clears all elements — use `export` / `snapshot` for persistence.
 
 ## MCP Tools (26 Total)
@@ -500,7 +453,7 @@ Viewport group focus can tune framing with `viewportZoomFactor`:
 
 `scrollToElementIds` zooms to fit every requested element, while `scrollToElementId` centers one element without changing the current zoom. Specify only one viewport mode per request. `viewportZoomFactor` accepts values greater than 0 and at most 1.
 
-## Quick Start (From Source / Docker)
+## Quick Start (From Source)
 
 From source (Node >= 18):
 
@@ -512,14 +465,7 @@ node dist/index.js                # MCP server over stdio (terminal 2, usually l
 node dist/bin.js status           # or drive the CLI straight from the build
 ```
 
-Docker canvas server:
-```bash
-docker run -d -p 3000:3000 --name mcp-excalidraw-canvas ghcr.io/yctimlin/mcp_excalidraw-canvas:latest
-```
-
-Both images above are the upstream project's published ones. The MCP server image is `ghcr.io/yctimlin/mcp_excalidraw:latest` (stdio; point `EXPRESS_SERVER_URL` at the canvas container).
-
-This fork publishes its own to `ghcr.io/vitorengers/mcp_excalidraw` and `ghcr.io/vitorengers/mcp_excalidraw-canvas`, but only from `main` and from a `v*.*.*` tag. A pull request builds both images and publishes neither — see [`.github/workflows/docker.yml`](.github/workflows/docker.yml).
+There is no container path. It was deleted rather than repaired ([#300](https://github.com/vitorengers/mcp_excalidraw/issues/300)): the image bound every interface on a server whose API has no authentication, and carried neither `gh` nor `git`, so the issue blocks, the project-board mirror and the terminal — most of what this fork is — could not have run inside it. Run it on the host, from `npx` or from a clone.
 
 ## Testing
 
