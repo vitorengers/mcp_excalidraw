@@ -2,6 +2,7 @@
 // `<state-dir>/config.json` and `<cwd>/.env` into `process.env`, and half the modules below
 // read a variable while they are being evaluated. See `core/settings.ts`.
 import './core/env.js';
+import { env, settingName } from './core/settings.js';
 import express, { Request, Response, NextFunction } from 'express';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
@@ -41,7 +42,9 @@ import {
 import { spawnRestartSupervisor, type CanvasIdentity } from './core/restart-supervisor.js';
 import {
   addWorkspace,
+  hasWorkspaceRegistry,
   loadWorkspaces,
+  registryPath,
   reorderWorkspaces,
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -50,9 +53,12 @@ import {
 import { BoardScene, parseBoardScene } from './core/board-seed.js';
 import { listDirectories } from './core/directory-browse.js';
 import {
-  AgentCommands, AgentHost, agentCommandFor, runIssueAgent, runReviseAgent, runsHeadless,
+  AgentCommands, AgentHost, AgentRun, agentCommandFor, runIssueAgent, runReviseAgent, runsHeadless,
   withoutPrintFlags
 } from './core/issue-agent.js';
+import {
+  AgentRoleCommands, AgentsHealth, agentRoles, initialAgents, preflightAgents, preflightLines
+} from './core/agent-preflight.js';
 import { AgentUsage } from './core/agent-usage.js';
 import {
   ClaudeEnvironmentStatus, readClaudeStatus, STALE_AFTER_SECONDS
@@ -67,8 +73,12 @@ import {
   todoColumn,
   DEFAULT_TODO_COLUMN,
   NoProjectConfigured,
+  ProjectUrlUnparseable,
   NotOnThisBoard
 } from './core/project-board.js';
+import {
+  GithubHealth, GithubStatus, githubHealth, githubPreflightLine, initialGithub, readGithubStatus
+} from './core/github-status.js';
 import {
   lastQueuePass,
   QueuePass,
@@ -80,9 +90,12 @@ import {
   setQueueEnabled,
   startableCards
 } from './core/implement-queue.js';
-import { MIRROR_DOC_KEY } from './core/project-board-layout.js';
+import { TOOL_DOC_KEYS } from './core/tool-docs.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
+import { GITHUB_HOST, issueUrlRefusal } from './core/github-host.js';
 import type { IssueDetail } from './core/github-issue.js';
+import { fetchPullLanding } from './core/github-pull.js';
+import { Landing, landingFor } from './core/implement-landing.js';
 import { IssueMemo, memoWindow } from './core/issue-memo.js';
 import {
   PtyModule,
@@ -94,7 +107,7 @@ import {
 } from './core/terminal-session.js';
 import { issueBlockAppearance } from './core/issue-appearance.js';
 import { preserveServerAuthored } from './core/element-authorship.js';
-import { runImplementAgent } from './core/implement-agent.js';
+import { UnfinishedRun, runImplementAgent } from './core/implement-agent.js';
 import {
   ImplementRecord,
   ImplementUsage,
@@ -109,7 +122,9 @@ import {
   HeldWorktree,
   ImplementWorktree,
   ensureWorktree,
-  releaseWorktree
+  originRemote,
+  releaseWorktree,
+  worktreesHoldingWork
 } from './core/implement-worktree.js';
 import { describeInterrupted, interruptedRuns } from './core/implement-recovery.js';
 import { layoutLabel, DEFAULT_BOUND_TEXT_FONT_SIZE } from './core/text-layout.js';
@@ -151,7 +166,7 @@ const server = createServer(app);
 let authorities: Set<string> | null = null;
 function boardAuthorities(): Set<string> {
   if (!authorities) {
-    authorities = allowedAuthorities(HOST, PORT, process.env.EXCALIDRAW_ALLOWED_HOSTS);
+    authorities = allowedAuthorities(HOST, PORT, env('ALLOWED_HOSTS'));
   }
   return authorities;
 }
@@ -1306,10 +1321,17 @@ app.get('/api/workspaces', async (_req: Request, res: Response) => {
   if (offLoopback(res, 'Projects are listed')) return;
 
   try {
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspaces = await loadWorkspaces(registryPath());
     res.json({
       success: true,
-      configured: Boolean(process.env.EXCALIDRAW_WORKSPACES),
+      // Constant now, and kept rather than dropped because what it says is still worth
+      // saying: this board has somewhere to record a project, so registering one will work.
+      // It used to mean "`EXCALIDRAW_WORKSPACES` is set", and the page read it as permission
+      // to draw the tab strip at all — which hid the `+` on exactly the board that needed it.
+      // `registryPath()` cannot answer nothing, so the honest value here is `true`. Whether
+      // any project has been *added* is the list below, in the same payload; the boolean that
+      // has to be read without one is `/health`'s `workspaces`.
+      configured: true,
       workspaces
     });
   } catch (error) {
@@ -1329,7 +1351,7 @@ app.post('/api/workspaces', async (req: Request, res: Response) => {
   if (offLoopback(res, 'Projects are added')) return;
 
   try {
-    const result = await addWorkspace(process.env.EXCALIDRAW_WORKSPACES, {
+    const result = await addWorkspace(registryPath(), {
       path: typeof req.body?.path === 'string' ? req.body.path : '',
       ...(typeof req.body?.id === 'string' ? { id: req.body.id } : {}),
       ...(typeof req.body?.distro === 'string' ? { distro: req.body.distro } : {})
@@ -1358,7 +1380,7 @@ app.put('/api/workspaces/order', async (req: Request, res: Response) => {
   if (offLoopback(res, 'The order of the projects is written')) return;
 
   try {
-    const result = await reorderWorkspaces(process.env.EXCALIDRAW_WORKSPACES, req.body?.ids);
+    const result = await reorderWorkspaces(registryPath(), req.body?.ids);
     if (!result.ok) {
       return res.status(result.status).json({ success: false, error: result.error });
     }
@@ -1375,7 +1397,7 @@ app.get('/api/workspaces/:id/config', async (req: Request, res: Response) => {
   if (offLoopback(res, 'Project settings are read')) return;
 
   try {
-    const result = await readWorkspaceConfig(process.env.EXCALIDRAW_WORKSPACES, req.params.id ?? '');
+    const result = await readWorkspaceConfig(registryPath(), req.params.id ?? '');
     if (!result.ok) {
       return res.status(result.status).json({ success: false, error: result.error });
     }
@@ -1391,7 +1413,7 @@ app.put('/api/workspaces/:id/config', async (req: Request, res: Response) => {
 
   try {
     const result = await writeWorkspaceConfig(
-      process.env.EXCALIDRAW_WORKSPACES,
+      registryPath(),
       req.params.id ?? '',
       req.body?.config
     );
@@ -1431,8 +1453,8 @@ app.get('/api/fs/directories', async (req: Request, res: Response) => {
 // back to the native one, which is what keeps a command written without an absolute path
 // working in both.
 const ISSUE_AGENT_COMMANDS: AgentCommands = {
-  native: process.env.EXCALIDRAW_ISSUE_AGENT || null,
-  wsl: process.env.EXCALIDRAW_ISSUE_AGENT_WSL || null,
+  native: env('ISSUE_AGENT') || null,
+  wsl: env('ISSUE_AGENT_WSL') || null,
 };
 
 /** Whether any board at all may research. A workspace's own answer comes later. */
@@ -1651,7 +1673,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   if (!ISSUE_AGENT_CONFIGURED) {
     return res.status(404).json({
       success: false,
-      error: 'Issue blocks are disabled. Set EXCALIDRAW_ISSUE_AGENT to the agent command to enable them.'
+      error: `Issue blocks are disabled. Set ${settingName('ISSUE_AGENT')} to the agent command to enable them.`
     });
   }
 
@@ -1696,7 +1718,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: 'The block has no observation to work from.' });
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return res.status(400).json({
@@ -1708,8 +1730,43 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: `Workspace is unusable: ${workspace.error}` });
   }
 
+  /**
+   * Where the issue would be created — and a refusal, on the block, when there is nowhere.
+   *
+   * Writing an observation down is the part that has to work before GitHub is connected, and
+   * since #316 it does: the notes column and its `+` are the canvas's own and need no project.
+   * Turning one into an issue is not. The agent is told to create it "with `gh` in this
+   * repository", so a project with no repository at all sends a coding agent off to spend
+   * minutes discovering that — a run that looks exactly like a working one until it fails with
+   * whatever `gh` said. Refused here instead, before the spawn, which is the decision #316
+   * records: refuse at the run rather than at the `+`.
+   *
+   * `repo` in `board.config.json` first and the `origin` remote second, the way
+   * `interruptedRuns` already resolves it: a checkout that has a GitHub remote has told us
+   * where its issues go, and asking it to repeat that in a config file would refuse a project
+   * that works. A remote that is not on `github.com` names itself in the refusal rather than
+   * being reported as no remote at all — #322's rule, and the case where the reader is looking
+   * at an `origin` and being told there is none.
+   *
+   * The reason goes onto the block as well as into the response. The panel showing it is one
+   * selection away from being closed, and the block is what the reader comes back to.
+   */
+  const origin = await originRemote(workspace);
+  const repo = workspace.repo || origin.repo;
+  if (!repo) {
+    const reason = 'This project has no GitHub repository to create the issue in'
+      + (origin.url
+        ? ` — its "origin" is ${origin.url}, which is not a ${GITHUB_HOST} remote. `
+          + `This board only opens issues on ${GITHUB_HOST}. `
+        : `. Set "repo" in board.config.json, or add a ${GITHUB_HOST} "origin" remote. `)
+      + 'The observation is kept either way.';
+    markIssueState(workspaceId, elementId, 'failed', { issueError: reason });
+    logger.warn(`Issue block ${elementId} refused: workspace "${workspaceId}" names no repository`);
+    return res.status(400).json({ success: false, error: reason });
+  }
+
   const agentCommand = agentCommandOrRefuse(
-    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching', 'EXCALIDRAW_ISSUE_AGENT'
+    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching', settingName('ISSUE_AGENT')
   );
   if (!agentCommand) return;
 
@@ -1762,7 +1819,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     const result = await runIssueAgent(workspace, observation, {
       agentCommand,
       imagePaths: images.paths,
-      notFoundVariable: 'EXCALIDRAW_ISSUE_AGENT_WSL',
+      notFoundVariable: settingName('ISSUE_AGENT_WSL'),
       onUsage: (usage) => recordIssueUsage(elementId, usage)
     });
     if (result.ok && result.issueUrl) {
@@ -1878,11 +1935,13 @@ app.post('/api/issue-block/:id/adopt', async (req: Request, res: Response) => {
   if (!isIssueUrl(issueUrl)) {
     return res.status(400).json({
       success: false,
-      error: 'Expected the URL of a GitHub issue, like https://github.com/owner/repo/issues/1.'
+      // The same sentence the other four take, since #322: one refusal, naming the host it
+      // requires, wherever an issue URL is typed rather than clicked.
+      error: issueUrlRefusal(issueUrl)
     });
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return res.status(400).json({
@@ -1995,7 +2054,7 @@ app.delete('/api/issue-block/:id', (req: Request, res: Response) => {
  * Only the issue is memoised. The implement record is read fresh on every request, because
  * it costs nothing to read and is the fact most likely to have changed since.
  */
-const issueMemo = new IssueMemo<IssueDetail>(memoWindow(process.env.EXCALIDRAW_ISSUE_MEMO_MS));
+const issueMemo = new IssueMemo<IssueDetail>(memoWindow(env('ISSUE_MEMO_MS')));
 
 // ─── Implementing an issue ────────────────────────────────────
 //
@@ -2006,13 +2065,118 @@ const issueMemo = new IssueMemo<IssueDetail>(memoWindow(process.env.EXCALIDRAW_I
 // half is a pair rather than one variable: a board that granted a distro an agent for
 // research must not thereby have granted it one that writes.
 const IMPLEMENT_AGENT_COMMANDS: AgentCommands = {
-  native: process.env.EXCALIDRAW_IMPLEMENT_AGENT || null,
-  wsl: process.env.EXCALIDRAW_IMPLEMENT_AGENT_WSL || null,
+  native: env('IMPLEMENT_AGENT') || null,
+  wsl: env('IMPLEMENT_AGENT_WSL') || null,
 };
 
 /** Whether any board at all may implement. A workspace's own answer comes later. */
 const IMPLEMENT_AGENT_CONFIGURED = Boolean(
   IMPLEMENT_AGENT_COMMANDS.native || IMPLEMENT_AGENT_COMMANDS.wsl
+);
+
+// ─── Do the agents actually run? ──────────────────────────────
+//
+// Both of the flags above mean only that a string is non-empty, and for a long time that was
+// all `/health` could say about the most quietly broken thing on the board. `core/agent-
+// preflight.ts` is the answer: it runs argv[0] of each configured command with `--version`,
+// per role and per environment, and what comes back is a line at startup and the `agents`
+// field below. See that module for why the command is not re-run whole and why nothing that
+// reaches the wire carries it.
+const AGENT_ROLES: AgentRoleCommands[] = agentRoles({
+  issue: ISSUE_AGENT_COMMANDS,
+  implement: IMPLEMENT_AGENT_COMMANDS,
+});
+
+/**
+ * What `/health` says about the agents, replaced once when the probes land.
+ *
+ * A value rather than a promise, and read synchronously, because `/health` is what `stop`,
+ * auto-start and the restart supervisor all wait on: a route that awaited a `wsl.exe` round
+ * trip would make a slow distro into a board that looks like it never came up. Until the
+ * probes finish this says `probing`, which is true.
+ */
+let AGENT_PREFLIGHT: AgentsHealth = initialAgents(AGENT_ROLES);
+
+/**
+ * Ask, once, at startup — after `listen`, and never awaited by anything.
+ *
+ * The registry is read for one thing only: a project inside a distro, which is the only
+ * environment a WSL command can be tried in. A board with none pays nothing, which is most of
+ * them. Failures here are statuses rather than exceptions, so the whole of this is wrapped
+ * once: a preflight that could stop the board coming up would be worse than the silence it
+ * replaces.
+ */
+async function runAgentPreflight(): Promise<void> {
+  try {
+    // `registryPath()` rather than the raw variable, since #399: the registry has a per-OS
+    // default now, and a board whose only projects come from that default has projects like
+    // any other — including one inside a distro, which is the whole reason this reads it.
+    const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
+    const wslWorkspace = workspaces.find(
+      (workspace) => workspace.environment.kind === 'wsl' && !workspace.error
+    ) ?? null;
+
+    AGENT_PREFLIGHT = await preflightAgents({ roles: AGENT_ROLES, wslWorkspace });
+
+    for (const line of preflightLines(AGENT_PREFLIGHT, AGENT_ROLES)) {
+      if (line.level === 'warn') logger.warn(line.message);
+      else logger.info(line.message);
+    }
+  } catch (error) {
+    logger.warn(`Agent preflight could not run: ${(error as Error).message}`);
+  }
+}
+
+// ─── Is `gh` there, and is it logged in? ──────────────────────
+//
+// The same question one layer over, about the one binary every GitHub feature on this board
+// goes through. It fails as quietly as the agents do and in more ways: not installed, not
+// logged in, a token without the `project` scope, a project the account cannot see — and
+// until #317 all four arrived on the canvas as the same blank corner. `core/github-status.ts`
+// is where the two commands are run and what their output is allowed to say.
+
+/**
+ * What `/health` says about `gh`, replaced once when the probe lands.
+ *
+ * A value read synchronously, for exactly the reason `AGENT_PREFLIGHT` is: `/health` is what
+ * `stop`, auto-start and the restart supervisor wait on, and a route that awaited a `gh` that
+ * reaches the network would turn a slow morning into a board that looks like it never came up.
+ * Until the probe finishes this says `probing`, which is true.
+ *
+ * The host's own `gh`, not any one board's: this field describes the machine, and a server
+ * with no projects registered at all still has an answer to give. The per-workspace answer —
+ * which is the one a distro-backed project needs — is `GET /api/github-status`.
+ */
+let GH_PREFLIGHT: GithubHealth = initialGithub();
+
+/** Ask, once, at startup — after `listen`, and never awaited by anything. */
+async function runGithubPreflight(): Promise<void> {
+  try {
+    const status = await readGithubStatus(null);
+    GH_PREFLIGHT = githubHealth(status);
+    const line = githubPreflightLine(status);
+    if (line.level === 'warn') logger.warn(line.message);
+    else logger.info(line.message);
+  } catch (error) {
+    logger.warn(`GitHub preflight could not run: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * One `gh` interrogation per workspace, behind the same memo the issue reads use.
+ *
+ * The window matters here more than it does there. The canvas asks this on a *failing* poll,
+ * and a poll comes round every twenty seconds — so without a memo a board whose `gh` is broken
+ * would spawn two more processes every twenty seconds forever, to be told the same thing.
+ *
+ * `IssueMemo` unchanged rather than a second cache: it is already generic, already keyed by
+ * workspace, and already drops failures instead of remembering them, which is the property
+ * that matters when the thing being remembered is a `gh` that fails intermittently at connect.
+ * The second half of its key is a constant here — there is one status per workspace.
+ */
+const GH_STATUS_KEY = 'gh-status';
+const ghStatusMemo = new IssueMemo<GithubStatus>(
+  memoWindow(env('GH_STATUS_MEMO_MS'))
 );
 
 /**
@@ -2025,7 +2189,7 @@ const IMPLEMENT_AGENT_CONFIGURED = Boolean(
  * machine. `0` means no cap; `1` serialises.
  */
 const IMPLEMENT_CONCURRENCY = (() => {
-  const configured = process.env.EXCALIDRAW_IMPLEMENT_CONCURRENCY;
+  const configured = env('IMPLEMENT_CONCURRENCY');
   if (configured === undefined || configured.trim() === '') return 4;
   const parsed = Number(configured);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : 4;
@@ -2101,7 +2265,7 @@ function recordImplement(
 function carriedImplement(
   workspaceId: string,
   issueUrl: string
-): Pick<ImplementRecord, 'startedAt' | 'usage' | 'terminal'> {
+): Pick<ImplementRecord, 'startedAt' | 'usage' | 'terminal' | 'recovered'> {
   const existing = readImplement(workspaceId, issueUrl);
   return {
     startedAt: existing?.startedAt ?? null,
@@ -2110,6 +2274,9 @@ function carriedImplement(
     // middle of the run, and a record rebuilt from literals at the end would forget which
     // tab the run happened in exactly when somebody goes looking for its transcript.
     terminal: existing?.terminal ?? null,
+    // And this one is a *bound*, so losing it does not merely forget something — it grants a
+    // second recovery. Carried rather than remembered for exactly that reason.
+    recovered: existing?.recovered ?? false,
   };
 }
 
@@ -2189,7 +2356,7 @@ async function beginImplement(
   options: { resume?: boolean; interactive?: boolean } = {}
 ): Promise<ImplementAnswer> {
   if (!isIssueUrl(issueUrl)) {
-    return { status: 400, body: { success: false, error: `Not a GitHub issue URL: ${issueUrl}` } };
+    return { status: 400, body: { success: false, error: issueUrlRefusal(issueUrl) } };
   }
 
   const existing = readImplement(workspaceId, issueUrl);
@@ -2244,7 +2411,7 @@ async function beginImplement(
       body: {
         success: false,
         error: `This workspace already has ${inFlight.length} implementation(s) running, which is the limit `
-          + `set by EXCALIDRAW_IMPLEMENT_CONCURRENCY. In flight: ${inFlight.map((run) => run.issueUrl).join(', ')}`,
+          + `set by ${settingName('IMPLEMENT_CONCURRENCY')}. In flight: ${inFlight.map((run) => run.issueUrl).join(', ')}`,
         running: inFlight.map((run) => run.issueUrl)
       }
     };
@@ -2266,7 +2433,10 @@ async function beginImplement(
     startedAt: new Date().toISOString(),
     endedAt: null,
     usage: null,
-    terminal: null
+    terminal: null,
+    // This is the one write that starts a run rather than continuing one, so it is where the
+    // recovery allowance is handed out. Every record after it carries this forward.
+    recovered: false
   });
 
   /**
@@ -2280,7 +2450,7 @@ async function beginImplement(
    */
   const releaseSlot = (): void => recordImplement(workspaceId, issueUrl, existing);
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     releaseSlot();
@@ -2303,7 +2473,7 @@ async function beginImplement(
   // After the claim, so it goes through `releaseSlot` like every other late refusal: a
   // workspace whose environment was never granted a command must not hold a slot for it.
   const agentRefusal = agentCommandRefusal(
-    workspace, IMPLEMENT_AGENT_COMMANDS, 'Implementing', 'EXCALIDRAW_IMPLEMENT_AGENT'
+    workspace, IMPLEMENT_AGENT_COMMANDS, 'Implementing', settingName('IMPLEMENT_AGENT')
   );
   if (agentRefusal) {
     releaseSlot();
@@ -2346,12 +2516,12 @@ function interactiveCommand(agentCommand: string, interactive?: boolean): string
 async function interactiveTabRefusal(workspaceId: string): Promise<string | null> {
   if (!terminalAvailable()) {
     return 'An interactive run needs a terminal tab to run in, and the terminal is off on '
-      + 'this board. Set EXCALIDRAW_TERMINAL to turn it on, or start the run without asking '
+      + `this board. Set ${settingName('TERMINAL')} to turn it on, or start the run without asking `
       + 'for a tab to answer.';
   }
   if (!await loadPty()) {
     return 'An interactive run needs a pseudoterminal, and this board has none — either no '
-      + '@lydell/node-pty binary for this platform, or EXCALIDRAW_TERMINAL_PTY=0. On pipes '
+      + `@lydell/node-pty binary for this platform, or ${settingName('TERMINAL_PTY')}=0. On pipes `
       + 'there is no interface to draw and nothing to type into, so the terminal tab would '
       + 'be the same read-only screen an ordinary run gets.';
   }
@@ -2411,44 +2581,79 @@ async function runImplementation(
     // do before the two features knew about each other.
     const host = implementTerminalHost(workspace, issueUrl);
 
-    const result = await runImplementAgent(workspace, issueUrl, {
-      // Resolved here rather than handed down: `beginImplement` has already refused a
-      // workspace with no command for its environment, so by this line there is one.
-      //
-      // And this is the whole of what a per-run "interactive" changes. Everything downstream
-      // already reads the shape of the command rather than a second setting — `runsHeadless`
-      // decides whether the tab gets a pseudoterminal, `buildAgentCommand` decides whether
-      // the prompt goes to stdin or travels as the last argument, `streamsUsage` decides
-      // whether there are token counts to read — so taking the print flags off is the same
-      // request the operator makes by leaving them out of `EXCALIDRAW_IMPLEMENT_AGENT`, made
-      // once instead of forever. `withoutPrintFlags` only ever removes; a command with no
-      // print flags in it comes back byte for byte.
-      agentCommand: interactiveCommand(
-        agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS) as string, options.interactive
-      ),
-      notFoundVariable: 'EXCALIDRAW_IMPLEMENT_AGENT_WSL',
-      worktree,
-      resuming,
-      // Reached only when the configured command already streams. Otherwise the agent
-      // prints prose at exit, there is nothing to read, and this is never called.
-      onUsage: (usage) => recordImplementUsage(workspaceId, issueUrl, usage),
-      ...(host ? { host } : {})
-    });
+    // The run, and then at most once more.
+    //
+    // **The loop is the whole of the recovery, and it is a loop rather than a second call into
+    // this function on purpose.** Re-entering would move the card to In Progress again, cut the
+    // worktree again and reset the start time; worse, it would have to pass the cap and the
+    // per-issue guard, which would either refuse it or need a way around them — a second door
+    // into starting a run, which is the thing `beginImplement`'s comment exists to prevent.
+    // Here the slot is already held, the state stays `running` for the reader, and the checkout
+    // survives between the two attempts because the release happens after both.
+    let unfinished: UnfinishedRun | null = null;
+    let result: AgentRun;
+    let landing: Landing;
+    for (;;) {
+      result = await runImplementAgent(workspace, issueUrl, {
+        // Resolved here rather than handed down: `beginImplement` has already refused a
+        // workspace with no command for its environment, so by this line there is one.
+        //
+        // And this is the whole of what a per-run "interactive" changes. Everything downstream
+        // already reads the shape of the command rather than a second setting — `runsHeadless`
+        // decides whether the tab gets a pseudoterminal, `buildAgentCommand` decides whether
+        // the prompt goes to stdin or travels as the last argument, `streamsUsage` decides
+        // whether there are token counts to read — so taking the print flags off is the same
+        // request the operator makes by leaving them out of `EXCALIDRAW_IMPLEMENT_AGENT`, made
+        // once instead of forever. `withoutPrintFlags` only ever removes; a command with no
+        // print flags in it comes back byte for byte.
+        agentCommand: interactiveCommand(
+          agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS) as string, options.interactive
+        ),
+        notFoundVariable: settingName('IMPLEMENT_AGENT_WSL'),
+        worktree,
+        resuming,
+        unfinished,
+        // Reached only when the configured command already streams. Otherwise the agent
+        // prints prose at exit, there is nothing to read, and this is never called.
+        onUsage: (usage) => recordImplementUsage(workspaceId, issueUrl, usage),
+        ...(host ? { host } : {})
+      });
+
+      // What the agent printed is not what happened. A run that prints a pull request URL has
+      // proved that a pull request exists, and nothing more — so the one participant that knows
+      // whether it landed is asked before the record is written. Only for a run that claims to
+      // have produced one: the other paths never asked GitHub anything and must not start.
+      const pull = result.ok && result.url
+        ? await fetchPullLanding(workspace, result.url)
+        : null;
+      landing = landingFor({
+        ok: result.ok, url: result.url, error: result.error, output: result.output, pull
+      });
+
+      if (readImplement(workspaceId, issueUrl)?.recovered) break;
+      const held = await recoverable(workspace, issueUrl, result, landing, worktree);
+      if (!held) break;
+
+      logger.warn(
+        `${issueUrl} ended without landing anything and is being finished: ${landing.error}`
+      );
+      // Written before the second attempt starts, not after it: this is the bound, and a bound
+      // recorded on the way out is one a crash in between hands back.
+      recordImplement(workspaceId, issueUrl, {
+        state: 'running', url: landing.url, error: null, worktree: worktree?.path ?? null,
+        endedAt: null, ...carriedImplement(workspaceId, issueUrl), recovered: true
+      });
+      unfinished = { pullRequest: landing.url, worktree: held.worktree };
+    }
+
     const kept = await releaseWorktreeFor(workspace, worktree, issueUrl);
 
-    if (result.ok && result.url) {
-      recordImplement(workspaceId, issueUrl, {
-        state: 'done', url: result.url, error: null, worktree: kept,
-        ...carriedImplement(workspaceId, issueUrl), endedAt: new Date().toISOString()
-      });
-      logger.info(`${issueUrl} implemented at ${result.url}`);
-    } else {
-      recordImplement(workspaceId, issueUrl, {
-        state: 'failed', url: null, error: result.error ?? null, worktree: kept,
-        ...carriedImplement(workspaceId, issueUrl), endedAt: new Date().toISOString()
-      });
-      logger.warn(`${issueUrl} implementation failed: ${result.error}`);
-    }
+    recordImplement(workspaceId, issueUrl, {
+      state: landing.state, url: landing.url, error: landing.error, worktree: kept,
+      ...carriedImplement(workspaceId, issueUrl), endedAt: new Date().toISOString()
+    });
+    if (landing.state === 'done') logger.info(`${issueUrl} implemented at ${landing.url}`);
+    else logger.warn(`${issueUrl} implementation ${landing.state}: ${landing.error}`);
   } catch (error) {
     recordImplement(workspaceId, issueUrl, {
       state: 'failed',
@@ -2484,7 +2689,7 @@ async function runImplementation(
  * the cap is full, and why the timer does not exist at all until something turns a queue on.
  */
 const IMPLEMENT_QUEUE_MS = (() => {
-  const configured = process.env.EXCALIDRAW_IMPLEMENT_QUEUE_MS;
+  const configured = env('IMPLEMENT_QUEUE_MS');
   if (configured === undefined || configured.trim() === '') return 30_000;
   const parsed = Number(configured);
   return Number.isFinite(parsed) && parsed >= 250 ? parsed : 30_000;
@@ -2587,7 +2792,7 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
       return;
     }
 
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspaces = await loadWorkspaces(registryPath());
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
     if (!workspace || workspace.error || !workspace.githubProject) {
       outcome = {
@@ -2712,7 +2917,7 @@ function capFullOutcome(workspaceId: string, said = ''): { reason: QueuePassReas
   return {
     reason: 'cap-full',
     detail: said || `All ${inFlight.length} slot(s) are taken, which is the limit set by `
-      + `EXCALIDRAW_IMPLEMENT_CONCURRENCY. Holding them: ${inFlight.map((run) => run.issueUrl).join(', ')}`
+      + `${settingName('IMPLEMENT_CONCURRENCY')}. Holding them: ${inFlight.map((run) => run.issueUrl).join(', ')}`
   };
 }
 
@@ -2788,6 +2993,59 @@ function queueStateFor(workspace: Workspace | undefined, workspaceId: string): {
 }
 
 /**
+ * Whether a run that just ended is worth finishing, and what it left to finish.
+ *
+ * Three gates, and each of them refuses a different thing that would otherwise turn one
+ * automatic second attempt into a loop or into damage.
+ *
+ * **Only a `failed` landing.** `done` shipped. `blocked` is the agent having stopped for a
+ * person on purpose — sending a second one at it would force the merge the first refused, which
+ * is the failure #409 added that state to make impossible.
+ *
+ * **Only a clean exit.** A turn that ended while a background command was still pending exits
+ * **zero**, which is the shape of both runs this exists for. A non-zero exit is a command that
+ * could not be found or an agent that blew up, and a null one is a timeout or a refusal made
+ * before anything spawned — a broken machine or a decision, neither of which a second identical
+ * attempt improves.
+ *
+ * **Only a run that got somewhere.** A pull request that exists, or a checkout holding commits
+ * or changes. With neither there is nothing to *finish*, and re-entering would be a plain re-run
+ * — which is exactly what `dispatchQueue`'s "the queue tries each issue once" refuses, and the
+ * rule this feature has to stay inside rather than quietly overturn.
+ *
+ * Derived from git rather than remembered, and read while the checkout is still there —
+ * `releaseWorktreeFor` runs after this, and it removes a worktree with nothing uncommitted in
+ * it even when that worktree holds commits the base branch has never seen.
+ */
+async function recoverable(
+  workspace: Workspace,
+  issueUrl: string,
+  result: AgentRun,
+  landing: Landing,
+  worktree: ImplementWorktree | null
+): Promise<{ worktree: HeldWorktree | null } | null> {
+  if (landing.state !== 'failed') return null;
+  if (result.code !== 0) return null;
+
+  let held: HeldWorktree | null = null;
+  if (worktree) {
+    try {
+      const wanted = worktree.path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+      held = (await worktreesHoldingWork(workspace)).find(
+        (candidate) => candidate.path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === wanted
+      ) ?? null;
+    } catch (error) {
+      // A git that will not answer is not a reason to refuse a recovery for a run that has a
+      // pull request — and not a reason to grant one for a run whose only evidence was this.
+      logger.warn(`Could not read what ${issueUrl} left in its checkout: ${(error as Error).message}`);
+    }
+  }
+
+  if (!landing.url && !held) return null;
+  return { worktree: held };
+}
+
+/**
  * Tidy up after a run, and report what could not be tidied.
  *
  * A worktree holding uncommitted changes is kept, because those changes are the only copy
@@ -2831,7 +3089,7 @@ async function releaseWorktreeFor(
 async function recoverInterruptedRuns(): Promise<void> {
   let workspaces: Workspace[];
   try {
-    workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    workspaces = await loadWorkspaces(registryPath());
   } catch (error) {
     logger.warn(`Could not look for interrupted implementations: ${(error as Error).message}`);
     return;
@@ -2857,7 +3115,12 @@ async function recoverInterruptedRuns(): Promise<void> {
           // Nothing survives a restart here either: the sessions were the previous server's
           // and went down with it, so an id recovered from a worktree would name a tab that
           // stopped existing.
-          terminal: null
+          terminal: null,
+          // Nor does this, and it must not be inferred: whether the lost run had already spent
+          // its recovery is not written in the checkout. `false` is the honest reading, and it
+          // costs nothing — an `interrupted` run is offered to a person through **Resume**
+          // rather than continued automatically, and that offer has never been rationed.
+          recovered: false
         });
         logger.warn(
           `${run.issueUrl} was being implemented when a previous server stopped; `
@@ -3008,7 +3271,7 @@ async function seedBoardFromFile(workspace: Workspace): Promise<void> {
 async function seedBoardsFromFiles(): Promise<void> {
   let workspaces: Workspace[];
   try {
-    workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    workspaces = await loadWorkspaces(registryPath());
   } catch (error) {
     logger.warn(`Could not look for boards to load: ${(error as Error).message}`);
     return;
@@ -3028,7 +3291,7 @@ function implementingRefused(res: Response): boolean {
   if (!IMPLEMENT_AGENT_CONFIGURED) {
     res.status(404).json({
       success: false,
-      error: 'Implementing is disabled. Set EXCALIDRAW_IMPLEMENT_AGENT to the agent command to enable it.'
+      error: `Implementing is disabled. Set ${settingName('IMPLEMENT_AGENT')} to the agent command to enable it.`
     });
     return true;
   }
@@ -3125,7 +3388,7 @@ app.post('/api/implement/queue', async (req: Request, res: Response) => {
   logger.info(`Queue: "${workspaceId}" is ${enabled ? 'on' : 'off'}`);
   if (enabled) void dispatchQueue(workspaceId);
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => []);
+  const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
   res.json({
     success: true,
     queue: queueStateFor(workspaces.find((candidate) => candidate.id === workspaceId), workspaceId)
@@ -3206,7 +3469,7 @@ app.get('/api/implement', async (req: Request, res: Response) => {
   const offered = IMPLEMENT_AGENT_CONFIGURED
     && (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost');
   const workspaces = offered
-    ? await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => [])
+    ? await loadWorkspaces(registryPath()).catch(() => [])
     : [];
 
   res.json({
@@ -3246,11 +3509,11 @@ app.get('/api/issue', async (req: Request, res: Response) => {
 
   const issueUrl = typeof req.query.url === 'string' ? req.query.url : '';
   if (!isIssueUrl(issueUrl)) {
-    return res.status(400).json({ success: false, error: `Not a GitHub issue URL: ${issueUrl}` });
+    return res.status(400).json({ success: false, error: issueUrlRefusal(issueUrl) });
   }
 
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3294,7 +3557,7 @@ app.post('/api/issue/comment', async (req: Request, res: Response) => {
 
   const issueUrl = typeof req.body?.url === 'string' ? req.body.url : '';
   if (!isIssueUrl(issueUrl)) {
-    return res.status(400).json({ success: false, error: `Not a GitHub issue URL: ${issueUrl}` });
+    return res.status(400).json({ success: false, error: issueUrlRefusal(issueUrl) });
   }
 
   // Posted as typed, trailing newlines and all — the point of this route is that the text
@@ -3306,7 +3569,7 @@ app.post('/api/issue/comment', async (req: Request, res: Response) => {
   }
 
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3430,14 +3693,14 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
   if (!ISSUE_AGENT_CONFIGURED) {
     return res.status(404).json({
       success: false,
-      error: 'Researching an issue again is disabled. Set EXCALIDRAW_ISSUE_AGENT to the agent command to enable it.'
+      error: `Researching an issue again is disabled. Set ${settingName('ISSUE_AGENT')} to the agent command to enable it.`
     });
   }
   if (offLoopback(res, 'Issues are researched again')) return;
 
   const issueUrl = typeof req.body?.url === 'string' ? req.body.url : '';
   if (!isIssueUrl(issueUrl)) {
-    return res.status(400).json({ success: false, error: `Not a GitHub issue URL: ${issueUrl}` });
+    return res.status(400).json({ success: false, error: issueUrlRefusal(issueUrl) });
   }
 
   // Kept as typed, trailing newlines and all: the observations are what the run is *about*,
@@ -3462,7 +3725,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
     });
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3472,7 +3735,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
   }
 
   const agentCommand = agentCommandOrRefuse(
-    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching an issue again', 'EXCALIDRAW_ISSUE_AGENT'
+    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching an issue again', settingName('ISSUE_AGENT')
   );
   if (!agentCommand) return;
 
@@ -3551,7 +3814,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
 
     const result = await runReviseAgent(workspace, issueUrl, observations, {
       agentCommand,
-      notFoundVariable: 'EXCALIDRAW_ISSUE_AGENT_WSL',
+      notFoundVariable: settingName('ISSUE_AGENT_WSL'),
       onUsage: takeUsage
     });
 
@@ -3622,7 +3885,7 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
     return res.status(404).json({ success: false, error: 'This block has no issue yet.' });
   }
 
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace || workspace.error) {
     return res.status(400).json({
@@ -3651,17 +3914,36 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
 // Both directions go through `gh`. It is already required by the issue agent, already
 // carries the `project` scope, and the PATH and WSL traps around it are already paid for.
 
-/** The workspace a project-board request is about, or a reason it is not usable. */
-async function projectWorkspace(req: Request): Promise<{ workspace: Workspace } | { error: string }> {
+/**
+ * The workspace a project-board request is about, or a reason it is not usable.
+ *
+ * The reason is carried alongside the sentence rather than left to be read out of it. Both
+ * answer 404 — the canvas draws nothing and says nothing for either, because neither is
+ * somebody's board being broken — but a payload whose only machine-readable part is English
+ * prose is one the next reader has to parse to act on.
+ */
+type ProjectWorkspaceRefusal = { error: string; reason: 'no-workspace' | 'no-project' };
+
+async function projectWorkspace(
+  req: Request
+): Promise<{ workspace: Workspace } | ProjectWorkspaceRefusal> {
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
-    return { error: `Workspace "${workspaceId}" is not registered, so it has no GitHub project.` };
+    return {
+      error: `Workspace "${workspaceId}" is not registered, so it has no GitHub project.`,
+      reason: 'no-workspace'
+    };
   }
-  if (workspace.error) return { error: `Workspace is unusable: ${workspace.error}` };
+  if (workspace.error) {
+    return { error: `Workspace is unusable: ${workspace.error}`, reason: 'no-workspace' };
+  }
   if (!workspace.githubProject) {
-    return { error: 'This board has no "githubProject" in its board.config.json.' };
+    return {
+      error: 'This board has no "githubProject" in its board.config.json.',
+      reason: 'no-project'
+    };
   }
   return { workspace };
 }
@@ -3679,19 +3961,78 @@ app.get('/api/project-board', async (req: Request, res: Response) => {
   const resolved = await projectWorkspace(req);
   if ('error' in resolved) {
     // 404 rather than 400: the feature is absent for this board, not misused.
-    return res.status(404).json({ success: false, error: resolved.error });
+    return res.status(404).json({
+      success: false, reason: resolved.reason, error: resolved.error
+    });
   }
 
   try {
     const board = await readProjectBoard(resolved.workspace);
     res.json({ success: true, board });
   } catch (error) {
+    // 422 rather than 404, and that split is the point of #317. A 404 is the canvas's
+    // instruction to draw nothing and say nothing, which is right for the boards that have no
+    // project and wrong for the one board whose operator wrote a URL and got silence. The
+    // `reason` says the same thing in the body, for a reader that has the payload and not the
+    // status line.
+    if (error instanceof ProjectUrlUnparseable) {
+      return res.status(422).json({
+        success: false, reason: 'bad-project-url', error: (error as Error).message
+      });
+    }
     if (error instanceof NoProjectConfigured) {
-      return res.status(404).json({ success: false, error: (error as Error).message });
+      return res.status(404).json({
+        success: false, reason: 'no-project', error: (error as Error).message
+      });
     }
     // 502: the failure is GitHub's or gh's, not the caller's request.
     logger.warn(`Project board read failed: ${(error as Error).message}`);
     res.status(502).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/**
+ * `GET /api/github-status` — whether `gh` is there and logged in, for this board.
+ *
+ * Loopback-only, like every other route that runs `gh`: this one spawns nothing on anybody's
+ * behalf, but what it answers with is the account name and the token's scopes, and a canvas
+ * reachable from the network must not hand those out.
+ *
+ * The consumer is the canvas, on a poll that just failed. `GET /api/project-board` can say
+ * that `gh` refused; only this can say *why* — not installed, not logged in, or logged in
+ * without the `project` scope, which are three different things for the reader to go and do.
+ */
+app.get('/api/github-status', async (req: Request, res: Response) => {
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    return res.status(403).json({
+      success: false,
+      error: 'The GitHub status only answers while the server is bound to loopback.'
+    });
+  }
+
+  const workspaceId = workspaceIdFrom(req);
+  const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId) ?? null;
+
+  // A workspace that is not registered, or one the registry could not resolve, is still a
+  // question this route can answer — about the host's own `gh`. Refusing would hide the one
+  // failure most likely to be behind an unusable board on a fresh clone.
+  const target = workspace && !workspace.error ? workspace : null;
+
+  try {
+    const status = await ghStatusMemo.read(
+      target ? target.id : `${workspaceId} host`,
+      GH_STATUS_KEY,
+      () => readGithubStatus(target)
+    );
+    res.json({ success: true, workspace: target ? target.id : null, gh: status });
+  } catch (error) {
+    // `readGithubStatus` turns every failure into a status rather than an exception, so this
+    // is the registry or the environment giving way underneath it. Reported rather than
+    // swallowed: a canvas that asked why GitHub is broken must not be answered with silence
+    // by the route that exists to end silence.
+    logger.warn(`GitHub status could not be read: ${(error as Error).message}`);
+    res.status(500).json({ success: false, error: (error as Error).message });
   }
 });
 
@@ -3718,15 +4059,26 @@ app.post('/api/project-board/move', async (req: Request, res: Response) => {
 
   const resolved = await projectWorkspace(req);
   if ('error' in resolved) {
-    return res.status(404).json({ success: false, error: resolved.error });
+    return res.status(404).json({
+      success: false, reason: resolved.reason, error: resolved.error
+    });
   }
 
   try {
     const board = await moveCard(resolved.workspace, itemId, optionId);
     res.json({ success: true, board });
   } catch (error) {
+    // The same split as the read route above, and here for consistency rather than because a
+    // drag can reach it: a card cannot be dragged on a board whose mirror never drew.
+    if (error instanceof ProjectUrlUnparseable) {
+      return res.status(422).json({
+        success: false, reason: 'bad-project-url', error: (error as Error).message
+      });
+    }
     if (error instanceof NoProjectConfigured) {
-      return res.status(404).json({ success: false, error: (error as Error).message });
+      return res.status(404).json({
+        success: false, reason: 'no-project', error: (error as Error).message
+      });
     }
     if (error instanceof NotOnThisBoard) {
       return res.status(400).json({ success: false, error: (error as Error).message });
@@ -3771,14 +4123,14 @@ app.get('/api/library', async (req: Request, res: Response) => {
   // `??`, not `||`: an *explicitly empty* `EXCALIDRAW_LIBRARY` is how a board says it wants no
   // shared shapes at all, which is a thing a workspace shipping its own set needs to be able to
   // say now that unset no longer means none.
-  const shared = process.env.EXCALIDRAW_LIBRARY ?? packagedLibrary;
+  const shared = env('LIBRARY') ?? packagedLibrary;
   if (shared) {
     sources.push({ origin: 'shared', path: path.resolve(shared) });
   }
 
   const workspaceId = workspaceIdFrom(req);
   if (workspaceId !== DEFAULT_WORKSPACE_ID) {
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspaces = await loadWorkspaces(registryPath());
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace?.libraryFile) {
       sources.push({ origin: 'workspace', path: path.resolve(workspace.libraryFile) });
@@ -3819,7 +4171,7 @@ app.get('/api/library', async (req: Request, res: Response) => {
 // `EXCALIDRAW_TERMINAL` unset means these routes do not exist. Not "answer 403", not
 // "answer with an empty session": 404, the same shape the issue block uses, so a canvas
 // that never turned it on cannot tell a disabled feature from an absent one.
-const TERMINAL_SETTING = process.env.EXCALIDRAW_TERMINAL || null;
+const TERMINAL_SETTING = env('TERMINAL') || null;
 
 /**
  * Every session, by board and then by id.
@@ -3864,7 +4216,7 @@ function terminalRefused(res: Response): boolean {
   if (!TERMINAL_SETTING) {
     res.status(404).json({
       success: false,
-      error: 'The terminal is disabled. Set EXCALIDRAW_TERMINAL to enable it.'
+      error: `The terminal is disabled. Set ${settingName('TERMINAL')} to enable it.`
     });
     return true;
   }
@@ -4009,7 +4361,7 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
   if (terminalRefused(res)) return;
 
   const workspaceId = workspaceIdFrom(req);
-  const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+  const workspaces = await loadWorkspaces(registryPath());
   const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) {
     return res.status(400).json({
@@ -4035,7 +4387,7 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
   if (!shellCommand) {
     return res.status(404).json({
       success: false,
-      error: 'The terminal is disabled. Set EXCALIDRAW_TERMINAL to enable it.'
+      error: `The terminal is disabled. Set ${settingName('TERMINAL')} to enable it.`
     });
   }
   // One path, spelled the way the caller's own environment spells it: inside a WSL distro
@@ -4242,29 +4594,35 @@ process.on('exit', closeAllTerminals);
 // ─── Docs API (markdown shown for the selected element) ───────
 //
 // A shape can carry `customData.docKey`; this serves the matching markdown so the
-// canvas can show the reasoning behind a box without leaving the drawing. Disabled
-// until EXCALIDRAW_DOCS_DIR points somewhere, because serving arbitrary files from
-// an unauthenticated local API is not something to enable by default.
-const DOCS_DIR = process.env.EXCALIDRAW_DOCS_DIR
-  ? path.resolve(process.env.EXCALIDRAW_DOCS_DIR)
-  : null;
+// canvas can show the reasoning behind a box without leaving the drawing.
 
 /**
  * The documentation shipped with the tool, rather than with the project on screen.
  *
- * `__dirname` is `dist/` once compiled, so this is the repository's own `docs/`.
+ * `__dirname` is `dist/` once compiled, so this is this build's own `docs/` — the repository's
+ * in a checkout, and the package's in an installed copy, where `files` ships `docs/*.md`.
  */
 const TOOL_DOCS_DIR = path.resolve(__dirname, '../docs');
 
 /**
- * Doc keys that belong to a block this server draws, not to the board it is drawn on.
+ * Where a board with no `docsDir` of its own reads documents from.
  *
- * The mirror is generated onto every project that names a `githubProject`, always carrying
- * `docKey: "project-board"` — a key that resolved inside the mirrored project, where the
- * document has no reason to exist. A tool block's documentation is a property of the tool,
- * so these resolve against the tool's own directory whatever board is asking.
+ * `EXCALIDRAW_DOCS_DIR` was the install directory retyped by hand — an absolute path into one
+ * checkout, in one operator's `.env` — and unset meant the route was off. So the tool could not
+ * serve documentation it publishes in its own package, on the machine it was installed on, and
+ * the only thing standing between a fresh clone and a dead card was a file no clone has.
+ *
+ * `undefined`, not falsy: an *explicitly empty* `EXCALIDRAW_DOCS_DIR` is how a board says it
+ * wants no fallback at all, which is a thing a setup serving only per-project documents needs
+ * to be able to say now that unset no longer means none. Serving arbitrary files from an
+ * unauthenticated local API is still not a default — this serves one directory, this build's
+ * own, and `DOC_KEY_PATTERN` plus the containment check below are what bound it to
+ * `<dir>/<key>.md`.
  */
-const TOOL_DOC_KEYS = new Set<string>([MIRROR_DOC_KEY]);
+const DOCS_DIR_SETTING = env('DOCS_DIR');
+const DOCS_DIR = DOCS_DIR_SETTING === undefined
+  ? TOOL_DOCS_DIR
+  : (DOCS_DIR_SETTING ? path.resolve(DOCS_DIR_SETTING) : null);
 
 // Keys become filenames, so anything that could climb out of DOCS_DIR is rejected
 // outright rather than normalised — a rejected key is obvious, a rewritten one is not.
@@ -4287,14 +4645,15 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: 'Invalid doc key' });
   }
 
-  // Each board reads its own project's docs. The env var stays as the fallback for
-  // single-board setups, which have no registry to resolve a directory from.
+  // Each board reads its own project's docs, except for the keys that name a block this server
+  // draws. `DOCS_DIR` is the fallback underneath both, for a canvas with no registered project
+  // to resolve a directory from and for a project that carries no `docsDir` of its own.
   const workspaceId = workspaceIdFrom(req);
   let docsDir = DOCS_DIR;
   if (TOOL_DOC_KEYS.has(key)) {
     docsDir = TOOL_DOCS_DIR;
   } else if (workspaceId !== DEFAULT_WORKSPACE_ID) {
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES);
+    const workspaces = await loadWorkspaces(registryPath());
     const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace?.docsDir) docsDir = path.resolve(workspace.docsDir);
   }
@@ -4303,7 +4662,7 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
     return res.status(404).json({
       success: false,
       code: NO_DOCS_DIR,
-      error: 'No docs directory for this board. Set docsDir in board.config.json, or EXCALIDRAW_DOCS_DIR.'
+      error: `No docs directory for this board. Set docsDir in board.config.json, or ${settingName('DOCS_DIR')}.`
     });
   }
 
@@ -4800,18 +5159,33 @@ app.get('/', (req: Request, res: Response) => {
  */
 function canvasIdentity(): CanvasIdentity {
   return {
-    workspaces: process.env.EXCALIDRAW_WORKSPACES ? 'configured' : 'none',
+    // "Was this canvas pointed at a registry, or has the one it found got projects in it",
+    // not "is a variable set". The two were the same question until the registry path grew a
+    // default: every canvas resolves one now, so the old expression alone would answer
+    // `configured` for the very stand-in this field exists to unmask. See
+    // `hasWorkspaceRegistry` for why both clauses are there.
+    workspaces: hasWorkspaceRegistry() ? 'configured' : 'none',
     terminal: Boolean(TERMINAL_SETTING),
     // The agents fail the most quietly of the three: the routes answer, the blocks draw, the
-    // buttons are there, and pressing one does nothing. **Two booleans, never one** — the
+    // buttons are there, and pressing one does nothing. **Per role, never one** — the
     // variables are separate so that turning on issue blocks cannot quietly turn on repository
-    // writes, and a single flag here would hide the very asymmetry that split exists for.
-    // Whether they are set, never what they are: these are somebody's command lines, with
-    // paths and flags in them, and this route is unauthenticated on loopback.
-    agents: {
-      issue: ISSUE_AGENT_CONFIGURED,
-      implement: IMPLEMENT_AGENT_CONFIGURED
-    }
+    // writes, and a single field here would hide the very asymmetry that split exists for.
+    //
+    // It used to be two booleans, and both of them meant "a string is non-empty", which is the
+    // one thing about an agent that cannot go wrong. Now it is what the preflight found out by
+    // running the binary, per role *and* per environment — the second axis matters because a
+    // host path configured on a board with a project inside a distro is found in one and
+    // missing in the other, and one flag could only ever have reported one of the two.
+    //
+    // What it never carries is the command line: these are somebody's paths and permission
+    // flags, and this route is unauthenticated on loopback. `backend` is a name out of a list
+    // `core/agent-preflight.ts` holds and `version` is a version number, both by construction.
+    agents: AGENT_PREFLIGHT,
+    // And the binary underneath every GitHub feature on the board, which failed as quietly as
+    // the agents did and had nothing here at all until #317. `resolved` and a version number
+    // only: the login, the token's scopes and `gh`'s own stderr are on `/api/github-status`,
+    // which is loopback-only. This route is not.
+    gh: GH_PREFLIGHT
   };
 }
 
@@ -4919,7 +5293,7 @@ app.post('/api/restart', (_req: Request, res: Response) => {
  * Claude Code by default, and a route that answered `[]` would look like a board whose
  * sessions had never run rather than one that was never asked to look.
  */
-const CLAUDE_STATUS_DIR = (process.env.EXCALIDRAW_CLAUDE_STATUS ?? '').trim();
+const CLAUDE_STATUS_DIR = (env('CLAUDE_STATUS') ?? '').trim();
 
 /**
  * One read of that directory, however many tabs asked.
@@ -4937,7 +5311,7 @@ function readClaudeStatusMemoized(): Promise<ClaudeEnvironmentStatus[]> {
     return claudeStatusMemo.reading;
   }
   const reading = (async () => {
-    const workspaces = await loadWorkspaces(process.env.EXCALIDRAW_WORKSPACES).catch(() => []);
+    const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
     const distros = workspaces
       .map((workspace) => workspace.environment)
       .filter((environment): environment is { kind: 'wsl'; distro: string } => environment.kind === 'wsl')
@@ -4966,7 +5340,7 @@ app.get('/api/claude-status', async (req: Request, res: Response) => {
   if (!CLAUDE_STATUS_DIR) {
     return res.status(404).json({
       success: false,
-      error: 'Claude Code status is off. Set EXCALIDRAW_CLAUDE_STATUS to the directory your '
+      error: `Claude Code status is off. Set ${settingName('CLAUDE_STATUS')} to the directory your `
         + 'status line command writes into.'
     });
   }
@@ -5122,6 +5496,16 @@ async function startServer(): Promise<void> {
     // carrying the issue, and it can only write onto elements that are in the store when it
     // looks. The other order leaves a recovered `interrupted` run recorded but undrawn.
     void seedBoardsFromFiles().then(recoverInterruptedRuns);
+
+    // And the one question nothing used to ask: do the agents this board is configured with
+    // actually run? Here for the same reason as the line above — a `wsl.exe` round trip must
+    // not sit between the port opening and the board being usable — and separately, because
+    // neither depends on the other.
+    void runAgentPreflight();
+    // And the same question about `gh`, which every GitHub feature on the board goes through
+    // and which fails in more ways than the agents do. Separately again: neither waits on the
+    // other, and a `gh auth status` that reaches the network must not delay either.
+    void runGithubPreflight();
   });
 
   const shutdown = (signal: NodeJS.Signals): void => {

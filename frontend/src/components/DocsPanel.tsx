@@ -231,11 +231,13 @@ interface ImplementView {
     /** Part of `outputTokens`, not a third total. Null when the agent never said. */
     thinkingTokens: number | null
   } | null
+  /** Whether this run already spent its one automatic second attempt. */
+  recovered: boolean
 }
 
 /** Nothing known about a run, which is also what a reset leaves behind. */
 const NO_IMPLEMENT: ImplementView = {
-  state: null, url: null, error: null, startedAt: null, endedAt: null, usage: null
+  state: null, url: null, error: null, startedAt: null, endedAt: null, usage: null, recovered: false
 }
 
 /**
@@ -257,7 +259,8 @@ const NO_RUN: RunView = { startedAt: null, endedAt: null, usage: null }
 const runView = (record: Record<string, unknown> | null | undefined): RunView => ({
   startedAt: (record?.startedAt as string) ?? null,
   endedAt: (record?.endedAt as string) ?? null,
-  usage: (record?.usage as ImplementView['usage']) ?? null
+  usage: (record?.usage as ImplementView['usage']) ?? null,
+  recovered: record?.recovered === true
 })
 
 /** An implementation record as the server hands it over, in the shape the panel wants. */
@@ -937,8 +940,12 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                 {implement.state === 'running' && (
                   <>
                     <p className="element-docs__hint">
-                      An agent is implementing this issue in the project. There is no time
-                      limit on the run.
+                      {implement.recovered
+                        ? 'The first attempt ended without opening or merging a pull request, '
+                          + 'so a second one is finishing it. This is the last — nothing tries again '
+                          + 'after it.'
+                        : 'An agent is implementing this issue in the project. There is no time '
+                          + 'limit on the run.'}
                     </p>
                     {/* Without a timeout, nothing else ever clears this state. The server
                         refuses while a run is genuinely in flight, so this is a way back
@@ -982,6 +989,42 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
 
                 {implement.state === 'failed' && (
                   <p className="element-docs__error">{implement.error ?? 'The run failed.'}</p>
+                )}
+
+                {/* Said after the failure rather than instead of it. A run that was tried twice
+                    and failed anyway is a different thing from one that failed once, and a board
+                    that tells the same story about both invites a third attempt by hand. */}
+                {implement.state === 'failed' && implement.recovered && (
+                  <p className="element-docs__hint">
+                    This was tried twice — the first attempt ended without a pull request and a
+                    second was started to finish it. Nothing will try again on its own.
+                  </p>
+                )}
+
+                {/* A run that ended correctly without landing anything: the agent could not
+                    reconcile a conflict and stopped for a person, which its prompt tells it to
+                    do. A hint rather than an error, because nothing here went wrong — and not a
+                    new button, because the action row already carries five. */}
+                {implement.state === 'blocked' && (
+                  <p className="element-docs__hint">
+                    {implement.error
+                      ?? 'The run stopped and asked for a person. Its pull request is open.'}
+                  </p>
+                )}
+
+                {/* The pull request of a run that did not land. Separate from the "Implemented"
+                    link above and deliberately worded differently: that one is gated on `done`
+                    and would otherwise call an unmerged pull request shipped. A board that has
+                    just been told where the pull request is must still say where it is. */}
+                {implement.state !== 'done' && implement.url && (
+                  <a
+                    className="element-docs__issue-link"
+                    href={implement.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Not merged · {implement.url.replace(/^https:\/\/github\.com\//, '')}
+                  </a>
                 )}
 
                 {/* A closed issue is done with, and what closed it is worth naming: the

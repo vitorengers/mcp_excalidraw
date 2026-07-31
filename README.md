@@ -21,7 +21,7 @@ One canvas, three ways to drive it:
 
 - **Agent Skill + CLI** — recommended for coding agents (Claude Code, Codex CLI, Cursor, OpenCode): `npx -y @vitorengers/vibemaxxing <command>`. Zero config, auto-starts the canvas, composable JSON in/out.
 - **MCP Server** — 26 tools over stdio for any Model Context Protocol client (Claude Desktop, Cursor, Codex CLI, Antigravity, ...).
-- **REST API** — 56 routes over plain HTTP; the only workspace-aware surface, and what the board itself is built on.
+- **REST API** — 57 routes over plain HTTP; the only workspace-aware surface, and what the board itself is built on.
 
 Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Mermaid conversion runs in the local browser canvas; `share` is optional and uploads an encrypted scene to excalidraw.com.
 
@@ -67,7 +67,9 @@ Everything from here to [What It Is](#what-it-is) is VibeMaxxing, and exists onl
 
 ### One project per board
 
-`EXCALIDRAW_WORKSPACES` points at a registry JSON listing your projects; each project then
+A registry JSON lists your projects — `EXCALIDRAW_WORKSPACES` names it, and with that unset it
+is `workspaces.json` in this machine’s per-user state directory, created when you add the first
+project; each project then
 describes its own board settings in a `board.config.json` at its root — its docs directory, its
 shape library, its GitHub repository and project, and per-agent model and effort. Settings travel
 with the project instead of piling up in one machine's global config. Tabs along the top of the
@@ -108,10 +110,16 @@ checkout: four agents building in one working tree is four agents overwriting ea
 
 ### Starting it
 
+The workbench half reads **github.com and only github.com** — issue blocks, the project mirror,
+implementations and interrupted-run recovery all require it, there is no host setting, and a
+GitHub Enterprise Server or a GitLab is out of scope. The canvas itself requires none of it.
+
 The canvas server is `node dist/server.js` after `npm run build`, and everything else is
 environment. [docs/running.md](docs/running.md) is the procedure: the port (3737 by default, and
 3000 is unusable on the development machine — [docs/trap-port-3000.md](docs/trap-port-3000.md)), the kill-the-stale-server
-step that comes before it, and all fifteen `EXCALIDRAW_*` variables with their defaults.
+step that comes before it, and all twenty-six `EXCALIDRAW_*` variables with their defaults —
+which can each be spelled `VIBEMAXXING_*` instead, and are read from
+[`config.json`](docs/configuration.md) in a per-OS directory as well as from the environment.
 
 ## What It Is
 

@@ -1,7 +1,7 @@
 # CLI
 
 `src/bin.ts`, published as `@vitorengers/vibemaxxing` and installed as `vibemaxxing`, with
-`vibemax` beside it as a shorter alias. 21 commands. It is
+`vibemax` beside it as a shorter alias. 22 commands. It is
 the interface the bundled agent skill actually uses, because a shell command is cheaper for an
 agent to reach for than a tool definition it has to be handed first.
 
@@ -53,13 +53,42 @@ error.
 
 | Group | Commands |
 |---|---|
-| Server | `launch` `start` `stop` `status` `mcp` |
+| Server | `launch` `start` `stop` `status` `mcp` `doctor` |
 | Elements | `add` `update` `delete` `get` `query` `apply` |
 | Scene | `describe` `screenshot` `export` `import` `mermaid` `share` `clear` |
 | Other | `snapshot` `arrange` `install-skill` |
 
 `apply` is the one worth knowing: it takes a single `{create, update, delete}` patch and
 applies it in one call, so a whole edit round-trips once instead of once per element.
+
+## `doctor` — can the agents actually run?
+
+The agents fail the most quietly of anything this tool has: the blocks draw, the buttons are
+there, and pressing one does nothing. `doctor` is the way to ask before pressing. It reads the
+board's `/health` and reports, per role and per environment, one of `found`, `not found`,
+`unconfigured`, `unsupported`, `not probed` or `unknown` — naming the variable to set when the
+answer is `not found`.
+
+```
+$ vibemaxxing doctor
+issue in the native environment [claude]: found version 2.0.14.
+implement in the native environment: not found. Set EXCALIDRAW_IMPLEMENT_AGENT to a command
+that environment can run.
+```
+
+JSON on stdout as usual, prose on stderr. It exits 0 whenever the board answered, including
+when what it answered is that an agent is missing — that is a report, and a script that wants
+the verdict has the JSON.
+
+What it never prints is the command line, a path or a flag, and neither does `/health`: those
+are somebody's absolute paths with their permission flags in them, and `/health` is
+unauthenticated on loopback. `backend` is a name out of a list `src/core/agent-preflight.ts`
+holds, and `version` is a version number extracted from the output rather than the output. The
+same preflight runs at startup and warns there — see [running.md](running.md).
+
+The known limit is that a command is still an opaque string: the probe runs argv[0] with
+`--version`, so `node ./my-agent.mjs` reports on `node`. Reading a command as a *backend* is
+what an adapter is for.
 
 ## It starts the canvas for you
 

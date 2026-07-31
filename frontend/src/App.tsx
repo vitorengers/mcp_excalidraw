@@ -35,6 +35,8 @@ import {
   mirrorAnchors,
   resolveMirrorOrigin,
   layoutUnreadable,
+  notesOnlyBoard,
+  isNotesOnlyBoard,
   UNREADABLE_WIDTH,
   MIRROR_KIND,
   NOTES_OPTION_ID
@@ -179,6 +181,18 @@ const AUTO_SYNC_DEBOUNCE_MS = 1200;
  */
 const CLIENT_ID = globalThis.crypto?.randomUUID?.()
   ?? `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+/**
+ * What this tool is called, for the one place the frontend has to say it.
+ *
+ * `board.config.json`'s `name`, copied rather than imported: that file is the server's, read
+ * per request for whichever project a tab is showing, and a bundle that runs before the first
+ * response has no board to read it from. The copy in `frontend/index.html`'s `<title>` is
+ * there for the same reason and is even earlier — it is what a still-loading tab says.
+ * `scripts/check-brand-strings-browser.mjs` holds all three in agreement, the way
+ * `check-readme.mjs` already does for the README.
+ */
+const PRODUCT_NAME = 'VibeMaxxing';
 
 /**
  * How often the mirror re-reads the project.
@@ -1255,13 +1269,6 @@ function App(): JSX.Element {
   // Boards, one per project
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [activeWorkspace, setActiveWorkspace] = useState<string>('default')
-  /**
-   * Whether a registry exists at all, which is not the same as it having projects in it.
-   *
-   * An empty registry is a board waiting for its first project and has to show the `+`
-   * that adds one; no registry at all has nowhere to put it.
-   */
-  const [workspacesConfigured, setWorkspacesConfigured] = useState<boolean>(false)
   /** Which dialog is open, if any: the project picker or one project's settings. */
   const [workspaceDialog, setWorkspaceDialog] = useState<'add' | 'config' | null>(null)
   // WebSocket handlers close over their creation-time scope, so the ref is what the
@@ -1742,6 +1749,21 @@ function App(): JSX.Element {
    * stall — or the same one after a recovery — is announced afresh.
    */
   const announcedStallRef = useRef<string>('')
+
+  /**
+   * The GitHub failure each board has already said, so it says each one once.
+   *
+   * The same rule as `announcedStallRef` and a stronger reason for it: a `gh` that is not
+   * installed is not installed at every poll, so a toast per poll would be this board telling
+   * somebody every twenty seconds, for as long as their session lasts, a thing they cannot fix
+   * without leaving the canvas. Keyed by board, because two tabs can fail differently and the
+   * one being looked at is the one that has to be able to speak.
+   *
+   * Keyed on the *server's* sentence rather than on the one shown, which is what keeps the
+   * `/api/github-status` read off the repeat path: an unchanged failure is dropped before
+   * anything is asked, and only a failure that is new pays for the diagnosis.
+   */
+  const announcedBoardFailureRef = useRef<Record<string, string>>({})
 
   // Sync state management
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle')
@@ -2460,12 +2482,19 @@ function App(): JSX.Element {
    * strip itself is a mirror element, so a scene-side test would call the board warm the
    * moment the strip landed and never correct the words on it again.
    *
+   * **Read from GitHub** is the whole of that test, which is why `notesOnlyBoard` is excluded
+   * from it: since #316 a board with no project sets `board` too, so that the notes column
+   * exists there, and counting that as warm would put the silence back — a project configured
+   * afterwards, and unreadable, would draw its notes column and say nothing about why the rest
+   * of the region never arrived.
+   *
    * `layoutUnreadable` says what it draws and why it is a strip rather than a toast.
    */
   const renderUnreadable = (reason: string): void => {
     const api = excalidrawAPIRef.current
     if (!api) return
-    if (projectBoardRef.current.board) return
+    const warm = projectBoardRef.current.board
+    if (warm && !isNotesOnlyBoard(warm)) return
     // Same reason as every other write to this region: a redraw under a pointer or a caret
     // takes the thing being worked on out from under it.
     if (busyOnCanvas(api)) return
@@ -2513,7 +2542,8 @@ function App(): JSX.Element {
     // this function is built to skip, and a board that came back meanwhile keeps its own.
     if (document.fonts && document.fonts.status !== 'loaded') {
       void document.fonts.ready.then(() => {
-        if (projectBoardRef.current.board) return
+        const settled = projectBoardRef.current.board
+        if (settled && !isNotesOnlyBoard(settled)) return
         projectBoardRef.current = { ...projectBoardRef.current, signature: '' }
         renderUnreadable(reason)
       })
@@ -2695,6 +2725,33 @@ function App(): JSX.Element {
   }
 
   /**
+   * Draw the one column the canvas owns, on a board that has no project to mirror.
+   *
+   * The 404 branch used to be `clearMirror()`, and the notes column is drawn by the mirror —
+   * so a workspace with no `githubProject` had no column, no `+`, and therefore no route to
+   * the issue block, which is the feature this tool is built around. Registration writes a
+   * `board.config.json` with `name` and never a project, so that was every newly registered
+   * one: the headline feature was reachable only after a step nothing on the canvas asked for.
+   *
+   * `notesOnlyBoard` is a board of no sections, so the same `layoutMirror` draws the same
+   * column it draws in front of a project's four. Nothing here decides geometry — that is the
+   * whole reason it goes through the layout rather than drawing a column of its own.
+   *
+   * The mirrored state is dropped **once**, on the pass that finds the project gone: a board
+   * that was read from GitHub leaves cards, move errors and a queue behind it, and every one
+   * of them belongs to a project this board no longer has. Guarded by `isNotesOnlyBoard` so
+   * the twenty-second poll does not clear and redraw the region for ever after — `renderMirror`
+   * skips a pass whose layout has not changed, and a `signature` reset every time would be
+   * the reader's selection fought on a timer.
+   */
+  const renderNotesOnly = (): void => {
+    if (projectBoardRef.current.board && !isNotesOnlyBoard(projectBoardRef.current.board)) {
+      clearMirror()
+    }
+    renderMirror(notesOnlyBoard())
+  }
+
+  /**
    * Drop the draft blocks whose issue now has a card of its own.
    *
    * Matched on the issue URL rather than on position or title: the URL is the only thing
@@ -2857,7 +2914,70 @@ function App(): JSX.Element {
     }
   }
 
-  /** Re-read the project and redraw. A board with no project configured stays blank. */
+  /**
+   * What the server can add about `gh` itself, or nothing.
+   *
+   * `GET /api/project-board` says the read failed and repeats what `gh` printed, which is the
+   * half a reader can act on only if they already know what `gh` is. This is the other half:
+   * not installed, not logged in, and logged in without the `project` scope are three
+   * different things to go and do, and the first two are what a fresh clone hits before
+   * anything is configured at all.
+   *
+   * Never allowed to fail the announcement it is decorating: a diagnosis that could not be
+   * fetched must not swallow the failure it was fetched for.
+   */
+  const githubAdvice = async (): Promise<string> => {
+    try {
+      const response = await fetch(apiUrl('/api/github-status'))
+      if (!response.ok) return ''
+      const gh = (await response.json())?.gh
+      if (!gh) return ''
+      if (gh.installed === false) {
+        return ' The gh CLI was not found on this machine — install it, or set '
+          + 'EXCALIDRAW_GH_COMMAND to where it lives.'
+      }
+      if (gh.authenticated === false) {
+        return ` gh is installed but not logged in — run "gh auth login".${
+          gh.error ? ` It said: ${String(gh.error)}` : ''}`
+      }
+      if (Array.isArray(gh.scopes) && !gh.scopes.includes('project')) {
+        return ` gh is logged in as ${String(gh.login ?? 'an account')} without the "project" `
+          + 'scope, which reading a project board needs — run "gh auth refresh -s project".'
+      }
+      return ''
+    } catch {
+      return ''
+    }
+  }
+
+  /**
+   * Say, once per board, that the project could not be read — and why.
+   *
+   * The strip `renderUnreadable` draws is only for a *cold* board, because a blip must not wipe
+   * a mirror somebody is reading; a board that has drawn once and then starts failing had
+   * nothing at all until #317. A toast is what says it either way, and it says it without
+   * putting a shape on a canvas that is already showing the last good answer.
+   *
+   * The suppression is what keeps it from becoming its own nuisance: the same failure on the
+   * next poll is dropped before anything is fetched, and the memory is cleared by a read that
+   * succeeds, so a board that recovers and breaks again speaks afresh.
+   */
+  const announceProjectBoardFailure = async (
+    api: ExcalidrawImperativeAPI,
+    workspace: string,
+    reported: string
+  ): Promise<void> => {
+    if (announcedBoardFailureRef.current[workspace] === reported) return
+    announcedBoardFailureRef.current[workspace] = reported
+    const advice = await githubAdvice()
+    // The board may have been switched while the diagnosis was in flight, and a toast is a
+    // property of the window rather than of a scene — saying it now would put one board's
+    // failure in front of another board's canvas.
+    if (activeWorkspaceRef.current !== workspace) return
+    sayOnCanvas(api, `The project board could not be read. ${reported}${advice}`)
+  }
+
+  /** Re-read the project and redraw. A board with no project configured keeps its notes column. */
   const refreshProjectBoard = async (): Promise<void> => {
     const api = excalidrawAPIRef.current
     if (!api) return
@@ -2872,20 +2992,38 @@ function App(): JSX.Element {
       // A tab switched while the request was in flight would draw one project's board
       // over another project's canvas.
       if (activeWorkspaceRef.current !== workspace) return
+      // The one status that means "this board has no project", and the only one that says
+      // nothing. Since #317 it means only that: a `githubProject` that is not a project URL
+      // answers 422 and falls through to the branch below, where it is said out loud. Most
+      // boards are this one, and a toast on every one of them would be the feature making
+      // itself unusable.
+      //
+      // Saying nothing is not the same as drawing nothing, which is what it used to do and
+      // what #316 is about: the notes column and its `+` are the canvas's own and need no
+      // project, so what a 404 clears is the *mirrored* half of the region. There is no
+      // failure here to announce — a board with no project is not a board that failed.
       if (response.status === 404) {
-        clearMirror()
+        renderNotesOnly()
+        announcedBoardFailureRef.current[workspace] = ''
         return
       }
       const body = await response.json().catch(() => ({}))
       if (!body?.success || !body.board) {
         // Not a 404 — that was answered above and means the board simply has no project.
         // This is `gh` unresolvable, an expired login, a token without the `project` scope,
-        // a GitHub outage, or the loopback refusal, and every one of them arrives here with
-        // its own sentence in `body.error`. Throwing that away is what #254 is about.
+        // a GitHub outage, an unparseable project URL, or the loopback refusal, and every one
+        // of them arrives here with its own sentence in `body.error`. Throwing that away is
+        // what #254 is about, and saying it on a board whose mirror is already up — where the
+        // strip below will not draw, on purpose — is what #317 is about.
         console.warn('Could not read the project board:', body?.error ?? response.status)
-        renderUnreadable(String(body?.error ?? `The server answered ${response.status}.`))
+        const reported = String(body?.error ?? `The server answered ${response.status}.`)
+        renderUnreadable(reported)
+        void announceProjectBoardFailure(api, workspace, reported)
         return
       }
+      // A read that came back is what clears the memory, so a board that recovers and then
+      // fails the same way again says so rather than being suppressed by its own history.
+      announcedBoardFailureRef.current[workspace] = ''
       await reconcileDrafts(body.board as ProjectBoard)
       if (activeWorkspaceRef.current !== workspace) return
       const { implementing, queue } = await readImplementRecords()
@@ -2906,6 +3044,7 @@ function App(): JSX.Element {
       console.warn('Could not read the project board:', error)
       if (activeWorkspaceRef.current !== workspace) return
       renderUnreadable((error as Error).message)
+      void announceProjectBoardFailure(api, workspace, (error as Error).message)
     }
   }
 
@@ -3063,11 +3202,19 @@ function App(): JSX.Element {
 
     if (!board) return
 
-    // Nothing on the canvas for this: no column means no mirror was drawn, and the `+` is
-    // drawn by the mirror, so there is no button here to have been pressed.
-    const column = columns.find((candidate) => candidate.optionId === sectionOptionId) ?? columns[0]
+    // The notes column, whatever the press named. It is where every draft is laid out — a
+    // stamp on a block decides nothing, which `layoutMirror` states — and it is the one column
+    // that is there whether or not this board has a project at all, because the canvas draws
+    // it rather than mirroring it. Falling back to `columns[0]` said the same thing only for
+    // as long as the notes column happened to be first.
+    const column = columns.find((candidate) => candidate.optionId === sectionOptionId)
+      ?? columns.find((candidate) => candidate.optionId === NOTES_OPTION_ID)
     if (!column) {
-      console.warn('The mirror has no column to drop a block into.')
+      // Nothing on the canvas for this: no column means no mirror was drawn, and the `+` is
+      // drawn by the mirror, so there is no button here to have been pressed. Said out loud
+      // all the same — a `+` that answers nothing is what #244 is about, and a console
+      // warning is a thing nobody has open.
+      sayOnCanvas(api, 'The board has no notes column to drop a block into.')
       return
     }
 
@@ -4667,20 +4814,17 @@ function App(): JSX.Element {
 
     const openTheBoard = async (): Promise<void> => {
       let list: WorkspaceSummary[] = []
-      let configured = false
       try {
         const result = await (await fetch('/api/workspaces')).json()
-        if (result?.success) {
-          list = result.workspaces ?? []
-          configured = Boolean(result.configured)
-        }
+        // `configured` comes back in this payload and is deliberately not read: it is `true`
+        // on every board now, and reading it was what decided whether the tab strip existed.
+        if (result?.success) list = result.workspaces ?? []
       } catch (error) {
         console.warn('Could not load workspaces:', error)
       }
       if (cancelled) return
 
       setWorkspaces(list)
-      setWorkspacesConfigured(configured)
       const resolved = resolveInitialWorkspace(list)
       if (resolved) {
         activeWorkspaceRef.current = resolved
@@ -4714,6 +4858,30 @@ function App(): JSX.Element {
       for (const workspaceId of [...warmBoardsRef.current.keys()]) dropWarmBoard(workspaceId)
     }
   }, [])
+
+  /**
+   * What the browser tab says this window is.
+   *
+   * Since #261 the bar above the canvas has no title on it — a constant four words beside the
+   * tabs that already name the board was the least informative thing in the row — so `<title>`
+   * is the only place the name is left, and a reader with three projects open in three windows
+   * reads them apart there and nowhere else. So the board goes first and the product second:
+   * a tab strip is truncated to a handful of characters, and those characters should be the
+   * variable half.
+   *
+   * The fallbacks are the states a board really sits in rather than defensive padding. Before
+   * `/api/workspaces` has answered there is no list; a board nobody has added a project to yet
+   * has nothing to be named after (#310 gave every canvas a registry, so that is now an empty
+   * one rather than none, and the tab says the same thing either way); and this repository's
+   * own board is *called* VibeMaxxing, which would otherwise render `VibeMaxxing —
+   * VibeMaxxing`. All three land on the product name alone, which is what `index.html` already
+   * said before any of this ran.
+   */
+  useEffect(() => {
+    const board = workspaces.find((workspace) => workspace.id === activeWorkspace)
+    const name = board?.name?.trim()
+    document.title = name && name !== PRODUCT_NAME ? `${name} — ${PRODUCT_NAME}` : PRODUCT_NAME
+  }, [workspaces, activeWorkspace])
 
   /**
    * The camera this board was last left at, put back on the way in.
@@ -6170,16 +6338,16 @@ function App(): JSX.Element {
         is the least informative use of a row that now has to hold both. The document still has
         its name in `<title>`, where a browser tab reads it.
 
-        The tab strip renders nothing at all when no registry is configured, and that has to
-        mean *no tabs*, not *no bar*: a single-board setup still needs the connection pill, Sync
-        to Backend and Clear Canvas, which is why the strip is a child of the header rather
-        than the header being a branch of the strip.
+        The strip is a child of the header rather than the header being a branch of the strip,
+        and that mattered while the strip could disappear: the connection pill, Sync to Backend
+        and Clear Canvas belong to a board with no projects too. The strip stays now — it
+        carries the control that adds the first project — but the nesting is still right for
+        the same reason.
       */}
       <div className="header">
         <WorkspaceTabs
           workspaces={workspaces}
           activeId={activeWorkspace}
-          configured={workspacesConfigured}
           onSelect={switchWorkspace}
           onAdd={() => setWorkspaceDialog('add')}
           onConfigure={() => setWorkspaceDialog('config')}
