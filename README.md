@@ -208,9 +208,11 @@ There is no separate server setup: any drawing command auto-starts the local can
 No clone, no config:
 
 ```bash
-# start the canvas (drawing commands auto-start it too) and open it
-npx -y @vitorengers/vibemaxxing start
-open http://127.0.0.1:3737   # the URL `start` printed; a browser tab enables screenshots & mermaid
+# the whole of it: starts the canvas, opens it in your browser, prints where it is
+npx -y @vitorengers/vibemaxxing
+# → VibeMaxxing 0.1.0 — http://127.0.0.1:3737
+# (a browser tab is what enables screenshots & mermaid. `start` is the same thing
+#  without the browser, printing JSON, for a script or an agent.)
 
 # draw something
 echo '[
@@ -263,11 +265,15 @@ Where the skill shines:
 
 `npx -y @vitorengers/vibemaxxing <command>` or (after `npm i -g @vitorengers/vibemaxxing`) `vibemaxxing <command>`, with `vibemax` installed beside it as a shorter alias of the same binary. The inherited names `mcp-excalidraw-server` and `excalidraw-canvas` are **gone**: upstream's published package installs both, so keeping them meant a global install of the two packages fighting over the same command. If you had either in a script, change it to `vibemaxxing`.
 
+**With no arguments at all it launches the board** — starts it, opens it, prints the one line above — and it does that only when stdin is a terminal, because a bare invocation is also how every MCP client starts the stdio server. A pipe on stdin is a client and gets the transport; a terminal is a person and gets the board. Say `launch` or `mcp` to settle it outright. `--no-open` or `VIBEMAXXING_NO_OPEN=1` launches without a browser, and a stdout that is not a terminal suppresses the browser on its own, so agents and CI are unaffected.
+
 Conventions: JSON results on stdout — except `describe` (plain text by design) and raw-content output when `--out` is omitted (`export` prints the scene JSON, `screenshot --format svg` prints SVG). Diagnostics on stderr. Exit codes: `0` ok, `1` error, `2` usage, `3` canvas unreachable, `4` browser tab required. Canvas URL from `EXPRESS_SERVER_URL` or `--url`. Canvas-driving commands auto-start the server; `status` only reports current state. Explicit `start` overrides the `EXCALIDRAW_NO_AUTOSTART=1` opt-out (it's user intent, not auto-start).
 
 | Command | Description |
 |---------|-------------|
+| *(no arguments)* / `launch` | Start the board, open it in a browser, print one line: `VibeMaxxing <version> — <url>`. A second launch prints the same line and brings the existing tab forward |
 | `start` / `stop` / `status` | Manage the canvas server (detached; `stop` identity-checks the live server via `/health` before signaling) |
+| `mcp` | Run the MCP stdio server by name (what a bare invocation means to an MCP client) |
 | `add [file\|-]` | Batch-create elements from a JSON array (file or stdin); `--one '{...}'` for a single element |
 | `apply [file\|-]` | One-call multi-op patch: `{"create":[...],"update":[{"id":"a","set":{...}}],"delete":["id"]}` |
 | `get <id>` / `delete <id...>` | Read / remove elements |
@@ -287,7 +293,7 @@ Labels and arrow bindings use the agent-friendly format everywhere in the CLI: `
 
 ## Configure MCP Clients
 
-The MCP server runs over stdio. Since v1.1 the simplest config is `npx` — no clone, no absolute paths, and the canvas auto-starts:
+The MCP server runs over stdio. Since v1.1 the simplest config is `npx` — no clone, no absolute paths, and the canvas auto-starts. The bare invocation below stays the stdio server for a client: a launch needs a terminal on stdin, and a client hands it a pipe. Add `"mcp"` to the arguments if you would rather say so outright.
 
 ### Environment Variables
 
@@ -300,6 +306,8 @@ The MCP server runs over stdio. Since v1.1 the simplest config is `npx` — no c
 | `PORT` / `HOST` | Canvas server bind address. `PORT` pins the port and is never scanned past | `3737` (next free port above it if taken) / `127.0.0.1` |
 | `EXCALIDRAW_CANVAS_PORT` | Preferred port to try first — a preference, not a pin: the search may walk past it | `3737` |
 | `EXCALIDRAW_STATE_HOME` | Parent directory for the pidfile and the running board's state file | per-OS state directory |
+| `VIBEMAXXING_NO_OPEN` | Set `1` so a launch never opens a browser (`--no-open` sets it). A stdout that is not a terminal already suppresses it | (unset) |
+| `VIBEMAXXING_OPEN_COMMAND` | Command line to open a URL with instead of the platform's own, URL appended last — for a machine with no `xdg-open` | `cmd /c start ""` · `open` · `xdg-open` |
 
 ---
 
