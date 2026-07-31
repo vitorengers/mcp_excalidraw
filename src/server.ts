@@ -4752,6 +4752,13 @@ app.get('/health', (req: Request, res: Response) => {
     // from a stale pidfile or an unrelated app squatting on the port.
     service: 'mcp-excalidraw-canvas',
     pid: process.pid,
+    // Which machine this board is running on, for a page that has to describe it. The Add-a-
+    // project dialog's example path is the only concrete path this tool ever shows, and it
+    // was a `C:` one everywhere — the wrong syntax for the platform two thirds of readers are
+    // standing on. Here rather than in `canvasIdentity()`: that is what a *replacement* has to
+    // match, and a restart cannot change the platform, so putting it there would add a
+    // comparison that can never be false and imply it could.
+    platform: process.platform,
     ...canvasIdentity()
   });
 });

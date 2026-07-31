@@ -11,6 +11,7 @@
  * loopback guard as everything else on this server that touches the machine.
  */
 import fs from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import { resolveWorkspacePath } from './workspace-paths.js';
 
@@ -30,15 +31,63 @@ export interface DirectoryListing {
 
 const forward = (value: string): string => value.replace(/\\/g, '/');
 
+const isDirectory = async (candidate: string): Promise<boolean> => {
+  try {
+    return (await fs.stat(candidate)).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+/** Where a mac mounts everything that is not the boot disk, and nothing else does. */
+const MAC_VOLUMES = '/Volumes';
+
+/**
+ * Which machine the roots are being listed for.
+ *
+ * Defaulted arguments nothing in `src/` passes, which is the convention #283 and #286
+ * established for `agentPath` and `wslUnsupportedHere`: one platform has to be able to assert
+ * the answer for all three, and a board that could be *told* its own platform or its own home
+ * by the environment would be a board that can lie about where it is standing.
+ */
+export interface RootOptions {
+  platform?: NodeJS.Platform;
+  home?: string;
+  volumes?: string;
+}
+
 /**
  * The roots to start from.
  *
  * On Windows that is the drive letters, because there is no single filesystem root to
  * open on and a picker that started at `C:/` would have no way to reach `D:/`.
+ *
+ * Everywhere else `/` is that single root, and it is a poor place to be *put*: this is the
+ * first screen of the product, and a reader adding their first project on a mac clicked past
+ * `System`, `Volumes`, `private` and `cores` to reach `Users`, on Linux past `proc`, `sys` and
+ * `dev`. So the home directory comes first, because that is where a project is — with `/`
+ * still in the same listing, since nothing above home may become unreachable, and on darwin
+ * `/Volumes` when there is one, which is the whole of the rest of that machine's disks.
+ *
+ * A root is offered rather than a shortcut invented: each entry is a real directory and its
+ * own absolute path, so `parent` below goes on meaning exactly what it meant.
  */
-async function listRoots(): Promise<DirectoryListing> {
-  if (process.platform !== 'win32') {
-    return { path: '', parent: null, entries: [{ name: '/', path: '/' }] };
+export async function listRoots({
+  platform = process.platform,
+  home = os.homedir(),
+  volumes = MAC_VOLUMES,
+}: RootOptions = {}): Promise<DirectoryListing> {
+  if (platform !== 'win32') {
+    const entries: DirectoryEntry[] = [];
+    const homePath = forward(home ?? '').replace(/(.)\/+$/, '$1');
+    // A home of `/` — a root account, or a machine with no `HOME` at all — is the entry below
+    // rather than a second one saying the same thing.
+    if (homePath && homePath !== '/') entries.push({ name: homePath, path: homePath });
+    entries.push({ name: '/', path: '/' });
+    if (platform === 'darwin' && await isDirectory(volumes)) {
+      entries.push({ name: forward(volumes), path: forward(volumes) });
+    }
+    return { path: '', parent: null, entries };
   }
 
   const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
