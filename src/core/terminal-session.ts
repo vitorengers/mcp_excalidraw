@@ -119,28 +119,71 @@ export interface PtyModule {
 const PTY_SPECIFIER = '@lydell/node-pty';
 let ptyLoad: Promise<PtyModule | null> | null = null;
 
+/** What the setting reads as, when the setting is what turned the binding off. */
+const PTY_DISABLED_REASON = 'EXCALIDRAW_TERMINAL_PTY=0';
+
+/**
+ * Why the import produced no binding, written once, inside the memoised load below.
+ *
+ * Inside rather than beside it because the load is memoised: a reason set on the way out of
+ * `loadPty()` would be right for the first session of a board's life and null for every one
+ * after it, which is the shape of bug that makes a diagnostic worse than none.
+ */
+let ptyImportReason: string | null = null;
+
+/**
+ * Why this machine has no pseudoterminal, or null while it has one.
+ *
+ * Recomputed on every `loadPty()` rather than latched, so that the setting is asked afresh:
+ * the import is a once-per-process fact and `EXCALIDRAW_TERMINAL_PTY` is not.
+ */
+let ptyReason: string | null = null;
+
 export function ptyDisabled(setting: string | undefined | null = process.env.EXCALIDRAW_TERMINAL_PTY): boolean {
   return /^(0|false|off|no|disabled)$/i.test((setting ?? '').trim());
 }
 
+/**
+ * The reason there is no PTY here, as the last `loadPty()` found it, or null.
+ *
+ * Read by a session on its way to being a pipe, so that the block can say *why* it is one.
+ * Null before anything has asked, which is honest: nothing has been found out yet.
+ */
+export function ptyUnavailableReason(): string | null {
+  return ptyReason;
+}
+
 export async function loadPty(): Promise<PtyModule | null> {
-  if (ptyDisabled()) return null;
+  if (ptyDisabled()) {
+    ptyReason = PTY_DISABLED_REASON;
+    return null;
+  }
   if (!ptyLoad) {
     ptyLoad = (async () => {
       try {
         const loaded = await import(/* @vite-ignore */ PTY_SPECIFIER) as { spawn?: unknown; default?: unknown };
         const candidate = (typeof loaded.spawn === 'function' ? loaded : loaded.default) as PtyModule | undefined;
-        if (!candidate || typeof candidate.spawn !== 'function') return null;
+        if (!candidate || typeof candidate.spawn !== 'function') {
+          ptyImportReason = `${PTY_SPECIFIER} imported without a spawn function, so there is no binding to use`;
+          logger.warn('No PTY binding is available, so the terminal will use pipes', { reason: ptyImportReason });
+          return null;
+        }
         return candidate;
       } catch (error) {
-        logger.info('No PTY binding is available, so the terminal will use pipes', {
-          reason: (error as Error).message
-        });
+        // `warn` rather than `info`, because the console transport is warn and up: on `info`
+        // the one line naming the cause reached the log file alone, and a reader whose every
+        // session had quietly become a pipe had no reason to open it. The message is the
+        // library's own — it names the missing package (`@lydell/node-pty-linux-x64`) or the
+        // link failure, which is the part anybody can act on.
+        ptyImportReason = (error as Error).message;
+        logger.warn('No PTY binding is available, so the terminal will use pipes', { reason: ptyImportReason });
         return null;
       }
     })();
   }
-  return ptyLoad;
+  const binding = await ptyLoad;
+  ptyReason = binding ? null : ptyImportReason;
+  return binding;
 }
 
 /**
@@ -413,6 +456,18 @@ export interface TerminalSessionSummary {
   shell: string;
   /** Whether the shell got a terminal or three pipes. The block says which. */
   mode: TerminalMode;
+  /**
+   * Why it is `pipe`, when that is a fallback, and null when it is not.
+   *
+   * The mode says *what* happened and this says *why*, which is the difference between a
+   * reader knowing their board behaves differently from the one in the documentation and
+   * knowing what to install. Three answers: the import error's own message on a platform
+   * `@lydell/node-pty` ships no prebuilt binary for, `EXCALIDRAW_TERMINAL_PTY=0` where the
+   * fallback was asked for, and null where nothing needs explaining — a working PTY, or a
+   * session whose stdin was spent on a prompt, which is on pipes by construction on every
+   * machine there is and would be mislabelled by a cause belonging to this one.
+   */
+  pipeReason: string | null;
   pid: number | null;
   startedAt: string;
   cols: number;
@@ -467,6 +522,8 @@ export class TerminalSession {
   readonly cwd: string;
   readonly shell: string;
   readonly mode: TerminalMode;
+  /** Why the mode is `pipe`, where that is a fallback. See `TerminalSessionSummary`. */
+  readonly pipeReason: string | null;
   readonly owner: TerminalSessionOwner | null;
   readonly startedAt = new Date().toISOString();
 
@@ -532,6 +589,10 @@ export class TerminalSession {
     this.mode = binding ? 'pty' : 'pipe';
     this.owner = options.owner ?? null;
     this.promptSent = Boolean(options.input) && !asArgument;
+    // A cause only where there is one to give. A prompt on stdin puts the session on pipes
+    // whatever the machine can offer — a pseudoterminal has no end of file — so naming this
+    // board's missing binding there would explain a tab with something that did not decide it.
+    this.pipeReason = this.mode === 'pipe' && !this.promptSent ? ptyUnavailableReason() : null;
     // What the shell itself will report from `pwd`, which for a WSL project is not the
     // path this process used to spawn it.
     this.cwd = workspace.environment.kind === 'wsl'
@@ -625,6 +686,7 @@ export class TerminalSession {
       cwd: this.cwd,
       shell: this.shell,
       mode: this.mode,
+      pipeReason: this.pipeReason,
       pid: this.pid,
       startedAt: this.startedAt,
       cols: this.cols,
