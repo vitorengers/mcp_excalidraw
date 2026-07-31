@@ -88,7 +88,7 @@ export type AgentsHealth = Record<AgentRole, AgentRoleHealth>;
 /** One role as the board holds it: the commands, and the variable that would grant them. */
 export interface AgentRoleCommands {
   role: AgentRole;
-  /** `EXCALIDRAW_ISSUE_AGENT` / `EXCALIDRAW_IMPLEMENT_AGENT`; the WSL half adds `_WSL`. */
+  /** The `ISSUE_AGENT` / `IMPLEMENT_AGENT` setting, spelled by `settingName`; WSL adds `_WSL`. */
   variable: string;
   commands: AgentCommands;
 }

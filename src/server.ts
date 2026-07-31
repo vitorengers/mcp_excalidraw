@@ -2417,7 +2417,7 @@ async function interactiveTabRefusal(workspaceId: string): Promise<string | null
   }
   if (!await loadPty()) {
     return 'An interactive run needs a pseudoterminal, and this board has none — either no '
-      + '@lydell/node-pty binary for this platform, or EXCALIDRAW_TERMINAL_PTY=0. On pipes '
+      + `@lydell/node-pty binary for this platform, or ${settingName('TERMINAL_PTY')}=0. On pipes `
       + 'there is no interface to draw and nothing to type into, so the terminal tab would '
       + 'be the same read-only screen an ordinary run gets.';
   }
