@@ -3,8 +3,9 @@
 A region to the left of the board's own content, showing the workspace's GitHub project: one
 section per column, newest issue on top — except **Todo**, which reads oldest first because it is
 the column the queue drains — and cards you can drag between columns with the move travelling back
-to GitHub. Dormant unless a project names a `githubProject`, so a board that has none never grows
-one.
+to GitHub. Dormant unless a project names a `githubProject` — a board that has none mirrors
+nothing, and since #316 still draws the one column that mirrors nothing anyway: **My Notes**, with
+its `+`. See [The region on a board with no project](#the-region-on-a-board-with-no-project).
 
 The **leftmost** region again since #200: the canvas reads `mirror | terminals | documentation`,
 and the terminal blocks sit between this one and the board's own content, anchored to the
@@ -139,8 +140,45 @@ the one that stays. Measured in a browser: the label was 467 wide against a sent
 510 of, and `bash: … command not found` lost a character off each end. So `document.fonts.ready`
 buys exactly one more pass.
 
-404 is untouched and still means something else entirely: the board has no project, so the region
-is cleared rather than explained.
+404 still means something else entirely: the board has no project, so there is nothing to explain
+and nothing to keep. What it draws instead is the next section.
+
+## The region on a board with no project
+
+`GET /api/project-board` answers **404** when the workspace names no `githubProject`, is not
+registered, or is unusable. The canvas read that as `clearMirror()` until #316 — and the notes
+column and its `+` are drawn by the mirror, so a board with no project had no column, no `+`, and
+therefore no route to the issue block, which is the feature this tool is built around.
+`addIssueBlockToColumn` warned to the browser console, where nobody is looking. Registration
+writes a `board.config.json` with a `name` and never a `githubProject`, so that was **every newly
+registered project**: the headline feature was reachable only after a step nothing on the canvas
+asked for.
+
+So a 404 clears the mirrored half of the region and draws the half that is not mirrored. That is
+`notesOnlyBoard()` — a `ProjectBoard` of *no sections at all*, marked `noProject`, which
+`layoutMirror` then puts the notes column in front of exactly as it does for a project of four.
+One code path draws the column, whether or not there is anything beside it, which is what keeps
+its geometry from having two answers. The strip above it carries `No GitHub project configured`
+in place of a project title, and no link, because there is no project to open.
+
+The mark matters twice:
+
+- **A board with no project is not a warm mirror.** The strip a failed read draws is skipped when
+  a board is already up, so that a blip cannot wipe a region somebody is reading; counting this
+  one as warm would put #252's silence back, on a project configured afterwards and unreadable.
+  `isNotesOnlyBoard` is what the test excludes.
+- **The clearing happens once.** A board that *was* read leaves cards, move errors and a queue
+  state behind it, all of them a project's; they go on the pass that finds the project gone, and
+  not on the ninety after it, or the twenty-second poll would fight the reader's selection for
+  ever.
+
+What is refused is the *run*, not the `+`. Writing an observation down is the part that has to
+work before GitHub is connected — see `docs/issue-block.md`, [A run needs a repository to create
+the issue in](issue-block.md#a-run-needs-a-repository-to-create-the-issue-in).
+
+`scripts/check-notes-column-without-project-browser.mjs` holds all of it, in a browser and at two
+zooms: the column's position is computed relative to the mirrored ones, so drawing it alone is a
+layout change that compiles perfectly either way.
 
 ## Where the region sits
 
