@@ -16,6 +16,7 @@ import { ESCALATION_MARKER } from './implement-landing.js';
 import { HeldWorktree, ImplementWorktree } from './implement-worktree.js';
 import { applyAgentSettings, AgentHost, AgentRun, runAgent, workflowSection } from './issue-agent.js';
 import { loadAgentWorkflow, Workspace } from './workspaces.js';
+import { env } from './settings.js';
 
 /**
  * What the agent is told.
@@ -136,7 +137,7 @@ Return only the pull request URL on a line of its own as the last thing you prin
  * in `running`, so the block offers a reset.
  */
 export const IMPLEMENT_TIMEOUT_MS: number | null = (() => {
-  const configured = Number(process.env.EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT);
+  const configured = Number(env('IMPLEMENT_AGENT_TIMEOUT'));
   return Number.isFinite(configured) && configured > 0 ? configured * 1000 : null;
 })();
 

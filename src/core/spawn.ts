@@ -10,7 +10,7 @@ import { DEFAULT_CANVAS_PORT, removeCanvasState, whatIsOn } from './port.js';
 
 export { foreignServiceError };
 import { readPidFile, removePidFile, startupLogPath } from './pidfile.js';
-import { ensureStateDir, realEnvironment } from './settings.js';
+import { ensureStateDir, realEnvironment, settingName } from './settings.js';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
@@ -131,7 +131,7 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
 
   if (!options.force) {
     if (EXCALIDRAW_NO_AUTOSTART) {
-      throw unreachableError('auto-start disabled by EXCALIDRAW_NO_AUTOSTART=1');
+      throw unreachableError(`auto-start disabled by ${settingName('NO_AUTOSTART')}=1`);
     }
     if (!ENABLE_CANVAS_SYNC) {
       throw unreachableError('auto-start disabled because ENABLE_CANVAS_SYNC=false');

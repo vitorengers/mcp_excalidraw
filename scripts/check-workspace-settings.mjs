@@ -381,7 +381,7 @@ try {
   check('implementing stays disabled', refusedImplement.status === 404,
         `got ${refusedImplement.status} ${JSON.stringify(refusedImplement.body)}`);
   check('and says which variable would enable it',
-        /EXCALIDRAW_IMPLEMENT_AGENT/.test(refusedImplement.body?.error ?? ''), refusedImplement.body?.error);
+        /VIBEMAXXING_IMPLEMENT_AGENT/.test(refusedImplement.body?.error ?? ''), refusedImplement.body?.error);
   const configWithCommand = await call(UNGRANTED_BASE, '/api/workspaces/tuned/config', {
     method: 'PUT',
     body: JSON.stringify({ config: { agents: { implement: { command: 'node evil.mjs' } } } }),
