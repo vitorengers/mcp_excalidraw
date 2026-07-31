@@ -1,6 +1,13 @@
 MIT License
 
 Copyright (c) 2024 MCP Excalidraw Server
+Copyright (c) 2024-2026 yctimlin, for the original work at github.com/yctimlin/mcp_excalidraw
+Copyright (c) 2026 vitorengers, for this fork at github.com/vitorengers/mcp_excalidraw
+
+The first line is the notice this work inherited, kept verbatim because the permission text
+below carries it into every copy. The two below it name who holds what: the original work is
+yctimlin's, and everything this fork added to it is vitorengers'. NOTICE.md says where the
+two divide.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

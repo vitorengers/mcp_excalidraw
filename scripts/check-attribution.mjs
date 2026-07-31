@@ -337,9 +337,15 @@ console.log('\n3. LICENSE and NOTICE.md ship with the package');
 
 const pkg = JSON.parse(read('package.json'));
 
-/** What npm says the tarball will hold. `--dry-run` writes nothing and asks no registry. */
+/**
+ * What npm says the tarball will hold. `--dry-run` writes nothing and asks no registry.
+ *
+ * One command string and no argument array: npm on Windows is `npm.cmd`, which Node refuses to
+ * spawn without a shell, and a shell handed an argument array warns that it concatenates them
+ * anyway. Every word here is a literal.
+ */
 function packedPaths() {
-  const result = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'],
+  const result = spawnSync('npm pack --dry-run --json --ignore-scripts',
                            { cwd: repoRoot, encoding: 'utf8', shell: true });
   const text = String(result.stdout ?? '');
   const start = text.indexOf('[');
