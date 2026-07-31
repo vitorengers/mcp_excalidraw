@@ -83,6 +83,9 @@ const SAYS = {
   forbidden: 'gh: Resource not accessible by personal access token (HTTP 403)',
   notFound: 'gh: Not Found (HTTP 404)',
   unresolvable: "Could not resolve to a Repository with the name 'vitorengers/nothing-here'.",
+  // A CLI missing inside a distro. The spawn that succeeded was `wsl.exe`, so this failure
+  // can never carry an errno — it is the only shape "gh is absent" takes on a WSL board.
+  notInstalledInDistro: 'bash: line 1: gh: command not found',
   // The blip the whole retry policy was written for.
   socket: 'error connecting to api.github.com: dial tcp 140.82.121.6:443: An operation on a '
     + 'socket could not be performed because the system lacked sufficient buffer space or '
@@ -238,6 +241,7 @@ const DETERMINISTIC = [
   ['a repository that is not there', 'notFound', ''],
   ['a name GitHub cannot resolve', 'unresolvable', ''],
   ['a gh that checked the scopes itself', 'scopeCli', 'gh auth refresh -s project'],
+  ['a gh missing inside a distro', 'notInstalledInDistro', 'EXCALIDRAW_GH_COMMAND_WSL'],
 ];
 
 for (const [name, mode, remedy] of DETERMINISTIC) {

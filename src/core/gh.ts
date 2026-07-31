@@ -75,7 +75,8 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * and a search.
  */
 const REMEDY = {
-  install: 'Install the GitHub CLI, or set EXCALIDRAW_GH_COMMAND to where it lives.',
+  install: 'Install the GitHub CLI, or set EXCALIDRAW_GH_COMMAND (EXCALIDRAW_GH_COMMAND_WSL for '
+    + 'a project inside a distro) to where it lives.',
   login: 'Run "gh auth login".',
   scope: 'Run "gh auth refresh -s project" — a default "gh auth login" does not ask for that '
     + 'scope, and the project board needs it.',
@@ -104,8 +105,11 @@ const REMEDY = {
  * than a refusal invented from a pattern that stopped matching.
  */
 const TERMINAL: ReadonlyArray<{ pattern: RegExp; remedy: string }> = [
-  // The spawn never happened: no such binary, or one that cannot be executed.
-  { pattern: /\b(ENOENT|EACCES|ENOTDIR)\b/, remedy: REMEDY.install },
+  // The spawn never happened: no such binary, or one that cannot be executed. `command not
+  // found` is the same fact through a WSL workspace, where the spawn that succeeds is
+  // `wsl.exe` and the CLI is missing one layer further in — the shape #252 was, and the one
+  // shape of "gh is absent" that can never arrive as an errno.
+  { pattern: /\b(ENOENT|EACCES|ENOTDIR)\b|command not found/i, remedy: REMEDY.install },
   // gh's own pre-flight ("missing required scopes"), and GitHub's answer to a query the token
   // may not make. Both are one `gh auth refresh` away.
   {

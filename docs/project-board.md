@@ -141,7 +141,8 @@ directly. So a CLI that is not installed, a login that has expired, a token with
 seconds, to say the same thing (**#319**).
 
 `classifyGhFailure` in `src/core/gh.ts` is the one place that reads a failure and says whether
-asking again could change the answer. A spawn that found no binary, `gh auth`, a missing scope,
+asking again could change the answer. A spawn that found no binary — or a `command not found`
+from inside a distro, which is the same fact one layer in — `gh auth`, a missing scope,
 `Could not resolve to a`, HTTP 401, 403 and 404 are **terminal**: one attempt, and a
 `TerminalGhFailure` carrying the literal command that fixes it — `gh auth refresh -s project`
 for the scope, `gh auth login` for the login — on the end of `gh`'s own sentence, so it reaches
