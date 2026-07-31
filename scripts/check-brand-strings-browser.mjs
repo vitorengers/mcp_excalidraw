@@ -288,7 +288,8 @@ try {
   }
   check('a project is in front', typeof seen.activeTab === 'string' && seen.activeTab.length > 0,
         JSON.stringify(seen.tabs));
-  check('and the title names it', seen.title.includes(seen.activeTab ?? ' '),
+  check('and the title names it',
+        Boolean(seen.activeTab) && seen.title.includes(seen.activeTab),
         `${JSON.stringify(seen.title)} does not carry ${JSON.stringify(seen.activeTab)}`);
   check('the title names no other project on the strip',
         seen.tabs.filter((name) => name !== seen.activeTab)
@@ -310,7 +311,7 @@ try {
   check('the title followed the switch', after.title.includes(other),
         `${JSON.stringify(seen.title)} → ${JSON.stringify(after.title)}`);
   check('and stopped naming the board that was in front before',
-        !after.title.includes(switched.tabs.find((name) => name === seen.activeTab) ?? ' '),
+        Boolean(switched.activeTab) && !after.title.includes(seen.activeTab),
         JSON.stringify(after.title));
   check('it still carries the product name after the switch',
         after.title.includes(PRODUCT), JSON.stringify(after.title));
