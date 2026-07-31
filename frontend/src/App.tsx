@@ -3159,6 +3159,14 @@ function App(): JSX.Element {
     shell: string
     /** `pty` or `pipe` — which of the two the server got, so the block can say so. */
     mode: string
+    /**
+     * Why the mode is `pipe`, where that is a fallback rather than a decision, or null.
+     *
+     * The mode alone told a reader that their board behaves unlike the one in the
+     * documentation and not what to do about it: the cause — a missing prebuilt binding,
+     * named by the import error, or `EXCALIDRAW_TERMINAL_PTY=0` — was a line in a log file.
+     */
+    pipeReason?: string | null
     cols: number
     rows: number
     /**
@@ -3217,6 +3225,7 @@ function App(): JSX.Element {
         cwd: session.cwd,
         shell: session.shell,
         mode: session.mode ?? 'pipe',
+        pipeReason: session.pipeReason ?? null,
         cols: session.cols,
         rows: session.rows,
         owner: session.owner ?? null
