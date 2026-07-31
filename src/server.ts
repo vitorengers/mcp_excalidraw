@@ -5105,7 +5105,7 @@ async function startServer(): Promise<void> {
     logger.info(`WebSocket server running on ws://${hostForUrl}:${PORT}`);
 
     // Written only after listen succeeds so stale files can't shadow a
-    // server that never came up; lets `excalidraw-canvas stop` find us.
+    // server that never came up; lets the CLI's `stop` command find us.
     writePidFile(PORT, process.pid);
     // And beside it, the port itself — the one thing a later command cannot work out on its
     // own once the port stopped being a constant. It is written, never trusted: every reader

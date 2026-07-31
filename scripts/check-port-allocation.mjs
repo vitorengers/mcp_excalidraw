@@ -84,9 +84,35 @@ check('no check takes a second port by adding to the first', derivedPorts.length
 
 console.log('\nWhere the ports come from instead');
 
-const listeners = [...sources].filter(([, source]) =>
+const spawnsSomething = (source) =>
   /spawn\(process\.execPath/.test(source) || /startCanvas\(/.test(source)
-  || /openCanvas\(/.test(source) || /\.listen\(/.test(source));
+  || /openCanvas\(/.test(source) || /\.listen\(/.test(source);
+
+/**
+ * A spawn is not automatically a listener. `check-bin-identity.mjs` starts `dist/bin.js` in MCP
+ * stdio mode and speaks JSON-RPC down a pipe: no socket, no port, nothing to allocate — and
+ * asking it to import `free-port.mjs` would be a helper it never calls, which is worse than the
+ * rule catching nothing.
+ *
+ * What separates the two is whether the source names a port at all. A check that reaches a
+ * server it spawned has to say where — a `PORT`, a loopback address, the canvas-URL variable —
+ * so a file that says none of them is not inventing a port number whatever it spawns.
+ *
+ * That variable's name is assembled rather than written out, the way `PID_MODULO` above is:
+ * `check-no-external-server.mjs` reads a check that spells it out as one choosing its own
+ * target from the environment, and this file only describes the shape of one.
+ */
+const URL_VARIABLE = ['EXPRESS', 'SERVER', 'URL'].join('_');
+const NAMES_A_PORT =
+  new RegExp(`\\bports?\\b|127\\.0\\.0\\.1|localhost|\\[::1\\]|${URL_VARIABLE}`, 'i');
+const listensOnAPort = (source) => spawnsSomething(source) && NAMES_A_PORT.test(source);
+
+check('a stdio spawn that names no port is not counted as a listener',
+  !listensOnAPort('const child = spawn(process.execPath, [join(root, "dist", "bin.js")]);'));
+check('a spawn that hands a port over is',
+  listensOnAPort('const child = spawn(process.execPath, [server], { env: { PORT: String(port) } });'));
+
+const listeners = [...sources].filter(([, source]) => listensOnAPort(source));
 const withoutHelper = listeners
   .filter(([, source]) => !/from '\.\/lib\/free-port\.mjs'/.test(source)
     && !/from '\.\/lib\/spawn-canvas\.mjs'/.test(source))
