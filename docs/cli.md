@@ -1,6 +1,7 @@
 # CLI
 
-`src/bin.ts`, published as `mcp-excalidraw-server` and `excalidraw-canvas`. 19 commands. It is
+`src/bin.ts`, published as `@vitorengers/vibemaxxing` and installed as `vibemaxxing`, with
+`excalidraw-canvas` and `mcp-excalidraw-server` kept as aliases. 19 commands. It is
 the interface the bundled agent skill actually uses, because a shell command is cheaper for an
 agent to reach for than a tool definition it has to be handed first.
 

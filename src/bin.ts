@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Single bin entry for both package bins (mcp-excalidraw-server and
+// Single bin entry for every package bin (vibemaxxing, mcp-excalidraw-server and
 // excalidraw-canvas):
 //
 //   no arguments  -> MCP stdio server (backward compatible with MCP clients)

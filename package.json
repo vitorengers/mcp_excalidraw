@@ -1,10 +1,11 @@
 {
-  "name": "mcp-excalidraw-server",
-  "version": "1.1.0",
-  "description": "Excalidraw toolkit for AI coding agents — agent skill, CLI, and MCP server with a live canvas",
+  "name": "@vitorengers/vibemaxxing",
+  "version": "0.1.0",
+  "description": "VibeMaxxing — an Excalidraw workbench for AI coding agents: a live canvas, a CLI, a portable agent skill and an MCP server",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
+    "vibemaxxing": "dist/bin.js",
     "mcp-excalidraw-server": "dist/bin.js",
     "excalidraw-canvas": "dist/bin.js"
   },
@@ -55,36 +56,30 @@
     "vite": "^6.3.5"
   },
   "keywords": [
-    "mcp",
-    "mcp-server",
+    "vibemaxxing",
     "excalidraw",
-    "model-context-protocol",
-    "ai",
-    "drawing",
     "diagrams",
     "canvas",
-    "real-time",
-    "websocket",
-    "visualization",
-    "claude",
-    "ai-tools",
-    "claude-skill",
-    "agent-skills",
     "cli",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "agent-skills",
+    "claude-skill",
     "ai-agents"
   ],
   "author": {
-    "name": "yctimlin",
-    "email": "c22647809@gmail.com"
+    "name": "vitorengers",
+    "url": "https://github.com/vitorengers"
   },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yctimlin/mcp_excalidraw.git"
+    "url": "https://github.com/vitorengers/mcp_excalidraw.git"
   },
-  "homepage": "https://github.com/yctimlin/mcp_excalidraw#readme",
+  "homepage": "https://github.com/vitorengers/mcp_excalidraw#readme",
   "bugs": {
-    "url": "https://github.com/yctimlin/mcp_excalidraw/issues"
+    "url": "https://github.com/vitorengers/mcp_excalidraw/issues"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -11,8 +11,8 @@ manifest. Settings travel with the project instead of piling up in one machine's
 ```json
 {
   "workspaces": [
-    { "id": "fica-ai",    "path": "C:/Users/vtr_d/Documents/Projects/FicaAI" },
-    { "id": "board-tool", "path": "C:/Users/vtr_d/Documents/Projects/mcp_excalidraw" }
+    { "id": "fica-ai",    "path": "C:/Users/you/Documents/Projects/FicaAI" },
+    { "id": "board-tool", "path": "C:/Users/you/Documents/Projects/mcp_excalidraw" }
   ]
 }
 ```
