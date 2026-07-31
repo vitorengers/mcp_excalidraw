@@ -26,6 +26,8 @@ export interface TerminalTabState {
     cwd: string
     shell: string
     mode: string
+    /** Why the mode is `pipe`, where that is a fallback rather than a decision. See `App.tsx`. */
+    pipeReason?: string | null
     cols: number
     rows: number
     /**
@@ -1164,12 +1166,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         </span>
 
         {/* Which of the two modes this session got. A block that says nothing about it is
-            how the same feature behaves differently on two machines with no way to tell. */}
+            how the same feature behaves differently on two machines with no way to tell.
+
+            And why, when there is a why: the mode named the difference and left the reader
+            to guess at the cause, which sat in a log file. The library's own wording is
+            passed through rather than rephrased — it names the package that is missing,
+            which is the one part of this anybody can act on. */}
         <span
           className="terminal-card__mode"
           title={status?.mode === 'pty'
             ? 'A real terminal: full-screen programs work, and so does Ctrl+C.'
-            : 'No PTY on this machine, so the shell is on pipes: one command in, its output back.'}
+            : 'No PTY on this machine, so the shell is on pipes: one command in, its output back.'
+              + (status?.pipeReason ? ` Why there is none: ${status.pipeReason}` : '')}
         >{status?.mode ?? ''}</span>
 
         {/* And what the tab *is*, when it is not a shell. A session whose stdin went to an

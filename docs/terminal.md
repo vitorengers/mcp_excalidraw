@@ -176,6 +176,28 @@ the pipes described below.
 the block shows it in the header, because a feature that behaves differently on two machines
 with no way to tell which is which is worse than one that only does less.
 
+**And why, when the pipe is a fallback.** `pipeReason` sits beside the mode. The mode said
+that this board is not the board in the documentation; the cause was a `logger.info` line in
+`~/.local/state/excalidraw-mcp/excalidraw.log`, which the console transport never printed
+because it is `warn` and up — so on Alpine, on musl, on an older glibc, on linux-armv7 or on
+any seventh platform, every session quietly became a pipe and the one line naming which of
+the three causes it was sat in a file nobody had a reason to open. It is now three answers:
+
+- **the import error's own message** where the binding could not be loaded, passed through
+  verbatim rather than rephrased — it names the missing package (`@lydell/node-pty-linux-x64`)
+  or the link failure, which is the part anybody can act on. The same message goes to `warn`
+  as well, so a board started in a terminal says it once without anybody opening a file.
+- **`EXCALIDRAW_TERMINAL_PTY=0`** where the fallback was asked for. No warning for this one: a
+  board told to use pipes is doing what it was told.
+- **`null`** where nothing needs explaining — a working PTY, or a session whose stdin was
+  spent on a prompt. That one is on pipes by construction on *every* machine, since a
+  pseudoterminal has no end of file, so labelling it with this machine's missing binding would
+  explain a tab with something that did not decide it.
+
+The reason is appended to the mode chip's tooltip, after the sentence that was always there.
+`scripts/check-pty-fallback-reason.mjs` covers the summary and the warning,
+`scripts/check-pty-fallback-reason-browser.mjs` the tooltip.
+
 ```
 EXCALIDRAW_TERMINAL_PTY=0
 ```
@@ -1869,6 +1891,16 @@ it. A board returned to puts its block back where it was left.
 - `scripts/check-terminal-pty.mjs` — that the shell sees a tty, that the echo moved with it,
   that a resize reaches the child, that the scrollback is cut between sequences, and that with
   no binding the server still starts and says `pipe`.
+- `scripts/check-pty-fallback-reason.mjs` — that a session on pipes says *why*: the variable
+  where the fallback was asked for, the import error's own message where the binding could not
+  be loaded — on stderr at `warn` as well as in the summary, and on the second session of a
+  board's life as well as the first, because the load is memoised — and nothing at all for a
+  session whose stdin went to a prompt, which would be a pipe on any machine. The missing
+  binding is simulated by a module resolution hook that throws for the one specifier, since
+  this repository is maintained on a box where the prebuilt binary is present.
+- `scripts/check-pty-fallback-reason-browser.mjs` — the other half, in Chrome: the mode chip's
+  tooltip keeps the sentence it always had and carries the reason after it, and a `pty` chip
+  has nothing appended to it.
 - `scripts/check-terminal-default-shell.mjs` — which shell a bare `EXCALIDRAW_TERMINAL=1`
   starts: `$SHELL` for a native workspace on macOS and Linux in both modes, an absolute
   fallback where the machine names none, `bash` still for a WSL one, and both PowerShell
