@@ -14,6 +14,10 @@ export async function start(argv: string[]): Promise<void> {
   // because a file that exists is a file somebody can open and add a registry to. The
   // alternative was a documented convention about a gitignored `.env` in a directory a
   // double-clicked launcher cannot predict, which is the defect this replaces.
+  //
+  // Before `ensureCanvasRunning`, because the port is already decided by here: `core/port.ts`
+  // resolved it at the entry point, and `canvasPort()` is reading that answer rather than
+  // asking a new one.
   const settings = ensureSettingsFile(canvasPort());
   if (settings.created) {
     note(`Wrote ${settings.file} — configuration lives here, see config.example.json`);

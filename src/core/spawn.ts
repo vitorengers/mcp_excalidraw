@@ -1,21 +1,27 @@
 import { spawn } from 'child_process';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
 import { EXPRESS_SERVER_URL, ENABLE_CANVAS_SYNC, EXCALIDRAW_NO_AUTOSTART } from './config.js';
 import { getHealth, CANVAS_SERVICE_NAME, foreignServiceError, markCanvasIdentityVerified } from './canvas-client.js';
+import { isAcceptedCanvasService } from './identity.js';
+import { DEFAULT_CANVAS_PORT, removeCanvasState, whatIsOn } from './port.js';
 
 export { foreignServiceError };
-import { readPidFile, removePidFile } from './pidfile.js';
+import { readPidFile, removePidFile, startupLogPath } from './pidfile.js';
 import { ensureStateDir, realEnvironment } from './settings.js';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+/** How long a spawned server's death is allowed to be somebody else winning the race. */
+const CONCURRENT_START_GRACE_MS = 2000;
 
 export function canvasPort(): number {
   try {
     const url = new URL(EXPRESS_SERVER_URL);
     return parseInt(url.port, 10) || (url.protocol === 'https:' ? 443 : 80);
   } catch {
-    return 3000;
+    return DEFAULT_CANVAS_PORT;
   }
 }
 
@@ -56,10 +62,40 @@ async function healthOrNull(timeoutMs = 500) {
   }
 }
 
-// True only for a /health payload from OUR canvas server (v1.1+ identity
-// marker). Anything else answering the port is a foreign service.
+// True only for a /health payload from OUR canvas server. Anything else
+// answering the port is a foreign service.
+//
+// "Ours" is a list rather than one string: the marker is renamed in a later
+// release than the one that starts accepting the new value, so that a canvas
+// already running from the old build is still ours. See core/identity.ts.
 export function isCanvasHealth(health: { service?: string } | null): boolean {
-  return health !== null && health.service === CANVAS_SERVICE_NAME;
+  return health !== null && isAcceptedCanvasService(health.service);
+}
+
+/**
+ * The port is taken by something that is not us, and no scan is going to help — either the
+ * caller pinned it or the resolution already walked past everything free. Naming the port and
+ * what answers on it is the whole of the improvement: the old path spawned a server that could
+ * not bind, threw its complaint into a log file, and told the caller only that eight seconds
+ * had gone by.
+ */
+function portConflictError(port: number, occupant: string): Error {
+  const error = new Error(
+    `Canvas server cannot start on port ${port}: ${occupant} is already listening there. `
+    + `Stop it, or set PORT to a free port — with PORT unset the launch path picks one itself.`
+  );
+  (error as any).code = 'CANVAS_UNREACHABLE';
+  return error;
+}
+
+/** The last of what the spawned server said before it gave up, or '' if it said nothing. */
+function startupLogTail(file: string, limit = 900): string {
+  try {
+    const text = fs.readFileSync(file, 'utf-8').trim();
+    return text.length > limit ? `...${text.slice(-limit)}` : text;
+  } catch {
+    return '';
+  }
 }
 
 export interface EnsureResult {
@@ -105,10 +141,33 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
     throw unreachableError('refusing to auto-start a non-loopback canvas URL');
   }
 
+  const port = canvasPort();
+  const bindHost = spawnBindHost();
+
+  // Asked before spawning, not after failing to. Nothing answered /health above, so anything
+  // holding the port is either not HTTP or not a canvas — and a server we spawn onto it will
+  // exit on EADDRINUSE eight seconds before the caller hears about it.
+  const occupant = await whatIsOn(port, bindHost);
+  if (occupant) {
+    throw portConflictError(port, occupant);
+  }
+
+  // Cleared before the spawn rather than read blind after it: the server writes its own fatal
+  // startup errors here (see startServer in server.ts), and a message left by an earlier
+  // attempt on the same port would be relayed as this one's.
+  const startupLog = startupLogPath(port);
+  try { fs.rmSync(startupLog, { force: true }); } catch { /* nothing to clear */ }
+
   // dist/core/spawn.js -> dist/server.js; spawn args must be path strings
   const serverJs = fileURLToPath(new URL('../server.js', import.meta.url));
   const child = spawn(process.execPath, [serverJs], {
     detached: true,
+    // `stdio: 'ignore'` stays, and the startup error still gets back here — through the file
+    // above rather than through a pipe. Two reasons it is not a pipe: a detached child whose
+    // parent has exited would be writing into a closed one, and #302 kept this spawn free of
+    // inherited descriptors on purpose, because libuv skips `CREATE_NO_WINDOW` when a stdio
+    // entry is one. The file is the same shape as the restart log next to it, and for the same
+    // reason: by the time there is something to say, nobody is listening.
     stdio: 'ignore',
     // What every other spawn in this tree sets, and this one did not — including the other
     // detached one, the PTY reaper in terminal-session.ts. `detached` and `stdio: 'ignore'`
@@ -116,19 +175,25 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
     // (utils/logger.ts) rather than to a console anybody could read.
     windowsHide: true,
     // The working directory the board gets, rather than the one the caller happened to be in
-    // (#304). A board is not a thing about the current directory: this spawn had no `cwd` at
-    // all, so an MCP server attached to an editor auto-started a canvas in *that editor's
-    // project*, which is where `docs/running.md` had to warn that the port is now held by
-    // something answering `status: healthy` with no workspaces, no terminal and no agents. The
-    // state directory is where `config.json` is, so it is also the directory whose `.env` the
-    // board reads — a fixed pair, wherever the command was typed.
+    // (#304). This spawn passed no `cwd` at all, so an MCP server attached to an editor
+    // auto-started a canvas in *that editor's project* — which is where the warning in
+    // `docs/running.md` comes from: the port is then held by something answering
+    // `status: healthy` with no workspaces, no terminal and no agents. The state directory is
+    // where `config.json` is, so it is also the directory whose `.env` the board reads: a
+    // fixed pair, wherever the command was typed.
     cwd: ensureStateDir(),
-    // The environment this process was *started* with, not the one it read a `.env` into. The
-    // child does its own layering, from the directory above; passing `process.env` would hand
-    // it the launch directory's `.env` as though it had been exported.
-    env: { ...realEnvironment(), PORT: String(canvasPort()), HOST: spawnBindHost() }
+    // The environment this process was *started* with, not the one it read its own files into.
+    // The child does its own layering, from the directory above; passing `process.env` would
+    // hand it the launch directory's `.env` as though it had been exported. `PORT` and `HOST`
+    // are the exception on purpose — the caller has already resolved where this board goes
+    // (`core/port.ts`), and the child must not resolve it a second time and differently.
+    env: { ...realEnvironment(), PORT: String(port), HOST: bindHost }
   });
   child.unref();
+
+  let exitCode: number | null = null;
+  let diedAt: number | null = null;
+  child.once('exit', code => { exitCode = code ?? 0; });
   logger.info(`Auto-starting canvas server (pid ${child.pid}) at ${EXPRESS_SERVER_URL}`);
 
   const deadline = Date.now() + timeoutMs;
@@ -147,10 +212,34 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
       );
       return { url: EXPRESS_SERVER_URL, spawned: true };
     }
+    // It died rather than came up. Relayed with what it said, and now — waiting out the
+    // remaining seven seconds to then report a timeout is describing the wrong event.
+    //
+    // But not instantly, because of the one case where our own child dying is not the answer:
+    // two callers auto-starting at once. The loser exits on the loopback guard or EADDRINUSE
+    // and the winner is a moment from healthy, and this path has always been allowed to end in
+    // success for that reason. So the death opens a short window rather than closing the door,
+    // and the loop above is still the one that decides.
+    if (exitCode !== null) {
+      if (diedAt === null) diedAt = Date.now();
+      if (Date.now() - diedAt >= CONCURRENT_START_GRACE_MS) {
+        const said = startupLogTail(startupLog);
+        throw unreachableError(
+          `the canvas server started on port ${port} exited with code ${exitCode} before answering /health`
+          + (said ? `. It said:\n${said}` : `. It wrote nothing to ${startupLog}; the rest is in the platform log file`)
+        );
+      }
+    }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
 
-  throw unreachableError(`auto-started server did not become healthy within ${timeoutMs}ms`);
+  const stillThere = await whatIsOn(port, bindHost);
+  const said = startupLogTail(startupLog);
+  throw unreachableError(
+    `the server auto-started on port ${port} did not answer /health within ${timeoutMs}ms `
+    + `(${stillThere ?? 'and nothing is listening on that port now'})`
+    + (said ? `. It said:\n${said}` : '')
+  );
 }
 
 export interface StopResult {
@@ -173,8 +262,10 @@ export async function stopCanvas(): Promise<StopResult> {
   if (!health) {
     if (filePid !== null) {
       removePidFile(port);
+      removeCanvasState(port);
       return { stopped: false, pid: filePid, message: `Canvas server is not running; stale pidfile removed (pid ${filePid}).` };
     }
+    removeCanvasState(port);
     return { stopped: false, message: 'Canvas server is not running.' };
   }
 
@@ -197,6 +288,7 @@ export async function stopCanvas(): Promise<StopResult> {
   while (Date.now() < deadline) {
     if (!(await healthOrNull(300))) {
       removePidFile(port);
+      removeCanvasState(port);
       return { stopped: true, pid, message: `Canvas server (pid ${pid}) stopped.` };
     }
     await new Promise(resolve => setTimeout(resolve, 200));

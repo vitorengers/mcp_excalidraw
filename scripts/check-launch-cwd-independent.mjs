@@ -31,7 +31,7 @@
  * Self-contained: it writes its own state directories, decoy directories and registries under
  * the system temp directory, launches through `dist/bin.js`, and kills every server it started
  * by the pid that server reports about itself. Nothing here touches the operator's own state
- * directory (`EXCALIDRAW_STATE_DIR` redirects it), the board, GitHub or the network, and no
+ * directory (`EXCALIDRAW_STATE_HOME` redirects it), the board, GitHub or the network, and no
  * agent is ever spawned — the decoy's "agent" is `node --version`.
  * Run `./node_modules/.bin/tsc` first.
  *
@@ -53,16 +53,13 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = join(repoRoot, 'dist', 'bin.js');
 
 /**
- * The CLI's canvas-URL variable, spelled in pieces the way
- * `scripts/check-no-external-server.mjs` spells it.
+ * The application's own folder inside the state home, spelled as `core/settings.ts` spells it.
  *
- * That check bans the name from every check file, and the ban is on the string rather than on
- * the use, because a scanner that has to tell reading from writing is a scanner one edit from
- * missing the case it exists for. What it forbids is a check whose target is *read* out of the
- * environment; this one only ever hands the name to a child it started, and asserts on what the
- * layers make of it.
+ * `EXCALIDRAW_STATE_HOME` redirects the *parent*, so a check that wants to plant a `config.json`
+ * has to know the leaf. Read from `process.platform` for the same reason the module does: the
+ * name differs by platform, and a constant here would be right on one machine.
  */
-const URL_VARIABLE = ['EXPRESS', 'SERVER', 'URL'].join('_');
+const STATE_LEAF = process.platform === 'win32' ? 'Excalidraw-Canvas' : 'excalidraw-canvas';
 
 let failures = 0;
 
@@ -111,10 +108,17 @@ writeFileSync(join(decoyDir, '.env'), [
 /** A directory with nothing in it at all, for the "no `.env` on the machine" case. */
 const bareDir = make('bare');
 
-function writeStateDir(name, values) {
-  const dir = make(name);
+/**
+ * A throwaway state home with a `config.json` planted in the directory the tool will look in.
+ *
+ * Returns the *home*, because that is what `EXCALIDRAW_STATE_HOME` takes, and the leaf, because
+ * the cases that read the file back need it.
+ */
+function writeStateHome(name, values) {
+  const home = make(name);
+  const dir = make(name, STATE_LEAF);
   writeFileSync(join(dir, 'config.json'), JSON.stringify(values, null, 2), 'utf8');
-  return dir;
+  return { home, dir };
 }
 
 // ─── Launching, and cleaning up after ────────────────────────────
@@ -139,8 +143,8 @@ async function healthAt(port, attempts = 60) {
  * `PORT`, no `HOST` — minus `EXCALIDRAW_NO_DOTENV`, because a check about which file decides
  * cannot start by turning the files off.
  */
-function launch({ cwd, stateDir, extraEnv = {} }) {
-  const env = canvasEnvironment({ EXCALIDRAW_STATE_DIR: stateDir, LOG_LEVEL: 'error', ...extraEnv });
+function launch({ cwd, stateHome, extraEnv = {} }) {
+  const env = canvasEnvironment({ EXCALIDRAW_STATE_HOME: stateHome, LOG_LEVEL: 'error', ...extraEnv });
   delete env.EXCALIDRAW_NO_DOTENV;
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [binPath, 'start'], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -193,7 +197,7 @@ try {
     port: decoyPort,
     cwd: decoyDir,
     allowDotenv: true,
-    env: { LOG_LEVEL: 'error', EXCALIDRAW_STATE_DIR: emptyState },
+    env: { LOG_LEVEL: 'error', EXCALIDRAW_STATE_HOME: emptyState },
   });
   startedByHelper.push(decoyCanvas.child);
   const decoyHealth = await healthAt(decoyPort);
@@ -212,8 +216,11 @@ try {
   console.log('\n1. a board launched from the decoy directory');
 
   const port = await freePort();
-  const stateDir = writeStateDir('state', { PORT: port, EXCALIDRAW_WORKSPACES: stateRegistry });
-  const launchedFromDecoy = await launch({ cwd: decoyDir, stateDir });
+  // `PORT` rather than `EXCALIDRAW_CANVAS_PORT`, so the port is a pin and this case is
+  // deterministic — and because a `PORT` read out of `config.json` is itself the claim that the
+  // layers are applied before `core/port.ts` resolves against them.
+  const state = writeStateHome('state', { PORT: port, EXCALIDRAW_WORKSPACES: stateRegistry });
+  const launchedFromDecoy = await launch({ cwd: decoyDir, stateHome: state.home });
   check('`start` came back happy', launchedFromDecoy.code === 0, launchedFromDecoy.out.trim());
 
   const health = await boardAt(port);
@@ -237,8 +244,8 @@ try {
   console.log('\n2. a board launched from a directory with no .env in it');
 
   const barePort = await freePort();
-  const bareState = writeStateDir('bare-state', { PORT: barePort, EXCALIDRAW_WORKSPACES: stateRegistry });
-  const launchedFromBare = await launch({ cwd: bareDir, stateDir: bareState });
+  const bareState = writeStateHome('bare-state', { PORT: barePort, EXCALIDRAW_WORKSPACES: stateRegistry });
+  const launchedFromBare = await launch({ cwd: bareDir, stateHome: bareState.home });
   check('`start` came back happy', launchedFromBare.code === 0, launchedFromBare.out.trim());
 
   const bareHealth = await boardAt(barePort);
@@ -253,11 +260,11 @@ try {
   console.log('\n3. the .env beside config.json is the one a board reads');
 
   const besidePort = await freePort();
-  const besideState = writeStateDir('beside-state', {
+  const besideState = writeStateHome('beside-state', {
     PORT: besidePort, EXCALIDRAW_WORKSPACES: stateRegistry,
   });
-  writeFileSync(join(besideState, '.env'), 'EXCALIDRAW_TERMINAL=1\n', 'utf8');
-  const launchedBeside = await launch({ cwd: decoyDir, stateDir: besideState });
+  writeFileSync(join(besideState.dir, '.env'), 'EXCALIDRAW_TERMINAL=1\n', 'utf8');
+  const launchedBeside = await launch({ cwd: decoyDir, stateHome: besideState.home });
   check('`start` came back happy', launchedBeside.code === 0, launchedBeside.out.trim());
 
   const besideHealth = await boardAt(besidePort);
@@ -268,21 +275,27 @@ try {
 
   console.log('\n4. the first launch writes the file');
 
+  // A preference in the environment rather than a pin, so that what gets written down is the
+  // port the *resolution* arrived at. It also keeps this case off 3737, where the machine
+  // running it may have a real board: with nothing named at all the search would start there.
   const freshPort = await freePort();
-  const freshState = make('fresh-state');
+  const freshHome = make('fresh-state');
   const launchedFresh = await launch({
     cwd: bareDir,
-    stateDir: freshState,
-    extraEnv: { [URL_VARIABLE]: `http://127.0.0.1:${freshPort}` },
+    stateHome: freshHome,
+    extraEnv: { EXCALIDRAW_CANVAS_PORT: String(freshPort) },
   });
   check('`start` came back happy', launchedFresh.code === 0, launchedFresh.out.trim());
   await boardAt(freshPort);
 
-  const freshFile = join(freshState, 'config.json');
+  const freshFile = join(freshHome, STATE_LEAF, 'config.json');
   check('a config.json is there afterwards', existsSync(freshFile), freshFile);
   if (existsSync(freshFile)) {
     const written = JSON.parse(readFileSync(freshFile, 'utf8'));
-    check('holding the resolved port', Number(written.PORT) === freshPort, JSON.stringify(written));
+    check('holding the resolved port', Number(written.EXCALIDRAW_CANVAS_PORT) === freshPort,
+          JSON.stringify(written));
+    check('as the preference and not as the pin', written.PORT === undefined,
+          'a written PORT would stop every later launch scanning past a port somebody else took');
     check('and nothing else', Object.keys(written).length === 1, JSON.stringify(written));
   }
 
@@ -326,17 +339,10 @@ try {
     check('and a real environment variable wins over both',
           overBoth.EXCALIDRAW_TERMINAL === undefined, JSON.stringify(overBoth));
 
-    const derived = mergeSettings({ PORT: '4123' }, {}, {});
-    check('a port from the state file carries the canvas URL with it',
-          derived[URL_VARIABLE] === 'http://127.0.0.1:4123', JSON.stringify(derived));
-
-    const notDerived = mergeSettings({ PORT: '4123' }, {}, { [URL_VARIABLE]: 'http://127.0.0.1:9' });
-    check('but never over a URL the caller named',
-          notDerived[URL_VARIABLE] === undefined, JSON.stringify(notDerived));
-
-    const shellPort = mergeSettings({}, {}, { PORT: '4123' });
-    check('and never for a PORT that was only ever in the shell',
-          shellPort[URL_VARIABLE] === undefined, JSON.stringify(shellPort));
+    const nothingInvented = mergeSettings({ PORT: '4123' }, {}, {});
+    check('and nothing is derived from what a layer supplied',
+          Object.keys(nothingInvented).length === 1 && nothingInvented.PORT === '4123',
+          `${JSON.stringify(nothingInvented)} — the port resolution is core/port.ts's, downstream of this`);
   }
 } finally {
   for (const pid of new Set(launched)) {

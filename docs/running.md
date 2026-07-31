@@ -1,6 +1,6 @@
 # Running the board
 
-How to start Board Tool. Until #151 this was written down nowhere in the repository: four
+How to start VibeMaxxing. Until #151 this was written down nowhere in the repository: four
 tracked documents cited a PowerShell start script that has never been in `git ls-files`, and the
 only start instruction a clone actually got was the upstream README's port 3000 — which
 [trap-port-3000.md](trap-port-3000.md) explains can never work on the machine this fork is
@@ -94,22 +94,32 @@ the port goes to whatever auto-starts first.
 
 ## The environment
 
-`PORT` and `HOST` decide where it listens. **`PORT=3737`** on the development machine — 3000 is
-unusable there. The checks never use either: each starts its own instance on a port the kernel
-just handed out, and neither `PORT` nor anything else in the environment reaches it.
+`PORT` and `HOST` decide where it listens. Everything else is `EXCALIDRAW_*`, and every one of
+them is optional: unset means the feature is off, not degraded.
 
-Everything else is `EXCALIDRAW_*`, and every one of them is optional. Unset means the feature is
-off, not degraded.
-
-The twenty below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
+The twenty-one below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
 and they are in [their own section](#windows-only-projects-inside-a-wsl-distro) rather than here.
 
 Every name in both tables can be set three ways — in `<state-dir>/config.json`, in a `<cwd>/.env`,
 or exported — and they are read in that order, the environment winning.
 [configuration.md](configuration.md) is that half.
 
+**3737 is the default port rather than one machine's habit** since #303: 3000 is the default of
+Next.js, Create React App and most tutorial servers, and it is unusable here for a reason of its
+own. A `PORT` that is set is a **pin** — the server binds that port or fails saying what is on
+it, which is what keeps a scripted start and a published container deterministic. With `PORT`
+unset, the launch path tries `EXCALIDRAW_CANVAS_PORT` or 3737 and, if something else is already
+there, walks up to the next free port; `start` prints the URL and writes it into a state file
+beside the pidfile, so `status` and `stop` find a board on a port nobody typed.
+`EXPRESS_SERVER_URL`, when set, overrides all of it and is never scanned past.
+
+The checks never use any of them: each starts its own instance on a port the kernel just handed
+out, and neither `PORT` nor anything else in the environment reaches it.
+
 | Variable | Default | What it does |
 |---|---|---|
+| `EXCALIDRAW_CANVAS_PORT` | `3737` | The port the launch path tries first. A preference, not a pin: with `PORT` unset the search walks past it to the next free port |
+| `EXCALIDRAW_STATE_HOME` | per-OS state directory | The parent of the directory holding `config.json`, the pidfile, the restart log and the running board's state file. For a check that needs a throwaway one |
 | `EXCALIDRAW_WORKSPACES` | unset | Path to the registry JSON. Unset means one `default` board and no project tabs — see [workspaces.md](workspaces.md) |
 | `EXCALIDRAW_BOARD_STATE` | beside the registry | Where each registered board is saved between processes. Unset puts them in a directory named after the registry file; with no registry, nothing is saved — [element-store.md](element-store.md) |
 | `EXCALIDRAW_DOCS_DIR` | unset | Where `GET /api/docs/:key` reads *this tool's own* documentation from. Unset disables it: serving arbitrary files from an unauthenticated local API is not a default |
@@ -129,7 +139,6 @@ or exported — and they are read in that order, the environment winning.
 | `EXCALIDRAW_NO_AUTOSTART` | unset | `1` stops the CLI and the MCP server auto-spawning a canvas |
 | `EXCALIDRAW_NO_DOTENV` | unset | `1` stops both configuration files being read — `<cwd>/.env` and `<state-dir>/config.json` alike — leaving only the real environment. The checks set it, because a file layer only ever fills in variables that are *unset*, which is exactly the set a check deleted on purpose — [trap-check-environment.md](trap-check-environment.md) |
 | `EXCALIDRAW_ENV_FILE` | `<cwd>/.env` | Read this file instead. Ignored when `EXCALIDRAW_NO_DOTENV=1`, and it does not move `config.json` |
-| `EXCALIDRAW_STATE_DIR` | platform | Where `config.json`, the pidfile and the restart log live. Read from the environment only: a file cannot name the directory it is in — [configuration.md](configuration.md) |
 
 **Pin the agents' model and effort.** Without `--model` and `--effort` on those two command
 lines the agent inherits whatever `~/.claude/settings.json` says, so changing the model of an

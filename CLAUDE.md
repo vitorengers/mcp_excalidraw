@@ -54,7 +54,7 @@ machine ([docs/trap-port-3000.md](docs/trap-port-3000.md)).
 
 ## Every change updates both halves of the board
 
-The Board Tool board (`docs/board.excalidraw`) is cut into two marked sections, each with a key
+The VibeMaxxing board (`docs/board.excalidraw`) is cut into two marked sections, each with a key
 that scrolls onto it — see [docs/board-sections.md](docs/board-sections.md).
 
 - **Project structure** (`Alt+P`) — what the tool is: the architecture, the blocks on the canvas,

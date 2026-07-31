@@ -1,6 +1,6 @@
 # Notice
 
-Board Tool (`vitorengers/mcp_excalidraw`) is an MIT-licensed fork of the upstream project
+VibeMaxxing (`vitorengers/mcp_excalidraw`) is an MIT-licensed fork of the upstream project
 `yctimlin/mcp_excalidraw` (the original work), taken at commit
 `505f4c6e0ca1fe2489b4c18c9fedc24ac50a9002` (2026-07-22), the last commit this repository
 inherited from upstream. Everything at or below that commit is the original work and its

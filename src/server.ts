@@ -1,13 +1,14 @@
 // First, before every other module body in this file's graph: importing it folds
 // `<state-dir>/config.json` and `<cwd>/.env` into `process.env`, and half the modules below
 // read a variable while they are being evaluated. See `core/settings.ts`.
-import { loadSettings } from './core/settings.js';
+import './core/env.js';
 import express, { Request, Response, NextFunction } from 'express';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import net from 'net';
 import path from 'path';
 import fs from 'fs/promises';
+import { mkdirSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import logger from './utils/logger.js';
 import {
@@ -32,7 +33,10 @@ import {
 import { z } from 'zod';
 import WebSocket from 'ws';
 import { isMainModule } from './core/entry.js';
-import { writePidFile, removePidFile, restartLogPath } from './core/pidfile.js';
+import { writePidFile, removePidFile, restartLogPath, startupLogPath } from './core/pidfile.js';
+import {
+  canvasUrlFor, explicitPort, preferredPort, removeCanvasState, writeCanvasState
+} from './core/port.js';
 import { spawnRestartSupervisor, type CanvasIdentity } from './core/restart-supervisor.js';
 import {
   addWorkspace,
@@ -125,11 +129,6 @@ import {
   scheduleBoardStateSave,
   SavedBoard
 } from './core/board-state.js';
-
-// Already applied by the import at the top of this file — this is the idempotent second call
-// that says so out loud, so nobody deletes the import as unused. See `core/settings.ts` for the
-// three layers and for `EXCALIDRAW_NO_DOTENV`, which turns the two file ones off.
-loadSettings();
 
 // Every write to every store reaches the save half through here, rather than each of the
 // dozen writers remembering to. Nothing is written until a board has been registered as worth
@@ -4929,7 +4928,12 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 });
 
 // Start server
-const PORT = parseInt(process.env.PORT || '3000', 10);
+//
+// The server never scans. `PORT` is a pin and the preference is a starting point, and both are
+// final here — the search that turns an occupied port into a free one happens in the launch
+// path (core/port.ts, from the CLI entry point), before anything captured a URL. A server that
+// moved itself would come up somewhere its own caller is not looking.
+const PORT = explicitPort() ?? preferredPort();
 const HOST = process.env.HOST || '127.0.0.1';
 const LOOPBACK_GUARD_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0', '::']);
 const LOOPBACK_ADDRESSES = ['127.0.0.1', '::1'];
@@ -4966,28 +4970,50 @@ async function findExistingLoopbackListener(port: number): Promise<string | null
   return null;
 }
 
+/**
+ * A fatal startup failure, said twice: into the platform log, and into a file beside the pidfile.
+ *
+ * The second one is the only one the caller can read. This process is normally spawned detached
+ * with `stdio: 'ignore'` — see core/spawn.ts for why that stays — so a message on stderr reaches
+ * nobody, and the launcher was left reporting an eight-second health timeout that named neither
+ * the port nor what was on it. The launcher clears this file before spawning and relays whatever
+ * is in it if this process dies.
+ */
+function failStartup(message: string): void {
+  logger.error(message);
+  try {
+    const file = startupLogPath(PORT);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, `${new Date().toISOString()} ${message}
+`, 'utf-8');
+  } catch { /* the log above is what is left */ }
+  process.exit(1);
+}
+
 server.on('error', (error: NodeJS.ErrnoException) => {
   if (error.code === 'EADDRINUSE') {
     const address = (error as NodeJS.ErrnoException & { address?: string }).address || HOST;
-    logger.error(`Canvas server port ${PORT} is already in use on ${formatHostForUrl(address)}.`);
+    failStartup(
+      `Canvas server port ${PORT} is already in use on ${formatHostForUrl(address)}: `
+      + 'something else is listening there. Stop it, or start with PORT unset and let the '
+      + 'launch path pick a free port.'
+    );
   } else if (error.code === 'EACCES') {
-    logger.error(`Canvas server cannot bind ${formatHostForUrl(HOST)}:${PORT}: permission denied.`);
+    failStartup(`Canvas server cannot bind ${formatHostForUrl(HOST)}:${PORT}: permission denied.`);
   } else {
-    logger.error('Failed to start canvas server:', error);
+    failStartup(`Failed to start canvas server: ${error.message}`);
   }
-  process.exit(1);
 });
 
 async function startServer(): Promise<void> {
   if (LOOPBACK_GUARD_HOSTS.has(HOST)) {
     const existingHost = await findExistingLoopbackListener(PORT);
     if (existingHost) {
-      logger.error(
+      failStartup(
         `Refusing to start canvas server on ${formatHostForUrl(HOST)}:${PORT}: ` +
         `${formatHostForUrl(existingHost)}:${PORT} is already listening. ` +
         'This prevents duplicate IPv4/IPv6 canvas servers from splitting state.'
       );
-      process.exit(1);
     }
   }
 
@@ -5004,6 +5030,10 @@ async function startServer(): Promise<void> {
     // Written only after listen succeeds so stale files can't shadow a
     // server that never came up; lets `excalidraw-canvas stop` find us.
     writePidFile(PORT, process.pid);
+    // And beside it, the port itself — the one thing a later command cannot work out on its
+    // own once the port stopped being a constant. It is written, never trusted: every reader
+    // probes /health before believing it.
+    writeCanvasState({ port: PORT, pid: process.pid, url: canvasUrlFor(PORT, HOST) });
     ownsPidFile = true;
 
     // The boards, and then whatever the last process was in the middle of when it stopped.
@@ -5024,7 +5054,7 @@ async function startServer(): Promise<void> {
     // rather than a minute — but a shutdown that discarded the last edit would be the same
     // loss #225 is about, arriving through the one door that could have been closed politely.
     flushBoardStateSaves();
-    if (ownsPidFile) removePidFile(PORT);
+    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); }
     server.close(() => process.exit(0));
     // Force-exit if open sockets keep the server from closing promptly
     setTimeout(() => process.exit(0), 2000).unref();
@@ -5033,7 +5063,7 @@ async function startServer(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('exit', () => {
     flushBoardStateSaves();
-    if (ownsPidFile) removePidFile(PORT);
+    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); }
   });
 }
 

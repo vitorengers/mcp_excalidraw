@@ -1,8 +1,8 @@
-# Board Tool — Excalidraw MCP Server, CLI & Agent Skill
+# VibeMaxxing — Excalidraw MCP Server, CLI & Agent Skill
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Board Tool** (`vitorengers/mcp_excalidraw`) is a private fork of the upstream project
+**VibeMaxxing** (`vitorengers/mcp_excalidraw`) is a fork of the upstream project
 `yctimlin/mcp_excalidraw`. It keeps everything upstream does — a live
 [Excalidraw](https://excalidraw.com) canvas agents draw on, drive from a CLI, or reach over MCP —
 and builds a **workbench for running a software project on that canvas** on top of it: registered
@@ -61,7 +61,7 @@ Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Merma
 
 ## What This Fork Adds
 
-Everything from here to [What It Is](#what-it-is) is Board Tool, and exists only in
+Everything from here to [What It Is](#what-it-is) is VibeMaxxing, and exists only in
 `vitorengers/mcp_excalidraw`. Every document referenced below is in
 [docs/index.md](docs/index.md).
 
@@ -109,8 +109,8 @@ checkout: four agents building in one working tree is four agents overwriting ea
 ### Starting it
 
 The canvas server is `node dist/server.js` after `npm run build`, and everything else is
-environment. [docs/running.md](docs/running.md) is the procedure: the port (3000 is unusable on
-the development machine — [docs/trap-port-3000.md](docs/trap-port-3000.md)), the kill-the-stale-server
+environment. [docs/running.md](docs/running.md) is the procedure: the port (3737 by default, and
+3000 is unusable on the development machine — [docs/trap-port-3000.md](docs/trap-port-3000.md)), the kill-the-stale-server
 step that comes before it, and all fifteen `EXCALIDRAW_*` variables with their defaults.
 
 ## What It Is
@@ -119,7 +119,7 @@ Ask your agent to *"draw the architecture of this service"* and it produces a re
 
 Under the hood there are two processes, one product:
 
-- **Canvas server**: Excalidraw web UI + REST API + WebSocket real-time sync (default `http://127.0.0.1:3000`)
+- **Canvas server**: Excalidraw web UI + REST API + WebSocket real-time sync (default `http://127.0.0.1:3737`, or the next free port above it)
 - **A thin front-end of your choice**: the CLI, the MCP stdio server, or raw HTTP — all drive the same canvas
 
 Since v1.1 the canvas server starts itself: canvas-driving CLI commands (and the MCP server on launch) auto-spawn it if nothing is listening. `status` only inspects the current server state. Set `EXCALIDRAW_NO_AUTOSTART=1` to opt out.
@@ -177,7 +177,7 @@ Install the Excalidraw canvas toolkit so you can draw diagrams for me:
 2. Run: npx -y @vitorengers/vibemaxxing install-skill --dir <that-skills-directory>
 3. Read the installed excalidraw-skill/SKILL.md so you know the drawing workflow.
 4. Start the canvas with: npx -y @vitorengers/vibemaxxing start
-   then tell me to open http://127.0.0.1:3000 in my browser (screenshots need an open tab).
+   then tell me to open the URL it prints in my browser (screenshots need an open tab).
 5. Draw a small test diagram — two labeled boxes connected by an arrow — take a
    screenshot, and show me the result to confirm everything works.
 ```
@@ -193,7 +193,7 @@ Install the Excalidraw canvas toolkit so you can draw diagrams for me:
 | **CLI user / scripting** | Nothing — `npx -y @vitorengers/vibemaxxing <command>` | See [CLI Reference](#cli-reference) |
 | **Contributor / from source** | `git clone` + `npm ci` + `npm run build` | See [Quick Start (From Source)](#quick-start-from-source) |
 
-There is no separate server setup: any drawing command auto-starts the local canvas server on `http://127.0.0.1:3000`.
+There is no separate server setup: any drawing command auto-starts the local canvas server on `http://127.0.0.1:3737` — or, if something else already holds that port, on the next free one above it, which `start` prints and every later command finds by itself.
 
 ### 60-Second Quick Start (CLI)
 
@@ -202,7 +202,7 @@ No clone, no config:
 ```bash
 # start the canvas (drawing commands auto-start it too) and open it
 npx -y @vitorengers/vibemaxxing start
-open http://127.0.0.1:3000   # browser tab enables screenshots & mermaid
+open http://127.0.0.1:3737   # the URL `start` printed; a browser tab enables screenshots & mermaid
 
 # draw something
 echo '[
@@ -283,11 +283,13 @@ The MCP server runs over stdio. Since v1.1 the simplest config is `npx` — no c
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `EXPRESS_SERVER_URL` | URL of the canvas server | `http://127.0.0.1:3000` |
+| `EXPRESS_SERVER_URL` | URL of the canvas server. Set, it is a hard override and nothing is scanned | the running board's URL, else `http://127.0.0.1:3737` |
 | `ENABLE_CANVAS_SYNC` | Enable real-time canvas sync | `true` |
 | `EXCALIDRAW_NO_AUTOSTART` | Set `1` to disable canvas auto-start | (unset) |
 | `EXCALIDRAW_EXPORT_DIR` | Base directory MCP file exports may write to | current working dir |
-| `PORT` / `HOST` | Canvas server bind address | `3000` / `127.0.0.1` |
+| `PORT` / `HOST` | Canvas server bind address. `PORT` pins the port and is never scanned past | `3737` (next free port above it if taken) / `127.0.0.1` |
+| `EXCALIDRAW_CANVAS_PORT` | Preferred port to try first — a preference, not a pin: the search may walk past it | `3737` |
+| `EXCALIDRAW_STATE_HOME` | Parent directory for the pidfile and the running board's state file | per-OS state directory |
 
 ---
 
@@ -318,7 +320,7 @@ Config location:
       "command": "node",
       "args": ["/absolute/path/to/mcp_excalidraw/dist/index.js"],
       "env": {
-        "EXPRESS_SERVER_URL": "http://127.0.0.1:3000",
+        "EXPRESS_SERVER_URL": "http://127.0.0.1:3737",
         "ENABLE_CANVAS_SYNC": "true"
       }
     }
@@ -340,7 +342,7 @@ claude mcp add excalidraw --scope user -- npx -y @vitorengers/vibemaxxing
 **Local (node)** - User-level (available across all projects):
 ```bash
 claude mcp add excalidraw --scope user \
-  -e EXPRESS_SERVER_URL=http://127.0.0.1:3000 \
+  -e EXPRESS_SERVER_URL=http://127.0.0.1:3737 \
   -e ENABLE_CANVAS_SYNC=true \
   -- node /absolute/path/to/mcp_excalidraw/dist/index.js
 ```
@@ -460,7 +462,7 @@ From source (Node >= 18):
 ```bash
 npm ci
 npm run build
-PORT=3000 npm run canvas          # canvas server (terminal 1)
+PORT=3737 npm run canvas          # canvas server (terminal 1)
 node dist/index.js                # MCP server over stdio (terminal 2, usually launched by your MCP client)
 node dist/bin.js status           # or drive the CLI straight from the build
 ```
@@ -535,7 +537,7 @@ Yes — that's the recommended path for coding agents: `npx -y @vitorengers/vibe
 ## Troubleshooting
 
 - **CLI exit code 3** (canvas unreachable): the server is not running for an inspecting command such as `status`, auto-start is disabled (`EXCALIDRAW_NO_AUTOSTART=1`), or `EXPRESS_SERVER_URL` points at a non-loopback host. Run `start` explicitly or fix the env.
-- **CLI exit code 4** (browser required): screenshots, image export, viewport, and mermaid conversion render in the frontend — open `http://127.0.0.1:3000` in a browser and retry.
+- **CLI exit code 4** (browser required): screenshots, image export, viewport, and mermaid conversion render in the frontend — open the canvas URL (`status` prints it) in a browser and retry.
 - **Canvas not updating**: confirm `EXPRESS_SERVER_URL` points at the running canvas server (`status` shows the URL in use).
 - **Updates/deletes fail after batch creation**: ensure you are on a build that includes the batch id preservation fix (merged via PR #34).
 - **The terminal block is missing from the canvas** (boards running with `EXCALIDRAW_TERMINAL`): press **Alt+T**. One key covers every way it can be absent — it scrolls to the blocks, places one if the board has none, and opens a session if none is running, including after the last tab was closed. Erasing a block while its shells are alive undoes itself, because nothing in that gesture kills a shell. A block carries a strip of tabs: `+` opens another shell, `×` ends one, `⧉` gives a tab a block of its own and `⇥` puts it back. See [docs/terminal.md](docs/terminal.md).

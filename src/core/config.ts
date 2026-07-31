@@ -1,14 +1,15 @@
-// Configuration for every entry point (MCP server, CLI, canvas server), layered in one place:
-// `<state-dir>/config.json`, then `<cwd>/.env`, then the real environment. See
-// `core/settings.ts` for why each of those is where it is, and for `EXCALIDRAW_NO_DOTENV=1`,
-// which turns both file layers off. Importing the module applies them; the call is explicit
-// here so that the constants below cannot be read out of a half-loaded environment.
-import { loadSettings } from './settings.js';
+// The `.env`, before anything below reads a variable out of it. See core/env.ts for why the
+// file is loaded from a module of its own rather than here.
+import './env.js';
+import { canvasUrlFor, DEFAULT_CANVAS_PORT } from './port.js';
 
-loadSettings();
-
-// Express server configuration
-export const EXPRESS_SERVER_URL = process.env.EXPRESS_SERVER_URL || 'http://127.0.0.1:3000';
+// Express server configuration.
+//
+// The default is resolved once, at import, and every module downstream reads this one string —
+// which is exactly why the port scan happens in front of it, in `core/port.ts`, called from the
+// entry point before this module is loaded. By the time anybody reads `EXPRESS_SERVER_URL` the
+// answer has to already be final.
+export const EXPRESS_SERVER_URL = process.env.EXPRESS_SERVER_URL || canvasUrlFor(DEFAULT_CANVAS_PORT);
 export const ENABLE_CANVAS_SYNC = process.env.ENABLE_CANVAS_SYNC !== 'false'; // Default to true
 
 // Opt-out for auto-starting the canvas server from the CLI / MCP server

@@ -6,12 +6,12 @@ import dotenv from 'dotenv';
 /**
  * Where this tool's configuration comes from, and in what order.
  *
- * Until #304 the only answer was `<cwd>/.env`, and `.env` is gitignored, has no tracked
- * example, and lives wherever the caller's shell happened to be. A double-clicked launcher has
- * an unpredictable working directory — `C:\Windows\System32` from a shortcut, `/` from a
- * `.desktop` entry, the home directory from Finder — so it can never find one, and the board
- * comes up with no workspaces, no terminal and no agents while answering `status: healthy` on
- * the port the real board was meant to hold.
+ * Until #304 the only answer was `<cwd>/.env`, and `.env` is gitignored, has no tracked example,
+ * and lives wherever the caller's shell happened to be. A double-clicked launcher has an
+ * unpredictable working directory — `C:\Windows\System32` from a shortcut, `/` from a `.desktop`
+ * entry, the home directory from Finder — so it can never find one, and the board comes up with
+ * no workspaces, no terminal and no agents while answering `status: healthy` on the port the
+ * real board was meant to hold.
  *
  * So there are three sources now, layered explicitly, lowest first:
  *
@@ -27,7 +27,8 @@ import dotenv from 'dotenv';
  *
  * Loading is idempotent and happens on import, so no entry point can read `process.env` before
  * the layers are applied: the hazard with `dotenv.config()` called in a module *body* is that
- * every import of that module's own graph has already run.
+ * every import of that module's own graph has already run. `core/env.ts` is the side-effect
+ * module the entry points import for exactly that reason, and it is this.
  *
  * `EXCALIDRAW_NO_DOTENV=1` turns both file layers off — the `.env` and the state file alike.
  * It is what every check sets (`scripts/lib/spawn-canvas.mjs`), and it exists because of what
@@ -35,34 +36,78 @@ import dotenv from 'dotenv';
  * exactly the ones a caller deliberately removed. `check-workspace-settings.mjs` builds a
  * server with no implement agent to prove `/api/implement` answers 404, and on a machine with
  * an `.env` it got the operator's real coding agent back and started one.
+ *
+ * The state-directory functions live here rather than in `core/pidfile.ts`, which chose them
+ * before #304, because `config.json` is in that directory too and because this module must not
+ * import the logger: the logger reads `LOG_LEVEL` and `LOG_FILE_PATH` in its own body, and it
+ * cannot be evaluated before the layers are applied. `pidfile.ts` re-exports them, so every
+ * caller that had them from there still does.
  */
 
 /** Values a `config.json` may hold, once flattened to the strings an environment holds. */
 export type SettingsMap = Record<string, string>;
 
 /**
- * Platform-compatible state directory for this tool's own files — the pidfile, the restart
- * log, and now the configuration. `EXCALIDRAW_STATE_DIR` redirects all of it.
+ * The directory the platform keeps per-user state in — the *parent*, not the application's own
+ * folder inside it.
  *
- * The override is read from the environment only, never from `config.json`: the file lives in
- * the directory it would be naming.
+ * `EXCALIDRAW_STATE_HOME` overrides it, and exists so a check can give a run a throwaway state
+ * directory of its own. Without it there is no way to exercise the pidfile and the state files
+ * except against the real one, which on this machine holds the board the maintainer is looking
+ * at. Read from the environment only, never from `config.json`: the file would be naming the
+ * directory it is in.
  */
-export function stateDir(): string {
-  const override = process.env.EXCALIDRAW_STATE_DIR;
-  if (override && override.trim()) return path.resolve(override.trim());
+function stateHome(): string {
+  const override = process.env.EXCALIDRAW_STATE_HOME;
+  if (override) return override;
   if (process.platform === 'darwin') {
-    return path.join(homedir(), 'Library', 'Application Support', 'excalidraw-canvas');
+    return path.join(homedir(), 'Library', 'Application Support');
   }
   if (process.platform === 'win32') {
-    const base = process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local');
-    return path.join(base, 'Excalidraw-Canvas');
+    return process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local');
   }
-  const xdgState = process.env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state');
-  return path.join(xdgState, 'excalidraw-canvas');
+  return process.env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state');
+}
+
+/** Read per call rather than captured: a check may be simulating another platform. */
+function leaf(name: 'next' | 'legacy'): string {
+  if (process.platform === 'win32') {
+    return name === 'next' ? 'VibeMaxxing-Canvas' : 'Excalidraw-Canvas';
+  }
+  return name === 'next' ? 'vibemaxxing-canvas' : 'excalidraw-canvas';
+}
+
+/**
+ * Where runtime artifacts are written today. Still the legacy directory, deliberately, for the
+ * reason `core/identity.ts` gives: a directory rename orphans the pidfile, and `stop` then
+ * cannot find the server it started while the port stays held.
+ */
+export function stateDir(): string {
+  return path.join(stateHome(), leaf('legacy'));
+}
+
+/**
+ * Where a reader looks, new directory first. The rename flips what `stateDir()` returns; this
+ * list is what makes that flip survivable, so it ships one release ahead of it.
+ */
+export function stateDirCandidates(): string[] {
+  return [path.join(stateHome(), leaf('next')), stateDir()];
+}
+
+/** The state directory, made if it is not there yet. */
+export function ensureStateDir(): string {
+  const dir = stateDir();
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 export function settingsFilePath(): string {
   return path.join(stateDir(), 'config.json');
+}
+
+/** Every place a `config.json` could be, in the order a reader should try them. */
+export function settingsFilePaths(): string[] {
+  return stateDirCandidates().map(dir => path.join(dir, 'config.json'));
 }
 
 /**
@@ -109,6 +154,14 @@ export function readSettingsFile(file: string = settingsFilePath()): SettingsMap
   return values;
 }
 
+/** The first `config.json` that is there, across both state-directory spellings. */
+function readSettingsFiles(): SettingsMap {
+  for (const file of settingsFilePaths()) {
+    if (fs.existsSync(file)) return readSettingsFile(file);
+  }
+  return {};
+}
+
 /** The `.env` layer: `EXCALIDRAW_ENV_FILE`, or the file beside this process's working directory. */
 export function envFilePath(): string {
   const named = process.env.EXCALIDRAW_ENV_FILE;
@@ -138,17 +191,6 @@ export function mergeSettings(
   environment: NodeJS.ProcessEnv
 ): SettingsMap {
   const merged: SettingsMap = { ...fromFile, ...fromEnvFile };
-
-  // The one derived value. `PORT` is what the server binds and `EXPRESS_SERVER_URL` is what
-  // every client of it reads, so a `config.json` holding only the port — which is exactly what
-  // the launch path writes on first run — would move the board and leave the CLI, the MCP
-  // server and the auto-start probe talking to the old one. Only when the port came from the
-  // state file and nothing named a URL: it must not start deciding for a `PORT` that was
-  // already in somebody's shell.
-  if (fromFile.PORT && !merged.EXPRESS_SERVER_URL && environment.EXPRESS_SERVER_URL === undefined) {
-    merged.EXPRESS_SERVER_URL = `http://127.0.0.1:${fromFile.PORT}`;
-  }
-
   const applied: SettingsMap = {};
   for (const [key, value] of Object.entries(merged)) {
     if (environment[key] === undefined) applied[key] = value;
@@ -163,7 +205,9 @@ let realEnv: NodeJS.ProcessEnv | null = null;
  * Apply the layers to `process.env`, once.
  *
  * Runs on import (bottom of this file) so that no module body can read a variable before the
- * files have been folded in.
+ * files have been folded in — which is also what puts the port resolution downstream of it:
+ * `resolveCanvasUrl` in `core/port.ts` reads `PORT` and `EXCALIDRAW_CANVAS_PORT`, and a port
+ * named in `config.json` has to be in the environment by then to count for anything.
  */
 export function loadSettings(): void {
   if (loaded) return;
@@ -172,7 +216,7 @@ export function loadSettings(): void {
 
   if (process.env.EXCALIDRAW_NO_DOTENV === '1') return;
 
-  const applied = mergeSettings(readSettingsFile(), readEnvFile(), realEnv);
+  const applied = mergeSettings(readSettingsFiles(), readEnvFile(), realEnv);
   for (const [key, value] of Object.entries(applied)) process.env[key] = value;
 }
 
@@ -190,13 +234,6 @@ export function realEnvironment(): NodeJS.ProcessEnv {
   return { ...(realEnv ?? process.env) };
 }
 
-/** The state directory, made if it is not there yet. */
-export function ensureStateDir(): string {
-  const dir = stateDir();
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
-}
-
 export interface SettingsFileWrite {
   file: string;
   created: boolean;
@@ -210,13 +247,21 @@ export interface SettingsFileWrite {
  * Nothing else is written, because everything else is a decision this has no business making
  * on the operator's behalf — `config.example.json` is where the rest is spelled out.
  *
+ * The port is written as `EXCALIDRAW_CANVAS_PORT` rather than as `PORT`, which is the same
+ * number with a different promise attached: #303 made `PORT` a **pin** that is never scanned
+ * past, and `EXCALIDRAW_CANVAS_PORT` the port to *try first*. Writing the pin would quietly
+ * convert every later launch on this machine into one that fails when something else holds
+ * that port, instead of walking to the next free one.
+ *
  * Never overwrites: after the first run this file is the operator's.
  */
 export function ensureSettingsFile(port: number): SettingsFileWrite {
+  for (const existing of settingsFilePaths()) {
+    if (fs.existsSync(existing)) return { file: existing, created: false };
+  }
   const file = settingsFilePath();
-  if (fs.existsSync(file)) return { file, created: false };
   ensureStateDir();
-  fs.writeFileSync(file, `${JSON.stringify({ PORT: port }, null, 2)}\n`, 'utf-8');
+  fs.writeFileSync(file, `${JSON.stringify({ EXCALIDRAW_CANVAS_PORT: port }, null, 2)}\n`, 'utf-8');
   return { file, created: true };
 }
 
