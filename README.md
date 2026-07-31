@@ -342,7 +342,7 @@ claude mcp add excalidraw --scope user -- npx -y @vitorengers/vibemaxxing
 **Local (node)** - User-level (available across all projects):
 ```bash
 claude mcp add excalidraw --scope user \
-  -e EXPRESS_SERVER_URL=http://127.0.0.1:3000 \
+  -e EXPRESS_SERVER_URL=http://127.0.0.1:3737 \
   -e ENABLE_CANVAS_SYNC=true \
   -- node /absolute/path/to/mcp_excalidraw/dist/index.js
 ```
