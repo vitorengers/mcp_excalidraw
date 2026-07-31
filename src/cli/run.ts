@@ -37,12 +37,13 @@ const COMMANDS: Record<string, Command> = {
 
 function printHelp(): void {
   const lines = [
-    `mcp-excalidraw-server ${packageVersion()} — Excalidraw toolkit for AI coding agents`,
+    `vibemaxxing ${packageVersion()} — Excalidraw workbench for AI coding agents`,
     '',
     'Usage:',
-    '  mcp-excalidraw-server                  Run the MCP stdio server (for MCP clients)',
-    '  mcp-excalidraw-server <command> [...]  Drive the canvas from the command line',
+    '  vibemaxxing                            Run the MCP stdio server (for MCP clients)',
+    '  vibemaxxing <command> [...]            Drive the canvas from the command line',
     '  excalidraw-canvas <command> [...]      Same CLI under its short alias',
+    '  mcp-excalidraw-server <command> [...]  … and under the name it shipped as before',
     '',
     'Commands:',
     ...Object.entries(COMMANDS).map(([name, cmd]) => `  ${name.padEnd(14)} ${cmd.summary}`),
@@ -55,7 +56,7 @@ function printHelp(): void {
     '  Canvas-driving commands auto-start the server (disable with EXCALIDRAW_NO_AUTOSTART=1).',
     '  Canvas URL comes from EXPRESS_SERVER_URL (default http://127.0.0.1:3000) or --url.',
     '',
-    'Run `mcp-excalidraw-server help <command>` for per-command usage.'
+    'Run `vibemaxxing help <command>` for per-command usage.'
   ];
   process.stdout.write(lines.join('\n') + '\n');
 }
@@ -74,7 +75,7 @@ export async function runCli(argv: string[]): Promise<void> {
   if (!name || name === 'help' || name === '--help' || name === '-h') {
     const topic = name === 'help' ? rest[0] : undefined;
     if (topic && COMMANDS[topic]) {
-      process.stdout.write(`Usage: mcp-excalidraw-server ${COMMANDS[topic].usage}\n  ${COMMANDS[topic].summary}\n`);
+      process.stdout.write(`Usage: vibemaxxing ${COMMANDS[topic].usage}\n  ${COMMANDS[topic].summary}\n`);
     } else {
       printHelp();
     }
@@ -88,7 +89,7 @@ export async function runCli(argv: string[]): Promise<void> {
 
   const command = COMMANDS[name];
   if (!command) {
-    process.stderr.write(`Unknown command "${name}". Run \`mcp-excalidraw-server help\` for the list.\n`);
+    process.stderr.write(`Unknown command "${name}". Run \`vibemaxxing help\` for the list.\n`);
     process.exitCode = 2;
     return;
   }
@@ -100,7 +101,7 @@ export async function runCli(argv: string[]): Promise<void> {
       process.stderr.write(`Error: ${(error as Error).message}\n`);
     }
     if (error instanceof CliUsageError) {
-      process.stderr.write(`Usage: mcp-excalidraw-server ${command.usage}\n`);
+      process.stderr.write(`Usage: vibemaxxing ${command.usage}\n`);
     }
     process.exitCode = exitCodeFor(error);
   }

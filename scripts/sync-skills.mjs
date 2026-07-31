@@ -3,7 +3,7 @@
 // copy (.agents/skills/excalidraw-skill, which .claude/skills symlinks to).
 //
 // skills/ is the single source of truth: it is published to npm and installed
-// by `mcp-excalidraw-server install-skill`. Edit there, then run:
+// by `vibemaxxing install-skill`. Edit there, then run:
 //   npm run sync:skills
 
 import fs from 'fs';

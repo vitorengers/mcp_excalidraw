@@ -14,13 +14,15 @@
  *
  * A package name in an install command is only honest under one of three conditions:
  *
- *   1. it is a name this tree publishes — `package.json` `name` or one of its `bin` keys —
- *      *and* `package.json` is this repository's package record rather than upstream's,
- *      which is decided here by whether `repository.url` names the repository in
- *      `board.config.json`. That second half is what stops the rule going vacuous: a tree
- *      that carries upstream's package record verbatim would otherwise "publish" upstream's
- *      name by definition, and every command naming it would pass. It also means the rule
- *      needs no edit when #293 claims an npm identity — it reads the record, not a literal;
+ *   1. it is `package.json` `name` — and *not* merely one of its `bin` keys — *and*
+ *      `package.json` is this repository's package record rather than upstream's, which is
+ *      decided here by whether `repository.url` names the repository in `board.config.json`.
+ *      That second half is what stopped the rule going vacuous while the tree still carried
+ *      upstream's record verbatim: it would otherwise have "published" upstream's name by
+ *      definition and waved every command through. It reads the record rather than a literal,
+ *      which is why #293 claiming `@vitorengers/vibemaxxing` needed no edit here — and why
+ *      the `bin` half matters now that the two disagree, `mcp-excalidraw-server` surviving as
+ *      an alias while the registry entry under that name is still upstream's;
  *   2. it sits under a heading that says the command installs upstream's package;
  *   3. it names something this tree declares as a dependency, or something that is plainly
  *      not this product at all (`@modelcontextprotocol/inspector`). A name carrying
@@ -66,8 +68,20 @@ function check(name, condition, detail = '') {
 
 // ─── What this tree may legitimately name ─────────────────────
 
-/** Names this tree claims as its own: the package name and every bin it installs. */
-const ownNames = new Set([pkg.name, ...Object.keys(pkg.bin ?? {})].filter(Boolean));
+/**
+ * The one name a fetch may legitimately use: `package.json` `name`.
+ *
+ * **Not the `bin` keys.** `npx -y <x>` and `npm i -g <x>` resolve `x` as a *package* on the
+ * registry; a bin key is only what you type once the package is installed. Since #293 the two
+ * disagree on purpose — this tree publishes `@vitorengers/vibemaxxing` and keeps
+ * `mcp-excalidraw-server` as a bin alias so existing MCP client configurations survive the
+ * rename — and `mcp-excalidraw-server` on the registry is still upstream's package. Letting a
+ * bin key license a fetch would wave through the exact command this check exists to catch.
+ */
+const ownNames = new Set([pkg.name].filter(Boolean));
+
+/** Bin aliases, named here only so the failure can say why the name is not enough. */
+const binNames = new Set(Object.keys(pkg.bin ?? {}).filter((name) => name !== pkg.name));
 
 /** Names this tree depends on, and may therefore document a reader fetching. */
 const dependencyNames = new Set([
@@ -161,7 +175,7 @@ function declaredUpstream(text) {
   const declared = new Set();
   for (const line of firstSection(text)) {
     if (!/upstream/i.test(line)) continue;
-    for (const name of ownNames) {
+    for (const name of [...ownNames, ...binNames]) {
       if (new RegExp(String.raw`(^|[^\w.@/-])${escaped(name)}([^\w.@/-]|$)`).test(line)) {
         declared.add(name);
       }
@@ -178,6 +192,10 @@ function offence({ name, headings, declared }) {
     return `"${name}" is package.json's name, but package.json still describes `
          + `${pkg.repository?.url ?? 'no repository'} rather than ${board.repo} — the registry `
          + `entry under that name is not this tree's`;
+  }
+  if (binNames.has(name)) {
+    return `"${name}" is a bin alias, not the package name — \`npx\` and \`npm i\` resolve it on `
+         + `the registry, where it is somebody else's package. Fetch "${pkg.name}"`;
   }
   if (/excalidraw/i.test(name) && !dependencyNames.has(name)) {
     return `"${name}" is neither published by this repository nor one of its dependencies`;
@@ -239,11 +257,16 @@ const installSection = (() => {
 
 check('the README has an Installation section', installSection !== null);
 if (installSection !== null) {
-  check('it installs from a clone (`npm ci`)', installSection.includes('npm ci'),
-        'the only supported install path is a checkout of this repository');
-  check('it points at the run procedure (docs/running.md)',
-        installSection.includes('docs/running.md'),
-        'installing is half of it; the launcher and its environment live in that document');
+  /**
+   * Whichever way the publishing question is answered, the install section has to name a way
+   * in that belongs to this repository: the package it publishes, or a clone of it. #293
+   * answered it — `@vitorengers/vibemaxxing` — and this holds either answer, so it does not
+   * have to be rewritten if the tree ever stops publishing.
+   */
+  const namesOwnPackage = publishesOwnPackage && installSection.includes(pkg.name);
+  const installsFromClone = installSection.includes('npm ci');
+  check('it names a way in that is this repository\'s', namesOwnPackage || installsFromClone,
+        `neither "${pkg.name}" nor a clone (\`npm ci\`) appears in it`);
 }
 
 if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }

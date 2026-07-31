@@ -14,7 +14,7 @@ pipeline of its own; a green badge for somebody else's would say nothing true ab
 
 One canvas, three ways to drive it:
 
-- **Agent Skill + CLI** — recommended for coding agents (Claude Code, Codex CLI, Cursor, OpenCode): `node dist/bin.js <command>` from a clone. Auto-starts the canvas, composable JSON in/out.
+- **Agent Skill + CLI** — recommended for coding agents (Claude Code, Codex CLI, Cursor, OpenCode): `npx -y @vitorengers/vibemaxxing <command>`. Zero config, auto-starts the canvas, composable JSON in/out.
 - **MCP Server** — 26 tools over stdio for any Model Context Protocol client (Claude Desktop, Cursor, Codex CLI, Antigravity, ...).
 - **REST API** — 56 routes over plain HTTP; the only workspace-aware surface, and what the board itself is built on.
 
@@ -36,7 +36,6 @@ Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Merma
 - [How We Differ from the Official Excalidraw MCP](#how-we-differ-from-the-official-excalidraw-mcp)
 - [What's New](#whats-new)
 - [Installation](#installation)
-  - [Upstream's published package](#upstreams-published-package)
 - [Agent Skill](#agent-skill)
 - [CLI Reference](#cli-reference)
 - [Configure MCP Clients](#configure-mcp-clients)
@@ -144,89 +143,60 @@ Excalidraw has an [official MCP](https://github.com/excalidraw/excalidraw-mcp) �
 
 ## What's New
 
-Current package version: **1.1.0**. The current release line is **v1.1 — CLI-First**.
+Current package version: **0.1.0**, published as **`@vitorengers/vibemaxxing`**. The numbering
+restarts here: `1.1.0` was the upstream package's, and this fork has never published one of its
+own. The release line below is what that version contains.
 
 ### v1.1 — CLI-First
 
-- **First-class CLI**: every capability is now a composable command — `node dist/bin.js add|query|describe|screenshot|export|import|mermaid|snapshot|arrange|share|...` — JSON on stdout, meaningful exit codes.
+- **First-class CLI**: every capability is now a composable command — `npx -y @vitorengers/vibemaxxing add|query|describe|screenshot|export|import|mermaid|snapshot|arrange|share|...` — JSON on stdout, meaningful exit codes. Also installed as the `excalidraw-canvas` alias.
 - **Zero-setup**: canvas-driving CLI commands and the MCP server **auto-start the canvas server** if it isn't running (closes #66). Opt out with `EXCALIDRAW_NO_AUTOSTART=1`.
 - **`apply`**: multi-op patches (`{"create":[...],"update":[{"id":"a","set":{...}}],"delete":[...]}`) in a single invocation.
-- **`install-skill`**: `node dist/bin.js install-skill --dir <skills-root>` copies the portable agent skill into the directory your agent chooses (project or global), cleanly replacing older versions.
+- **`install-skill`**: `npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>` copies the portable agent skill into the directory your agent chooses (project or global), cleanly replacing older versions.
 - **Skill is now CLI-first** and no longer needs a cloned repo or configured MCP server to work.
 - **Typed queries**: `query --filter locked=true --filter label.text=API` — booleans, numbers, and nested keys work.
 - **Internals**: shared core library (`src/core/`) behind both the CLI and MCP server; canvas `groupIds` are the source of truth for grouping (ungroup now works across restarts); `node-fetch` dropped; MCP version metadata derived from `package.json`; canvas server writes a pidfile and shuts down cleanly.
 
 ## Installation
 
-The only prerequisite is **Node.js ≥ 18**. **Board Tool is installed by cloning it** — this
-repository publishes no npm package, so there is nothing to `npx`:
-
-```bash
-git clone https://github.com/vitorengers/mcp_excalidraw.git
-cd mcp_excalidraw
-npm ci && npm run build
-```
-
-Then start the canvas. [docs/running.md](docs/running.md) is the procedure — the port, the
-kill-the-stale-server step that comes before it, and all fifteen `EXCALIDRAW_*` variables with
-their defaults. The short version is `node dist/server.js`.
-
-Every command on this page runs from that clone. The CLI is `node dist/bin.js <command>`
-(`npm run cli -- <command>` is the same thing), and the MCP server is `node dist/index.js`.
-
-### Upstream's published package
-
-`npx -y mcp-excalidraw-server` and `npm i -g mcp-excalidraw-server` do work, and they do **not**
-install this tool. That name on the registry belongs to the
-[published package](https://www.npmjs.com/package/mcp-excalidraw-server) of the upstream project `yctimlin/mcp_excalidraw`,
-the diagramming toolkit this fork started from. It has a canvas, a CLI and an MCP server; it has
-none of the workspace registry, the two-section board, the `issue` / `project-board` /
-`terminal` blocks or the worktree-per-issue agents that [What This Fork
-Adds](#what-this-fork-adds) describes.
-
-This fork has claimed no npm name of its own yet, so the clone above is the only way to get this
-build. The portable [agent skill](#agent-skill) is the one part that also works against
-upstream's package, because it teaches diagramming rather than the board.
+The only prerequisite is **Node.js ≥ 18**.
 
 ### Easiest: let your agent install it
 
-Copy this into your coding agent — it clones the repository, installs the portable skill into the project/global skill directory that agent already knows how to use, then verifies it by drawing a test diagram:
+Copy this into your coding agent — it installs the portable skill into the project/global skill directory that agent already knows how to use, then verifies it by drawing a test diagram:
 
 ```text
-Install the Board Tool canvas toolkit so you can draw diagrams for me:
+Install the Excalidraw canvas toolkit so you can draw diagrams for me:
 
-1. Clone https://github.com/vitorengers/mcp_excalidraw, then run `npm ci && npm run build`
-   in the clone. Every command below runs from there.
-2. Choose the right skill directory for this agent and scope (project or global).
-3. Run: node dist/bin.js install-skill --dir <that-skills-directory>
-4. Read the installed excalidraw-skill/SKILL.md so you know the drawing workflow.
-5. Start the canvas with: node dist/bin.js start
+1. Choose the right skill directory for this agent and scope (project or global).
+2. Run: npx -y @vitorengers/vibemaxxing install-skill --dir <that-skills-directory>
+3. Read the installed excalidraw-skill/SKILL.md so you know the drawing workflow.
+4. Start the canvas with: npx -y @vitorengers/vibemaxxing start
    then tell me to open http://127.0.0.1:3000 in my browser (screenshots need an open tab).
-6. Draw a small test diagram — two labeled boxes connected by an arrow — take a
+5. Draw a small test diagram — two labeled boxes connected by an arrow — take a
    screenshot, and show me the result to confirm everything works.
 ```
 
 ### Manual install
 
-All of these run from the clone, after `npm ci && npm run build`.
-
 | You are... | Install with | Then |
 |---|---|---|
-| **Modern coding agent** | `node dist/bin.js install-skill --dir <skills-root>` | Let the agent choose project/global scope and its skill root |
-| **Claude Code shortcut** | `node dist/bin.js install-skill` | Installs to `~/.claude/skills` for backward compatibility |
-| **Codex shortcut** | `node dist/bin.js install-skill --target codex` | Installs to `~/.codex/skills` for backward compatibility |
-| **MCP client user** (Claude Desktop, Cursor, ...) | Add the `node` config below | See [Configure MCP Clients](#configure-mcp-clients) |
-| **CLI user / scripting** | Nothing further — `node dist/bin.js <command>` | See [CLI Reference](#cli-reference) |
+| **Modern coding agent** | `npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>` | Let the agent choose project/global scope and its skill root |
+| **Claude Code shortcut** | `npx -y @vitorengers/vibemaxxing install-skill` | Installs to `~/.claude/skills` for backward compatibility |
+| **Codex shortcut** | `npx -y @vitorengers/vibemaxxing install-skill --target codex` | Installs to `~/.codex/skills` for backward compatibility |
+| **MCP client user** (Claude Desktop, Cursor, ...) | Add the npx config below | See [Configure MCP Clients](#configure-mcp-clients) |
+| **CLI user / scripting** | Nothing — `npx -y @vitorengers/vibemaxxing <command>` | See [CLI Reference](#cli-reference) |
+| **Contributor / from source** | `git clone` + `npm ci` + `npm run build` | See [Quick Start (From Source / Docker)](#quick-start-from-source--docker) |
 
 There is no separate server setup: any drawing command auto-starts the local canvas server on `http://127.0.0.1:3000`.
 
 ### 60-Second Quick Start (CLI)
 
-From the clone, with no config:
+No clone, no config:
 
 ```bash
 # start the canvas (drawing commands auto-start it too) and open it
-node dist/bin.js start
+npx -y @vitorengers/vibemaxxing start
 open http://127.0.0.1:3000   # browser tab enables screenshots & mermaid
 
 # draw something
@@ -234,25 +204,25 @@ echo '[
   {"id":"api","type":"rectangle","x":100,"y":100,"width":160,"height":80,"text":"API Server","backgroundColor":"#a5d8ff"},
   {"id":"db","type":"rectangle","x":400,"y":100,"width":160,"height":80,"text":"Database","backgroundColor":"#99e9f2"},
   {"type":"arrow","x":0,"y":0,"startElementId":"api","endElementId":"db","text":"SQL"}
-]' | node dist/bin.js add
+]' | npx -y @vitorengers/vibemaxxing add
 
 # let your agent see its work
-node dist/bin.js describe
-node dist/bin.js screenshot --out diagram.png
+npx -y @vitorengers/vibemaxxing describe
+npx -y @vitorengers/vibemaxxing screenshot --out diagram.png
 
 # diagrams as repo artifacts
 mkdir -p docs
-node dist/bin.js export --out docs/architecture.excalidraw
+npx -y @vitorengers/vibemaxxing export --out docs/architecture.excalidraw
 
 # or straight into an Obsidian vault (.md extension → Obsidian Excalidraw plugin format)
-node dist/bin.js export --out ~/vault/diagrams/architecture.excalidraw.md
+npx -y @vitorengers/vibemaxxing export --out ~/vault/diagrams/architecture.excalidraw.md
 ```
 
 Give your agent the full playbook:
 
 ```bash
-node dist/bin.js install-skill --dir <skills-root>
-node dist/bin.js install-skill --print-source  # inspect bundled source path
+npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>
+npx -y @vitorengers/vibemaxxing install-skill --print-source  # inspect bundled source path
 ```
 
 > **Security note:** The canvas server binds `127.0.0.1` only by default. If you expose it on a network interface (`HOST=0.0.0.0`), put network-level access controls in front — the API has no built-in authentication.
@@ -262,7 +232,7 @@ node dist/bin.js install-skill --print-source  # inspect bundled source path
 The skill at `skills/excalidraw-skill/` teaches agents the full workflow — layout planning, the screenshot-verify-fix quality loop, arrow routing, anti-patterns, snapshots, and file I/O. It works through the CLI (preferred, zero setup), MCP tools (if configured), or raw REST — in that order.
 
 ```bash
-node dist/bin.js install-skill --dir <skills-root>
+npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>
 ```
 
 The command copies the bundled `excalidraw-skill/` directory into `<skills-root>/excalidraw-skill`. Let your agent choose whether that root should be project-level or global. Re-running `install-skill` upgrades in place — it replaces the target directory, so files removed upstream don't linger.
@@ -276,7 +246,7 @@ Where the skill shines:
 
 ## CLI Reference
 
-`node dist/bin.js <command>` from the clone, or `npm run cli -- <command>`.
+`npx -y @vitorengers/vibemaxxing <command>` or (after `npm i -g @vitorengers/vibemaxxing`) `vibemaxxing <command>` — `excalidraw-canvas` and `mcp-excalidraw-server` are kept as aliases of the same binary, so an existing MCP client configuration survives the rename.
 
 Conventions: JSON results on stdout — except `describe` (plain text by design) and raw-content output when `--out` is omitted (`export` prints the scene JSON, `screenshot --format svg` prints SVG). Diagnostics on stderr. Exit codes: `0` ok, `1` error, `2` usage, `3` canvas unreachable, `4` browser tab required. Canvas URL from `EXPRESS_SERVER_URL` or `--url`. Canvas-driving commands auto-start the server; `status` only reports current state. Explicit `start` overrides the `EXCALIDRAW_NO_AUTOSTART=1` opt-out (it's user intent, not auto-start).
 
@@ -302,8 +272,7 @@ Labels and arrow bindings use the agent-friendly format everywhere in the CLI: `
 
 ## Configure MCP Clients
 
-The MCP server runs over stdio, and it is `dist/index.js` in your clone — there is no published
-package to `npx`, so every config below points at an absolute path. The canvas auto-starts:
+The MCP server runs over stdio. Since v1.1 the simplest config is `npx` — no clone, no absolute paths, and the canvas auto-starts:
 
 ### Environment Variables
 
@@ -324,7 +293,19 @@ Config location:
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 - Linux: `~/.config/Claude/claude_desktop_config.json`
 
-**node (recommended)**
+**npx (recommended)**
+```json
+{
+  "mcpServers": {
+    "excalidraw": {
+      "command": "npx",
+      "args": ["-y", "@vitorengers/vibemaxxing"]
+    }
+  }
+}
+```
+
+**Local (node)**
 ```json
 {
   "mcpServers": {
@@ -361,9 +342,14 @@ Config location:
 
 ### Claude Code
 
-> Tip: for coding agents, the skill + CLI often beats MCP config entirely — let the agent pick its skill root, then run `node dist/bin.js install-skill --dir <skills-root>`.
+**npx (recommended)**
+```bash
+claude mcp add excalidraw --scope user -- npx -y @vitorengers/vibemaxxing
+```
 
-**node (recommended)** - User-level (available across all projects):
+> Tip: for coding agents, the skill + CLI often beats MCP config entirely — let the agent pick its skill root, then run `npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>`.
+
+**Local (node)** - User-level (available across all projects):
 ```bash
 claude mcp add excalidraw --scope user \
   -e EXPRESS_SERVER_URL=http://127.0.0.1:3000 \
@@ -392,13 +378,13 @@ claude mcp remove excalidraw # Remove a server
 
 Config location: `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json` for global config)
 
-**node (recommended)**
+**npx (recommended)**
 ```json
 {
   "mcpServers": {
     "excalidraw": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp_excalidraw/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@vitorengers/vibemaxxing"]
     }
   }
 }
@@ -425,9 +411,9 @@ Config location: `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json
 
 ### Codex CLI
 
-**node (recommended)**
+**npx (recommended)**
 ```bash
-codex mcp add excalidraw -- node /absolute/path/to/mcp_excalidraw/dist/index.js
+codex mcp add excalidraw -- npx -y @vitorengers/vibemaxxing
 ```
 
 **Docker**
@@ -457,7 +443,7 @@ Config location: `~/.config/opencode/opencode.json` or project-level `opencode.j
   "mcp": {
     "excalidraw": {
       "type": "local",
-      "command": ["node", "/absolute/path/to/mcp_excalidraw/dist/index.js"],
+      "command": ["npx", "-y", "@vitorengers/vibemaxxing"],
       "enabled": true
     }
   }
@@ -474,8 +460,8 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
 {
   "mcpServers": {
     "excalidraw": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp_excalidraw/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@vitorengers/vibemaxxing"]
     }
   }
 }
@@ -598,7 +584,7 @@ No API key is required. Core drawing runs locally under MIT license. The only ou
 
 ### Can I use it without configuring MCP?
 
-Yes — that's the recommended path for coding agents: `node dist/bin.js install-skill --dir <skills-root>` and the agent drives everything through the CLI. MCP configuration is only needed for chat clients like Claude Desktop.
+Yes — that's the recommended path for coding agents: `npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>` and the agent drives everything through the CLI. MCP configuration is only needed for chat clients like Claude Desktop.
 
 ## Troubleshooting
 

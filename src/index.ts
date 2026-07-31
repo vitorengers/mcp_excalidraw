@@ -649,7 +649,7 @@ const tools: Tool[] = [
 // Initialize MCP server
 const server = new Server(
   {
-    name: "mcp-excalidraw-server",
+    name: "vibemaxxing",
     version: packageVersion(),
     description: "Programmatic canvas toolkit for Excalidraw with file I/O, image export, and real-time sync"
   },
