@@ -37,13 +37,15 @@
  *     (`docs/trap-allowed-tools.md`), so the README has to say the key changed rather than only
  *     changing it.
  *
- * **What rule 4 deliberately allows.** Three strings in `src/` are the same shape as an
- * inherited bin and name something else: the pidfile state directory (`excalidraw-canvas`,
- * where a running server's pid already lives — renaming it orphans one), and the `source` field
- * written into an exported scene (`mcp-excalidraw-server`, left alone by #293 on the grounds
- * that nothing reads it back and it instructs nobody to install anything). Each is listed with
- * its file and an exact count, so a fourth occurrence anywhere is a failure. The health-identity
- * marker `mcp-excalidraw-canvas` is a different token and never a hit, the way
+ * **What rule 4 deliberately allows.** Two strings in `src/` are the same shape as an inherited
+ * bin and name something else: the POSIX leaf of the pidfile state directory
+ * (`excalidraw-canvas`, where a running server's pid already lives — #303 named its successor
+ * and left the rename for later precisely because it orphans that pidfile), and the `source`
+ * field written into an exported scene (`mcp-excalidraw-server`, left alone by #293 on the
+ * grounds that nothing reads it back and it instructs nobody to install anything). Each is
+ * listed with its file and an exact count, so one more occurrence anywhere is a failure — and
+ * so is an entry that has gone stale, which is what caught the pidfile refactor. The
+ * health-identity marker `mcp-excalidraw-canvas` is a different token and never a hit, the way
  * `check-fork-identity.mjs` treats `mcp-excalidraw-mcp`.
  *
  * **Run against the tree before the change it guards**, where it is red on rules 1, 3, 4 and 6.
@@ -79,8 +81,9 @@ const NO_LITERALS_IN = ['src/cli/run.ts', 'src/core/spawn.ts'];
  * term, exact count, and why it is not a command.
  */
 const NOT_COMMANDS = [
-  { file: 'src/core/pidfile.ts', term: 'excalidraw-canvas', count: 2,
-    why: 'the state directory a running server\'s pidfile already sits in' },
+  { file: 'src/core/pidfile.ts', term: 'excalidraw-canvas', count: 1,
+    why: 'the POSIX leaf of the state directory a running server\'s pidfile already sits in; '
+         + '#303 named its successor and left the rename for later, since it orphans that pidfile' },
   { file: 'src/core/scene-io.ts', term: 'mcp-excalidraw-server', count: 1,
     why: 'the "source" field of an exported scene; nothing reads it back (#293)' },
 ];
