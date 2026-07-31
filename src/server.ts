@@ -4301,8 +4301,9 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: 'Invalid doc key' });
   }
 
-  // Each board reads its own project's docs. The env var stays as the fallback for
-  // single-board setups, which have no registry to resolve a directory from.
+  // Each board reads its own project's docs, except for the keys that name a block this server
+  // draws. `DOCS_DIR` is the fallback underneath both, for a canvas with no registered project
+  // to resolve a directory from and for a project that carries no `docsDir` of its own.
   const workspaceId = workspaceIdFrom(req);
   let docsDir = DOCS_DIR;
   if (TOOL_DOC_KEYS.has(key)) {
