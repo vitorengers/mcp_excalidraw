@@ -3,8 +3,8 @@
 // Single bin entry for every command this package installs (see package.json
 // `bin`, and BIN_NAMES in core/version.ts):
 //
-//   no arguments  -> launch the board under one of this package's own command names;
-//                    MCP stdio server under any other name (see core/entry-name.ts)
+//   no arguments  -> launch the board, under one of this package's own command names and with a
+//                    terminal on stdin; MCP stdio server otherwise (see core/entry-name.ts)
 //   <subcommand>  -> CLI
 //
 // IMPORTANT: never statically import ./index.js or ./server.js here.
@@ -60,14 +60,13 @@ if (!process.env.EXPRESS_SERVER_URL) {
   if (resolved) process.env.EXPRESS_SERVER_URL = resolved;
 }
 
-// What zero arguments mean, decided by the name the command was invoked under.
+// What zero arguments mean: the launch under one of this package's own commands with a person on
+// the other end of stdin, and the stdio server it has always been in every other case — reached
+// exactly as it was reached before, so a client that gets here notices nothing.
 //
-// Under one of this package's own commands it is the launch: bring the board up, open it, print
-// one line. Under anything else — including the two names upstream's package installs, which an
-// MCP client configuration written before the rename still names — it is the stdio server it has
-// always been, reached exactly as it was reached before. core/entry-name.ts holds the rule, and
-// the case it cannot decide from a name (every Windows shim, where npm's own shim has already
-// thrown the name away) is decided by whether stdin is a terminal.
+// Both conditions, because either alone gets a real case wrong: npx hands an MCP client a symlink
+// carrying the product's own name, and npm's Windows shim throws the name away before Node starts.
+// core/entry-name.ts is where that is argued out.
 let mode = 'mcp';
 if (argv.length === 0) {
   const { entryMode } = await import('./core/entry-name.js');

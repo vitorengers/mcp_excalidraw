@@ -1,8 +1,9 @@
 /**
  * Which of the two things a bare, argument-less invocation meant.
  *
- * One file is installed under several names and is also the MCP server, so the name it was
- * invoked under has to decide — and `process.argv[1]` is the only place that name can be read.
+ * One file is installed under several names and is also the MCP server, so something has to
+ * decide between bringing a board up for a person and speaking JSON-RPC to a client. Two things
+ * do: the name on `process.argv[1]`, and what is on the other end of stdin. See `entryMode`.
  */
 export type EntryMode = 'launch' | 'mcp';
 
