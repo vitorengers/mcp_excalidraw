@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Checks that no workflow publishes anything from a pull request, and that none of them binds
- * host port 3000.
+ * Checks that no workflow publishes anything from a pull request, that none of them binds
+ * host port 3000, and that `ci.yml` actually runs this repository's checks, on three
+ * operating systems, from a build it made itself.
  *
  * `docker.yml` triggered on `pull_request` with `push: true` on both build jobs. A pull request
  * from a fork gets a read-only `GITHUB_TOKEN` whatever the `permissions:` block asks for, so the
@@ -39,6 +40,37 @@
  * Section 0 runs the parser and the reachability walk over inline fixtures, including a workflow
  * that does publish from a pull request, so the analysis is known to catch one after the real
  * workflow stops being an example of the defect.
+ *
+ * ### And that `ci.yml` runs the suite rather than only compiling it (#280)
+ *
+ * Both jobs in `ci.yml` were `runs-on: ubuntu-latest`, and between them they type-checked,
+ * built, asserted three artifacts existed and ran two of the hundred and seventy-odd
+ * `scripts/check-*.mjs`. Nothing in this repository had ever been *exercised* on macOS or on
+ * Windows, which is the platform it is maintained on and the one the terminal, the worktrees
+ * and the paths all behave differently on. `CLAUDE.md` says compiling is not working, and the
+ * workflow was compiling.
+ *
+ * So sections 5 to 7 hold `ci.yml` to the shape the issue asked for, and each rule is about a
+ * way the matrix could go green having proved nothing:
+ *
+ *   - **a job that runs checks builds first.** `scripts/run-checks.mjs` deliberately does not
+ *     build — a missing `dist/` is exit 2 — so a job that forgets is a red run rather than a
+ *     silent one, but it is still a job that ran nothing. Order matters, so this asks for the
+ *     build *before* the run rather than merely somewhere in the job.
+ *   - **the `fast` and `browser` matrices name all three runner operating systems**, since
+ *     one of them is the whole point.
+ *   - **the `repo` job checks out with `fetch-depth: 0`**, because `check-board-map.mjs` and
+ *     `check-shallow-clone.mjs` read this fork's merge history and a shallow clone has none.
+ *   - **exactly one job runs `--tier repo`, on ubuntu.** Those five checks read tracked files
+ *     and need no platform; three copies of them is three chances to disagree about a file.
+ *   - **the browser job installs a Chrome and points `CHROME_PATH` at it** rather than
+ *     trusting the image to carry one, and runs `--strict`, which is what turns a check that
+ *     found no browser from a silent exit 0 into a failure.
+ *   - **nothing reads a secret**, so a pull request from a fork completes all three jobs.
+ *
+ * Section 5 runs those rules over inline fixtures first — a workflow that runs checks without
+ * building, and one that builds after running them — so the analysis is known to catch the
+ * defect rather than to describe whatever `ci.yml` happens to say.
  *
  * Offline and self-contained: it reads `.github/workflows/*.yml`. No server, no browser, no
  * network, no Docker.
@@ -378,6 +410,65 @@ function publishedHostPorts(script) {
   return ports;
 }
 
+// ─── What a job builds, runs and runs on ──────────────────────
+
+/** Every step of a job, in the order they are written. Reachability is not the subject here. */
+const stepsOf = (job) => (job?.steps ?? []).filter(Boolean);
+
+/** The index of the first step whose `run:` matches, or -1. */
+const firstRunning = (job, pattern) => stepsOf(job)
+  .findIndex((step) => typeof step.run === 'string' && pattern.test(step.run));
+
+const RUNS_CHECKS = /run-checks\.mjs/;
+const BUILDS = /npm run build\b/;
+
+/**
+ * The runner images a job can land on.
+ *
+ * `runs-on: ${{ matrix.os }}` says nothing on its own, so the matrix is what is read; a job
+ * naming its image directly is read off `runs-on`. An expression pointing at anything else is
+ * no answer and comes back empty, which every caller reads as the failing one.
+ */
+function runnerOses(job) {
+  const fromMatrix = job?.strategy?.matrix?.os;
+  if (Array.isArray(fromMatrix)) return fromMatrix.map(String);
+  if (typeof fromMatrix === 'string' && fromMatrix !== '') return [fromMatrix];
+  const runsOn = job?.['runs-on'];
+  if (Array.isArray(runsOn)) return runsOn.map(String);
+  if (typeof runsOn === 'string' && !/\$\{\{/.test(runsOn)) return [runsOn];
+  return [];
+}
+
+/** The tiers a job asks `run-checks.mjs` for. An invocation with no `--tier` reports `''`. */
+function tiersRunBy(job) {
+  const out = [];
+  for (const step of stepsOf(job)) {
+    if (typeof step.run !== 'string') continue;
+    for (const [, invocation] of step.run.matchAll(/run-checks\.mjs([^\n]*)/g)) {
+      const named = /--tier\s+(\S+)/.exec(invocation);
+      if (!named) { out.push(''); continue; }
+      out.push(...named[1].split(',').map((tier) => tier.trim()).filter(Boolean));
+    }
+  }
+  return out;
+}
+
+/** `with:` of the job's `actions/checkout` step, or an empty mapping. */
+const checkoutWith = (job) =>
+  stepsOf(job).find((step) => usesAction(step, 'actions/checkout'))?.with ?? {};
+
+/** Jobs that run a check and do not run `npm run build` in an earlier step. */
+function jobsRunningChecksUnbuilt(workflow) {
+  const out = [];
+  for (const [id, job] of Object.entries(workflow?.jobs ?? {})) {
+    const runsAt = firstRunning(job, RUNS_CHECKS);
+    if (runsAt === -1) continue;
+    const buildsAt = firstRunning(job, BUILDS);
+    if (buildsAt === -1 || buildsAt > runsAt) out.push(id);
+  }
+  return out;
+}
+
 // ─── 0. The analysis catches a workflow that does it ──────────
 
 console.log('0. the reachability walk finds a publish a pull request can reach');
@@ -570,6 +661,143 @@ if (!docker) {
         && [].concat(on.push?.tags ?? []).some((tag) => /^v/.test(String(tag))),
         JSON.stringify(on.push ?? null));
 }
+
+// ─── 5. The build-before-run rule catches a job that skips it ─
+
+console.log('\n5. a job that runs the checks without building first is caught');
+
+const FIXTURE_UNBUILT = `name: Unbuilt
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: npm ci
+      - name: Run the fast tier
+        run: node scripts/run-checks.mjs --tier fast
+  late:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the fast tier
+        run: node scripts/run-checks.mjs --tier fast
+      - name: Build project
+        run: npm run build
+  built:
+    runs-on: \${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build project
+        run: npm run build
+      - name: Run the fast tier
+        run: node scripts/run-checks.mjs --tier fast
+`;
+
+const unbuilt = parseYaml(FIXTURE_UNBUILT);
+
+check('a job that runs checks with no build at all is caught',
+      jobsRunningChecksUnbuilt(unbuilt).includes('fast'));
+check('so is one that builds after running them',
+      jobsRunningChecksUnbuilt(unbuilt).includes('late'));
+check('and a job that builds first is not',
+      !jobsRunningChecksUnbuilt(unbuilt).includes('built'),
+      jobsRunningChecksUnbuilt(unbuilt).join(', '));
+check('a matrix of runner images is read, and a bare runs-on too',
+      runnerOses(unbuilt.jobs.built).join() === 'ubuntu-latest,macos-latest,windows-latest'
+      && runnerOses(unbuilt.jobs.fast).join() === 'ubuntu-latest',
+      JSON.stringify([runnerOses(unbuilt.jobs.built), runnerOses(unbuilt.jobs.fast)]));
+check('fetch-depth: 0 is read off the checkout step',
+      String(checkoutWith(unbuilt.jobs.built)['fetch-depth']) === '0'
+      && checkoutWith(unbuilt.jobs.fast)['fetch-depth'] === undefined,
+      JSON.stringify(checkoutWith(unbuilt.jobs.built)));
+check('the tier a job asks for is read off the invocation',
+      tiersRunBy(unbuilt.jobs.built).join() === 'fast',
+      JSON.stringify(tiersRunBy(unbuilt.jobs.built)));
+
+// ─── 6. ci.yml runs the checks, on three platforms ────────────
+
+console.log('\n6. ci.yml runs the checks, from a build it made, on three platforms');
+
+const ci = workflows.get('ci.yml');
+const ciJobs = ci?.jobs ?? {};
+const ciText = existsSync(join(workflowDir, 'ci.yml'))
+  ? readFileSync(join(workflowDir, 'ci.yml'), 'utf8') : '';
+
+/** The three the issue names. A fourth image is welcome; a missing one is the defect. */
+const OSES = ['ubuntu-latest', 'macos-latest', 'windows-latest'];
+
+check('there is a ci.yml to inspect', Boolean(ci));
+
+const runningJobs = Object.entries(ciJobs).filter(([, job]) => firstRunning(job, RUNS_CHECKS) !== -1);
+check('at least one job runs scripts/run-checks.mjs', runningJobs.length > 0,
+      `jobs: ${Object.keys(ciJobs).join(', ') || 'none'} — a workflow that only compiles proves `
+      + 'the TypeScript compiles, which CLAUDE.md says is not working');
+
+check('every job that runs a check runs npm run build before it',
+      jobsRunningChecksUnbuilt(ci ?? {}).length === 0,
+      `${jobsRunningChecksUnbuilt(ci ?? {}).join(', ')} — run-checks.mjs does not build, by design`);
+
+for (const tier of ['fast', 'browser']) {
+  const jobsForTier = runningJobs.filter(([, job]) => tiersRunBy(job).includes(tier));
+  check(`a job runs --tier ${tier}`, jobsForTier.length > 0);
+  for (const [id, job] of jobsForTier) {
+    const oses = runnerOses(job);
+    check(`the ${id} job runs on ${OSES.join(', ')}`, OSES.every((os) => oses.includes(os)),
+          `runs on: ${oses.join(', ') || 'nothing this can read'}`);
+  }
+}
+
+const repoJobs = runningJobs.filter(([, job]) => tiersRunBy(job).includes('repo'));
+check('exactly one job runs --tier repo', repoJobs.length === 1,
+      `${repoJobs.map(([id]) => id).join(', ') || 'none'} — check-english-only.mjs and `
+      + 'check-board-map.mjs read tracked files and need no platform');
+for (const [id, job] of repoJobs) {
+  check(`the ${id} job checks out with fetch-depth: 0`,
+        String(checkoutWith(job)['fetch-depth']) === '0',
+        'a shallow clone cannot answer what this fork has merged');
+  check(`the ${id} job runs on ubuntu alone`, runnerOses(job).join() === 'ubuntu-latest',
+        `runs on: ${runnerOses(job).join(', ') || 'nothing this can read'}`);
+}
+
+const untiered = runningJobs.filter(([, job]) => tiersRunBy(job).includes(''));
+check('no job invokes run-checks.mjs without naming a tier', untiered.length === 0,
+      `${untiered.map(([id]) => id).join(', ')} — an untiered run drags repo onto every platform`);
+
+// ─── 7. And a fork's pull request can complete all of it ──────
+
+console.log('\n7. the browser job brings its own Chrome, and no job needs a secret');
+
+for (const [id, job] of runningJobs.filter(([, job]) => tiersRunBy(job).includes('browser'))) {
+  check(`the ${id} job installs a browser rather than trusting the image`,
+        stepsOf(job).some((step) => usesAction(step, 'browser-actions/setup-chrome')),
+        'no step installs one, so the tier passes or fails on whatever the image happens to ship');
+  const strictly = stepsOf(job).some((step) => typeof step.run === 'string'
+    && RUNS_CHECKS.test(step.run) && /--strict\b/.test(step.run));
+  check(`the ${id} job runs the browser tier with --strict`, strictly,
+        'without it a check that found no browser exits 3 and is reported as a skip');
+  check(`the ${id} job points CHROME_PATH at what it installed`,
+        stepsOf(job).some((step) => step.env?.CHROME_PATH !== undefined) || /CHROME_PATH/.test(ciText),
+        'nothing in the job names CHROME_PATH');
+}
+
+check('ci.yml declares permissions: contents: read',
+      ci?.permissions?.contents === 'read', JSON.stringify(ci?.permissions ?? null));
+check('ci.yml declares a concurrency group that cancels the run it replaces',
+      Boolean(ci?.concurrency?.group) && ci?.concurrency?.['cancel-in-progress'] === true,
+      JSON.stringify(ci?.concurrency ?? null));
+check('no step in ci.yml reads a secret',
+      !/secrets\./.test(ciText),
+      'a pull request from a fork gets none of them, and would fail on the step that asks');
 
 console.log('');
 if (failures) {
