@@ -16,6 +16,33 @@ the two is measured from the other and changes no arithmetic.
 Nothing here names a column. That is the whole point — a fourth option added on GitHub is a
 fourth section on the next poll, with nothing edited in this repository.
 
+## Which URL to paste
+
+Whatever the address bar says. A project is `/users/<login>/projects/<n>` or
+`/orgs/<org>/projects/<n>`, and github.com adds the view you happen to have open on top of it —
+`/views/1`, and `?pane=issue&itemId=…` once a card's side panel is up. All of those are the same
+project, so all of them are accepted and everything past the number is dropped:
+
+```
+https://github.com/users/you/projects/5
+https://github.com/orgs/acme/projects/12/views/1
+https://github.com/users/you/projects/5/views/1?pane=issue&itemId=115447583
+```
+
+Accepted, not tolerated. The login and the number are interpolated into a command line that a WSL
+workspace runs through `bash -lc`, so what is matched is still only what GitHub allows in a login
+and in a number, and the decoration is matched too — no whitespace, no quotes — rather than
+skipped with a `.*`. A classic repository project (`/<owner>/<repo>/projects`) is a different
+feature of GitHub's and is refused as one, by name.
+
+**A value that can never resolve is refused when it is saved**, by
+`PUT /api/workspaces/:id/config`, and the settings dialog shows the sentence. It used to be
+accepted happily and fail at the far end: the mirror answers 404 for a URL it cannot parse, the
+canvas reads 404 as "this board has no project" and clears the region, so a board configured with
+a URL somebody had copied out of their browser was indistinguishable from a board that named none
+(**#318**). `scripts/check-project-url-forms.mjs` covers the whole wire, from the paste to the
+`gh` command line.
+
 ## Where the columns come from
 
 A user-owned project has **no board view**: `views(first:5)` returns a single `TABLE_LAYOUT` node
