@@ -33,6 +33,50 @@ takes; the procedure above is the one an operator takes, because it is the envir
 this document exists for. See [cli.md](cli.md) for when a bare invocation means the MCP stdio
 server instead, and for `--no-open`.
 
+## The first run: register the clone as its own project
+
+**A clone that has just been built and started comes up on a blank canvas, and that is not a
+broken build.** No tabs, no cards, no blocks. The board on screen is `default` — the board of
+somebody who has registered no project — and nothing on disk is behind it. The tracked
+`board.config.json` at the root of this repository does name a board file, but that field
+belongs to a *project*, and until a registry names one there is no project for it to belong to.
+Which is why the registry is the first thing to set rather than an optional extra: it is what
+turns this clone into a board that shows its own documentation cards and its own map of itself.
+
+1. **Write a registry file** wherever you keep configuration — `workspaces.json` beside your
+   `.env` will do — with one entry pointing at this clone. Write the path with forward slashes,
+   on Windows too:
+
+   ```json
+   {
+     "workspaces": [
+       { "id": "vibemaxxing", "path": "C:/Users/you/Documents/Projects/vibemaxxing" }
+     ]
+   }
+   ```
+
+2. **Point `EXCALIDRAW_WORKSPACES` at that file, and start the board** as in the short version
+   above. The boards are read from disk once, at startup, so the variable has to be there before
+   the server is:
+
+   ```bash
+   EXCALIDRAW_WORKSPACES=/path/to/workspaces.json node dist/server.js
+   ```
+
+3. **Open `http://127.0.0.1:<PORT>`.** There is now one project tab, holding the elements of
+   `docs/board.excalidraw`: the two maps this repository keeps of itself, and the cards that
+   open every document in `docs/`. `Alt+P` and `Alt+G` are the keys that scroll to each —
+   [board-sections.md](board-sections.md).
+
+The `+` at the end of the tab strip does step 1 for you, against the per-user registry the
+variable table below resolves to when nothing is set, and it is the right way to add the
+*second* project. It is not a shortcut past this section: adding a project registers it
+immediately, but the board file behind it is only read at startup, so a tab added that way
+stays empty until the server is restarted.
+
+[workspaces.md](workspaces.md) is the rest of the registry — the fields an entry may carry, what
+a project's own `board.config.json` may say, and how a project inside a WSL distro is named.
+
 ## What it requires: github.com
 
 The workbench half of this tool reads **github.com, and only github.com**. Issue blocks, the

@@ -122,6 +122,12 @@ generated from the one declaration in `src/core/settings.ts`, so it is the list 
 copy of it. Each can be spelled `VIBEMAXXING_*` instead, and they are read from
 [`config.json`](docs/configuration.md) in a per-OS directory as well as from the environment.
 
+**A clone that has just been built comes up on a blank canvas**, and that is not a broken build:
+the board on screen belongs to nobody until a registry names a project, so nothing on disk is
+behind it. [The first run](docs/running.md#the-first-run-register-the-clone-as-its-own-project)
+is the three steps that make this clone its own first project, after which the tab holds the
+board this repository keeps of itself and every card in `docs/` opens.
+
 ## What It Is
 
 Ask your agent to *"draw the architecture of this service"* and it produces a real, editable Excalidraw diagram — not a one-shot image. Because the agent can query, screenshot, and update individual elements, it iterates until labels fit, nothing overlaps, and arrows route cleanly; then it exports the result as a `.excalidraw` file that lives in your repo and gets updated when the code changes.
