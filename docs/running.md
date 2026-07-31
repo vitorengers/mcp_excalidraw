@@ -1,6 +1,6 @@
 # Running the board
 
-How to start Board Tool. Until #151 this was written down nowhere in the repository: four
+How to start VibeMaxxing. Until #151 this was written down nowhere in the repository: four
 tracked documents cited a PowerShell start script that has never been in `git ls-files`, and the
 only start instruction a clone actually got was the upstream README's port 3000 — which
 [trap-port-3000.md](trap-port-3000.md) explains can never work on the machine this fork is

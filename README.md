@@ -1,16 +1,18 @@
-# Board Tool — Excalidraw MCP Server, CLI & Agent Skill
+# VibeMaxxing — Excalidraw MCP Server, CLI & Agent Skill
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Board Tool** (`vitorengers/mcp_excalidraw`) is a private fork of the upstream project
+**VibeMaxxing** (`vitorengers/mcp_excalidraw`) is a fork of the upstream project
 `yctimlin/mcp_excalidraw`. It keeps everything upstream does — a live
 [Excalidraw](https://excalidraw.com) canvas agents draw on, drive from a CLI, or reach over MCP —
 and builds a **workbench for running a software project on that canvas** on top of it: registered
 projects, a mirrored GitHub project board, blocks that open issues and implement them, and real
 shells.
 
-There are no CI or package badges here on purpose. This fork publishes no package and runs no
-pipeline of its own; a green badge for somebody else's would say nothing true about this tree.
+There are no CI or package badges here yet. This project has a pipeline and a package of its own
+now — `.github/workflows/ci.yml` and `@vitorengers/vibemaxxing` — so a badge here would at last
+be about this tree; it stays out until the first release actually publishes one, because a badge
+is a claim about live state.
 
 One canvas, three ways to drive it:
 
@@ -56,7 +58,7 @@ Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Merma
 
 ## What This Fork Adds
 
-Everything from here to [What It Is](#what-it-is) is Board Tool, and exists only in
+Everything from here to [What It Is](#what-it-is) is VibeMaxxing, and exists only in
 `vitorengers/mcp_excalidraw`. Every document referenced below is in
 [docs/index.md](docs/index.md).
 
