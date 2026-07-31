@@ -26,6 +26,21 @@ export function packageDescription(): string {
   }
 }
 
+/**
+ * The product's name as a person writes it, for the one line a launch prints.
+ *
+ * Read out of the description's leading segment rather than written down, for the reason
+ * `BIN_NAME` is read out of the `bin` map (#297): a literal that is right today is what the next
+ * rename has to find by hand. The description leads with the product and then explains it —
+ * "VibeMaxxing — an Excalidraw workbench for AI coding agents" — so the part before the dash is
+ * the name, and a description that has no dash is a name on its own. `BIN_NAME` is the fallback,
+ * which is the same string in lower case.
+ */
+export function productName(): string {
+  const leading = packageDescription().split(/[—–:]|\s-\s/)[0]?.trim();
+  return leading || BIN_NAME;
+}
+
 // The name to fall back on when package.json cannot be read at all — an installed package
 // always ships it beside dist/, so this is the shape of a broken checkout rather than a
 // supported mode. check-bin-identity.mjs pins it to package.json's first bin, so the fallback

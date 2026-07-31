@@ -27,6 +27,12 @@ node dist/server.js      # with the environment below
 Then open `http://127.0.0.1:<PORT>`. A tab has to be open for anything that renders: screenshots,
 PNG/SVG export, viewport control and Mermaid conversion all happen in the frontend.
 
+An installed copy does all three of those in one word — `vibemaxxing`, with no arguments, starts
+the board, opens the tab and prints `VibeMaxxing <version> — <url>`. That is the path a user
+takes; the procedure above is the one an operator takes, because it is the environment below that
+this document exists for. See [cli.md](cli.md) for when a bare invocation means the MCP stdio
+server instead, and for `--no-open`.
+
 ## Before you start: kill what is already listening
 
 This is the trap that costs the most, because everything looks like it worked — see
