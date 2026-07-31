@@ -151,7 +151,7 @@ mkdirSync(profileDir, { recursive: true });
 mkdirSync(shotDir, { recursive: true });
 
 const PROJECTS = [
-  { id: 'canvas-tool', name: 'Board Tool' },
+  { id: 'canvas-tool', name: 'VibeMaxxing' },
   { id: 'field-notes', name: 'Field Notes' },
   { id: 'harvest-planner', name: 'Harvest Planner' },
 ];

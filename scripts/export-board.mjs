@@ -125,7 +125,9 @@ const cleaned = elements
 const scene = {
   type: 'excalidraw',
   version: 2,
-  source: 'mcp-excalidraw-server',
+  // The package that produced this scene. Kept in step with `package.json` by hand: a
+  // re-export that reverted it would undo the rename in the one file nobody re-reads.
+  source: '@vitorengers/vibemaxxing',
   elements: cleaned,
   appState: { gridSize: null, viewBackgroundColor: '#ffffff' },
   files: {},
