@@ -3,7 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Excalidraw POC - Backend API Integration</title>
+    <!--
+      The product, not the substrate it draws on, and not the proof of concept it stopped
+      being three years ago. Since #261 the bar above the canvas carries no title of its own —
+      the project tabs name the board — so this is where the name lives, and `App.tsx` puts the
+      active project in front of it once the registry has answered. Until then, and on a board
+      with no registry at all, this is the whole of it.
+
+      It must stay in step with `board.config.json`'s `name`, which the frontend cannot read at
+      this point in the load; `scripts/check-brand-strings-browser.mjs` is what holds them
+      together.
+    -->
+    <title>VibeMaxxing</title>
     <style>
         body {
             margin: 0;
