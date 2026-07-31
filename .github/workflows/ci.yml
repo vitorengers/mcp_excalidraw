@@ -76,3 +76,9 @@ jobs:
 
       - name: Check tracked line endings and file modes
         run: node scripts/check-tracked-file-modes.mjs
+
+      # Red until the renames it guards land (#293, #294, #299, #300). It is last in the job
+      # so the steps above keep reporting their own result, and it is here rather than waiting
+      # for them because a guard added after the rename describes the rename.
+      - name: Check no artifact declares the upstream fork's identity
+        run: node scripts/check-fork-identity.mjs
