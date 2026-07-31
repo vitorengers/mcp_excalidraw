@@ -108,7 +108,7 @@ refusal above. The server was never the quiet part. The canvas was: every answer
 blip must not wipe a region somebody is reading. On a **cold** one — nothing drawn yet — nothing
 was what stayed on the screen, which from the canvas is indistinguishable from a board with no
 `githubProject` at all. #252 lost a WSL board's mirror to a restart that way, and the only trace
-anywhere was a line in `%LOCALAPPDATA%\Excalidraw-MCP\excalidraw.log`.
+anywhere was a line in the platform log file (`%LOCALAPPDATA%\VibeMaxxing-MCP\vibemaxxing.log` on Windows since #303; `Excalidraw-MCP\excalidraw.log` at the time).
 
 So a cold failure draws a **red strip** where the mirror would have been, carrying the sentence
 the server sent, and a warm one still draws nothing at all (**#254**). `layoutUnreadable` is the

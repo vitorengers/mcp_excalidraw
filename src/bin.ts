@@ -33,6 +33,18 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 
+// Where the canvas is, decided here and nowhere else.
+//
+// Every module downstream reads one captured `EXPRESS_SERVER_URL`, so this is the only point at
+// which a port can still be chosen — before `core/config.js` is loaded by anything. The `.env`
+// goes first, because a URL configured there is an explicit answer and must not be scanned past.
+if (!process.env.EXPRESS_SERVER_URL) {
+  await import('./core/env.js');
+  const { resolveCanvasUrl } = await import('./core/port.js');
+  const resolved = await resolveCanvasUrl();
+  if (resolved) process.env.EXPRESS_SERVER_URL = resolved;
+}
+
 if (argv.length === 0) {
   // MCP mode: stdout belongs to the JSON-RPC transport from here on
   const { runServer } = await import('./index.js');
