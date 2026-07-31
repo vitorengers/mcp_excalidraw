@@ -26,6 +26,7 @@ import {
   ProjectBoard,
   NO_STATUS_OPTION_ID,
   NO_STATUS_NAME,
+  parseProjectUrl,
 } from './project-board-types.js';
 
 // Re-exported so nothing on the server side has to know the types live next door.
@@ -65,36 +66,11 @@ const MAX_ITEM_PAGES = 20;
  * GitHub's cursors are opaque base64 and this reader has to hand one back on a command
  * line that a WSL workspace runs through `bash -lc` — the same argument the login and the
  * field name already earn a pattern for. Matched rather than escaped, for the reason at
- * `parseProjectUrl`: a guard you can read beats one you have to trust. A cursor that does
+ * `parseProjectUrl` (in `project-board-types.ts`, because the write path validates against
+ * it too): a guard you can read beats one you have to trust. A cursor that does
  * not match stops the paging instead of being interpolated, and the board says it is short.
  */
 const CURSOR = /^[A-Za-z0-9+/=_-]{1,200}$/;
-
-export interface ProjectRef {
-  ownerType: 'user' | 'organization';
-  login: string;
-  number: number;
-}
-
-/**
- * Owner and number from a project URL.
- *
- * The login is matched rather than escaped: it is interpolated into a command line that a
- * WSL workspace runs through `bash -lc`, and a pattern that only admits what GitHub
- * actually allows in a login is a guard you can read, where escaping is one you have to
- * trust. Anything else is refused outright.
- */
-export function parseProjectUrl(url: string | null | undefined): ProjectRef | null {
-  if (typeof url !== 'string') return null;
-  const match = /^https:\/\/github\.com\/(users|orgs)\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/projects\/(\d{1,10})\/?$/
-    .exec(url.trim());
-  if (!match) return null;
-  return {
-    ownerType: match[1] === 'orgs' ? 'organization' : 'user',
-    login: match[2] as string,
-    number: Number(match[3]),
-  };
-}
 
 /** Field names reach a command line too, so they are held to the same standard. */
 const FIELD_NAME = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$/;
