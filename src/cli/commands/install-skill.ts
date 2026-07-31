@@ -20,9 +20,16 @@ function findSkillSource(): string {
   return source;
 }
 
-function expandHome(input: string): string {
+// A leading `~` is a shell convention, and it is written `~/` on every platform — including
+// in this project's own docs. Testing `path.sep` made the rule conditional on the host, so
+// `--dir ~/skills` on Windows fell through to `path.resolve` and made a directory literally
+// named `~` in the working directory. Accept either separator everywhere; `path.join` spells
+// the result with the host's. Anchored, so `~foo` (the POSIX other-user form, and a legal
+// relative filename) is left alone.
+// Exported for scripts/check-install-skill-home.mjs.
+export function expandHome(input: string): string {
   if (input === '~') return os.homedir();
-  if (input.startsWith(`~${path.sep}`)) return path.join(os.homedir(), input.slice(2));
+  if (/^~[\\/]/.test(input)) return path.join(os.homedir(), input.slice(2));
   return input;
 }
 
