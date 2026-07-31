@@ -159,7 +159,7 @@ const projectFixture = (closed) => ({
       projectV2: {
         id: 'PVT_project5',
         title: 'project 5',
-        url: 'https://github.com/users/vitorengers/projects/5',
+        url: 'https://github.com/users/someone/projects/5',
         field: { id: 'PVTSSF_status', name: 'Status', options: [TODO, DOING, DONE] },
         items: {
           pageInfo: { hasNextPage: false },
@@ -246,7 +246,7 @@ mkdirSync(boardDir, { recursive: true });
 writeFileSync(join(boardDir, 'board.config.json'), JSON.stringify({
   name: 'board-deps',
   repo: REPO,
-  githubProject: 'https://github.com/users/vitorengers/projects/5',
+  githubProject: 'https://github.com/users/someone/projects/5',
 }), 'utf8');
 writeFileSync(registryPath, JSON.stringify({
   workspaces: [{ id: 'board-deps', path: boardDir.replace(/\\/g, '/') }],

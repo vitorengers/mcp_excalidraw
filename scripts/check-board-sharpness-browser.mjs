@@ -166,7 +166,7 @@ writeFileSync(fixturePath, JSON.stringify({
   data: { owner: { projectV2: {
     id: 'PVT_sharpness',
     title: 'Sharpness',
-    url: 'https://github.com/users/vitorengers/projects/5',
+    url: 'https://github.com/users/someone/projects/5',
     field: { id: 'PVTSSF_status', name: 'Status', options: COLUMNS },
     items: { pageInfo: { hasNextPage: false }, nodes: [{
       id: 'PVTI_a',
@@ -209,7 +209,7 @@ for (const [id, name] of [[WIDE, 'Wide Display'], [LAPTOP, 'Laptop Display']]) {
   writeFileSync(join(dirs[id], 'board.config.json'), JSON.stringify({
     name,
     repo: 'vitorengers/vibemaxxing',
-    githubProject: 'https://github.com/users/vitorengers/projects/5',
+    githubProject: 'https://github.com/users/someone/projects/5',
   }), 'utf8');
 }
 

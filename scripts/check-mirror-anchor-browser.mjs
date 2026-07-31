@@ -122,7 +122,7 @@ const payload = (options) => JSON.stringify({
   data: { owner: { projectV2: {
     id: 'PVT_kwHOBVSHIs4BefUS',
     title: 'mcp_excalidraw',
-    url: 'https://github.com/users/vitorengers/projects/5',
+    url: 'https://github.com/users/someone/projects/5',
     field: { id: 'PVTSSF_status', name: 'Status', options },
     items: { pageInfo: { hasNextPage: false }, nodes: [
       item('PVTI_a', 3, 'Being worked on', DOING),
@@ -153,7 +153,7 @@ writeFileSync(registryPath, JSON.stringify({
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Anchor Check',
   repo: 'vitorengers/vibemaxxing',
-  githubProject: 'https://github.com/users/vitorengers/projects/5',
+  githubProject: 'https://github.com/users/someone/projects/5',
 }), 'utf8');
 
 const PORT = await freePort();

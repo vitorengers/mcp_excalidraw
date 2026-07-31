@@ -81,7 +81,7 @@ function board(names, cards, hidden = [0, 0, 0]) {
   return {
     projectId: 'PVT_kwHOBVSHIs4BefUS',
     projectTitle: 'mcp_excalidraw',
-    projectUrl: 'https://github.com/users/vitorengers/projects/5',
+    projectUrl: 'https://github.com/users/someone/projects/5',
     fieldId: 'PVTSSF_status',
     fieldName: 'Status',
     morePages: false,

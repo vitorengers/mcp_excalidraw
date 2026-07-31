@@ -80,7 +80,7 @@ function page(items, { hasNextPage = false, endCursor = null } = {}) {
         projectV2: {
           id: 'PVT_kwHOBVSHIs4BefUS',
           title: 'mcp_excalidraw',
-          url: 'https://github.com/users/vitorengers/projects/5',
+          url: 'https://github.com/users/someone/projects/5',
           field: { id: 'PVTSSF_status', name: 'Status', options: [TODO, DOING, DONE] },
           items: { pageInfo: { hasNextPage, endCursor }, nodes: items },
         },
@@ -181,7 +181,7 @@ writeFileSync(registryPath, JSON.stringify({
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Paged Check',
   repo: 'vitorengers/vibemaxxing',
-  githubProject: 'https://github.com/users/vitorengers/projects/5',
+  githubProject: 'https://github.com/users/someone/projects/5',
 }), 'utf8');
 
 // Set before the modules load: `GH_COMMAND` is read once, at import.

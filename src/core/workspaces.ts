@@ -10,6 +10,7 @@ import fs from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
+import { originRepo } from './implement-worktree.js';
 import { stateDir, stateDirCandidates } from './settings.js';
 import {
   resolveWorkspacePath,
@@ -268,6 +269,40 @@ interface RegistryEntry {
 
 export const WORKSPACE_CONFIG_FILENAME = 'board.config.json';
 
+/**
+ * The overlay: the same settings, for the one machine rather than for the repository.
+ *
+ * A project's config travels with the project, which is right for `name`, `board` and
+ * `docsDir` — they describe the tool — and wrong for `repo` and `githubProject`, which
+ * describe an *account*. This repository shipped both of the latter in its tracked config, so
+ * a stranger who registered a clone of the release got a board mirroring the maintainer's
+ * GitHub project and refusing to drag any card on it.
+ *
+ * So the answers that belong to one person go in a second file beside the first, gitignored,
+ * and it wins where the two disagree. The second reason is the settings dialog: it writes this
+ * file, and a dialog writing into a git-tracked config means every settings edit dirties the
+ * working tree of whatever project is open.
+ */
+export const WORKSPACE_LOCAL_CONFIG_FILENAME = 'board.config.local.json';
+
+/**
+ * The shared config with the local one laid over it.
+ *
+ * Shallow, apart from `agents`: those merge one level down, so a machine that pins a model for
+ * the implement agent does not erase the issue agent the project configured for everybody.
+ */
+function mergeWorkspaceConfig(
+  shared: Record<string, unknown>,
+  local: Record<string, unknown> | null
+): Record<string, unknown> {
+  if (!local) return shared;
+  const merged: Record<string, unknown> = { ...shared, ...local };
+  if (isPlainObject(shared.agents) && isPlainObject(local.agents)) {
+    merged.agents = { ...shared.agents, ...local.agents };
+  }
+  return merged;
+}
+
 async function readJson(filePath: string): Promise<unknown> {
   const raw = await fs.readFile(filePath, 'utf-8');
   return JSON.parse(raw);
@@ -407,9 +442,9 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
     return { ...base, error: 'Could not resolve the workspace config path' };
   }
 
-  let config: WorkspaceConfig;
+  let shared: Record<string, unknown>;
   try {
-    config = (await readJson(configPath)) as WorkspaceConfig;
+    shared = (await readJson(configPath)) as Record<string, unknown>;
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     const reason = err.code === 'ENOENT'
@@ -418,6 +453,31 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
     logger.warn(`Workspace "${id}" is unusable — ${reason}`);
     return { ...base, error: reason };
   }
+
+  // Absent is the ordinary case and says nothing; present and unreadable is reported, for the
+  // same reason the shared file is. An overlay that is silently ignored is a board that reads
+  // its settings from a file the operator can see is right there.
+  const localPath = resolveInWorkspace(resolved, WORKSPACE_LOCAL_CONFIG_FILENAME);
+  let local: Record<string, unknown> | null = null;
+  if (localPath) {
+    try {
+      const parsed = await readJson(localPath);
+      if (!isPlainObject(parsed)) {
+        const reason = `Invalid ${WORKSPACE_LOCAL_CONFIG_FILENAME}: it is not a JSON object`;
+        logger.warn(`Workspace "${id}" is unusable — ${reason}`);
+        return { ...base, error: reason };
+      }
+      local = parsed;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        const reason = `Invalid ${WORKSPACE_LOCAL_CONFIG_FILENAME}: ${(error as Error).message}`;
+        logger.warn(`Workspace "${id}" is unusable — ${reason}`);
+        return { ...base, error: reason };
+      }
+    }
+  }
+
+  const config = mergeWorkspaceConfig(shared, local) as WorkspaceConfig;
 
   // A config pointing outside its own project is treated as a mistake, not honoured.
   const docsDir = config.docsDir ? resolveInWorkspace(resolved, config.docsDir) : null;
@@ -698,6 +758,14 @@ async function hasConventionalDocsDir(resolved: ResolvedPath): Promise<boolean> 
  * in. Read from disk rather than assumed: a project that keeps its documents somewhere else
  * still gets the blank, and sets it in the project settings dialog.
  *
+ * `repo` follows the same rule one step further out: it is read from the project's own
+ * `origin`, and left out entirely when there is no GitHub remote to read. It used to be a
+ * value this repository shipped in its tracked config, which meant every clone of it named
+ * the maintainer's repository — an answer about whoever wrote the file rather than about the
+ * checkout in front of the board. `githubProject` gets no such treatment and never will:
+ * a project board belongs to an account, nothing on disk implies one, and a guess there points
+ * `gh` at somebody else's board.
+ *
  * This runs when the config is created and at no other time. A project already registered
  * keeps whatever its config says, including the absence — repairing files this repository
  * does not own, behind the user's back, is not something a registration should do.
@@ -715,6 +783,20 @@ async function ensureWorkspaceConfig(resolved: ResolvedPath): Promise<void> {
   const name = segments[segments.length - 1] ?? 'Project';
   const config: WorkspaceConfig = { name };
   if (await hasConventionalDocsDir(resolved)) config.docsDir = CONVENTIONAL_DOCS_DIR;
+
+  // Best-effort, like the rest of this function: a directory that is no repository, a git
+  // that will not start, a remote that is not GitHub — each of those is a project with no
+  // `repo` key, which is exactly what it was before this line existed.
+  try {
+    const repo = await originRepo({
+      environment: resolved.environment,
+      path: resolved.hostPath,
+      innerPath: resolved.innerPath,
+    });
+    if (repo) config.repo = repo;
+  } catch (error) {
+    logger.warn(`Could not read the origin remote of ${resolved.hostPath}: ${(error as Error).message}`);
+  }
 
   try {
     await writeJsonFile(configPath, config);
@@ -1013,59 +1095,131 @@ export function validateWorkspaceConfigPatch(
   return { ok: true, patch };
 }
 
-/** Where a registered workspace keeps its config, and what is in it now. */
-async function configFileOf(
-  registryPath: string,
-  id: string
-): Promise<{ ok: true; workspace: Workspace; configPath: string; config: Record<string, unknown> } | WorkspaceWriteRefusal> {
-  const workspaces = await loadWorkspaces(registryPath);
-  const workspace = workspaces.find((candidate) => candidate.id === id);
-  if (!workspace) return { ok: false, status: 404, error: `Workspace "${id}" is not registered.` };
+/** One of the two files a project's settings can be in, and what is in it now. */
+interface ConfigFile {
+  path: string;
+  /** Null for an overlay that is not there — the ordinary case, and not an error. */
+  config: Record<string, unknown> | null;
+}
 
-  const configPath = resolveInWorkspace(resolveOf(workspace), WORKSPACE_CONFIG_FILENAME);
-  if (!configPath) {
-    return { ok: false, status: 500, error: `Could not resolve where "${id}" keeps its ${WORKSPACE_CONFIG_FILENAME}.` };
-  }
+interface ConfigFiles {
+  ok: true;
+  workspace: Workspace;
+  shared: ConfigFile;
+  local: ConfigFile;
+}
 
-  let config: Record<string, unknown> = {};
+/** Read one settings file, distinguishing "not there" from "there and unreadable". */
+async function readConfigFile(
+  filePath: string
+): Promise<{ ok: true; config: Record<string, unknown> | null } | WorkspaceWriteRefusal> {
   try {
-    const parsed = await readJson(configPath);
+    const parsed = await readJson(filePath);
     if (!isPlainObject(parsed)) {
-      return { ok: false, status: 409, error: `${configPath} is not a JSON object, so it cannot be edited from here.` };
+      return { ok: false, status: 409, error: `${filePath} is not a JSON object, so it cannot be edited from here.` };
     }
-    config = parsed;
+    return { ok: true, config: parsed };
   } catch (error) {
     // A project with no config yet is being given its first one; a malformed one is left
     // alone, because overwriting it would destroy whatever the operator was in the middle
     // of writing.
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      return {
-        ok: false,
-        status: 409,
-        error: `${configPath} could not be read (${(error as Error).message}), so it will not be overwritten from here.`,
-      };
-    }
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true, config: null };
+    return {
+      ok: false,
+      status: 409,
+      error: `${filePath} could not be read (${(error as Error).message}), so it will not be overwritten from here.`,
+    };
   }
-
-  return { ok: true, workspace, configPath, config };
 }
 
-/** A project's config exactly as it is on disk, for a UI that has to edit it. */
+/** Where a registered workspace keeps its settings — both files — and what is in each. */
+async function configFileOf(
+  registryPath: string,
+  id: string
+): Promise<ConfigFiles | WorkspaceWriteRefusal> {
+  const workspaces = await loadWorkspaces(registryPath);
+  const workspace = workspaces.find((candidate) => candidate.id === id);
+  if (!workspace) return { ok: false, status: 404, error: `Workspace "${id}" is not registered.` };
+
+  const resolved = resolveOf(workspace);
+  const configPath = resolveInWorkspace(resolved, WORKSPACE_CONFIG_FILENAME);
+  const localPath = resolveInWorkspace(resolved, WORKSPACE_LOCAL_CONFIG_FILENAME);
+  if (!configPath || !localPath) {
+    return { ok: false, status: 500, error: `Could not resolve where "${id}" keeps its ${WORKSPACE_CONFIG_FILENAME}.` };
+  }
+
+  const shared = await readConfigFile(configPath);
+  if (!shared.ok) return shared;
+  const local = await readConfigFile(localPath);
+  if (!local.ok) return local;
+
+  return {
+    ok: true,
+    workspace,
+    shared: { path: configPath, config: shared.config },
+    local: { path: localPath, config: local.config },
+  };
+}
+
+/**
+ * A project's settings as they are on disk, for a UI that has to edit them.
+ *
+ * The overlay laid over the shared file, because what the dialog has to show is what is *in
+ * force*: a field showing the shared value while the board obeys the overlay is a dialog that
+ * lies twice — once about the setting, and again when saving it appears to do nothing.
+ */
 export async function readWorkspaceConfig(
   registryPath: string,
   id: string
 ): Promise<{ ok: true; config: Record<string, unknown> } | WorkspaceWriteRefusal> {
   const found = await configFileOf(registryPath, id);
   if (!found.ok) return found;
-  return { ok: true, config: found.config };
+  return { ok: true, config: mergeWorkspaceConfig(found.shared.config ?? {}, found.local.config) };
+}
+
+/** Apply one setting to one config object, in place. Shared by both files. */
+function applySetting(config: Record<string, unknown>, key: string, value: unknown): void {
+  if (key === 'agents') {
+    const agents = isPlainObject(config.agents) ? { ...config.agents } : {};
+    if (value === null) {
+      delete config.agents;
+      return;
+    }
+    for (const [kind, settings] of Object.entries(value as Record<string, unknown>)) {
+      if (settings === null) { delete agents[kind]; continue; }
+      const merged: Record<string, unknown> = isPlainObject(agents[kind]) ? { ...agents[kind] as Record<string, unknown> } : {};
+      for (const [field, setting] of Object.entries(settings as Record<string, unknown>)) {
+        if (setting === null || (typeof setting === 'string' && !setting.trim())) delete merged[field];
+        else merged[field] = typeof setting === 'string' ? setting.trim() : setting;
+      }
+      if (Object.keys(merged).length) agents[kind] = merged;
+      else delete agents[kind];
+    }
+    if (Object.keys(agents).length) config.agents = agents;
+    else delete config.agents;
+    return;
+  }
+
+  if (value === null || (typeof value === 'string' && !value.trim())) delete config[key];
+  else config[key] = typeof value === 'string' ? value.trim() : value;
 }
 
 /**
- * Apply one edit to a project's config, keeping everything it does not mention.
+ * Apply one edit to a project's settings, keeping everything it does not mention.
  *
  * `null` clears a field rather than storing a null, so a config stays the small readable
  * file somebody would have hand-written. Agent settings merge one level down, so setting
  * a model does not erase an effort configured beside it.
+ *
+ * **Each setting goes back to the file it was read from.** A project with no
+ * `board.config.local.json` is the case this always handled and behaves identically; where
+ * there is one, a setting the overlay already carries is written to the overlay and everything
+ * else to the shared file. The two alternatives are both wrong in a way a user would meet
+ * immediately: writing everything to the shared file leaves the edit shadowed by the overlay,
+ * so saving appears to do nothing, and writing everything to the overlay copies the whole
+ * config into a file nobody shares, so the project's own settings stop reaching this machine.
+ * The dialog sends every field on every save, changed or not, which is what makes this a
+ * question with a wrong answer rather than an academic one.
  */
 export async function writeWorkspaceConfig(
   registryPath: string,
@@ -1078,37 +1232,28 @@ export async function writeWorkspaceConfig(
   const found = await configFileOf(registryPath, id);
   if (!found.ok) return found;
 
-  const config = { ...found.config };
-  for (const [key, value] of Object.entries(valid.patch)) {
-    if (key === 'agents') {
-      const agents = isPlainObject(config.agents) ? { ...config.agents } : {};
-      if (value === null) {
-        delete config.agents;
-        continue;
-      }
-      for (const [kind, settings] of Object.entries(value as Record<string, unknown>)) {
-        if (settings === null) { delete agents[kind]; continue; }
-        const merged: Record<string, unknown> = isPlainObject(agents[kind]) ? { ...agents[kind] as Record<string, unknown> } : {};
-        for (const [field, setting] of Object.entries(settings as Record<string, unknown>)) {
-          if (setting === null || (typeof setting === 'string' && !setting.trim())) delete merged[field];
-          else merged[field] = typeof setting === 'string' ? setting.trim() : setting;
-        }
-        if (Object.keys(merged).length) agents[kind] = merged;
-        else delete agents[kind];
-      }
-      if (Object.keys(agents).length) config.agents = agents;
-      else delete config.agents;
-      continue;
-    }
+  const shared = { ...(found.shared.config ?? {}) };
+  const local = found.local.config ? { ...found.local.config } : null;
+  const touched: Record<string, unknown>[] = [];
 
-    if (value === null || (typeof value === 'string' && !value.trim())) delete config[key];
-    else config[key] = typeof value === 'string' ? value.trim() : value;
+  for (const [key, value] of Object.entries(valid.patch)) {
+    const target = local && key in local ? local : shared;
+    applySetting(target, key, value);
+    if (!touched.includes(target)) touched.push(target);
   }
 
-  try {
-    await writeJsonFile(found.configPath, config);
-  } catch (error) {
-    return { ok: false, status: 500, error: `Could not write ${found.configPath}: ${(error as Error).message}` };
+  // An edit that names no setting still writes the shared file, which is what it did before
+  // there were two: that is the call a project with no config at all is given its first one by.
+  const writes: [string, Record<string, unknown>][] = [];
+  if (!touched.length || touched.includes(shared)) writes.push([found.shared.path, shared]);
+  if (local && touched.includes(local)) writes.push([found.local.path, local]);
+
+  for (const [filePath, contents] of writes) {
+    try {
+      await writeJsonFile(filePath, contents);
+    } catch (error) {
+      return { ok: false, status: 500, error: `Could not write ${filePath}: ${(error as Error).message}` };
+    }
   }
 
   const workspaces = await loadWorkspaces(registryPath);

@@ -96,8 +96,19 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const CONFIG_LOCK_WAIT_MS = 2000;
 const CONFIG_LOCK_POLL_MS = 50;
 
+/**
+ * What running git somewhere needs to know: which machine the directory is on, and how it is
+ * spelled on both sides of that.
+ *
+ * Narrower than `Workspace` because one caller has no workspace to hand. Registration reads a
+ * project's `origin` to find out which repository it is in, and that happens *before* there is
+ * a config for a workspace to be loaded from — a `Workspace` still satisfies it, so nothing
+ * else changed.
+ */
+export type GitLocation = Pick<Workspace, 'environment' | 'path' | 'innerPath'>;
+
 /** Run git the way the workspace's own environment runs it, in the directory given. */
-function git(workspace: Workspace, at: AgentDirectory, args: string[]): Promise<CommandResult> {
+function git(workspace: GitLocation, at: AgentDirectory, args: string[]): Promise<CommandResult> {
   if (workspace.environment.kind === 'wsl') {
     return exec('wsl.exe', [
       '-d', workspace.environment.distro,
@@ -113,7 +124,7 @@ function argPath(workspace: Workspace, directory: AgentDirectory): string {
   return workspace.environment.kind === 'wsl' ? directory.innerPath : directory.path;
 }
 
-function workspaceDirectory(workspace: Workspace): AgentDirectory {
+function workspaceDirectory(workspace: GitLocation): AgentDirectory {
   return { path: workspace.path, innerPath: workspace.innerPath };
 }
 
@@ -607,11 +618,12 @@ export async function worktreesHoldingWork(workspace: Workspace): Promise<HeldWo
 /**
  * `owner/name` as the repository's own `origin` declares it, or null.
  *
- * The fallback for a board whose `board.config.json` names no `repo`. Read rather than
- * guessed: reconstructing an issue URL from a branch name needs a repository, and inventing
- * one would point the panel at somebody else's issue.
+ * Read rather than guessed: reconstructing an issue URL from a branch name needs a repository,
+ * and inventing one would point the panel at somebody else's issue. That is also why it is now
+ * asked at *registration* — a `repo` shipped in a tracked config is an answer about whoever
+ * wrote the file, while `origin` is an answer about the checkout in front of the board.
  */
-export async function originRepo(workspace: Workspace): Promise<string | null> {
+export async function originRepo(workspace: GitLocation): Promise<string | null> {
   const remote = await git(workspace, workspaceDirectory(workspace), ['remote', 'get-url', 'origin']);
   if (!remote.ok) return null;
   const match = remote.stdout.trim().match(/github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/*$/i);

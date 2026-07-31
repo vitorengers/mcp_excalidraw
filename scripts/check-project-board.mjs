@@ -79,7 +79,7 @@ function payload({ options = [TODO, DOING, DONE], items = DEFAULT_ITEMS, hasNext
         projectV2: {
           id: 'PVT_kwHOBVSHIs4BefUS',
           title: 'mcp_excalidraw',
-          url: 'https://github.com/users/vitorengers/projects/5',
+          url: 'https://github.com/users/someone/projects/5',
           field: { id: 'PVTSSF_status', name: 'Status', options },
           items: { pageInfo: { hasNextPage }, nodes: items },
         },
@@ -161,8 +161,8 @@ check('and it says how many it left out', cappedTodo?.hidden === 1, `hidden=${ca
 check('the ones kept are the newest', cappedTodo?.cards[0]?.title === 'Newest todo');
 
 console.log('\n7. the project URL resolves to an owner and a number');
-check('a user project', JSON.stringify(parseProjectUrl('https://github.com/users/vitorengers/projects/5'))
-      === JSON.stringify({ ownerType: 'user', login: 'vitorengers', number: 5 }));
+check('a user project', JSON.stringify(parseProjectUrl('https://github.com/users/someone/projects/5'))
+      === JSON.stringify({ ownerType: 'user', login: 'someone', number: 5 }));
 check('an organisation project',
       parseProjectUrl('https://github.com/orgs/acme/projects/12')?.ownerType === 'organization');
 check('anything else is refused', parseProjectUrl('https://example.com/board') === null);
@@ -273,7 +273,7 @@ writeFileSync(registryPath, JSON.stringify({
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Mirror Check',
   repo: 'vitorengers/vibemaxxing',
-  githubProject: 'https://github.com/users/vitorengers/projects/5',
+  githubProject: 'https://github.com/users/someone/projects/5',
 }), 'utf8');
 
 const running = [];

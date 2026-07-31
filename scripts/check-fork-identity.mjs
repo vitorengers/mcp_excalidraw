@@ -4,7 +4,7 @@
  * owner.
  *
  * The only guard this fork had on its own identity read one file. `check-readme.mjs` loads
- * `README.md` and `board.config.json`, and its upstream rule scans README prose. That is why,
+ * `README.md` and the package manifest, and its upstream rule scans README prose. That is why,
  * 130 commits past the fork base recorded at `check-board-map.mjs`, five tracked artifacts
  * still named the upstream author as the owner and nothing went red: `package.json` (author
  * `yctimlin`, with `repository`, `homepage` and `bugs` all pointing at the upstream
@@ -33,10 +33,17 @@
  *     `docker-compose.yml`, and every tracked `*.json` at the repository root. A file on the
  *     list that does not exist is not a failure: `NOTICE.md` has not been written yet, and the
  *     Docker files are scheduled for deletion.
- *  2. **`package.json` agrees with `board.config.json`.** `repository.url`, `homepage` and
- *     `bugs.url` point at `github.com/<repo>`, and `name` is either the repository's own name
- *     or scoped to the account that holds it. The expectations are read from
- *     `board.config.json` rather than written down here, so the rename lands in one place.
+ *  2. **`package.json` agrees with what this tree records itself as.** `repository.url`,
+ *     `homepage` and `bugs.url` point at `github.com/<repo>`, and `name` is either the
+ *     repository's own name or scoped to the account that holds it. The expectation is read
+ *     rather than written down here, so a rename lands in one place — and since #315 that place
+ *     is `FORK_REPO` in `scripts/lib/repo-identity.mjs`, not `board.config.json`, which no
+ *     longer names a repository at all: a board configuration is read by the running server and
+ *     copied by everyone who clones the tree, so an account named in it is an account every
+ *     clone gets pointed at. It stays *outside* the manifest either way. The state this rule
+ *     was written for is a tree carrying upstream's manifest verbatim, in which `name` and
+ *     `repository.url` agree with each other perfectly and are both upstream's, so a manifest
+ *     compared against itself would pass by definition.
  *  3. **`LICENSE` names a copyright holder**, an account this repository can be traced to,
  *     rather than a product string. `Copyright (c) 2024 MCP Excalidraw Server` names nobody,
  *     and MIT requires that notice be carried into every copy.
@@ -71,6 +78,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { repoIdentity } from './lib/repo-identity.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -130,7 +139,7 @@ const fold = (value) => String(value ?? '')
   .toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /**
- * Where `package.json` disagrees with `board.config.json`.
+ * Where `package.json` disagrees with the repository it declares itself to be in.
  *
  * The name rule is deliberately two-sided. A bare package name has to *be* the repository's
  * name, and a scoped one only has to sit under the account that holds the repository — which
@@ -381,9 +390,10 @@ check('the same literal passes in a workflow that does not publish',
 
 // ─── The real tree ────────────────────────────────────────────
 
-const config = JSON.parse(readFileSync(join(repoRoot, 'board.config.json'), 'utf8'));
-const repo = String(config.repo ?? '');
-const [repoOwner] = repo.split('/');
+// `package.json`'s `repository` since #315, where `board.config.json` stopped naming one: a
+// board configuration is copied by everyone who clones the tree, so an account named in it is
+// an account every clone is pointed at. The manifest is the file whose job that is.
+const { repo, owner: repoOwner } = repoIdentity();
 
 /**
  * Tracked files at the repository root. An untracked `*.json` is somebody's local scratch and
@@ -423,8 +433,8 @@ const scanned = [...new Set([...FIXED_LIST, ...rootJsonFiles()])]
 
 console.log(`\n1. no machine-readable artifact declares somebody else's identity`);
 
-check(`board.config.json says which repository this is ("${repo}")`, /^[^/]+\/[^/]+$/.test(repo),
-      `repo is ${JSON.stringify(config.repo ?? null)}`);
+check(`the tree records which repository this is ("${repo}")`, /^[^/]+\/[^/]+$/.test(repo),
+      `FORK_REPO is ${JSON.stringify(repo || null)}`);
 check(`README.md is left to check-readme.mjs`, !scanned.includes('README.md'));
 
 const offenders = [];
@@ -443,7 +453,7 @@ for (const path of scanned) {
 
 check(`there were artifacts to scan (${present} of ${scanned.length} exist)`, present > 0);
 
-console.log('\n2. package.json agrees with board.config.json');
+console.log('\n2. package.json agrees with the repository it declares');
 
 const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
 const pkgIssues = packageIssues(pkg, repo);

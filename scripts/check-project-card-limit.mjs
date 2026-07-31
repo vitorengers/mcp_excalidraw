@@ -105,7 +105,7 @@ writeFileSync(payloadPath, JSON.stringify({
       projectV2: {
         id: 'PVT_kwHOBVSHIs4BefUS',
         title: 'mcp_excalidraw',
-        url: 'https://github.com/users/vitorengers/projects/5',
+        url: 'https://github.com/users/someone/projects/5',
         field: { id: 'PVTSSF_status', name: 'Status', options: [TODO, DOING, DONE] },
         items: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: ITEMS },
       },
@@ -126,7 +126,7 @@ function workspaceDir(id, config) {
   writeFileSync(join(dir, 'board.config.json'), JSON.stringify({
     name: id,
     repo: 'vitorengers/vibemaxxing',
-    githubProject: 'https://github.com/users/vitorengers/projects/5',
+    githubProject: 'https://github.com/users/someone/projects/5',
     ...config,
   }, null, 2), 'utf8');
   return dir;
@@ -192,8 +192,13 @@ try {
   check('which is not the documented default, or the setting would prove nothing',
         DEFAULT_CARD_LIMIT !== 8, `DEFAULT_CARD_LIMIT=${DEFAULT_CARD_LIMIT}`);
 
-  console.log('\n2. so the column this board draws is eight cards deep');
-  const board = await readProjectBoard(byId('this-repo'));
+  console.log('\n2. so the column a board configured that way draws is eight cards deep');
+  // Drawn from `says-eight`, a throwaway project configured to the same 8, rather than from
+  // this repository. Since #315 the tracked `board.config.json` names no `githubProject`, on
+  // purpose — a config every clone copies must not point at one account's project board — and
+  // `readProjectBoard` has nothing to read without one. What section 1 asserts is the half
+  // that is still this repository's own file: the number, and the loader reading it back.
+  const board = await readProjectBoard(byId('says-eight'));
   const done = findColumn(board, 'Done');
   check('Done draws 8', done?.cards.length === 8, `drew ${done?.cards.length}`);
   check('and counts the rest as hidden, rather than dropping them',
@@ -229,11 +234,11 @@ try {
   }
 
   console.log('\n5. an explicit cardLimit still wins, which is how the queue reads uncapped');
-  const uncapped = findColumn(await readProjectBoard(byId('this-repo'), { cardLimit: 0 }), 'Done');
+  const uncapped = findColumn(await readProjectBoard(byId('says-eight'), { cardLimit: 0 }), 'Done');
   check('cardLimit 0 lifts the configured 8', uncapped?.cards.length === DONE_ITEMS,
         `drew ${uncapped?.cards.length}`);
   check('and nothing is reported hidden', uncapped?.hidden === 0, `hidden=${uncapped?.hidden}`);
-  const three = findColumn(await readProjectBoard(byId('this-repo'), { cardLimit: 3 }), 'Done');
+  const three = findColumn(await readProjectBoard(byId('says-eight'), { cardLimit: 3 }), 'Done');
   check('a caller asking for 3 gets 3, over the file\'s 8', three?.cards.length === 3,
         `drew ${three?.cards.length}`);
 } catch (error) {

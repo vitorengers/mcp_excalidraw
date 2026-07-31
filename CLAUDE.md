@@ -14,9 +14,11 @@ requests. Conversation with the maintainer is Portuguese; the repository is not 
 
 ## Issue first, then a branch, then a pull request you merge yourself
 
-1. **Open an issue** and add it to
-   [Project 5](https://github.com/users/vitorengers/projects/5). The board is the record — work
-   that lands without an issue disappears from it.
+1. **Open an issue** and add it to the GitHub project this board is configured for — the
+   `githubProject` of the workspace you are working in, which lives in an untracked
+   `board.config.local.json` rather than in the repository, because a project board belongs
+   to an account and not to a clone ([docs/workspaces.md](docs/workspaces.md)). The board is
+   the record — work that lands without an issue disappears from it.
 2. **Branch from `main`**, one branch per issue. Never commit to `main` directly, and that
    includes board data: a re-exported `docs/board.excalidraw` is a commit like any other.
 3. **Open a pull request** whose body says `Closes #N`.

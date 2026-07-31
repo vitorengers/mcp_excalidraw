@@ -94,7 +94,7 @@ function board(sections) {
   return {
     projectId: 'PVT_hue',
     projectTitle: 'Hue check',
-    projectUrl: 'https://github.com/users/vitorengers/projects/5',
+    projectUrl: 'https://github.com/users/someone/projects/5',
     fieldId: 'PVTSSF_hue',
     fieldName: 'Stage',
     sections,
@@ -283,7 +283,7 @@ writeFileSync(fixturePath, JSON.stringify({
   data: { owner: { projectV2: {
     id: 'PVT_kwHOBVSHIs4BefUS',
     title: 'mcp_excalidraw',
-    url: 'https://github.com/users/vitorengers/projects/5',
+    url: 'https://github.com/users/someone/projects/5',
     field: { id: 'PVTSSF_status', name: 'Status', options: [TODO] },
     items: { pageInfo: { hasNextPage: false }, nodes: [] },
   } } },
@@ -302,7 +302,7 @@ writeFileSync(registryPath, JSON.stringify({
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Notes Hue',
   repo: 'vitorengers/vibemaxxing',
-  githubProject: 'https://github.com/users/vitorengers/projects/5',
+  githubProject: 'https://github.com/users/someone/projects/5',
 }), 'utf8');
 
 const PORT = await freePort();

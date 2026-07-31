@@ -8,6 +8,11 @@ public/dist/
 # Environment files
 .env
 
+# The board settings that belong to one machine rather than to the repository — `repo` and
+# `githubProject`, which name an account. `board.config.json` is tracked and says what the tool
+# is; this says whose checkout it is, and overrides it. See docs/workspaces.md.
+board.config.local.json
+
 # Logs
 *.log
 
