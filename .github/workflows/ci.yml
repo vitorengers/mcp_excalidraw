@@ -1,28 +1,57 @@
 name: CI
 
+# Three jobs, one per tier that a hosted runner can satisfy. `scripts/run-checks.mjs` is what
+# selects the checks — see docs/running.md, "Which checks run where" — and this file only says
+# which machine each tier gets and what has to be true before the runner is invoked.
+#
+# The `windows` and `wsl` tiers are deliberately absent: one needs a real distro behind
+# `wsl.exe`, which no hosted image has, and the other is the maintainer's own box. Both report
+# EXPECTED-SKIP wherever they are asked for, so adding them would buy a line of output.
+
 on:
   push:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
 
-jobs:
-  build-and-test:
-    name: Build and Type Check
-    runs-on: ubuntu-latest
+# Nothing here publishes anything, and nothing reads a secret, so a pull request from a fork
+# completes all three jobs exactly as a branch in this repository does.
+permissions:
+  contents: read
 
+# A second push to the same branch replaces the run it made obsolete rather than queueing
+# behind it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    name: fast / ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+
+    # `fail-fast: false` throughout: the point of the matrix is to find out which platforms are
+    # red, and cancelling the others the moment one fails answers that for exactly one of them.
     strategy:
+      fail-fast: false
       matrix:
-        node-version: [18.x, 20.x, 22.x]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['20.x', '22.x']
+        # `package.json` claims `>=18` and nothing has ever tested it. One combination is what
+        # that claim is worth — either it holds, or this job is the evidence that the engines
+        # field needs raising.
+        include:
+          - os: ubuntu-latest
+            node: '18.x'
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js ${{ matrix.node }}
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: ${{ matrix.node }}
           cache: 'npm'
 
       - name: Install dependencies
@@ -31,29 +60,22 @@ jobs:
       - name: Run TypeScript type check
         run: npm run type-check
 
+      # `run-checks.mjs` refuses to run against a missing dist/ and will not build one itself,
+      # so this step is what the whole job rests on rather than a convenience.
       - name: Build project
         run: npm run build
 
-      - name: Check build artifacts
-        run: |
-          echo "Checking if build artifacts exist..."
-          test -f dist/index.js || (echo "dist/index.js not found" && exit 1)
-          test -f dist/server.js || (echo "dist/server.js not found" && exit 1)
-          test -d dist/frontend || (echo "dist/frontend not found" && exit 1)
-          echo "All build artifacts present!"
+      - name: Run the fast tier
+        run: node scripts/run-checks.mjs --tier fast
 
-      - name: Upload build artifacts
-        if: matrix.node-version == '20.x'
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-artifacts
-          path: |
-            dist/
-          retention-days: 7
+  browser:
+    name: browser / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
 
-  lint-check:
-    name: Lint Check
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - name: Checkout code
@@ -65,20 +87,54 @@ jobs:
           node-version: '20.x'
           cache: 'npm'
 
+      # Installed rather than assumed. An image that ships a browser today may not tomorrow,
+      # and a browser tier running against whatever happens to be on the machine is a tier
+      # whose result nobody can reproduce.
+      - name: Install Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          install-dependencies: true
+
       - name: Install dependencies
         run: npm ci
 
-      - name: Check for TypeScript errors
-        run: npm run type-check
+      - name: Build project
+        run: npm run build
 
-      - name: Check development artifacts are in English
-        run: node scripts/check-english-only.mjs
+      # `--strict` is the half that matters: without it a check that found no browser exits 3
+      # and is reported as a skip, which is how sixty-nine checks hide behind a green tick.
+      - name: Run the browser tier
+        run: node scripts/run-checks.mjs --tier browser --strict
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
 
-      - name: Check tracked line endings and file modes
-        run: node scripts/check-tracked-file-modes.mjs
+  repo:
+    name: repo / ubuntu-latest
+    runs-on: ubuntu-latest
 
-      # Red until the renames it guards land (#293, #294, #299, #300). It is last in the job
-      # so the steps above keep reporting their own result, and it is here rather than waiting
-      # for them because a guard added after the rename describes the rename.
-      - name: Check no artifact declares the upstream fork's identity
-        run: node scripts/check-fork-identity.mjs
+    steps:
+      # The full history, because these five ask what this fork has merged and a shallow clone
+      # cannot answer.
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      # Ubuntu alone, and once. These read tracked files and this repository's own board, so a
+      # second platform would be a second chance to disagree about a file rather than a second
+      # measurement.
+      - name: Run the repo tier
+        run: node scripts/run-checks.mjs --tier repo

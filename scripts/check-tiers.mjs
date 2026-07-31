@@ -151,8 +151,12 @@ const pretendPortable = [];
  *     Windows never builds one. It is the same shape as the case above: the check needs no
  *     distro, and `wsl` is the one tier on which its subject — a machine without `wsl.exe` —
  *     is guaranteed not to hold.
+ *   - `check-ci-workflow.mjs` (#280) names `CHROME_PATH` in order to assert that the browser
+ *     job in `.github/workflows/ci.yml` exports one. It reads YAML and starts nothing, so it
+ *     is the third of the same shape: the string is the subject rather than a dependency.
  */
-const SELF_DESCRIBING = ['check-tiers.mjs', 'check-browser-strict.mjs', 'check-wsl-windows-only.mjs'];
+const SELF_DESCRIBING = ['check-tiers.mjs', 'check-browser-strict.mjs', 'check-wsl-windows-only.mjs',
+                         'check-ci-workflow.mjs'];
 
 for (const [file, tier] of tierOf) {
   if (SELF_DESCRIBING.includes(file)) continue;

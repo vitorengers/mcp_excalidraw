@@ -324,3 +324,32 @@ bundle, `/usr/bin/google-chrome`, `/usr/bin/chromium`, `/usr/bin/chromium-browse
 sandbox posture and CDP may not attach the same way, so it is only ever reached where no
 ordinary install exists to win. Adding a path anywhere else is a second copy that will drift,
 and `node scripts/check-browser-strict.mjs` fails on one.
+
+### And what a pull request runs
+
+`.github/workflows/ci.yml` is three jobs, one per tier a hosted runner can satisfy. Each of
+them builds before it runs anything, because `run-checks.mjs` refuses a missing `dist/` and
+will not make one itself.
+
+| Job | Runners | Node | Runs |
+|---|---|---|---|
+| `fast` | ubuntu, macOS, Windows | 20 and 22, plus 18 on ubuntu | `--tier fast` |
+| `browser` | ubuntu, macOS, Windows | 20 | `--tier browser --strict` |
+| `repo` | ubuntu, with `fetch-depth: 0` | 20 | `--tier repo` |
+
+The `browser` job installs its own Chrome — `browser-actions/setup-chrome` — and exports
+`CHROME_PATH` to the run, rather than trusting the image to carry one; `--strict` is what turns
+a check that found no browser from a skip into a failure. The `repo` job needs the full history
+because `check-board-map.mjs` and `check-shallow-clone.mjs` ask what this fork has merged, and
+it is ubuntu alone and once, because those five read tracked files and no platform can disagree
+about them.
+
+The `windows` and `wsl` tiers are not in the workflow. `wsl` needs a real distro, which no
+hosted image has; `windows` is one check that reads `process.platform`, and is the maintainer's
+to run. Both report EXPECTED-SKIP wherever they are asked for.
+
+Nothing in the workflow reads a secret and nothing publishes anything, so a pull request from a
+fork completes all three jobs exactly as a branch in this repository does. `permissions:
+contents: read` and a `concurrency` group that cancels the run a second push made obsolete are
+declared at the top of the file. `node scripts/check-ci-workflow.mjs` holds all of that,
+alongside the rules about publishing from a pull request and about host port 3000.
