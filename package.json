@@ -94,6 +94,7 @@
     "dist/**/*",
     "skills/**/*",
     "docs/*.md",
+    "docs/blocks.excalidrawlib",
     "*.d.ts",
     "README.md",
     "LICENSE",

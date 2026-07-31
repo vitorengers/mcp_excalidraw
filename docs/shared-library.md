@@ -13,11 +13,23 @@ A project with no library of its own still gets the shared one. A missing or mal
 reported alongside the items that did load rather than failing the whole request: one broken
 library should not leave every board with no shapes at all.
 
+## Where the shared one comes from with nothing set
+
+`EXCALIDRAW_LIBRARY` **defaults to the `docs/blocks.excalidrawlib` this build ships**, resolved
+from the server module rather than from the working directory — `../docs` beside `dist/` is the
+shipped file both in a checkout and in an npm-installed copy, which is why the file is in the
+`files` whitelist in `package.json`. Before #305 the variable had no default at all, so a fresh
+install, or a checkout whose operator never exported it, had no shared library: the `+` on the
+notes column found no issue block and answered a toast.
+
+The variable still overrides it, and an **explicitly empty** value is how a board says it wants
+no shared shapes at all — unset no longer means none.
+
 ## How it is set up here
 
-`EXCALIDRAW_LIBRARY` points at this repository's `docs/blocks.excalidrawlib`, which holds the
-tool's own blocks — the **Issue block** and a plain **Card**. Those are primitives of the tool
-rather than shapes belonging to one project, so every board gets them:
+The shipped `docs/blocks.excalidrawlib` holds the tool's own blocks — the **Issue block** and a
+plain **Card**. Those are primitives of the tool rather than shapes belonging to one project, so
+every board gets them:
 
 ```
 board-tool  -> Issue block, Card
