@@ -102,7 +102,7 @@ export const SETTINGS = [
   { name: 'ENV_FILE', fallback: '<cwd>/.env', description: 'Read this .env instead of the one beside the working directory' },
   { name: 'NO_DOTENV', fallback: 'unset', description: '1 stops both configuration files being read, leaving only the environment' },
   { name: 'NO_AUTOSTART', fallback: 'unset', description: '1 stops the CLI and the MCP server auto-spawning a canvas' },
-  { name: 'WORKSPACES', fallback: 'one default board', description: 'Path to the workspace registry JSON' },
+  { name: 'WORKSPACES', fallback: 'workspaces.json in the state directory', description: 'Path to the registry JSON — unset resolves the per-user default' },
   { name: 'BOARD_STATE', fallback: 'beside the registry', description: 'Where each registered board is saved between processes' },
   { name: 'DOCS_DIR', fallback: "the shipped docs/", description: "Where GET /api/docs/:key reads from for a board with no docsDir of its own" },
   { name: 'LIBRARY', fallback: 'the shipped blocks library', description: 'An .excalidrawlib served to every board' },
