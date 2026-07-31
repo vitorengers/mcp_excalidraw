@@ -207,6 +207,80 @@ change again, and say which you chose and why in the pull request. Do not assume
 because it is there, and do not begin writing on top of it without having looked.`;
 }
 
+/** What a run that ended without landing anything left for the attempt that follows it. */
+export interface UnfinishedRun {
+  /** The pull request the previous attempt opened, or null when it opened none. */
+  pullRequest: string | null;
+  /** What it left in this checkout, when it left anything. */
+  worktree: HeldWorktree | null;
+}
+
+/**
+ * The section that says the previous attempt was *this run*, and what it failed to do.
+ *
+ * Distinct from `resumeSection`, and the distinction is the whole reason this exists.
+ * That one is addressed to an agent picking up a stranger's checkout after a *server* died —
+ * so it says "none of this was reviewed, read it before you trust it". Here the previous
+ * attempt was this same board, minutes ago, working from this same prompt: the work is not
+ * suspect, it is unfinished, and telling an agent to consider discarding it would invite it to
+ * redo a change that is already correct.
+ *
+ * **What is missing differs, so the text does.** With no pull request there is a change to
+ * finish and open one for; with a pull request already open the only thing missing is the merge,
+ * and an agent not told that opens a second one — nothing downstream counts pull requests, so
+ * two for one issue is an error nowhere.
+ *
+ * **It names the defect**, because the recovery runs in the same headless mode with the same
+ * tendency. Both runs this was written for ended their turn while a background `npm test` was
+ * still going, believing something would call them back; in `claude -p` nothing does.
+ *
+ * **And it refuses to force a merge.** The marker is how a deliberate stop is recorded, but an
+ * agent that stopped for a person and forgot to print it would be recovered as though it had
+ * simply walked away. So the second attempt is told to check for that before merging anything —
+ * a guard that does not depend on the first agent having remembered its own signal.
+ */
+export function unfinishedSection(previous: UnfinishedRun | null | undefined): string {
+  if (!previous) return '';
+
+  const left = previous.worktree
+    ? [
+        previous.worktree.commits
+          ? `${previous.worktree.commits} commit(s) on this branch that the default branch does not have`
+          : null,
+        previous.worktree.changes ? `${previous.worktree.changes} path(s) with uncommitted changes` : null,
+      ].filter(Boolean).join(', and ') || 'no visible change'
+    : 'no visible change';
+
+  const missing = previous.pullRequest
+    ? `A pull request is already open for this work: ${previous.pullRequest}. **Do not open another
+one.** What is missing is the merge. Bring the branch up to date with the default branch, make
+sure the checks pass, and merge that pull request.`
+    : `No pull request was ever opened. What is in this checkout is ${left}. Finish the change,
+push the branch, and open the pull request.`;
+
+  return `\n\n---\n\nYou are finishing a run that stopped short. The previous attempt was this same
+board working from this same prompt, minutes ago — the work in this checkout is yours, not a
+stranger's, and it did not finish rather than going wrong. Read it before you add to it, but do
+not start the change again on the assumption that it is suspect.
+
+${missing}
+
+**How the previous attempt failed, so that you do not repeat it.** It ended its turn while it was
+still waiting for something in the background — a test suite, usually — believing it would be
+called back when that finished. It is not: this is a non-interactive run, and the turn ending is
+the process ending. So wait in the foreground. Do not put the wait itself in the background, and
+do not end a turn while anything you started is still pending. Whatever the last thing you do is,
+the pull request URL is what you print after it.
+
+**One thing to check before you merge anything.** The previous attempt may have left the pull
+request open deliberately, because it hit a conflict it could not honestly reconcile and stopped
+for a person. Look at the pull request and the branch first. If that is what happened, do not
+merge over it — print \`${ESCALATION_MARKER}: <pull request URL>\` and stop, exactly as it should
+have.
+
+This is the **last** attempt. Nothing will try again after you.`;
+}
+
 export async function runImplementAgent(
   workspace: Workspace,
   issueUrl: string,
@@ -222,6 +296,15 @@ export async function runImplementAgent(
      * Null for every ordinary run, which is what keeps the prompt unchanged for one.
      */
     resuming?: HeldWorktree | null;
+    /**
+     * What this same run left behind when it ended without landing anything.
+     *
+     * Null for a first attempt, which is what keeps the prompt unchanged for one. Distinct from
+     * `resuming`: that is a stranger's checkout after a server died, this is our own run being
+     * finished. Both can never be set at once — a resumed run that stops short reaches this on
+     * its second pass and the resume paragraph has already been said.
+     */
+    unfinished?: UnfinishedRun | null;
     /**
      * Where the run's token totals go while it runs, for a command that streams them.
      *
@@ -250,7 +333,9 @@ export async function runImplementAgent(
   // workflow the board cannot read gets a refusal naming the file, not a run that quietly
   // works the way it always did.
   const workflow = await loadAgentWorkflow(workspace, 'implement', settings);
-  if (!workflow.ok) return { ok: false, url: null, output: '', error: workflow.error };
+  // No code, because nothing was spawned: a project whose workflow file cannot be read is a
+  // refusal to fix rather than a run to try again.
+  if (!workflow.ok) return { ok: false, url: null, output: '', code: null, error: workflow.error };
 
   const prompt = `${IMPLEMENT_AGENT_PROMPT}\n\n---\n\nThe issue to implement:\n\n${issueUrl}`
     + worktreeSection(worktree)
@@ -258,6 +343,10 @@ export async function runImplementAgent(
     // has just introduced — and because that paragraph ends by saying a worktree is kept when
     // work is left in it, which is precisely how this one came to exist.
     + resumeSection(options.resuming ?? null)
+    // After both, because it is about what *this* run just failed to do rather than about the
+    // checkout — and it ends by naming the one thing the agent must not repeat, which is worth
+    // being the last board-written words before the project's own.
+    + unfinishedSection(options.unfinished ?? null)
     // Last of all, and deliberately: everything above is what this board tells every agent,
     // and the project's own workflow has to be the last thing a literal reader is told.
     + workflowSection(workflow.text);

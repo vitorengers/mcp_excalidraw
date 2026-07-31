@@ -81,6 +81,20 @@ export interface ImplementRecord {
    * never whether it may go.
    */
   terminal: string | null;
+  /**
+   * Whether this run has already spent its one automatic recovery.
+   *
+   * The bound, and it lives on the record rather than in a local variable because the record is
+   * what survives everything that rebuilds it — `carriedImplement` carries it the way it carries
+   * the start time, so a second attempt cannot be granted twice by a code path that forgot.
+   *
+   * `dispatchQueue` states the opposite rule on purpose, and it is there to stop a broken build
+   * being retried forever: *"the queue tries each issue once"*. An automatic recovery is a
+   * second attempt by another name, so this is what reconciles the two — one, ever, recorded
+   * against the run so that whoever reads the board is told a run already failed once rather
+   * than a clean story about a first attempt.
+   */
+  recovered: boolean;
 }
 
 /** Cumulative token counts for a run, as the agent reported them. */
