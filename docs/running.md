@@ -48,11 +48,42 @@ effect, compare that against the process you believe you started.
 It also returns **`workspaces`** — `configured` when `EXCALIDRAW_WORKSPACES` was set **or** the
 registry this canvas resolved has projects in it, `none` otherwise. Both clauses, since #310:
 every canvas resolves a registry now, so "the variable was set" alone would report `configured`
-for the very stand-in below — **`terminal`**, and **`agents`**
-(`{ issue, implement }`, two booleans because the two variables are separate ones), and those
-are what tell you the board is a board. Read `agents` first after a restart: they fail the most
-quietly of the three, because the blocks still draw and the buttons are still there and pressing
-one simply does nothing. Anything that runs a canvas-driving CLI command can
+for the very stand-in below — **`terminal`**, and **`agents`**, and those are what tell you the
+board is a board. Read `agents` first after a restart: they fail the most quietly of the three,
+because the blocks still draw and the buttons are still there and pressing one simply does
+nothing.
+
+`agents` used to be two booleans, and both of them meant only that a variable was non-empty —
+the one thing about an agent that cannot go wrong. Since #307 it is what a preflight found out
+by **running** the configured binary, per role and per environment:
+
+```json
+"agents": {
+  "issue":     { "configured": true,
+                 "environments": {
+                   "native": { "backend": "claude", "resolved": "found", "version": "2.0.14" },
+                   "wsl":    { "backend": "claude", "resolved": "not probed", "version": null } } },
+  "implement": { "configured": false,
+                 "environments": {
+                   "native": { "backend": null, "resolved": "unconfigured", "version": null },
+                   "wsl":    { "backend": null, "resolved": "unconfigured", "version": null } } }
+}
+```
+
+`resolved` is one of `found`, `not found`, `unconfigured`, `unsupported` (no WSL on this
+platform), `not probed` (a command for a distro, and no project in one to try it in), `probing`
+(the probes are still out — the server does not block `listen` on them) or `unknown`. Two roles
+still, never one, because the two variables are separate ones and turning on issue blocks must
+not quietly turn on repository writes; two environments, because a host path configured on a
+board with a project inside a distro is found in one and missing in the other.
+
+**A `not found` also prints a line at startup**, on `warn`, naming the role, the environment and
+the binary. `vibemaxxing doctor` asks the same question from a shell — see
+[cli.md](cli.md). Neither the route nor the command ever carries the command line, a path or a
+flag: `/health` is unauthenticated on loopback, and a command line here is somebody's absolute
+path with their permission flags in it.
+
+Anything that runs a canvas-driving CLI command can
 auto-start a server (`EXCALIDRAW_NO_AUTOSTART=1` stops it), and an auto-started one inherits the
 environment of whatever started it — which for an MCP server attached to an editor is no
 `EXCALIDRAW_*` at all. It binds this port, answers `status: healthy` and is not your board: no

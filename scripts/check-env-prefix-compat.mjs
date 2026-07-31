@@ -116,11 +116,20 @@ async function board(env) {
   return { port, health, logFile, read: canvas.read };
 }
 
-/** What `/health` says this instance *is*, without the fields that differ between processes. */
+/**
+ * What `/health` says this instance *is*, reduced to what a spelling can change.
+ *
+ * The agents are read down to `configured` rather than compared whole: since #404 each role
+ * carries a live preflight — `resolved: "probing"` until the probe lands — and two servers
+ * started a second apart would differ there for a reason that has nothing to do with prefixes.
+ */
 const identityOf = (health) => JSON.stringify({
   workspaces: health.workspaces,
   terminal: health.terminal,
-  agents: health.agents,
+  agents: {
+    issue: health.agents?.issue?.configured ?? null,
+    implement: health.agents?.implement?.configured ?? null,
+  },
 });
 
 async function projectAt(port) {
@@ -155,7 +164,7 @@ try {
         JSON.stringify(legacy.health.workspaces));
   check('and a terminal', legacy.health.terminal === true, JSON.stringify(legacy.health.terminal));
   check('and the issue agent it was given',
-        legacy.health.agents?.issue === true, JSON.stringify(legacy.health.agents));
+        legacy.health.agents?.issue?.configured === true, JSON.stringify(legacy.health.agents));
 
   // ─── 2. only the new names ─────────────────────────────────────
 

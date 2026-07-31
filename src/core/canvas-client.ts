@@ -2,6 +2,9 @@ import logger from '../utils/logger.js';
 import { ServerElement } from '../types.js';
 import { EXPRESS_SERVER_URL, ENABLE_CANVAS_SYNC } from './config.js';
 import { CANVAS_SERVICE_NAME, isAcceptedCanvasService } from './identity.js';
+// Type only: this module is on the CLI's own startup path, and the preflight reaches the
+// agent module and its spawns. What is wanted here is the shape of a payload, not the code.
+import type { AgentsHealth } from './agent-preflight.js';
 
 // API Response types
 export interface ApiResponse {
@@ -354,6 +357,12 @@ export interface HealthStatus {
   // Identity fields (v1.1+); `stop` requires both before signaling anything
   service?: string;
   pid?: number;
+  /**
+   * What the agent preflight found, per role and per environment. Optional because a canvas
+   * from an older build answers everything above and none of this — `doctor` says so rather
+   * than reading `undefined` as "no agents".
+   */
+  agents?: AgentsHealth;
 }
 
 export async function getHealth(timeoutMs = 2000): Promise<HealthStatus> {

@@ -113,7 +113,8 @@ try {
     withDotenv.health.workspaces === 'configured',
     `/health said workspaces: ${JSON.stringify(withDotenv.health.workspaces)}`);
   check('and its agents are configured from the file too',
-    withDotenv.health.agents?.issue === true && withDotenv.health.agents?.implement === true,
+    withDotenv.health.agents?.issue?.configured === true
+    && withDotenv.health.agents?.implement?.configured === true,
     JSON.stringify(withDotenv.health.agents));
 
   // ─── EXCALIDRAW_ENV_FILE moves the file ──────────────────────
@@ -121,10 +122,11 @@ try {
   console.log('\nEXCALIDRAW_ENV_FILE names the file instead');
 
   const elsewhere = await startWithDotenv({ EXCALIDRAW_ENV_FILE: elsewhereFile });
-  check('the named file is read', elsewhere.health.agents?.issue === true,
+  check('the named file is read', elsewhere.health.agents?.issue?.configured === true,
     JSON.stringify(elsewhere.health.agents));
   check('and the .env beside the working directory is not',
-    elsewhere.health.workspaces === 'none' && elsewhere.health.agents?.implement === false,
+    elsewhere.health.workspaces === 'none'
+    && elsewhere.health.agents?.implement?.configured === false,
     `/health said ${JSON.stringify({ workspaces: elsewhere.health.workspaces, agents: elsewhere.health.agents })}`);
 
   // ─── The fix ─────────────────────────────────────────────────
@@ -136,7 +138,8 @@ try {
     isolated.health.workspaces === 'none',
     `/health said workspaces: ${JSON.stringify(isolated.health.workspaces)} — the .env was read`);
   check('neither agent is configured',
-    isolated.health.agents?.issue === false && isolated.health.agents?.implement === false,
+    isolated.health.agents?.issue?.configured === false
+    && isolated.health.agents?.implement?.configured === false,
     JSON.stringify(isolated.health.agents));
   check('and the terminal the .env asked for is off',
     isolated.health.terminal === false,
@@ -151,9 +154,9 @@ try {
 
   const granted = await startThroughHelper({ EXCALIDRAW_ISSUE_AGENT: 'node --version' });
   check('an agent the check granted is configured',
-    granted.health.agents?.issue === true, JSON.stringify(granted.health.agents));
+    granted.health.agents?.issue?.configured === true, JSON.stringify(granted.health.agents));
   check('and one it did not grant is still off, .env or no .env',
-    granted.health.agents?.implement === false, JSON.stringify(granted.health.agents));
+    granted.health.agents?.implement?.configured === false, JSON.stringify(granted.health.agents));
 
   // ─── The parent process cannot decide either ─────────────────
 
@@ -165,7 +168,7 @@ try {
   const inherited = await startThroughHelper({}, workDir);
   check('is stripped before the child is spawned',
     inherited.health.workspaces === 'none'
-    && inherited.health.agents?.implement === false
+    && inherited.health.agents?.implement?.configured === false
     && inherited.health.terminal === false,
     JSON.stringify({
       workspaces: inherited.health.workspaces,
