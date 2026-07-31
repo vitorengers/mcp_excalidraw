@@ -45,7 +45,10 @@ foreach ($processId in ($busy.OwningProcess | Select-Object -Unique)) {
 `GET /health` returns the `pid` of whatever is answering. When a change seems to have had no
 effect, compare that against the process you believe you started.
 
-It also returns **`workspaces`** — `configured` or `none` — **`terminal`**, and **`agents`**
+It also returns **`workspaces`** — `configured` when `EXCALIDRAW_WORKSPACES` was set **or** the
+registry this canvas resolved has projects in it, `none` otherwise. Both clauses, since #310:
+every canvas resolves a registry now, so "the variable was set" alone would report `configured`
+for the very stand-in below — **`terminal`**, and **`agents`**
 (`{ issue, implement }`, two booleans because the two variables are separate ones), and those
 are what tell you the board is a board. Read `agents` first after a restart: they fail the most
 quietly of the three, because the blocks still draw and the buttons are still there and pressing
@@ -120,8 +123,8 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 |---|---|---|
 | `EXCALIDRAW_CANVAS_PORT` | `3737` | The port the launch path tries first. A preference, not a pin: with `PORT` unset the search walks past it to the next free port |
 | `EXCALIDRAW_STATE_HOME` | per-OS state directory | The parent of the directory holding `config.json`, the pidfile, the restart log and the running board's state file. For a check that needs a throwaway one |
-| `EXCALIDRAW_WORKSPACES` | unset | Path to the registry JSON. Unset means one `default` board and no project tabs — see [workspaces.md](workspaces.md) |
-| `EXCALIDRAW_BOARD_STATE` | beside the registry | Where each registered board is saved between processes. Unset puts them in a directory named after the registry file; with no registry, nothing is saved — [element-store.md](element-store.md) |
+| `EXCALIDRAW_WORKSPACES` | `workspaces.json` in the state directory | Path to the registry JSON. Unset resolves the per-user default, which is created when the first project is added — see [workspaces.md](workspaces.md) |
+| `EXCALIDRAW_BOARD_STATE` | beside the registry | Where each registered board is saved between processes. Unset puts them in a directory named after the registry file, default registry included — [element-store.md](element-store.md) |
 | `EXCALIDRAW_DOCS_DIR` | the shipped `docs/` | Where `GET /api/docs/:key` reads from for a board with no `docsDir` of its own. Set it **empty** for a setup that wants per-project documents and no fallback — [docs-block.md](docs-block.md) |
 | `EXCALIDRAW_LIBRARY` | the shipped `docs/blocks.excalidrawlib` | An `.excalidrawlib` served to every board, alongside each project's own. Set it **empty** for a board that wants no shared shapes at all — [shared-library.md](shared-library.md) |
 | `EXCALIDRAW_ISSUE_AGENT` | unset | The command line that researches an observation and opens the issue. Unset means issue blocks do nothing |

@@ -8,13 +8,13 @@ fetches `GET /api/docs/:key?workspace=...` and renders that markdown in a panel.
 ```
 
 The key resolves to `<docsDir>/<key>.md` inside the project, where `docsDir` comes from the
-project's own `board.config.json`. A board with none — the single-board setup, which has no
-registry to resolve a directory from, or a project registered before the seeding below — falls
-back to **the `docs/` this build ships**. `EXCALIDRAW_DOCS_DIR` overrides that fallback, and
-setting it *empty* removes it, which is how a setup that wants per-project documents and nothing
-else says so. It used to be unset by default, which meant the route was off until somebody typed
-their own install directory into it — so the tool could not serve documentation it publishes in
-its own npm package.
+project's own `board.config.json`. A board with none — a canvas with no registered project to
+resolve a directory from, or a project registered before the seeding below — falls back to **the
+`docs/` this build ships**. `EXCALIDRAW_DOCS_DIR` overrides that fallback, and setting it *empty*
+removes it, which is how a setup that wants per-project documents and nothing else says so. It
+used to be unset by default, which meant the route was off until somebody typed their own install
+directory into it — so the tool could not serve documentation it publishes in its own npm
+package.
 
 A project registered through the `+` is given `docsDir` when it actually has a `docs/` folder —
 read from disk, never guessed — because `docsDir` is the only route documentation has, and a
