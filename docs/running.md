@@ -1,8 +1,13 @@
 # Running the board
 
-How to start VibeMaxxing. Until #151 this was written down nowhere in the repository: four
-tracked documents cited a PowerShell start script that has never been in `git ls-files`, and the
-only start instruction a clone actually got was the upstream README's port 3000 — which
+**This is the operator and development procedure** — the environment a configured board runs
+with, restarting it, and running the checks. If you are trying to get a board up for the first
+time, [install.md](install.md) is that document and it is shorter: one command, or one
+double-click, on whichever platform you are on.
+
+Until #151 the procedure was written down nowhere in the repository: four tracked documents
+cited a PowerShell start script that has never been in `git ls-files`, and the only start
+instruction a clone actually got was the upstream README's port 3000 — which
 [trap-port-3000.md](trap-port-3000.md) explains can never work on the machine this fork is
 developed on.
 
@@ -29,9 +34,10 @@ PNG/SVG export, viewport control and Mermaid conversion all happen in the fronte
 
 An installed copy does all three of those in one word — `vibemaxxing`, with no arguments, starts
 the board, opens the tab and prints `VibeMaxxing <version> — <url>`. That is the path a user
-takes; the procedure above is the one an operator takes, because it is the environment below that
-this document exists for. See [cli.md](cli.md) for when a bare invocation means the MCP stdio
-server instead, and for `--no-open`.
+takes and [install.md](install.md) is where it is written out, for each platform; the procedure
+above is the one an operator takes, because it is the environment below that this document
+exists for. See [cli.md](cli.md) for when a bare invocation means the MCP stdio server instead,
+and for `--no-open`.
 
 ## What it requires: github.com
 
