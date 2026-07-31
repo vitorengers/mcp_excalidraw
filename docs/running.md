@@ -27,6 +27,28 @@ node dist/server.js      # with the environment below
 Then open `http://127.0.0.1:<PORT>`. A tab has to be open for anything that renders: screenshots,
 PNG/SVG export, viewport control and Mermaid conversion all happen in the frontend.
 
+## What it requires: github.com
+
+The workbench half of this tool reads **github.com, and only github.com**. Issue blocks, the
+project-board mirror, implementations and interrupted-run recovery all require it: a GitHub
+Enterprise Server, a GitLab or any other forge is out of scope, and there is no host setting
+anywhere that points them somewhere else. `EXCALIDRAW_GH_COMMAND` below says *where the `gh`
+binary is*, never which host it talks to, and the `gh` it names has to be authenticated
+(`gh auth status`) against github.com.
+
+Stated rather than resolved, and deliberately (#322). The host used to be compiled into five
+separate patterns that each assumed it in silence, so an enterprise URL was refused as if it
+were **malformed** — `Not a GitHub issue URL` about a URL that plainly was one. It now lives in
+`src/core/github-host.ts` with the words each refusal uses: an issue URL somewhere else is
+answered with *This board only reads issues on github.com*, and a checkout whose `origin` is
+elsewhere is told that its remote is not a github.com one rather than offered a setting that
+would rebuild its issues on this host. `scripts/check-github-host.mjs` holds the five patterns
+to that one answer.
+
+The canvas itself requires none of this: drawing, the CLI, the MCP tools, the docs cards and the
+terminal work on a project with no GitHub remote at all. What such a project does not get is the
+three blocks that talk to GitHub.
+
 ## Before you start: kill what is already listening
 
 This is the trap that costs the most, because everything looks like it worked — see

@@ -108,6 +108,11 @@ export interface ProjectRef {
  * is still refused. Nothing past the number is ever *used* — see `parseProjectUrl` for why the
  * parts that are used are matched at all — but a pattern that ended in `.*` would be one
  * nobody could check by reading it.
+ *
+ * `github.com` is a requirement, not a default: `github-host.ts` is where that was decided and
+ * written down, and `githubProjectRefusal` below shows the two forms that do work — it moved
+ * here from `workspaces.ts` with #317, so that the value refused as it is *typed* and the same
+ * value refused as it is *read* say one sentence rather than two.
  */
 const PROJECT_URL =
   /^https:\/\/github\.com\/(users|orgs)\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/projects\/(\d{1,10})(?:\/views\/\d{1,10})?\/?(?:\?[\w%.~!$&()*+,;:@/=|-]*)?(?:#[\w%.~!$&()*+,;:@/=|?-]*)?$/;
