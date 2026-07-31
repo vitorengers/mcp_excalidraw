@@ -12,6 +12,7 @@ import { spawn } from 'child_process';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
 import { agentPath, buildAgentCommand } from './issue-agent.js';
+import { env } from './settings.js';
 
 /**
  * The `gh` invocation for one workspace. Overridable so a check script can answer without
@@ -40,9 +41,9 @@ import { agentPath, buildAgentCommand } from './issue-agent.js';
  */
 export function ghCommandFor(workspace: Workspace): string {
   if (workspace.environment.kind === 'wsl') {
-    return process.env.EXCALIDRAW_GH_COMMAND_WSL?.trim() || 'gh';
+    return env('GH_COMMAND_WSL')?.trim() || 'gh';
   }
-  return process.env.EXCALIDRAW_GH_COMMAND?.trim() || 'gh';
+  return env('GH_COMMAND')?.trim() || 'gh';
 }
 
 /**

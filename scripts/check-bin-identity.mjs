@@ -68,6 +68,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { SETTING_PREFIXES } from './lib/spawn-canvas.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** The two command names upstream's published package installs. */
@@ -309,9 +311,13 @@ console.log('\n5. the MCP handshake announces this project');
 
 /** Speak `initialize` to the real bin over stdio and return its result, or null. */
 async function initialize(timeoutMs = 20000) {
+  // Both prefixes, since #311: the server reads `VIBEMAXXING_*` as well, so a loop that strips
+  // one lets the operator's own board configuration back into a check that exists to describe
+  // an unconfigured install.
   const env = { ...process.env, EXCALIDRAW_NO_AUTOSTART: '1', ENABLE_CANVAS_SYNC: 'false' };
   for (const key of Object.keys(env)) {
-    if (key.startsWith('EXCALIDRAW_') && key !== 'EXCALIDRAW_NO_AUTOSTART') delete env[key];
+    const configuration = SETTING_PREFIXES.some((prefix) => key.startsWith(prefix));
+    if (configuration && key !== 'EXCALIDRAW_NO_AUTOSTART') delete env[key];
   }
   const child = spawn(process.execPath, [join(repoRoot, 'dist', 'bin.js')],
                       { cwd: repoRoot, env, stdio: ['pipe', 'pipe', 'pipe'] });

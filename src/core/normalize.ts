@@ -1,6 +1,7 @@
 import path from 'path';
 import { generateId, ServerElement, normalizeFontFamily } from '../types.js';
 import { ALLOWED_EXPORT_DIR } from './config.js';
+import { settingName } from './settings.js';
 
 // Safe file path validation to prevent path traversal attacks
 export function sanitizeFilePath(filePath: string): string {
@@ -9,7 +10,7 @@ export function sanitizeFilePath(filePath: string): string {
   if (!resolved.startsWith(allowedDir + path.sep) && resolved !== allowedDir) {
     throw new Error(
       `Path traversal blocked: "${filePath}" resolves outside the allowed directory "${allowedDir}". ` +
-      `Set EXCALIDRAW_EXPORT_DIR to change the allowed base directory.`
+      `Set ${settingName('EXPORT_DIR')} to change the allowed base directory.`
     );
   }
   return resolved;

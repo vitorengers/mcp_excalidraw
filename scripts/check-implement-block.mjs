@@ -160,9 +160,9 @@ async function disabledCases() {
   const id = await blockWithIssue(0);
   const off = await call(`/api/issue-block/${id}/implement`, { method: 'POST' });
   check('404 when EXCALIDRAW_IMPLEMENT_AGENT is unset', off.status === 404, `got ${off.status}`);
-  check('says how to enable it', /EXCALIDRAW_IMPLEMENT_AGENT/.test(off.body.error ?? ''), off.body.error);
+  check('says how to enable it', /VIBEMAXXING_IMPLEMENT_AGENT/.test(off.body.error ?? ''), off.body.error);
   // Enabling issue blocks must not enable repository writes.
-  check('naming the issue agent instead would not do', !/EXCALIDRAW_ISSUE_AGENT/.test(off.body.error ?? ''));
+  check('naming the issue agent instead would not do', !/VIBEMAXXING_ISSUE_AGENT/.test(off.body.error ?? ''));
   await call('/api/elements/clear', { method: 'DELETE' });
 }
 
