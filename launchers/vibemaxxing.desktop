@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=VibeMaxxing
+Comment=An Excalidraw workbench for AI coding agents
+Exec=sh -c "command -v node >/dev/null 2>&1 || exec xdg-open https://nodejs.org/en/download; exec npx -y @vitorengers/vibemaxxing@latest"
+Terminal=false
+Categories=Development;Graphics;
+Keywords=excalidraw;diagram;canvas;agent;
