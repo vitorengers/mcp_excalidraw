@@ -97,14 +97,63 @@ const SUBJECTS = [
   { word: 'commands', actual: commands.length },
 ];
 
+/**
+ * The spelled-out forms, because prose does not use digits.
+ *
+ * The count claims this repository actually drifted on were every one of them a word — "all
+ * fifteen", "all nineteen are optional", "Eighteen `EXCALIDRAW_*` variables" — and a pattern
+ * matching `\d+` saw none of them. Up to thirty, which is well past any of the three surfaces
+ * and past the point where prose stops spelling a number out.
+ */
+const NUMBER_WORDS = [
+  'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+  'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen',
+  'nineteen', 'twenty', 'thirty',
+];
+
+/** `twenty-six` as 26, `48` as 48, and `null` for a word this does not spell. */
+function valueOf(claimed) {
+  if (/^\d+$/.test(claimed)) return Number(claimed);
+  const [tens, units] = claimed.toLowerCase().split('-');
+  const base = NUMBER_WORDS.indexOf(tens);
+  if (base < 0) return null;
+  const scale = tens === 'thirty' ? 30 : base;
+  if (!units) return scale;
+  const extra = NUMBER_WORDS.indexOf(units);
+  return extra > 0 && extra < 10 ? scale + extra : null;
+}
+
+const SPELLED = `(?:twenty|thirty)-(?:${NUMBER_WORDS.slice(1, 10).join('|')})|${NUMBER_WORDS.join('|')}`;
+
+/**
+ * A spelled-out number is only a claim about this codebase when something quantifies it.
+ *
+ * `all twenty-six tools` is; `the model gets two tools` is not, and neither is "two tools of a
+ * kind drawn alike" in `docs/terminal.md`, which is about ANSI colour. Digits keep the broader
+ * pattern they have always had — nobody writes `the model gets 2 tools` — but small numbers
+ * spelled out are ordinary English and matching them bare would red the check on prose that
+ * counts something else entirely. So a word needs `all` in front of it, or `MCP`/`CLI` behind:
+ * both of the forms this repository actually drifted in.
+ */
+function claimPatterns(word) {
+  return [
+    new RegExp(`\\b(\\d+)(?:\\s+(?:MCP|CLI))?\\s+${word}\\b`, 'gi'),
+    new RegExp(`\\ball\\s+(?:of\\s+the\\s+)?(${SPELLED})(?:\\s+(?:MCP|CLI))?\\s+${word}\\b`, 'gi'),
+    new RegExp(`\\b(${SPELLED})\\s+(?:MCP|CLI)\\s+${word}\\b`, 'gi'),
+  ];
+}
+
 const wrong = [];
 for (const file of scanned) {
   const text = read(file);
   for (const { word, actual } of SUBJECTS) {
-    // `27 routes`, `26 MCP tools`, `19 CLI commands`, and README's `(26 Total)` heading form.
-    const claim = new RegExp(`(\\d+)(?:\\s+(?:MCP|CLI))?\\s+${word}`, 'gi');
-    for (const [whole, number] of text.matchAll(claim)) {
-      if (Number(number) !== actual) wrong.push(`${file}: "${whole}" (there are ${actual})`);
+    for (const claim of claimPatterns(word)) {
+      for (const [whole, number] of text.matchAll(claim)) {
+        const claimed = valueOf(number);
+        if (claimed !== null && claimed !== actual) {
+          wrong.push(`${file}: "${whole}" (there are ${actual})`);
+        }
+      }
     }
   }
 }
