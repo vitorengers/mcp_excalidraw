@@ -55,6 +55,9 @@ import {
   AgentCommands, AgentHost, agentCommandFor, runIssueAgent, runReviseAgent, runsHeadless,
   withoutPrintFlags
 } from './core/issue-agent.js';
+import {
+  AgentRoleCommands, AgentsHealth, agentRoles, initialAgents, preflightAgents, preflightLines
+} from './core/agent-preflight.js';
 import { AgentUsage } from './core/agent-usage.js';
 import {
   ClaudeEnvironmentStatus, readClaudeStatus, STALE_AFTER_SECONDS
@@ -2023,6 +2026,59 @@ const IMPLEMENT_AGENT_COMMANDS: AgentCommands = {
 const IMPLEMENT_AGENT_CONFIGURED = Boolean(
   IMPLEMENT_AGENT_COMMANDS.native || IMPLEMENT_AGENT_COMMANDS.wsl
 );
+
+// ─── Do the agents actually run? ──────────────────────────────
+//
+// Both of the flags above mean only that a string is non-empty, and for a long time that was
+// all `/health` could say about the most quietly broken thing on the board. `core/agent-
+// preflight.ts` is the answer: it runs argv[0] of each configured command with `--version`,
+// per role and per environment, and what comes back is a line at startup and the `agents`
+// field below. See that module for why the command is not re-run whole and why nothing that
+// reaches the wire carries it.
+const AGENT_ROLES: AgentRoleCommands[] = agentRoles({
+  issue: ISSUE_AGENT_COMMANDS,
+  implement: IMPLEMENT_AGENT_COMMANDS,
+});
+
+/**
+ * What `/health` says about the agents, replaced once when the probes land.
+ *
+ * A value rather than a promise, and read synchronously, because `/health` is what `stop`,
+ * auto-start and the restart supervisor all wait on: a route that awaited a `wsl.exe` round
+ * trip would make a slow distro into a board that looks like it never came up. Until the
+ * probes finish this says `probing`, which is true.
+ */
+let AGENT_PREFLIGHT: AgentsHealth = initialAgents(AGENT_ROLES);
+
+/**
+ * Ask, once, at startup — after `listen`, and never awaited by anything.
+ *
+ * The registry is read for one thing only: a project inside a distro, which is the only
+ * environment a WSL command can be tried in. A board with none pays nothing, which is most of
+ * them. Failures here are statuses rather than exceptions, so the whole of this is wrapped
+ * once: a preflight that could stop the board coming up would be worse than the silence it
+ * replaces.
+ */
+async function runAgentPreflight(): Promise<void> {
+  try {
+    // `registryPath()` rather than the raw variable, since #399: the registry has a per-OS
+    // default now, and a board whose only projects come from that default has projects like
+    // any other — including one inside a distro, which is the whole reason this reads it.
+    const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
+    const wslWorkspace = workspaces.find(
+      (workspace) => workspace.environment.kind === 'wsl' && !workspace.error
+    ) ?? null;
+
+    AGENT_PREFLIGHT = await preflightAgents({ roles: AGENT_ROLES, wslWorkspace });
+
+    for (const line of preflightLines(AGENT_PREFLIGHT, AGENT_ROLES)) {
+      if (line.level === 'warn') logger.warn(line.message);
+      else logger.info(line.message);
+    }
+  } catch (error) {
+    logger.warn(`Agent preflight could not run: ${(error as Error).message}`);
+  }
+}
 
 /**
  * How many implementations one workspace may have in flight at once.
@@ -4823,15 +4879,20 @@ function canvasIdentity(): CanvasIdentity {
     workspaces: hasWorkspaceRegistry() ? 'configured' : 'none',
     terminal: Boolean(TERMINAL_SETTING),
     // The agents fail the most quietly of the three: the routes answer, the blocks draw, the
-    // buttons are there, and pressing one does nothing. **Two booleans, never one** — the
+    // buttons are there, and pressing one does nothing. **Per role, never one** — the
     // variables are separate so that turning on issue blocks cannot quietly turn on repository
-    // writes, and a single flag here would hide the very asymmetry that split exists for.
-    // Whether they are set, never what they are: these are somebody's command lines, with
-    // paths and flags in them, and this route is unauthenticated on loopback.
-    agents: {
-      issue: ISSUE_AGENT_CONFIGURED,
-      implement: IMPLEMENT_AGENT_CONFIGURED
-    }
+    // writes, and a single field here would hide the very asymmetry that split exists for.
+    //
+    // It used to be two booleans, and both of them meant "a string is non-empty", which is the
+    // one thing about an agent that cannot go wrong. Now it is what the preflight found out by
+    // running the binary, per role *and* per environment — the second axis matters because a
+    // host path configured on a board with a project inside a distro is found in one and
+    // missing in the other, and one flag could only ever have reported one of the two.
+    //
+    // What it never carries is the command line: these are somebody's paths and permission
+    // flags, and this route is unauthenticated on loopback. `backend` is a name out of a list
+    // `core/agent-preflight.ts` holds and `version` is a version number, both by construction.
+    agents: AGENT_PREFLIGHT
   };
 }
 
@@ -5142,6 +5203,12 @@ async function startServer(): Promise<void> {
     // carrying the issue, and it can only write onto elements that are in the store when it
     // looks. The other order leaves a recovered `interrupted` run recorded but undrawn.
     void seedBoardsFromFiles().then(recoverInterruptedRuns);
+
+    // And the one question nothing used to ask: do the agents this board is configured with
+    // actually run? Here for the same reason as the line above — a `wsl.exe` round trip must
+    // not sit between the port opening and the board being usable — and separately, because
+    // neither depends on the other.
+    void runAgentPreflight();
   });
 
   const shutdown = (signal: NodeJS.Signals): void => {

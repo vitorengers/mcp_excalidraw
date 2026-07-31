@@ -118,7 +118,8 @@ try {
   check('it answers /health', board.health !== null);
   check('and it is the board rather than a stand-in',
     board.health?.workspaces === 'configured' && board.health?.terminal === true
-    && board.health?.agents?.issue === true && board.health?.agents?.implement === true,
+    && board.health?.agents?.issue?.configured === true
+    && board.health?.agents?.implement?.configured === true,
     JSON.stringify(board.health));
 
   const oldPid = board.health?.pid ?? board.pid;
@@ -176,12 +177,17 @@ try {
   check('/health says it has a terminal', fresh?.terminal === true,
     `terminal was ${JSON.stringify(fresh?.terminal)}`);
   check('/health says both agents are configured',
-    fresh?.agents?.issue === true && fresh?.agents?.implement === true,
+    fresh?.agents?.issue?.configured === true && fresh?.agents?.implement?.configured === true,
     `agents was ${JSON.stringify(fresh?.agents)}`);
+  // On `configured` rather than on the whole `agents` object, for the reason `matchesIdentity`
+  // gives: what the preflight *resolved* is a fact about the machine at the moment it was
+  // asked, and a replacement still answering `probing` a second after `listen` is the same
+  // board. Whether a command is configured is the part a stand-in cannot fake.
   check('so the replacement is the board, not the stand-in the port once got',
     fresh?.workspaces === board.health?.workspaces
     && fresh?.terminal === board.health?.terminal
-    && JSON.stringify(fresh?.agents) === JSON.stringify(board.health?.agents),
+    && fresh?.agents?.issue?.configured === board.health?.agents?.issue?.configured
+    && fresh?.agents?.implement?.configured === board.health?.agents?.implement?.configured,
     `${JSON.stringify(fresh)} vs ${JSON.stringify(board.health)}`);
 
   // ─── Off loopback it is refused ───────────────────────────────
