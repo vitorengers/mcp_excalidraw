@@ -630,7 +630,7 @@ export function stripAnsi(text: string): string {
  * leave open. A single quote inside the value is the only thing that has to be spelled out,
  * and `'\''` is how: close the run, an escaped quote, open it again.
  */
-function singleQuoted(value: string): string {
+export function singleQuoted(value: string): string {
   return `'${value.split("'").join(`'\\''`)}'`;
 }
 

@@ -92,7 +92,8 @@ if (bare.health) {
   check('/health says it has no terminal',
     bare.health.terminal === false, `terminal was ${JSON.stringify(bare.health.terminal)}`);
   check('/health says neither agent is configured',
-    bare.health.agents?.issue === false && bare.health.agents?.implement === false,
+    bare.health.agents?.issue?.configured === false
+    && bare.health.agents?.implement?.configured === false,
     `agents was ${JSON.stringify(bare.health.agents)}`);
 }
 
@@ -103,8 +104,10 @@ console.log('\nA canvas configured the way a board is');
 const registry = join(workDir, 'registry.json');
 writeFileSync(registry, JSON.stringify({ workspaces: [] }), 'utf8');
 
-// The agent values are never run here and never read back — only whether they are set is
-// reported, so anything non-empty exercises the same expression the routes are gated on.
+// Since #307 the preflight really does spawn argv[0] of these, so they are chosen to be a
+// binary nothing has: the probe answers `not found`, which is the truth about them and is not
+// what this check is about. What is asserted here is `configured`, the expression the routes
+// are gated on, which anything non-empty exercises.
 const board = await canvasWith({
   EXCALIDRAW_WORKSPACES: registry,
   EXCALIDRAW_TERMINAL: '1',
@@ -121,7 +124,8 @@ if (board.health) {
   check('/health says it has a terminal',
     board.health.terminal === true, `terminal was ${JSON.stringify(board.health.terminal)}`);
   check('/health says both agents are configured',
-    board.health.agents?.issue === true && board.health.agents?.implement === true,
+    board.health.agents?.issue?.configured === true
+    && board.health.agents?.implement?.configured === true,
     `agents was ${JSON.stringify(board.health.agents)}`);
   check('and never reports the command lines themselves',
     !JSON.stringify(board.health).includes('agent-that-is-never-run'),
@@ -142,10 +146,10 @@ const researchOnly = await canvasWith({
 
 if (researchOnly.health) {
   check('the issue agent reads as on',
-    researchOnly.health.agents?.issue === true,
+    researchOnly.health.agents?.issue?.configured === true,
     `agents was ${JSON.stringify(researchOnly.health.agents)}`);
   check('and the implement agent, separately, as off',
-    researchOnly.health.agents?.implement === false,
+    researchOnly.health.agents?.implement?.configured === false,
     `agents was ${JSON.stringify(researchOnly.health.agents)}`);
 }
 
