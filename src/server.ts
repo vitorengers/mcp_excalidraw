@@ -2,6 +2,7 @@
 // `<state-dir>/config.json` and `<cwd>/.env` into `process.env`, and half the modules below
 // read a variable while they are being evaluated. See `core/settings.ts`.
 import './core/env.js';
+import { env, settingName } from './core/settings.js';
 import express, { Request, Response, NextFunction } from 'express';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
@@ -160,7 +161,7 @@ const server = createServer(app);
 let authorities: Set<string> | null = null;
 function boardAuthorities(): Set<string> {
   if (!authorities) {
-    authorities = allowedAuthorities(HOST, PORT, process.env.EXCALIDRAW_ALLOWED_HOSTS);
+    authorities = allowedAuthorities(HOST, PORT, env('ALLOWED_HOSTS'));
   }
   return authorities;
 }
@@ -1447,8 +1448,8 @@ app.get('/api/fs/directories', async (req: Request, res: Response) => {
 // back to the native one, which is what keeps a command written without an absolute path
 // working in both.
 const ISSUE_AGENT_COMMANDS: AgentCommands = {
-  native: process.env.EXCALIDRAW_ISSUE_AGENT || null,
-  wsl: process.env.EXCALIDRAW_ISSUE_AGENT_WSL || null,
+  native: env('ISSUE_AGENT') || null,
+  wsl: env('ISSUE_AGENT_WSL') || null,
 };
 
 /** Whether any board at all may research. A workspace's own answer comes later. */
@@ -1667,7 +1668,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   if (!ISSUE_AGENT_CONFIGURED) {
     return res.status(404).json({
       success: false,
-      error: 'Issue blocks are disabled. Set EXCALIDRAW_ISSUE_AGENT to the agent command to enable them.'
+      error: `Issue blocks are disabled. Set ${settingName('ISSUE_AGENT')} to the agent command to enable them.`
     });
   }
 
@@ -1725,7 +1726,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   }
 
   const agentCommand = agentCommandOrRefuse(
-    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching', 'EXCALIDRAW_ISSUE_AGENT'
+    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching', settingName('ISSUE_AGENT')
   );
   if (!agentCommand) return;
 
@@ -1778,7 +1779,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     const result = await runIssueAgent(workspace, observation, {
       agentCommand,
       imagePaths: images.paths,
-      notFoundVariable: 'EXCALIDRAW_ISSUE_AGENT_WSL',
+      notFoundVariable: settingName('ISSUE_AGENT_WSL'),
       onUsage: (usage) => recordIssueUsage(elementId, usage)
     });
     if (result.ok && result.issueUrl) {
@@ -2011,7 +2012,7 @@ app.delete('/api/issue-block/:id', (req: Request, res: Response) => {
  * Only the issue is memoised. The implement record is read fresh on every request, because
  * it costs nothing to read and is the fact most likely to have changed since.
  */
-const issueMemo = new IssueMemo<IssueDetail>(memoWindow(process.env.EXCALIDRAW_ISSUE_MEMO_MS));
+const issueMemo = new IssueMemo<IssueDetail>(memoWindow(env('ISSUE_MEMO_MS')));
 
 // ─── Implementing an issue ────────────────────────────────────
 //
@@ -2022,8 +2023,8 @@ const issueMemo = new IssueMemo<IssueDetail>(memoWindow(process.env.EXCALIDRAW_I
 // half is a pair rather than one variable: a board that granted a distro an agent for
 // research must not thereby have granted it one that writes.
 const IMPLEMENT_AGENT_COMMANDS: AgentCommands = {
-  native: process.env.EXCALIDRAW_IMPLEMENT_AGENT || null,
-  wsl: process.env.EXCALIDRAW_IMPLEMENT_AGENT_WSL || null,
+  native: env('IMPLEMENT_AGENT') || null,
+  wsl: env('IMPLEMENT_AGENT_WSL') || null,
 };
 
 /** Whether any board at all may implement. A workspace's own answer comes later. */
@@ -2133,7 +2134,7 @@ async function runGithubPreflight(): Promise<void> {
  */
 const GH_STATUS_KEY = 'gh-status';
 const ghStatusMemo = new IssueMemo<GithubStatus>(
-  memoWindow(process.env.EXCALIDRAW_GH_STATUS_MEMO_MS)
+  memoWindow(env('GH_STATUS_MEMO_MS'))
 );
 
 /**
@@ -2146,7 +2147,7 @@ const ghStatusMemo = new IssueMemo<GithubStatus>(
  * machine. `0` means no cap; `1` serialises.
  */
 const IMPLEMENT_CONCURRENCY = (() => {
-  const configured = process.env.EXCALIDRAW_IMPLEMENT_CONCURRENCY;
+  const configured = env('IMPLEMENT_CONCURRENCY');
   if (configured === undefined || configured.trim() === '') return 4;
   const parsed = Number(configured);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : 4;
@@ -2365,7 +2366,7 @@ async function beginImplement(
       body: {
         success: false,
         error: `This workspace already has ${inFlight.length} implementation(s) running, which is the limit `
-          + `set by EXCALIDRAW_IMPLEMENT_CONCURRENCY. In flight: ${inFlight.map((run) => run.issueUrl).join(', ')}`,
+          + `set by ${settingName('IMPLEMENT_CONCURRENCY')}. In flight: ${inFlight.map((run) => run.issueUrl).join(', ')}`,
         running: inFlight.map((run) => run.issueUrl)
       }
     };
@@ -2424,7 +2425,7 @@ async function beginImplement(
   // After the claim, so it goes through `releaseSlot` like every other late refusal: a
   // workspace whose environment was never granted a command must not hold a slot for it.
   const agentRefusal = agentCommandRefusal(
-    workspace, IMPLEMENT_AGENT_COMMANDS, 'Implementing', 'EXCALIDRAW_IMPLEMENT_AGENT'
+    workspace, IMPLEMENT_AGENT_COMMANDS, 'Implementing', settingName('IMPLEMENT_AGENT')
   );
   if (agentRefusal) {
     releaseSlot();
@@ -2467,12 +2468,12 @@ function interactiveCommand(agentCommand: string, interactive?: boolean): string
 async function interactiveTabRefusal(workspaceId: string): Promise<string | null> {
   if (!terminalAvailable()) {
     return 'An interactive run needs a terminal tab to run in, and the terminal is off on '
-      + 'this board. Set EXCALIDRAW_TERMINAL to turn it on, or start the run without asking '
+      + `this board. Set ${settingName('TERMINAL')} to turn it on, or start the run without asking `
       + 'for a tab to answer.';
   }
   if (!await loadPty()) {
     return 'An interactive run needs a pseudoterminal, and this board has none — either no '
-      + '@lydell/node-pty binary for this platform, or EXCALIDRAW_TERMINAL_PTY=0. On pipes '
+      + `@lydell/node-pty binary for this platform, or ${settingName('TERMINAL_PTY')}=0. On pipes `
       + 'there is no interface to draw and nothing to type into, so the terminal tab would '
       + 'be the same read-only screen an ordinary run gets.';
   }
@@ -2547,7 +2548,7 @@ async function runImplementation(
       agentCommand: interactiveCommand(
         agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS) as string, options.interactive
       ),
-      notFoundVariable: 'EXCALIDRAW_IMPLEMENT_AGENT_WSL',
+      notFoundVariable: settingName('IMPLEMENT_AGENT_WSL'),
       worktree,
       resuming,
       // Reached only when the configured command already streams. Otherwise the agent
@@ -2605,7 +2606,7 @@ async function runImplementation(
  * the cap is full, and why the timer does not exist at all until something turns a queue on.
  */
 const IMPLEMENT_QUEUE_MS = (() => {
-  const configured = process.env.EXCALIDRAW_IMPLEMENT_QUEUE_MS;
+  const configured = env('IMPLEMENT_QUEUE_MS');
   if (configured === undefined || configured.trim() === '') return 30_000;
   const parsed = Number(configured);
   return Number.isFinite(parsed) && parsed >= 250 ? parsed : 30_000;
@@ -2833,7 +2834,7 @@ function capFullOutcome(workspaceId: string, said = ''): { reason: QueuePassReas
   return {
     reason: 'cap-full',
     detail: said || `All ${inFlight.length} slot(s) are taken, which is the limit set by `
-      + `EXCALIDRAW_IMPLEMENT_CONCURRENCY. Holding them: ${inFlight.map((run) => run.issueUrl).join(', ')}`
+      + `${settingName('IMPLEMENT_CONCURRENCY')}. Holding them: ${inFlight.map((run) => run.issueUrl).join(', ')}`
   };
 }
 
@@ -3149,7 +3150,7 @@ function implementingRefused(res: Response): boolean {
   if (!IMPLEMENT_AGENT_CONFIGURED) {
     res.status(404).json({
       success: false,
-      error: 'Implementing is disabled. Set EXCALIDRAW_IMPLEMENT_AGENT to the agent command to enable it.'
+      error: `Implementing is disabled. Set ${settingName('IMPLEMENT_AGENT')} to the agent command to enable it.`
     });
     return true;
   }
@@ -3551,7 +3552,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
   if (!ISSUE_AGENT_CONFIGURED) {
     return res.status(404).json({
       success: false,
-      error: 'Researching an issue again is disabled. Set EXCALIDRAW_ISSUE_AGENT to the agent command to enable it.'
+      error: `Researching an issue again is disabled. Set ${settingName('ISSUE_AGENT')} to the agent command to enable it.`
     });
   }
   if (offLoopback(res, 'Issues are researched again')) return;
@@ -3593,7 +3594,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
   }
 
   const agentCommand = agentCommandOrRefuse(
-    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching an issue again', 'EXCALIDRAW_ISSUE_AGENT'
+    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching an issue again', settingName('ISSUE_AGENT')
   );
   if (!agentCommand) return;
 
@@ -3672,7 +3673,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
 
     const result = await runReviseAgent(workspace, issueUrl, observations, {
       agentCommand,
-      notFoundVariable: 'EXCALIDRAW_ISSUE_AGENT_WSL',
+      notFoundVariable: settingName('ISSUE_AGENT_WSL'),
       onUsage: takeUsage
     });
 
@@ -3981,7 +3982,7 @@ app.get('/api/library', async (req: Request, res: Response) => {
   // `??`, not `||`: an *explicitly empty* `EXCALIDRAW_LIBRARY` is how a board says it wants no
   // shared shapes at all, which is a thing a workspace shipping its own set needs to be able to
   // say now that unset no longer means none.
-  const shared = process.env.EXCALIDRAW_LIBRARY ?? packagedLibrary;
+  const shared = env('LIBRARY') ?? packagedLibrary;
   if (shared) {
     sources.push({ origin: 'shared', path: path.resolve(shared) });
   }
@@ -4029,7 +4030,7 @@ app.get('/api/library', async (req: Request, res: Response) => {
 // `EXCALIDRAW_TERMINAL` unset means these routes do not exist. Not "answer 403", not
 // "answer with an empty session": 404, the same shape the issue block uses, so a canvas
 // that never turned it on cannot tell a disabled feature from an absent one.
-const TERMINAL_SETTING = process.env.EXCALIDRAW_TERMINAL || null;
+const TERMINAL_SETTING = env('TERMINAL') || null;
 
 /**
  * Every session, by board and then by id.
@@ -4074,7 +4075,7 @@ function terminalRefused(res: Response): boolean {
   if (!TERMINAL_SETTING) {
     res.status(404).json({
       success: false,
-      error: 'The terminal is disabled. Set EXCALIDRAW_TERMINAL to enable it.'
+      error: `The terminal is disabled. Set ${settingName('TERMINAL')} to enable it.`
     });
     return true;
   }
@@ -4245,7 +4246,7 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
   if (!shellCommand) {
     return res.status(404).json({
       success: false,
-      error: 'The terminal is disabled. Set EXCALIDRAW_TERMINAL to enable it.'
+      error: `The terminal is disabled. Set ${settingName('TERMINAL')} to enable it.`
     });
   }
   // One path, spelled the way the caller's own environment spells it: inside a WSL distro
@@ -4477,9 +4478,10 @@ const TOOL_DOCS_DIR = path.resolve(__dirname, '../docs');
  * own, and `DOC_KEY_PATTERN` plus the containment check below are what bound it to
  * `<dir>/<key>.md`.
  */
-const DOCS_DIR = process.env.EXCALIDRAW_DOCS_DIR === undefined
+const DOCS_DIR_SETTING = env('DOCS_DIR');
+const DOCS_DIR = DOCS_DIR_SETTING === undefined
   ? TOOL_DOCS_DIR
-  : (process.env.EXCALIDRAW_DOCS_DIR ? path.resolve(process.env.EXCALIDRAW_DOCS_DIR) : null);
+  : (DOCS_DIR_SETTING ? path.resolve(DOCS_DIR_SETTING) : null);
 
 // Keys become filenames, so anything that could climb out of DOCS_DIR is rejected
 // outright rather than normalised — a rejected key is obvious, a rewritten one is not.
@@ -4519,7 +4521,7 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
     return res.status(404).json({
       success: false,
       code: NO_DOCS_DIR,
-      error: 'No docs directory for this board. Set docsDir in board.config.json, or EXCALIDRAW_DOCS_DIR.'
+      error: `No docs directory for this board. Set docsDir in board.config.json, or ${settingName('DOCS_DIR')}.`
     });
   }
 
@@ -5150,7 +5152,7 @@ app.post('/api/restart', (_req: Request, res: Response) => {
  * Claude Code by default, and a route that answered `[]` would look like a board whose
  * sessions had never run rather than one that was never asked to look.
  */
-const CLAUDE_STATUS_DIR = (process.env.EXCALIDRAW_CLAUDE_STATUS ?? '').trim();
+const CLAUDE_STATUS_DIR = (env('CLAUDE_STATUS') ?? '').trim();
 
 /**
  * One read of that directory, however many tabs asked.
@@ -5197,7 +5199,7 @@ app.get('/api/claude-status', async (req: Request, res: Response) => {
   if (!CLAUDE_STATUS_DIR) {
     return res.status(404).json({
       success: false,
-      error: 'Claude Code status is off. Set EXCALIDRAW_CLAUDE_STATUS to the directory your '
+      error: `Claude Code status is off. Set ${settingName('CLAUDE_STATUS')} to the directory your `
         + 'status line command writes into.'
     });
   }

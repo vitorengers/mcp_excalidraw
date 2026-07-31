@@ -10,7 +10,7 @@ import fs from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
-import { stateDir, stateDirCandidates } from './settings.js';
+import { env, stateDir, stateDirCandidates } from './settings.js';
 import {
   resolveWorkspacePath,
   resolveInWorkspace,
@@ -47,7 +47,7 @@ const REGISTRY_FILENAME = 'workspaces.json';
  * registry is written where `stateDir()` says, which is the same place everything else lands.
  */
 export function registryPath(): string {
-  const named = process.env.EXCALIDRAW_WORKSPACES?.trim();
+  const named = env('WORKSPACES')?.trim();
   if (named) return named;
 
   for (const dir of stateDirCandidates()) {
@@ -85,7 +85,7 @@ export function registryPath(): string {
  * `canvasIdentity()` stays the plain snapshot the restart supervisor compares against.
  */
 export function hasWorkspaceRegistry(): boolean {
-  if (process.env.EXCALIDRAW_WORKSPACES?.trim()) return true;
+  if (env('WORKSPACES')?.trim()) return true;
 
   try {
     const parsed = JSON.parse(readFileSync(registryPath(), 'utf-8')) as { workspaces?: unknown };

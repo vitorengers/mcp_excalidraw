@@ -1,17 +1,53 @@
 # Where the configuration comes from
 
-Three sources, layered, lowest first. [running.md](running.md) is what each variable *means*;
+Four sources, layered, lowest first. [running.md](running.md) is what each variable *means*;
 this is where the values are read from and which one wins.
 
 | | Source | Read by |
 |---|---|---|
 | 1 | `<state-dir>/config.json` | every process — the board, the CLI, the MCP server |
-| 2 | `<cwd>/.env` | the same, from **its own** working directory |
+| 2 | `<cwd>/.env` — **deprecated** | the same, from **its own** working directory |
 | 3 | the real environment | the same, and it beats both files |
+| 4 | an explicit command-line flag | the CLI, and it beats everything |
 
-`src/core/settings.ts` is all of it; `src/core/env.ts` is the one-line module the entry points
+`src/core/settings.ts` is all of it: the order as one pure function, `resolveSetting`, and the
+accessor every read site calls, `env(name)`. `src/core/env.ts` is the module the entry points
 import so that the layers are applied before anything reads a variable — including
 `src/core/port.ts`, which resolves the canvas port out of the environment the layers produced.
+
+Layer 4 has no command-line surface yet. No flag maps to one of these variables today — `--url`
+overrides the canvas URL, which is not one of them — so `overrideSetting` is the whole of it. It
+is here because the order is the kind of thing that has to be written down once, in front of the
+second caller rather than behind them.
+
+`node scripts/check-settings-precedence.mjs` asserts the order, and asserts layers 1 to 3 against
+real servers rather than against the resolver: the failure this guards against is a read site
+resolving to the wrong layer at runtime, which compiles perfectly and produces a board that
+answers `status: healthy` with somebody else's registry.
+
+## Two prefixes
+
+Every variable can be spelled `VIBEMAXXING_NAME` or `EXCALIDRAW_NAME`, and **the new spelling
+wins**. The old one is read for now and says so once, at `info`, in the log file — one line per
+variable however many times it is read, because `EXCALIDRAW_WORKSPACES` alone is read from a
+dozen places.
+
+The prefix could not move in one commit. `EXCALIDRAW_*` is the whole of the user's configuration,
+so an operator whose `config.json`, `.env` or shell profile still names the old spelling would
+have come up with no registry, no terminal and no agents, on a board answering `status: healthy` —
+which is exactly the failure the state file was added to close. Reading both is what makes the
+day the old prefix is dropped a day nobody notices.
+
+`src/core/settings.ts` declares the list once, and `node scripts/check-env-prefix-compat.mjs`
+fails if a variable is in that list and not in [running.md](running.md), or the other way about.
+
+## The `.env` layer is deprecated
+
+Layer 2 still works and is not going away this release, but a process that loads one now says so:
+one `warn` naming the file it read, and where to move the values instead. It is deprecated for the
+reason the state file exists — a `.env` is gitignored, has no tracked example, and sits wherever
+the caller's shell happened to be, so half the ways this tool can be started can never find one.
+Nothing is dropped silently; an installation migrates by being told.
 
 ## Why there is a file at all
 

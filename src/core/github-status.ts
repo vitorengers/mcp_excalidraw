@@ -36,6 +36,7 @@ import {
 } from './agent-preflight.js';
 import { agentPath, buildAgentCommand, tokenizeCommand } from './issue-agent.js';
 import { ghCommandFor } from './gh.js';
+import { env } from './settings.js';
 import { Workspace } from './workspaces.js';
 
 /**
@@ -97,12 +98,19 @@ export function initialGithub(): GithubHealth {
  * reached the CLI another way would be proving that other way works.
  */
 export function githubProbeSpec(workspace: Workspace | null, tail: string): ProbeSpec {
-  const env = { ...process.env, PATH: agentPath() };
+  // `agentPath()` for the reason `runGh` uses it: the CLI is not on `PATH` on every machine
+  // this runs on, and a preflight probing a bare `PATH` would report it missing on a board
+  // where every `gh` call succeeds.
+  const childEnv = { ...process.env, PATH: agentPath() };
   if (!workspace) {
-    const tokens = tokenizeCommand(`${process.env.EXCALIDRAW_GH_COMMAND?.trim() || 'gh'} ${tail}`);
-    return { command: tokens[0] ?? 'gh', args: tokens.slice(1), cwd: undefined, env };
+    // The command through `env()` rather than `process.env`, which is #311's rule and not a
+    // style preference: it may come from `config.json` or a `.env` as well as from the
+    // environment, under either prefix, and a preflight that read one layer would answer about
+    // a command the runs do not use.
+    const tokens = tokenizeCommand(`${env('GH_COMMAND')?.trim() || 'gh'} ${tail}`);
+    return { command: tokens[0] ?? 'gh', args: tokens.slice(1), cwd: undefined, env: childEnv };
   }
-  return { ...buildAgentCommand(workspace, `${ghCommandFor(workspace)} ${tail}`), env };
+  return { ...buildAgentCommand(workspace, `${ghCommandFor(workspace)} ${tail}`), env: childEnv };
 }
 
 /**

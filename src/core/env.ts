@@ -8,11 +8,24 @@
 // or an `EXCALIDRAW_CANVAS_PORT` named in `config.json` count: it is in the environment by the
 // time `core/port.ts` resolves against it.
 //
-// Since #304 there are three layers rather than one file: `<state-dir>/config.json`, then
-// `<cwd>/.env`, then the real environment, which wins. `core/settings.ts` is all of it,
-// including why `EXCALIDRAW_NO_DOTENV=1` turns both file layers off.
-import { loadSettings } from './settings.js';
+// Since #304 there are layers rather than one file: `<state-dir>/config.json`, then `<cwd>/.env`,
+// then the real environment, then an explicit flag. `core/settings.ts` is all of it, including
+// why `NO_DOTENV=1` turns both file layers off.
+//
+// The import order below is load-bearing and is the reason this module exists twice over.
+// `settings.js` first, because its body applies the layers; `logger.js` second, because its body
+// reads `LOG_LEVEL` and `LOG_FILE_PATH` and would otherwise read them from an environment the
+// files had not reached yet. That ordering is also why `settings.ts` cannot import the logger
+// itself, and so hands what it has to say to a sink instead — deprecation of the `<cwd>/.env`
+// layer, and of the old variable prefix.
+import { loadSettings, onSettingNotice } from './settings.js';
+import logger from '../utils/logger.js';
 
 loadSettings();
+
+onSettingNotice(({ level, message }) => {
+  if (level === 'warn') logger.warn(message);
+  else logger.info(message);
+});
 
 export {};

@@ -3,6 +3,7 @@ import net from 'net';
 import path from 'path';
 import { isAcceptedCanvasService } from './identity.js';
 import { stateDir, stateDirCandidates } from './pidfile.js';
+import { resolveSetting } from './settings.js';
 
 /**
  * Where the canvas listens when nobody said.
@@ -52,7 +53,7 @@ export function explicitPort(env: NodeJS.ProcessEnv = process.env): number | nul
  * which port to try first and leaves the search free to walk past it.
  */
 export function preferredPort(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.EXCALIDRAW_CANVAS_PORT;
+  const raw = resolveSetting('CANVAS_PORT', { environment: env });
   if (raw) {
     const port = parseInt(raw, 10);
     if (Number.isInteger(port) && port > 0 && port < 65536) return port;

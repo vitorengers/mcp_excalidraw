@@ -421,7 +421,7 @@ try {
 
   const opened = await call(DISABLED_BASE, '/api/terminal', { method: 'POST' });
   check('404 for opening a session', opened.status === 404, `got ${opened.status} ${JSON.stringify(opened.body)}`);
-  check('and the refusal names the variable', (opened.body?.error ?? '').includes('EXCALIDRAW_TERMINAL'),
+  check('and the refusal names the variable', (opened.body?.error ?? '').includes('VIBEMAXXING_TERMINAL'),
         opened.body?.error);
   for (const [path, options] of [
     ['/api/terminal', {}],
