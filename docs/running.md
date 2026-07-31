@@ -45,10 +45,10 @@ foreach ($processId in ($busy.OwningProcess | Select-Object -Unique)) {
 `GET /health` returns the `pid` of whatever is answering. When a change seems to have had no
 effect, compare that against the process you believe you started.
 
-It also returns **`workspaces`** — `configured` when the registry it resolved has at least one
-project in it, `none` when it has none, which since #310 is the question it answers: every canvas
-resolves a registry now, so "the variable was set" would report `configured` for the very
-stand-in this field exists to unmask — **`terminal`**, and **`agents`**
+It also returns **`workspaces`** — `configured` when `EXCALIDRAW_WORKSPACES` was set **or** the
+registry this canvas resolved has projects in it, `none` otherwise. Both clauses, since #310:
+every canvas resolves a registry now, so "the variable was set" alone would report `configured`
+for the very stand-in below — **`terminal`**, and **`agents`**
 (`{ issue, implement }`, two booleans because the two variables are separate ones), and those
 are what tell you the board is a board. Read `agents` first after a restart: they fail the most
 quietly of the three, because the blocks still draw and the buttons are still there and pressing

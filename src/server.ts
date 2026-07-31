@@ -41,7 +41,7 @@ import {
 import { spawnRestartSupervisor, type CanvasIdentity } from './core/restart-supervisor.js';
 import {
   addWorkspace,
-  hasRegisteredWorkspaces,
+  hasWorkspaceRegistry,
   loadWorkspaces,
   registryPath,
   reorderWorkspaces,
@@ -4809,12 +4809,12 @@ app.get('/', (req: Request, res: Response) => {
  */
 function canvasIdentity(): CanvasIdentity {
   return {
-    // "Has this canvas got any projects", not "was a registry variable set". The two used to
-    // be the same question and stopped being one when the registry path grew a default: every
-    // canvas resolves one now, so the old expression would answer `configured` for the very
-    // stand-in this field exists to unmask. An empty registry and no registry look identical
-    // from here, which is right — both are a canvas with no board on it.
-    workspaces: hasRegisteredWorkspaces() ? 'configured' : 'none',
+    // "Was this canvas pointed at a registry, or has the one it found got projects in it",
+    // not "is a variable set". The two were the same question until the registry path grew a
+    // default: every canvas resolves one now, so the old expression alone would answer
+    // `configured` for the very stand-in this field exists to unmask. See
+    // `hasWorkspaceRegistry` for why both clauses are there.
+    workspaces: hasWorkspaceRegistry() ? 'configured' : 'none',
     terminal: Boolean(TERMINAL_SETTING),
     // The agents fail the most quietly of the three: the routes answer, the blocks draw, the
     // buttons are there, and pressing one does nothing. **Two booleans, never one** — the

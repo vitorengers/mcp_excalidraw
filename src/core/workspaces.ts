@@ -55,26 +55,41 @@ export function registryPath(): string {
 }
 
 /**
- * Whether this canvas has any projects at all, answered without waiting.
+ * Whether this canvas is somebody's board rather than a scratch one, answered without waiting.
  *
- * `/health` is the one caller, and what it reports there is load-bearing:
- * `docs/running.md` tells the operator to read it first, because an MCP server attached to an
- * editor can auto-start a canvas onto the board's port and answer `status: healthy` while
- * being a scratch canvas. "Is `EXCALIDRAW_WORKSPACES` set" used to be the difference and no
- * longer is — every canvas resolves a registry now — so the difference is whether that
- * registry has anything in it.
+ * `/health` is the one caller, and what it reports there is load-bearing: `docs/running.md`
+ * tells the operator to read it first, because an MCP server attached to an editor can
+ * auto-start a canvas onto the board's port and answer `status: healthy` while being a canvas
+ * with nothing on it.
+ *
+ * Two clauses, and both are needed once the registry path has a default:
+ *
+ *   - **the variable was set.** This is what the field used to mean on its own, and it is
+ *     still the operator saying "this is the board" out loud. It stays first because it is
+ *     also the only evidence a caller has that a value *reached* the server —
+ *     `check-env-isolation.mjs` reads this field to prove a `.env` was read at all, with a
+ *     registry path that deliberately does not exist.
+ *   - **or the registry it resolved has projects in it.** The clause the default made
+ *     necessary: with no variable set, every canvas resolves a registry, so the first clause
+ *     alone would report `configured` for the very stand-in this field exists to unmask.
+ *
+ * A board that has both, one, or neither is therefore reported as what it is, and the case the
+ * field was invented for — an editor's MCP child holding no `EXCALIDRAW_*`, on a machine whose
+ * real board names its registry — still answers `none`.
  *
  * Deliberately cheap and deliberately synchronous: it counts entries rather than resolving
  * them, so a project directory that has gone missing does not change the answer, and
  * `canvasIdentity()` stays the plain snapshot the restart supervisor compares against.
  */
-export function hasRegisteredWorkspaces(): boolean {
+export function hasWorkspaceRegistry(): boolean {
+  if (process.env.EXCALIDRAW_WORKSPACES?.trim()) return true;
+
   try {
     const parsed = JSON.parse(readFileSync(registryPath(), 'utf-8')) as { workspaces?: unknown };
     return Array.isArray(parsed?.workspaces) && parsed.workspaces.length > 0;
   } catch {
     // No file, or one nobody can parse. Either way this canvas is showing no projects, which
-    // is exactly what the field is asked.
+    // is what the field is being asked.
     return false;
   }
 }
