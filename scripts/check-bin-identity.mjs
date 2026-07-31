@@ -347,6 +347,10 @@ check('serverInfo.name is neither inherited command name',
       !INHERITED.includes(String(serverInfo.name)), JSON.stringify(serverInfo.name));
 check('serverInfo.version is package.json\'s version', serverInfo.version === pkg.version,
       `${JSON.stringify(serverInfo.version)} vs ${JSON.stringify(pkg.version)}`);
+check('serverInfo.description is package.json\'s, which leads with the product',
+      serverInfo.description === pkg.description
+      && String(pkg.description).trim().length > 0,
+      `${JSON.stringify(serverInfo.description)} vs ${JSON.stringify(pkg.description)}`);
 
 console.log('\n6. the documentation renamed the client-config key with it');
 
