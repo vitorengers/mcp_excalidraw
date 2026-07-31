@@ -68,6 +68,25 @@ const check = (name, condition, detail = '') => {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const posix = (value) => value.replace(/\\/g, '/');
 
+/**
+ * One numbered section, whose failure is recorded rather than allowed to end the run.
+ *
+ * Written this way because of how this check was first proved. Run against the build that did
+ * not have the fix, section 1 timed out waiting for a `/health` field that did not exist yet and
+ * took the browser sections down with it — so the run reported one thing wrong when six were. A
+ * check that stops at the first defect cannot say how much of a feature is missing, which is
+ * exactly the question being put to it when it is run against the old code on purpose.
+ */
+async function stage(title, body) {
+  console.log(`\n${title}`);
+  try {
+    await body();
+  } catch (error) {
+    failures++;
+    console.error(`  FAIL  ${title} did not finish — ${error.message}`);
+  }
+}
+
 // ─── Three boards and three `gh`s ─────────────────────────────
 
 const workDir = mkdtempSync(join(tmpdir(), 'check-gh-status-'));
@@ -288,8 +307,6 @@ const json = async (url) => {
 };
 
 try {
-  console.log('1. /health says whether gh was found');
-
   const refuses = await canvas({
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_GH_COMMAND: `node "${posix(stubRefuses)}"`,
@@ -303,13 +320,14 @@ try {
     EXCALIDRAW_GH_COMMAND: `node "${posix(stubLoggedOut)}"`,
   });
 
+  await stage('1. /health says whether gh was found', async () => {
   // The preflight is not awaited before `listen` — on purpose, so a `gh` that reaches the
   // network cannot delay the board coming up — so `probing` is the honest first answer and
   // this waits it out rather than asserting against it.
   const settled = (base) => waitFor(async () => {
     const health = (await json(`${base}/health`)).body;
     return health?.gh && health.gh.resolved !== 'probing' ? health : null;
-  }, `the gh preflight on ${base}`);
+  }, `the gh preflight on ${base}`, 60);
 
   const foundHealth = await settled(refuses.base);
   check('a board with a gh reports it found', foundHealth.gh.resolved === 'found',
@@ -323,9 +341,9 @@ try {
   const missingHealth = await settled(withoutGh.base);
   check('a board without one reports it not found', missingHealth.gh.resolved === 'not found',
         JSON.stringify(missingHealth.gh));
+  });
 
-  console.log('\n2. GET /api/github-status answers what gh said about itself');
-
+  await stage('2. GET /api/github-status answers what gh said about itself', async () => {
   const ok = await json(`${refuses.base}/api/github-status?workspace=gh-refuses`);
   check('a working gh answers 200', ok.status === 200, JSON.stringify(ok.body));
   check('installed and authenticated', ok.body?.gh?.installed === true && ok.body?.gh?.authenticated === true,
@@ -349,9 +367,9 @@ try {
   const none = await json(`${withoutGh.base}/api/github-status?workspace=solo`);
   check('a gh that is not there is not installed', none.body?.gh?.installed === false,
         JSON.stringify(none.body?.gh));
+  });
 
-  console.log('\n3. the two things a 404 used to mean are two answers');
-
+  await stage('3. the two things a 404 used to mean are two answers', async () => {
   const silent = await json(`${refuses.base}/api/project-board?workspace=no-project`);
   check('a board with no githubProject is still 404', silent.status === 404,
         `${silent.status} ${JSON.stringify(silent.body)}`);
@@ -371,8 +389,7 @@ try {
   check('and a gh that refuses is still 502, carrying its own words',
         refused.status === 502 && String(refused.body?.error ?? '').includes('Bad credentials'),
         `${refused.status} ${JSON.stringify(refused.body)}`);
-
-  console.log('\n4. the canvas says it, in a browser, within one poll');
+  });
 
   const cdpPort = await freePort();
   children.push(spawn(chromePath, [
@@ -392,6 +409,7 @@ try {
   await send('Runtime.enable');
   await send('Page.addScriptToEvaluateOnNewDocument', { source: RECORDERS });
 
+  await stage('4. the canvas says it, in a browser, within one poll', async () => {
   await openBoard(refuses.base, 'gh-refuses');
   const spoke = await waitFor(async () => {
     const toasts = await evaluate('window.__toasts || []');
@@ -402,8 +420,9 @@ try {
         JSON.stringify(spoke));
   check('and it carries gh\'s own text rather than a status code',
         spoke.some((text) => text.includes('Bad credentials')), JSON.stringify(spoke));
+  });
 
-  console.log('\n5. and says it once, not once per poll');
+  await stage('5. and says it once, not once per poll', async () => {
   const before = await saidCount();
   check('said once so far', before === 1, String(before));
   // A refresh forced rather than waited for: the poll is twenty seconds and the page runs one
@@ -415,8 +434,9 @@ try {
   }
   const after = await saidCount();
   check('and still once after three more refreshes', after === 1, String(after));
+  });
 
-  console.log('\n6. a board with no githubProject draws nothing and says nothing');
+  await stage('6. a board with no githubProject draws nothing and says nothing', async () => {
   await openBoard(refuses.base, 'no-project');
   // Long enough for the first poll to have landed and been answered 404.
   await sleep(4000);
@@ -426,8 +446,9 @@ try {
         JSON.stringify(quietMirror));
   check('and nothing is said', (await saidCount()) === 0,
         JSON.stringify(await evaluate('window.__warns || []')));
+  });
 
-  console.log('\n7. a githubProject that is not a project URL is said out loud');
+  await stage('7. a githubProject that is not a project URL is said out loud', async () => {
   await openBoard(refuses.base, 'bad-url');
   const typoSaid = await waitFor(async () => {
     const toasts = await evaluate('window.__toasts || []');
@@ -438,6 +459,26 @@ try {
         JSON.stringify(typoSaid));
   check('naming the URL out of the board\'s own config',
         typoSaid.some((text) => text.includes('github.com/vitorengers')), JSON.stringify(typoSaid));
+  });
+
+  // The milestone's own case: a fresh clone, before anything is configured. What `gh` fails with
+  // there is a spawn error naming a path, which is not something a reader can act on — so this
+  // is the board that has to be handed the diagnosis rather than only the failure, and it is
+  // what `GET /api/github-status` exists for.
+  await stage('8. a board with no gh at all is told so, not shown a spawn error', async () => {
+  await openBoard(withoutGh.base, 'solo');
+  const clone = await waitFor(async () => {
+    const toasts = await evaluate('window.__toasts || []');
+    return toasts.some((text) => text.includes(SAID)) ? toasts : null;
+  }, 'the board with no gh to say the project could not be read', 240);
+  await shot('04-no-gh');
+  check('the toast reached the DOM', clone.some((text) => text.includes(SAID)),
+        JSON.stringify(clone));
+  check('and says the CLI was not found rather than only quoting the spawn',
+        clone.some((text) => text.includes('gh CLI was not found')), JSON.stringify(clone));
+  check('naming the variable that points at it',
+        clone.some((text) => text.includes('EXCALIDRAW_GH_COMMAND')), JSON.stringify(clone));
+  });
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);
