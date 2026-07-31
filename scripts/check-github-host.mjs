@@ -98,6 +98,7 @@ const extractGithubUrl = required(agentModule, 'extractGithubUrl', 'the agent ou
 const parseProjectUrl = required(boardModule, 'parseProjectUrl', 'the project URL parser');
 const issueUrlFor = required(recoveryModule, 'issueUrlFor', 'the interrupted-run URL builder');
 const runAgent = required(agentModule, 'runAgent', 'the agent runner');
+const agentRunFor = required(agentModule, 'agentRunFor', 'the backend resolver');
 const interruptedRuns = required(recoveryModule, 'interruptedRuns', 'interrupted-run detection');
 
 // ─── 1. the host is named in one place ─────────────────────────
@@ -315,7 +316,8 @@ process.stdin.on('end', () => {
 {
   const project = makeProject('agent-run', 'git@github.com:vitorengers/vibemaxxing.git');
   const run = await runAgent(workspaceAt(project, 'agent-run'), 'do the thing', {
-    agentCommand: `node "${slash(stubAgentPath)}"`,
+    // The passthrough backend, which is what a free-text command line has always been.
+    ...agentRunFor({ backend: 'raw', command: `node "${slash(stubAgentPath)}"` }, 'issue', null),
     expects: 'issues',
     what: 'the issue run',
     timeoutMs: 60_000,

@@ -13,6 +13,8 @@
  * silently rewriting somebody's command line is a decision, not a lookup.
  */
 
+import type { AgentAdapter, UsageCounts, UsagePatch } from './agent-adapter.js';
+
 /** What a run has spent, as the agent reports it. */
 export interface AgentUsage {
   /**
@@ -53,12 +55,8 @@ export function streamsUsage(agentCommand: string): boolean {
   return /--output-format[\s=]+["']?stream-json/i.test(agentCommand);
 }
 
-interface Counts {
-  input: number;
-  output: number;
-  /** Null is "not said", which is not the same answer as 0. */
-  thinking: number | null;
-}
+/** The same three figures the adapters report in. */
+type Counts = UsageCounts;
 
 const ZERO: Counts = { input: 0, output: 0, thinking: null };
 
@@ -114,6 +112,46 @@ function countsFrom(usage: unknown): Counts | null {
     output: numberAt(source, 'output_tokens'),
     thinking: thinkingFrom(source),
   };
+}
+
+/**
+ * What one event of Claude Code's stream says about the totals.
+ *
+ * The three shapes, and each is a real thing that stream does rather than a guess. It is also
+ * the `raw` backend's reading, because an arbitrary command line that streams is one streaming
+ * *this*, and it is what `UsageMeter` falls back to when nobody named a backend — see the class
+ * below for why each shape is counted the way it is.
+ */
+export function readClaudeUsage(event: Record<string, unknown>): UsagePatch | null {
+  if (event.type === 'system' && event.subtype === 'thinking_tokens') {
+    // The delta, never `estimated_tokens`: that one is the current turn's total and goes back
+    // down when the next turn starts. An event with no usable delta is left alone rather than
+    // counted as nothing, so silence stays silence.
+    const delta = optionalNumberAt(event, 'estimated_tokens_delta');
+    return delta === null ? null : { kind: 'thinking', delta };
+  }
+
+  if (event.type === 'result') {
+    const usage = event.usage as Record<string, unknown> | undefined;
+    const iterations = usage?.iterations;
+    if (Array.isArray(iterations) && iterations.length) {
+      return {
+        kind: 'settled',
+        counts: iterations
+          .map(countsFrom)
+          .filter((counts): counts is Counts => counts !== null)
+          .reduce(add, ZERO),
+      };
+    }
+    const counts = countsFrom(usage);
+    return counts ? { kind: 'settled', counts } : null;
+  }
+
+  const message = event.message as Record<string, unknown> | undefined;
+  const counts = countsFrom(message?.usage);
+  if (!counts) return null;
+  const id = typeof message?.id === 'string' && message.id ? message.id : null;
+  return { kind: 'message', id, counts };
 }
 
 /** How often the totals may be reported onward, however fast the lines arrive. */
@@ -180,9 +218,17 @@ export class UsageMeter {
   private pending: NodeJS.Timeout | null = null;
   private anonymous = 0;
 
+  /**
+   * `adapter` is what knows which of the three shapes an event is.
+   *
+   * Optional, and the fallback is `readClaudeUsage` — which is also what the `raw` backend
+   * answers — so a caller with a stream and no backend to name counts exactly what this class
+   * counted before backends existed. A type-only import, so this module stays a leaf.
+   */
   constructor(
     private readonly onChange: (usage: AgentUsage) => void,
-    private readonly intervalMs: number = REPORT_INTERVAL_MS
+    private readonly intervalMs: number = REPORT_INTERVAL_MS,
+    private readonly adapter: AgentAdapter | null = null
   ) {}
 
   /** A chunk of stdout, which may hold any number of lines and part of another. */
@@ -216,41 +262,31 @@ export class UsageMeter {
     } catch {
       return;
     }
-    if (!event || typeof event !== 'object') return;
+    if (!event || typeof event !== 'object' || Array.isArray(event)) return;
     const record = event as Record<string, unknown>;
 
-    if (record.type === 'system' && record.subtype === 'thinking_tokens') {
-      // The delta, never `estimated_tokens`: that one is the current turn's total and goes
-      // back down when the next turn starts. An event with no usable delta is left alone
-      // rather than counted as nothing, so silence stays silence.
-      const delta = optionalNumberAt(record, 'estimated_tokens_delta');
-      if (delta !== null) this.estimatedThinking = (this.estimatedThinking ?? 0) + delta;
+    // What the event *is* is the backend's question; what it does to the totals is this
+    // class's. An adapter that cannot place an event says so with null, which is not an
+    // error — a warning line in the middle of a stream is not a failure of this.
+    let patch: UsagePatch | null;
+    try {
+      patch = this.adapter ? this.adapter.readUsage(record) : readClaudeUsage(record);
+    } catch {
       return;
     }
+    if (!patch) return;
 
-    if (record.type === 'result') {
-      const usage = record.usage as Record<string, unknown> | undefined;
-      const iterations = usage?.iterations;
-      if (Array.isArray(iterations) && iterations.length) {
-        this.settled = iterations
-          .map(countsFrom)
-          .filter((counts): counts is Counts => counts !== null)
-          .reduce(add, ZERO);
-      } else {
-        const counts = countsFrom(usage);
-        if (counts) this.settled = counts;
-      }
+    if (patch.kind === 'thinking') {
+      this.estimatedThinking = (this.estimatedThinking ?? 0) + patch.delta;
       return;
     }
-
-    const message = record.message as Record<string, unknown> | undefined;
-    const counts = countsFrom(message?.usage);
-    if (!counts) return;
-
-    const id = typeof message?.id === 'string' && message.id
-      ? message.id
-      : `anonymous-${this.anonymous++}`;
-    this.byMessage.set(id, counts);
+    if (patch.kind === 'settled') {
+      this.settled = patch.counts;
+      return;
+    }
+    // A report that names nothing is counted as its own rather than overwriting the last
+    // anonymous one — two of them are two messages, not one message said twice.
+    this.byMessage.set(patch.id ?? `anonymous-${this.anonymous++}`, patch.counts);
   }
 
   private total(): Counts {

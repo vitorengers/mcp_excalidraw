@@ -134,11 +134,14 @@ const workspaceFor = (language) => ({
 });
 
 const agentCommand = `node "${stub.replace(/\\/g, '/')}"`;
+// The board holds a backend beside every command; `raw` is the passthrough one, which is
+// what a free-text command line has always been and what every board configured today is.
+const agentSpec = { backend: 'raw', command: agentCommand };
 
 async function researchPrompt(language) {
   rmSync(captured, { force: true });
   await runIssueAgent(workspaceFor(language), 'A note written on the board.', {
-    agentCommand, timeoutMs: 60_000,
+    agent: agentSpec, timeoutMs: 60_000,
   });
   return readFileSync(captured, 'utf8');
 }
@@ -147,7 +150,7 @@ async function revisePrompt(language) {
   rmSync(captured, { force: true });
   await runReviseAgent(workspaceFor(language),
     'https://github.com/vitorengers/farol/issues/6', 'More notes.', {
-      agentCommand, timeoutMs: 60_000,
+      agent: agentSpec, timeoutMs: 60_000,
     });
   return readFileSync(captured, 'utf8');
 }

@@ -178,7 +178,7 @@ async function implementRun(id) {
   clearCapture();
   process.env.CAPTURE_URL = PULL_URL;
   return runImplementAgent(workspaceOf(id), ISSUE_URL, {
-    agentCommand: AGENT_COMMAND,
+    agent: { backend: 'raw', command: AGENT_COMMAND },
     timeoutMs: 60_000,
   });
 }
@@ -187,7 +187,7 @@ async function issueRun(id) {
   clearCapture();
   process.env.CAPTURE_URL = ISSUE_URL;
   return runIssueAgent(workspaceOf(id), OBSERVATION, {
-    agentCommand: AGENT_COMMAND,
+    agent: { backend: 'raw', command: AGENT_COMMAND },
     timeoutMs: 60_000,
   });
 }
