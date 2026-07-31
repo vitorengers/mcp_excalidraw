@@ -9,7 +9,7 @@ fetches `GET /api/docs/:key?workspace=...` and renders that markdown in a panel.
 
 The key resolves to `<docsDir>/<key>.md` inside the project, where `docsDir` comes from the
 project's own `board.config.json`. `EXCALIDRAW_DOCS_DIR` remains the fallback for single-board
-setups, which have no registry to resolve a directory from.
+setups, whose canvas has no registered project to resolve a directory from.
 
 A project registered through the `+` is given `docsDir` when it actually has a `docs/` folder —
 read from disk, never guessed — because `docsDir` is the only route documentation has, and a

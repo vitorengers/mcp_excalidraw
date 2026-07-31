@@ -1,7 +1,7 @@
 # Canvas in the browser
 
 `frontend/`, React over `@excalidraw/excalidraw` 0.18. One tab per registered project, plus the
-`default` board when no registry is configured.
+`default` board on a canvas that has none yet.
 
 ## What it adds on top of Excalidraw
 
@@ -39,8 +39,10 @@ row that was mostly empty on both.
   measured and rejected: at 2.5 the controls alone are over 1900px and the row could never hold
   the tabs as well. Both scales are single multipliers, in `WorkspaceTabs.css` and in
   `frontend/index.html`'s style block.
-- **No registry means no tabs, not no bar.** `WorkspaceTabs` renders nothing without one, and
-  the connection pill, Sync to Backend, Clear Canvas and Restart Server are still there.
+- **The strip is always there, even with no projects at all.** It used to remove itself when
+  no registry was configured, which hid the `+` on the one board that had nothing else to press
+  (#310). With an empty list the control carries its own label — `+ Add a project` — because a
+  lone `+` in an otherwise empty header has no tabs to be read against.
 - **There is no page title on it.** `<h1>Excalidraw Canvas</h1>` said the same four words on
   every board of every project; the tabs beside it say which board this is. The name is still
   in `<title>`, where a browser tab reads it.
