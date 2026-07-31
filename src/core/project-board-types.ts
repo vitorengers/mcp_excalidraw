@@ -87,3 +87,66 @@ export const NOTES_OPTION_ID = 'canvas:notes';
  * called it when it was an option, so nothing on screen changes.
  */
 export const NOTES_NAME = 'My Notes';
+
+export interface ProjectRef {
+  ownerType: 'user' | 'organization';
+  login: string;
+  number: number;
+}
+
+/**
+ * A project URL, as GitHub's address bar actually writes it.
+ *
+ * `/users/<login>/projects/<n>` and `/orgs/<org>/projects/<n>` are the project; everything
+ * after the number is the *view* of it somebody happened to have open. Opening a project puts
+ * `/views/1` there, opening a card's side panel adds `?pane=issue&itemId=…`, and neither says
+ * anything about which project it is — so both are recognised and dropped rather than refused,
+ * because the URL a reader copies has to be a URL this board takes.
+ *
+ * Recognised, not tolerated: the query and the fragment are matched against the characters
+ * GitHub puts in them — no whitespace and no quote of either kind — so `?pane=issue itemId=1`
+ * is still refused. Nothing past the number is ever *used* — see `parseProjectUrl` for why the
+ * parts that are used are matched at all — but a pattern that ended in `.*` would be one
+ * nobody could check by reading it.
+ */
+const PROJECT_URL =
+  /^https:\/\/github\.com\/(users|orgs)\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/projects\/(\d{1,10})(?:\/views\/\d{1,10})?\/?(?:\?[\w%.~!$&()*+,;:@/=|-]*)?(?:#[\w%.~!$&()*+,;:@/=|?-]*)?$/;
+
+/**
+ * Owner and number from a project URL, or null for anything that is not one.
+ *
+ * The login is matched rather than escaped: it is interpolated into a command line that a
+ * WSL workspace runs through `bash -lc`, and a pattern that only admits what GitHub
+ * actually allows in a login is a guard you can read, where escaping is one you have to
+ * trust. Anything else is refused outright.
+ *
+ * It lives here, beside the shapes, rather than in `project-board.ts` because the write path
+ * needs it too — `validateWorkspaceConfigPatch` refuses a `githubProject` this returns null
+ * for — and that module spawns `gh`. The reader re-exports it, so nothing on the server side
+ * has to know where it moved to.
+ */
+export function parseProjectUrl(url: string | null | undefined): ProjectRef | null {
+  if (typeof url !== 'string') return null;
+  const match = PROJECT_URL.exec(url.trim());
+  if (!match) return null;
+  return {
+    ownerType: match[1] === 'orgs' ? 'organization' : 'user',
+    login: match[2] as string,
+    number: Number(match[3]),
+  };
+}
+
+/**
+ * True for a link to a **classic** repository project, `/<owner>/<repo>/projects[/<n>]`.
+ *
+ * Only ever asked about a URL `parseProjectUrl` has already refused, and only so a refusal
+ * can name what is wrong: a classic project is a real project somebody is looking at, and
+ * "that is not a project URL" about it would send the reader hunting for a typo that is not
+ * there. The two owner forms are excluded so `/users/x/projects/5` — which is a Projects v2
+ * URL that failed for some other reason — is never described as a classic one.
+ */
+export function isClassicProjectUrl(url: string | null | undefined): boolean {
+  if (typeof url !== 'string') return false;
+  return /^https:\/\/github\.com\/(?!users\/|orgs\/)[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}\/projects(\/\d{1,10})?\/?$/
+    .test(url.trim());
+}
