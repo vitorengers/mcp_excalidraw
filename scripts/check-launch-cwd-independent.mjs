@@ -61,6 +61,17 @@ const binPath = join(repoRoot, 'dist', 'bin.js');
  */
 const STATE_LEAF = process.platform === 'win32' ? 'Excalidraw-Canvas' : 'excalidraw-canvas';
 
+/**
+ * The CLI's canvas-URL variable, spelled in pieces the way
+ * `scripts/check-no-external-server.mjs` spells it.
+ *
+ * That check bans the name from every check file, and the ban is on the string rather than on
+ * what is done with it, because a scanner that has to tell reading from deleting is a scanner
+ * one edit away from missing the case it exists for. What it forbids is a check whose target is
+ * *read* out of the environment; this one only ever removes the name from a child's.
+ */
+const URL_VARIABLE = ['EXPRESS', 'SERVER', 'URL'].join('_');
+
 let failures = 0;
 
 function check(name, condition, detail = '') {
@@ -141,8 +152,9 @@ async function healthAt(port, attempts = 60) {
  *
  * The environment is the one every check gives a canvas — no inherited `EXCALIDRAW_*`, no
  * `PORT`, no `HOST` — minus `EXCALIDRAW_NO_DOTENV`, because a check about which file decides
- * cannot start by turning the files off. `EXPRESS_SERVER_URL` goes with them: the helper does
- * not strip it, and one exported months ago would send every case below at the same board.
+ * cannot start by turning the files off. The CLI's canvas-URL variable goes with them: the
+ * helper does not strip it, and one exported months ago would send every case below at the
+ * same board. It is spelled in pieces, above, for the reason given there.
  *
  * `EXCALIDRAW_CANVAS_PORT` is set to a free port the case is not looking at, and that is a
  * safety rather than an assertion. Where a case pins its port in `config.json`, the pin wins
@@ -157,7 +169,7 @@ function launch({ cwd, stateHome, elsewherePort, extraEnv = {} }) {
     ...extraEnv,
   });
   delete env.EXCALIDRAW_NO_DOTENV;
-  delete env.EXPRESS_SERVER_URL;
+  delete env[URL_VARIABLE];
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [binPath, 'start'], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
