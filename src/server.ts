@@ -3937,8 +3937,11 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
 // of a single-select field, cards newest-first, and a drag between columns written back.
 // Dormant unless a project says `githubProject`, so a board that has none never grows one.
 //
-// Both directions go through `gh`. It is already required by the issue agent, already
-// carries the `project` scope, and the PATH and WSL traps around it are already paid for.
+// Both directions go through `gh`. It is already required by the issue agent, and the PATH
+// and WSL traps around it are already paid for. It does *not* arrive with the `project`
+// scope — `gh auth login` never asks for it, so both directions fail on a default login
+// until `gh auth refresh -s project` has been run once, and `classifyGhFailure` is what says
+// so rather than letting GitHub's token inventory reach the canvas alone (#319).
 
 /**
  * The workspace a project-board request is about, or a reason it is not usable.
