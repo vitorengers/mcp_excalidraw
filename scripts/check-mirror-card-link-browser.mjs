@@ -82,7 +82,7 @@ const registryPath = join(workDir, 'workspaces.json');
 const TODO = { id: 'f75ad846', name: 'Todo' };
 const DOING = { id: '47fc9ee4', name: 'In Progress' };
 
-const PROJECT_URL = 'https://github.com/users/vitorengers/projects/5';
+const PROJECT_URL = 'https://github.com/users/someone/projects/5';
 const issueUrl = (number) => `https://github.com/vitorengers/vibemaxxing/issues/${number}`;
 
 const item = (id, number, title, option, createdAt) => ({

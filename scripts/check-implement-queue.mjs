@@ -84,7 +84,7 @@ const project = (number, nodes) => ({
       projectV2: {
         id: `PVT_project${number}`,
         title: `project ${number}`,
-        url: `https://github.com/users/vitorengers/projects/${number}`,
+        url: `https://github.com/users/someone/projects/${number}`,
         field: { id: 'PVTSSF_status', name: 'Status', options: [TODO, DOING, DONE] },
         items: { pageInfo: { hasNextPage: false }, nodes },
       },
@@ -207,7 +207,7 @@ for (const workspace of WORKSPACES) {
   writeFileSync(join(dir, 'board.config.json'), JSON.stringify({
     name: workspace.id,
     repo: REPO,
-    githubProject: `https://github.com/users/vitorengers/projects/${workspace.project}`,
+    githubProject: `https://github.com/users/someone/projects/${workspace.project}`,
   }), 'utf8');
   workspace.path = dir.replace(/\\/g, '/');
 }

@@ -97,8 +97,19 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const CONFIG_LOCK_WAIT_MS = 2000;
 const CONFIG_LOCK_POLL_MS = 50;
 
+/**
+ * What running git somewhere needs to know: which machine the directory is on, and how it is
+ * spelled on both sides of that.
+ *
+ * Narrower than `Workspace` because one caller has no workspace to hand. Registration reads a
+ * project's `origin` to find out which repository it is in, and that happens *before* there is
+ * a config for a workspace to be loaded from — a `Workspace` still satisfies it, so nothing
+ * else changed.
+ */
+export type GitLocation = Pick<Workspace, 'environment' | 'path' | 'innerPath'>;
+
 /** Run git the way the workspace's own environment runs it, in the directory given. */
-function git(workspace: Workspace, at: AgentDirectory, args: string[]): Promise<CommandResult> {
+function git(workspace: GitLocation, at: AgentDirectory, args: string[]): Promise<CommandResult> {
   if (workspace.environment.kind === 'wsl') {
     return exec('wsl.exe', [
       '-d', workspace.environment.distro,
@@ -114,7 +125,7 @@ function argPath(workspace: Workspace, directory: AgentDirectory): string {
   return workspace.environment.kind === 'wsl' ? directory.innerPath : directory.path;
 }
 
-function workspaceDirectory(workspace: Workspace): AgentDirectory {
+function workspaceDirectory(workspace: GitLocation): AgentDirectory {
   return { path: workspace.path, innerPath: workspace.innerPath };
 }
 
@@ -616,16 +627,23 @@ export interface OriginRemote {
 /**
  * `owner/name` as the repository's own `origin` declares it, and the remote it read it from.
  *
- * The fallback for a board whose `board.config.json` names no `repo`. Read rather than
- * guessed: reconstructing an issue URL from a branch name needs a repository, and inventing
- * one would point the panel at somebody else's issue.
+ * The fallback for a board whose `board.config.json` names no `repo`, and — since a tracked
+ * config no longer ships one — the answer registration writes into a new project's. Read rather
+ * than guessed: reconstructing an issue URL from a branch name needs a repository, and inventing
+ * one would point the panel at somebody else's issue. A `repo` shipped in a tracked config is an
+ * answer about whoever wrote the file; `origin` is an answer about the checkout in front of the
+ * board.
  *
  * Both halves are returned because "there is no `origin`" and "`origin` is not on github.com"
  * are different facts and the caller says different things about them — a warning that offers
  * `repo` in `board.config.json` to somebody whose remote is GitLab is answering a question
  * they did not ask. The parse itself is `github-host.ts`'s: the host is one decision.
+ *
+ * `GitLocation` rather than `Workspace`, because `ensureWorkspaceConfig` calls this while it is
+ * still deciding what the workspace is: it holds a resolved path and an environment and has no
+ * `Workspace` to hand over yet. Every other caller passes one, which satisfies the narrower type.
  */
-export async function originRemote(workspace: Workspace): Promise<OriginRemote> {
+export async function originRemote(workspace: GitLocation): Promise<OriginRemote> {
   const remote = await git(workspace, workspaceDirectory(workspace), ['remote', 'get-url', 'origin']);
   if (!remote.ok) return { url: null, repo: null };
   const url = remote.stdout.trim() || null;

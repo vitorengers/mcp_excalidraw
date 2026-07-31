@@ -129,7 +129,7 @@ const card = (itemId, title) => ({
 /** Three columns, which is what the live board's own geometry said it had been drawn for. */
 const board = (optionIds) => ({
   projectTitle: 'mcp_excalidraw',
-  projectUrl: 'https://github.com/users/vitorengers/projects/5',
+  projectUrl: 'https://github.com/users/someone/projects/5',
   fieldName: 'Status',
   sections: optionIds.map((optionId, index) => ({
     optionId,

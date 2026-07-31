@@ -30,12 +30,18 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { repoIdentity } from './lib/repo-identity.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const read = (relative) => readFileSync(join(repoRoot, relative), 'utf8');
 
 const readme = read('README.md');
 const config = JSON.parse(read('board.config.json'));
+// The name is the board's — the product is what the board is called. The repository is the
+// tree's own record of itself, since #315 took `repo` out of the board config: a configuration
+// a clone copies must not name the account it was copied from.
+const { repo } = repoIdentity();
 
 let failures = 0;
 
@@ -51,7 +57,7 @@ const mentions = (needle) => readme.includes(needle);
 console.log('1. the front page says which project it is');
 check(`it uses the name in board.config.json ("${config.name}")`, mentions(config.name),
       'the tool has a name and the README never said it');
-check(`it names this repository (${config.repo})`, mentions(config.repo),
+check(`it names this repository (${repo})`, mentions(repo),
       'a clone cannot tell which fork it is holding');
 
 // ─── 2. Nothing points at the upstream project unmarked ───────
@@ -90,7 +96,7 @@ check('every remaining mention of the upstream project says that is what it is',
 
 // Bug reports have to arrive somewhere a maintainer of this fork will read them.
 check('bug reports are pointed at this fork\'s issue tracker',
-      mentions(`github.com/${config.repo}/issues`), `expected a link to ${config.repo}/issues`);
+      mentions(`github.com/${repo}/issues`), `expected a link to ${repo}/issues`);
 
 // ─── 3. What this fork is, named on its own front page ────────
 

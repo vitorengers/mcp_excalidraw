@@ -112,8 +112,7 @@ two of the three platforms it runs on.
   "language": "English",
   "docsDir": "docs",
   "board": "docs/board.excalidraw",
-  "repo": "vitorengers/vibemaxxing",
-  "githubProject": "https://github.com/users/vitorengers/projects/5",
+  "repo": "someone/their-tool",
   "agents": {
     "issue":     { "model": "claude-fable-5", "effort": "high" },
     "implement": {
@@ -125,6 +124,18 @@ two of the three platforms it runs on.
   }
 }
 ```
+
+`repo` is **written at registration**, from the project's own `origin`: `POST /api/workspaces`
+reads `git remote get-url origin` in the folder that was chosen and writes `owner/name` into
+the config it creates. A folder that is no repository, or whose remote is not GitHub, gets no
+`repo` key at all rather than a guess — the panel reconstructs issue URLs from it, and an
+invented one points at somebody else's issue. It stays editable in the settings dialog, and a
+project that already has a config keeps whatever that config says: this runs when the file is
+created and never again.
+
+There is no equivalent for `githubProject` and there will not be. A project board belongs to an
+account, nothing on disk implies which one, and `readProjectBoard` runs `gh` against whatever it
+is given.
 
 A config field pointing outside its own project is **ignored, not honoured** — the workspace is
 still returned, with `error` explaining what was dropped. A project whose config is missing or
@@ -155,6 +166,43 @@ unset means *use the board default* — which is the only other value there is. 
 **cannot** configure the command itself; see
 [issue-block.md](issue-block.md#what-is-per-project-and-what-stays-global) for why that boundary
 is where it is.
+
+## board.config.local.json
+
+The same settings, for one machine rather than for the repository. It sits beside
+`board.config.json`, it is gitignored, and it **wins** where the two disagree — shallow, except
+`agents`, which merges one level down so a locally pinned implement model does not erase the
+issue agent the project configured for everybody.
+
+It exists because two of these settings are not properties of the tool at all. `repo` and
+`githubProject` name an *account*, and this repository used to ship both in its tracked config:
+a stranger who cloned the release and registered the clone as a board — the path the README's
+own fork section leads to, since the tool ships a `docs/` tree and a `docs/board.excalidraw` —
+got a board mirroring the maintainer's GitHub project, running `gh` against it, and marking
+every card on it undraggable. So this repository's `board.config.json` names a board and a docs
+directory and nothing about GitHub, and the machine it is developed on carries the rest:
+
+```json
+{
+  "repo": "someone/their-tool",
+  "githubProject": "https://github.com/users/someone/projects/5"
+}
+```
+
+The second reason is the settings dialog. It writes this file, and a dialog writing into a
+git-tracked config means every settings edit dirties the working tree of whatever project is
+open — including this one's.
+
+**A setting is written back to the file it was read from.** The dialog is shown the two files
+merged, because what it has to show is what is in force; on save, a setting the overlay already
+carries goes to the overlay and everything else goes to `board.config.json`. Both alternatives
+fail visibly: writing everything to the shared file leaves the edit shadowed and saving appears
+to do nothing, and writing everything to the overlay copies the whole config into a file nobody
+shares, so the project's own settings stop reaching this machine. Clearing an overridden setting
+removes it from the overlay, which brings the shared value back.
+
+An overlay that is there and unreadable is an **error on that workspace**, the same as a
+malformed `board.config.json`. Absent is the ordinary case and says nothing.
 
 ## agent-workflows/
 

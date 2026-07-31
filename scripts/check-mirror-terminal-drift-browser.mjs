@@ -146,7 +146,7 @@ const payload = (options) => JSON.stringify({
   data: { owner: { projectV2: {
     id: 'PVT_kwHOBVSHIs4BefUS',
     title: 'Drift',
-    url: 'https://github.com/users/vitorengers/projects/5',
+    url: 'https://github.com/users/someone/projects/5',
     field: { id: 'PVTSSF_status', name: 'Status', options },
     items: { pageInfo: { hasNextPage: false }, nodes: [
       item('PVTI_a', 3, 'Being worked on', DOING),
@@ -179,7 +179,7 @@ writeFileSync(registryPath, JSON.stringify({
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Drift Check',
   repo: 'vitorengers/vibemaxxing',
-  githubProject: 'https://github.com/users/vitorengers/projects/5',
+  githubProject: 'https://github.com/users/someone/projects/5',
 }), 'utf8');
 // The board switched to and back from. No project on it, so the region it draws is the notes
 // column alone (#316) — it exists to be somewhere else, which is all the switch needs it to be.

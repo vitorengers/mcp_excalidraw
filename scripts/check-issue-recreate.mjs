@@ -100,7 +100,7 @@ const boardPayload = () => ({
       projectV2: {
         id: 'PVT_kwHOBVSHIs4BefUS',
         title: 'mcp_excalidraw',
-        url: 'https://github.com/users/vitorengers/projects/5',
+        url: 'https://github.com/users/someone/projects/5',
         field: { id: 'PVTSSF_status', name: 'Status', options: [TODO, DOING, DONE] },
         items: {
           pageInfo: { hasNextPage: false },
@@ -280,7 +280,7 @@ process.stdin.on('end', () => {
 
 /** Two boards: one mirroring the project, one with no project at all. */
 const WORKSPACES = [
-  { id: 'mirrored', config: { githubProject: 'https://github.com/users/vitorengers/projects/5' } },
+  { id: 'mirrored', config: { githubProject: 'https://github.com/users/someone/projects/5' } },
   { id: 'projectless', config: {} },
 ];
 

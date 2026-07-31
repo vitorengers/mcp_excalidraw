@@ -173,7 +173,7 @@ check('an agent that printed one is read',
       extractGithubUrl(`Opened ${OK_ISSUE}\n`, 'issues') === OK_ISSUE,
       String(extractGithubUrl(`Opened ${OK_ISSUE}\n`, 'issues')));
 check('a github.com project URL parses',
-      parseProjectUrl('https://github.com/users/vitorengers/projects/5')?.login === 'vitorengers');
+      parseProjectUrl('https://github.com/users/someone/projects/5')?.login === 'someone');
 
 for (const remote of [
   'git@github.com:vitorengers/vibemaxxing.git',

@@ -64,7 +64,7 @@ function card(itemId, number, title, { draggable = true, contentType = 'Issue' }
 const board = {
   projectId: 'PVT_stub',
   projectTitle: 'mcp_excalidraw',
-  projectUrl: 'https://github.com/users/vitorengers/projects/5',
+  projectUrl: 'https://github.com/users/someone/projects/5',
   fieldId: 'PVTSSF_status',
   fieldName: 'Status',
   morePages: false,

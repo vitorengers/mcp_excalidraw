@@ -30,7 +30,7 @@
  *     its caption — the nearest non-empty line above or below.
  *
  * `package.json` `repository.url`, `homepage` and `bugs.url` are **not** re-asserted here.
- * `check-fork-identity.mjs` rule 2 owns them, reading the expectation from `board.config.json`,
+ * `check-fork-identity.mjs` rule 2 owns them, reading the expectation from `FORK_REPO`,
  * and a second copy of that rule is a second place to update. What this adds there is `author`,
  * which that check does not read: a package whose author is somebody else sends every bug
  * report and every question about it to a repository that will not answer.
@@ -55,6 +55,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { repoIdentity } from './lib/repo-identity.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => readFileSync(join(repoRoot, relative), 'utf8');
@@ -299,9 +301,10 @@ check('a captioned front page is accepted', mediaIssues(CLEAN_README, upstreamAs
 
 // ─── The real tree ────────────────────────────────────────────
 
-const config = JSON.parse(read('board.config.json'));
-const repo = String(config.repo ?? '');
-const [repoOwner] = repo.split('/');
+// From `FORK_REPO` since #315: `board.config.json` no longer names a repository, because a
+// board configuration is read by the running server and copied by everyone who clones the
+// tree, so naming an account in it pointed every clone at the maintainer's GitHub.
+const { repo, owner: repoOwner } = repoIdentity();
 
 /** One sha, recorded once. `check-board-map.mjs` is where it lives. */
 function forkBase() {

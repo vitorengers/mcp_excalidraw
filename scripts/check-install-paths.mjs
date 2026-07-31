@@ -16,7 +16,7 @@
  *
  *   1. it is `package.json` `name` — and *not* merely one of its `bin` keys — *and*
  *      `package.json` is this repository's package record rather than upstream's, which is
- *      decided here by whether `repository.url` names the repository in `board.config.json`.
+ *      decided here by whether `repository.url` names the repository `FORK_REPO` records.
  *      That second half is what stopped the rule going vacuous while the tree still carried
  *      upstream's record verbatim: it would otherwise have "published" upstream's name by
  *      definition and waved every command through. It reads the record rather than a literal,
@@ -51,13 +51,19 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { repoIdentity } from './lib/repo-identity.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const read = (relative) => readFileSync(join(repoRoot, relative), 'utf8');
 const present = (relative) => existsSync(join(repoRoot, relative));
 
 const pkg = JSON.parse(read('package.json'));
-const board = JSON.parse(read('board.config.json'));
+// The tree's own record of which repository it is, deliberately kept outside `package.json` —
+// the rule below is exactly "does the manifest describe this tree", so it needs something the
+// manifest cannot answer for itself. It was `board.config.json`'s `repo` until #315; see
+// `scripts/lib/repo-identity.mjs`.
+const { repo: FORK_REPO } = repoIdentity();
 
 let failures = 0;
 
@@ -97,7 +103,7 @@ const dependencyNames = new Set([
  * hands them upstream's product.
  */
 const publishesOwnPackage = typeof pkg.repository?.url === 'string'
-  && pkg.repository.url.includes(board.repo);
+  && pkg.repository.url.includes(FORK_REPO);
 
 // ─── Finding install and run commands ─────────────────────────
 
@@ -190,7 +196,7 @@ function offence({ name, headings, declared }) {
   if (ownNames.has(name)) {
     if (publishesOwnPackage || labelled) return null;
     return `"${name}" is package.json's name, but package.json still describes `
-         + `${pkg.repository?.url ?? 'no repository'} rather than ${board.repo} — the registry `
+         + `${pkg.repository?.url ?? 'no repository'} rather than ${FORK_REPO} — the registry `
          + `entry under that name is not this tree's`;
   }
   if (binNames.has(name)) {

@@ -585,8 +585,10 @@ branch, pull request, self-merge — is in [CLAUDE.md](CLAUDE.md), and
 [docs/development-log.md](docs/development-log.md) is one dated entry per merged pull request.
 
 Bug reports and pull requests for **this fork** belong on
-[its own issue tracker](https://github.com/vitorengers/vibemaxxing/issues) and its
-[project board](https://github.com/users/vitorengers/projects/5).
+[its own issue tracker](https://github.com/vitorengers/vibemaxxing/issues), and on the GitHub
+project the maintainer's board is pointed at — which is configured per checkout rather than
+shipped, so a clone of this repository is nobody else's project board
+([docs/workspaces.md](docs/workspaces.md)).
 
 ## License
 

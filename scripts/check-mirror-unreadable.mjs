@@ -164,7 +164,7 @@ console.log('\n5. it does not collide with the mirror it stands in for');
 
 const board = {
   projectTitle: 'mcp_excalidraw',
-  projectUrl: 'https://github.com/users/vitorengers/projects/5',
+  projectUrl: 'https://github.com/users/someone/projects/5',
   fieldName: 'Status',
   sections: [
     { optionId: 'a', name: 'Todo', cards: [], hidden: 0 },

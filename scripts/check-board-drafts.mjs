@@ -63,7 +63,7 @@ function board({ todo = [card('1', 'First todo'), card('2', 'Second todo')], doi
   return {
     projectId: 'PVT_kwHOBVSHIs4BefUS',
     projectTitle: 'mcp_excalidraw',
-    projectUrl: 'https://github.com/users/vitorengers/projects/5',
+    projectUrl: 'https://github.com/users/someone/projects/5',
     fieldId: 'PVTSSF_status',
     fieldName: 'Status',
     morePages: false,

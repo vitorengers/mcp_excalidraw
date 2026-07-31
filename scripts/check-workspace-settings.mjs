@@ -408,7 +408,7 @@ try {
     body: JSON.stringify({
       config: {
         name: 'Renamed From The Board',
-        githubProject: 'https://github.com/users/vitorengers/projects/5',
+        githubProject: 'https://github.com/users/someone/projects/5',
         agents: { implement: { model: 'claude-sonnet-5', effort: 'low', timeoutSeconds: 30 } },
       },
     }),

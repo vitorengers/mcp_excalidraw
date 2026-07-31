@@ -117,7 +117,7 @@ const PAYLOAD = {
       projectV2: {
         id: 'PVT_kwHOBVSHIs4BefUS',
         title: 'mcp_excalidraw',
-        url: 'https://github.com/users/vitorengers/projects/5',
+        url: 'https://github.com/users/someone/projects/5',
         field: {
           id: 'PVTSSF_status',
           name: 'Status',
@@ -210,11 +210,11 @@ writeFileSync(logPath, '', 'utf8');
  * server per case would be checking the environment instead.
  */
 const WORKSPACES = [
-  { id: 'board-default', config: { githubProject: 'https://github.com/users/vitorengers/projects/5' } },
+  { id: 'board-default', config: { githubProject: 'https://github.com/users/someone/projects/5' } },
   {
     id: 'board-named',
     config: {
-      githubProject: 'https://github.com/users/vitorengers/projects/5',
+      githubProject: 'https://github.com/users/someone/projects/5',
       // Lower case on purpose: the column is named "Icebox" on GitHub.
       projectTodoColumn: 'icebox',
     },
@@ -222,7 +222,7 @@ const WORKSPACES = [
   {
     id: 'board-missing',
     config: {
-      githubProject: 'https://github.com/users/vitorengers/projects/5',
+      githubProject: 'https://github.com/users/someone/projects/5',
       projectTodoColumn: 'Nowhere',
     },
   },

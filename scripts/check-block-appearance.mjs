@@ -122,7 +122,7 @@ function board(names, cards) {
   return {
     projectId: 'PVT_check',
     projectTitle: 'Appearance check',
-    projectUrl: 'https://github.com/users/vitorengers/projects/5',
+    projectUrl: 'https://github.com/users/someone/projects/5',
     fieldId: 'PVTSSF_check',
     fieldName: 'Stage',
     sections: names.map((name, index) => ({
