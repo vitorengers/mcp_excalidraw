@@ -216,6 +216,12 @@ const PROBE = `(() => {
   return {
     title: document.title,
     headings: Array.from(document.querySelectorAll('.header h1')).map((node) => text(node)),
+    // innerText rather than textContent, because the question is what a reader sees: the
+    // second one also returns whatever the row is currently hiding.
+    headerText: (() => {
+      const header = document.querySelector('.header');
+      return header ? (header.innerText || '').replace(/\\s+/g, ' ').trim() : null;
+    })(),
     activeTab: text(document.querySelector('.workspace-tab--active .workspace-tab__name')),
     tabs: Array.from(document.querySelectorAll('.workspace-tab__name')).map((node) => text(node)),
     assetPath: window.EXCALIDRAW_ASSET_PATH ?? null,
@@ -321,6 +327,16 @@ try {
   // took apart. `check-merged-bar-browser.mjs` counts it too, from the layout's side.
   check('the constant title has not come back to the bar',
         after.headings.length === 0, JSON.stringify(after.headings));
+
+  // The done-when asks for the *rendered* header, and counting `h1` at zero only says what is
+  // not there. These two say what is: the row names the board in front of it, and the word this
+  // item is about appears nowhere on it. Read positively, because "no `h1`" is also satisfied by
+  // a bar that names nothing at all.
+  console.log(`      (the row reads ${JSON.stringify(after.headerText)})`);
+  check('the bar names the project being looked at',
+        (after.headerText ?? '').includes(other), JSON.stringify(after.headerText));
+  check('and nothing on it names the substrate', !/excalidraw/i.test(after.headerText ?? ''),
+        JSON.stringify(after.headerText));
 
   console.log('\n3. a board with no registry still has a name in its tab');
   await open(solo.base);

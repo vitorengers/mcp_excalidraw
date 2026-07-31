@@ -42,10 +42,16 @@ row that was mostly empty on both.
 - **No registry means no tabs, not no bar.** `WorkspaceTabs` renders nothing without one, and
   the connection pill, Sync to Backend, Clear Canvas and Restart Server are still there.
 - **There is no page title on it.** `<h1>Excalidraw Canvas</h1>` said the same four words on
-  every board of every project; the tabs beside it say which board this is. The name is still
-  in `<title>`, where a browser tab reads it.
+  every board of every project; the tabs beside it say which board this is. The name is in
+  `<title>`, where a browser tab reads it — though until #296 the sentence was aspirational:
+  the tab said `Excalidraw POC - Backend API Integration`. It now reads
+  `Field Notes — VibeMaxxing`, the active project in front of the product, and the product
+  alone when there is no project to name it after. `frontend/index.html` ships that fallback as
+  the static title and `App.tsx` puts the board in front of it once `/api/workspaces` answers.
 
-`scripts/check-merged-bar-browser.mjs` measures all of it in a real browser, in both themes.
+`scripts/check-merged-bar-browser.mjs` measures all of it in a real browser, in both themes,
+and `scripts/check-brand-strings-browser.mjs` reads the rendered `document.title` and the
+rendered text of the bar.
 
 ## Restarting the server from the board
 
