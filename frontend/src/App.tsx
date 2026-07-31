@@ -5250,7 +5250,12 @@ function App(): JSX.Element {
    */
   const adoptWorkspace = (workspace: WorkspaceSummary, list: WorkspaceSummary[]): void => {
     setWorkspaces(list)
-    setWorkspacesConfigured(true)
+    // `setWorkspacesConfigured(true)` stood here until #323 removed it, and it had been a
+    // `ReferenceError` since #399 took the state away and left this one call site behind:
+    // adding the first project through the `+` threw here, so the dialog never closed and the
+    // board never switched to the tab it had just created. The frontend is built by `vite`
+    // and never type-checked, which is the only reason a name that is not defined anywhere
+    // could ship.
     setWorkspaceDialog(null)
     switchWorkspace(workspace.id)
   }

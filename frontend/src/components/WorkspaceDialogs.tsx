@@ -171,6 +171,8 @@ interface AgentDraft {
   model: string
   effort: string
   timeoutSeconds: string
+  /** Slug naming `agent-workflows/<slug>.md` in the project. See docs/workspaces.md. */
+  workflow: string
 }
 
 interface ConfigDraft {
@@ -189,7 +191,7 @@ interface ConfigDraft {
   implement: AgentDraft
 }
 
-const EMPTY_AGENT: AgentDraft = { model: '', effort: '', timeoutSeconds: '' }
+const EMPTY_AGENT: AgentDraft = { model: '', effort: '', timeoutSeconds: '', workflow: '' }
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 const number = (value: unknown): string => (typeof value === 'number' ? String(value) : '')
@@ -200,7 +202,8 @@ function agentDraft(raw: unknown): AgentDraft {
   return {
     model: text(settings.model),
     effort: text(settings.effort),
-    timeoutSeconds: number(settings.timeoutSeconds)
+    timeoutSeconds: number(settings.timeoutSeconds),
+    workflow: text(settings.workflow)
   }
 }
 
@@ -212,7 +215,10 @@ function agentPatch(draft: AgentDraft): Record<string, unknown> {
   return {
     model: orNull(draft.model),
     effort: orNull(draft.effort),
-    timeoutSeconds: draft.timeoutSeconds.trim() && Number.isFinite(seconds) && seconds > 0 ? seconds : null
+    timeoutSeconds: draft.timeoutSeconds.trim() && Number.isFinite(seconds) && seconds > 0 ? seconds : null,
+    // Sent because the draft was filled in from the file: a project that already selects a
+    // workflow sends its own value back, and the field is only blank where the file is.
+    workflow: orNull(draft.workflow)
   }
 }
 
@@ -232,6 +238,11 @@ export const WorkspaceConfigDialog: React.FC<{
   const [draft, setDraft] = useState<ConfigDraft | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /**
+   * Whether the expert rows are on screen. Closed every time the dialog opens, because the
+   * dialog is what a new user meets immediately after choosing a folder.
+   */
+  const [advanced, setAdvanced] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -307,9 +318,24 @@ export const WorkspaceConfigDialog: React.FC<{
       .catch((problem: Error) => { setError(problem.message); setBusy(false) })
   }
 
-  const field = (label: string, name: keyof ConfigDraft, placeholder = ''): React.ReactElement => (
+  /**
+   * One row. `optional` is what the five rows on the default view carry, and it is a word
+   * rather than a styling choice: this dialog opens on its own the moment a folder is picked,
+   * and eleven blank boxes with no such word read as eleven questions that have to be answered
+   * before the board will work. Every setting here is optional — the rows behind `Advanced`
+   * say it once, in the sentence over them, because eleven repetitions of it is noise.
+   */
+  const field = (
+    label: string,
+    name: keyof ConfigDraft,
+    placeholder = '',
+    optional = false
+  ): React.ReactElement => (
     <label className="workspace-config__row">
-      <span className="workspace-config__label">{label}</span>
+      <span className="workspace-config__label">
+        {label}
+        {optional && <span className="workspace-config__optional"> optional</span>}
+      </span>
       <input
         className="workspace-config__field"
         data-field={name}
@@ -358,6 +384,23 @@ export const WorkspaceConfigDialog: React.FC<{
           onChange={(event) => setAgent(kind, 'timeoutSeconds', event.target.value)}
         />
       </label>
+      {/*
+        The one setting here that changes what a run *does* rather than how well it runs, and
+        the one that had no field at all: the slug names `agent-workflows/<slug>.md` in the
+        project, whose text is given to the agent. A name, not a path — the server refuses a
+        path with that sentence, so the placeholder shows the shape rather than explaining it.
+      */}
+      <label className="workspace-config__row">
+        <span className="workspace-config__label">Workflow</span>
+        <input
+          className="workspace-config__field"
+          data-field={`agents.${kind}.workflow`}
+          type="text"
+          placeholder="use board default"
+          value={draft?.[kind].workflow ?? ''}
+          onChange={(event) => setAgent(kind, 'workflow', event.target.value)}
+        />
+      </label>
     </fieldset>
   )
 
@@ -370,29 +413,58 @@ export const WorkspaceConfigDialog: React.FC<{
 
         {draft && (
           <>
-            {field('Name', 'name', workspaceId)}
+            {field('Name', 'name', workspaceId, true)}
             {/* The language the issues this board opens for the project are written in.
                 Blank is English. It is a name a model reads, not a locale code. */}
-            {field('Issue language', 'language', 'English')}
-            {field('Docs folder', 'docsDir', 'docs')}
-            {field('Board file', 'board', 'docs/board.excalidraw')}
-            {field('Library file', 'library')}
-            {field('GitHub repo', 'repo', 'owner/name')}
-            {field('GitHub project', 'githubProject', 'https://github.com/users/…/projects/5')}
-            {field('Project field', 'projectField', 'Status')}
-            {field('Cards per column', 'projectCardLimit')}
-            {/* The two columns this server writes: where a researched issue lands, and
-                where an implementation does. Blank means the option GitHub names itself. */}
-            {field('Todo column', 'projectTodoColumn', 'Todo')}
-            {field('In-progress column', 'projectInProgressColumn', 'In Progress')}
+            {field('Issue language', 'language', 'English', true)}
+            {field('Docs folder', 'docsDir', 'docs', true)}
+            {field('GitHub repo', 'repo', 'owner/name', true)}
+            {field('GitHub project', 'githubProject', 'https://github.com/users/…/projects/5', true)}
 
             {/*
-              A project retunes the agents the board already allows; blank means the
-              board's own setting. It cannot supply a command, so it can never enable an
-              agent the operator has not enabled.
+              A disclosure rather than a scroll, and the rows behind it are *unmounted* rather
+              than hidden: `<details>` and `display: none` both leave every one of them in the
+              tab order and in a screen reader's reading of the form, which is the thing that
+              made this dialog read as a questionnaire.
+
+              What stays above is the five a project cannot be worked on without having thought
+              about; everything below has a default that is right until somebody has a reason.
+              Toggling changes nothing but what is on screen — `draft` holds the whole config
+              either way and `save` sends all of it, so a collapsed dialog saves a workflow it
+              never showed rather than clearing it.
             */}
-            {agentFields('issue', 'Issue agent')}
-            {agentFields('implement', 'Implement agent')}
+            <button
+              type="button"
+              className="workspace-config__advanced"
+              aria-expanded={advanced}
+              onClick={() => setAdvanced((open) => !open)}
+            >
+              {advanced ? '▾' : '▸'} Advanced
+            </button>
+
+            {advanced && (
+              <>
+                <p className="workspace-config__note">
+                  All optional — blank means the board&rsquo;s own default.
+                </p>
+                {field('Board file', 'board', 'docs/board.excalidraw')}
+                {field('Library file', 'library')}
+                {field('Project field', 'projectField', 'Status')}
+                {field('Cards per column', 'projectCardLimit')}
+                {/* The two columns this server writes: where a researched issue lands, and
+                    where an implementation does. Blank means the option GitHub names itself. */}
+                {field('Todo column', 'projectTodoColumn', 'Todo')}
+                {field('In-progress column', 'projectInProgressColumn', 'In Progress')}
+
+                {/*
+                  A project retunes the agents the board already allows; blank means the
+                  board's own setting. It cannot supply a command, so it can never enable an
+                  agent the operator has not enabled.
+                */}
+                {agentFields('issue', 'Issue agent')}
+                {agentFields('implement', 'Implement agent')}
+              </>
+            )}
           </>
         )}
 

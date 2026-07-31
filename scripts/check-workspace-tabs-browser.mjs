@@ -383,6 +383,14 @@ try {
   await shot('05-settings');
   await type('.workspace-config__field[data-field="name"]', 'First Project');
   await type('.workspace-config__field[data-field="repo"]', 'vitorengers/first');
+  // The dialog opens on five rows since #323; the column and the agent model are behind
+  // `Advanced` and are not in the DOM until it is pressed, so typing into them before this
+  // click writes nothing and the two cases at the end of this section would fail on the file
+  // rather than on the disclosure. What that disclosure *is* is `check-workspace-settings-browser.mjs`;
+  // what this section still needs is to reach past it.
+  check('the advanced rows can be reached', await click('.workspace-config__advanced'));
+  await waitFor(() => dialogOpen('.workspace-config__field[data-field="projectTodoColumn"]'),
+                'the advanced rows to be revealed');
   await type('.workspace-config__field[data-field="projectTodoColumn"]', 'Ready');
   await type('.workspace-config__field[data-field="agents.implement.model"]', 'claude-opus-5');
   await shot('06-settings-filled');
