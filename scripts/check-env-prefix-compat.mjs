@@ -15,8 +15,9 @@
  *     check's server, specifically so that the operator's machine cannot decide the result. A
  *     loop that strips one prefix strips nothing under the other, and the live board's
  *     configuration leaks back into ~130 checks (section 4).
- *   - the documentation states a count, and a count is a claim a machine can check. It said
- *     fifteen against an actual twenty-five (section 5).
+ *   - the documentation describes a list of names, and a renamed variable has to arrive in both
+ *     halves at once: section 5 fails on a name the accessor reads with no row in
+ *     `docs/running.md`, and on a row for a name it does not read.
  *
  * Self-contained: it writes its own registries under the system temp directory, starts its own
  * canvas servers on ports the kernel just handed out with a state home and a log file of their
@@ -264,7 +265,6 @@ try {
 
   if (Array.isArray(names.names)) {
     const running = readFileSync(join(repoRoot, 'docs', 'running.md'), 'utf8');
-    const readme = readFileSync(join(repoRoot, 'README.md'), 'utf8');
 
     const documented = [...running.matchAll(/^\|\s*`EXCALIDRAW_([A-Z_]+)`/gm)].map((match) => match[1]);
     const missing = names.names.filter((name) => !documented.includes(name));
@@ -274,15 +274,15 @@ try {
     check('and running.md documents nothing the accessor does not read',
           extra.length === 0, extra.join(', '));
 
-    const total = names.names.length;
-    const windowsOnly = names.names.filter((name) => name.endsWith('_WSL')).length;
-    const crossPlatform = total - windowsOnly;
-    check(`running.md counts the ${NUMBER_WORDS[crossPlatform]} cross-platform ones`,
-          running.includes(`The ${NUMBER_WORDS[crossPlatform]} below`),
-          `running.md does not say "The ${NUMBER_WORDS[crossPlatform]} below"`);
-    check(`and the README counts all ${NUMBER_WORDS[total]}`,
-          readme.includes(`all ${NUMBER_WORDS[total]} \`EXCALIDRAW_*\` variables`),
-          `the README does not say "all ${NUMBER_WORDS[total]} \`EXCALIDRAW_*\` variables"`);
+    // The count itself is no longer asserted anywhere, and that is the point: this check used
+    // to require running.md to say "The twenty-three below" and the README "all twenty-six",
+    // which is one drifting number replaced by two that a check kept correct — until somebody
+    // added a variable and had to be told by a red run where the sentences were. Since #312 the
+    // tables are generated from the declaration and no document states a count at all.
+    // `check-settings-documented.mjs` owns both halves of that.
+    const stated = [...running.matchAll(new RegExp(`\\b(?:${NUMBER_WORDS.join('|')})\\b[^.\\n]{0,30}\`?EXCALIDRAW_\\*`, 'gi'))];
+    check('and states no count of them', stated.length === 0,
+          stated.map(([whole]) => whole).join(' · '));
   }
 } finally {
   for (const canvas of started) canvas.stop();
