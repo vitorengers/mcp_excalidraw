@@ -122,7 +122,7 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_STATE_HOME` | per-OS state directory | The parent of the directory holding `config.json`, the pidfile, the restart log and the running board's state file. For a check that needs a throwaway one |
 | `EXCALIDRAW_WORKSPACES` | unset | Path to the registry JSON. Unset means one `default` board and no project tabs — see [workspaces.md](workspaces.md) |
 | `EXCALIDRAW_BOARD_STATE` | beside the registry | Where each registered board is saved between processes. Unset puts them in a directory named after the registry file; with no registry, nothing is saved — [element-store.md](element-store.md) |
-| `EXCALIDRAW_DOCS_DIR` | unset | Where `GET /api/docs/:key` reads *this tool's own* documentation from. Unset disables it: serving arbitrary files from an unauthenticated local API is not a default |
+| `EXCALIDRAW_DOCS_DIR` | the shipped `docs/` | Where `GET /api/docs/:key` reads from for a board with no `docsDir` of its own. Set it **empty** for a setup that wants per-project documents and no fallback — [docs-block.md](docs-block.md) |
 | `EXCALIDRAW_LIBRARY` | the shipped `docs/blocks.excalidrawlib` | An `.excalidrawlib` served to every board, alongside each project's own. Set it **empty** for a board that wants no shared shapes at all — [shared-library.md](shared-library.md) |
 | `EXCALIDRAW_ISSUE_AGENT` | unset | The command line that researches an observation and opens the issue. Unset means issue blocks do nothing |
 | `EXCALIDRAW_IMPLEMENT_AGENT` | unset | The command line that implements one. Unset means the button is not offered |

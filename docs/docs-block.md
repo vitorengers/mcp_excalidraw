@@ -8,8 +8,13 @@ fetches `GET /api/docs/:key?workspace=...` and renders that markdown in a panel.
 ```
 
 The key resolves to `<docsDir>/<key>.md` inside the project, where `docsDir` comes from the
-project's own `board.config.json`. `EXCALIDRAW_DOCS_DIR` remains the fallback for single-board
-setups, which have no registry to resolve a directory from.
+project's own `board.config.json`. A board with none — the single-board setup, which has no
+registry to resolve a directory from, or a project registered before the seeding below — falls
+back to **the `docs/` this build ships**. `EXCALIDRAW_DOCS_DIR` overrides that fallback, and
+setting it *empty* removes it, which is how a setup that wants per-project documents and nothing
+else says so. It used to be unset by default, which meant the route was off until somebody typed
+their own install directory into it — so the tool could not serve documentation it publishes in
+its own npm package.
 
 A project registered through the `+` is given `docsDir` when it actually has a `docs/` folder —
 read from disk, never guessed — because `docsDir` is the only route documentation has, and a
@@ -24,8 +29,27 @@ Some keys belong to a block this server draws rather than to the board it is dra
 project mirror is generated onto every project that names a `githubProject`, always carrying
 `docKey: "project-board"` — and that key used to resolve inside the *mirrored* project, where
 the document has no reason to exist, so the mirror on every board but this one read as
-undocumented. Those keys are listed in `TOOL_DOC_KEYS` in `src/server.ts` and resolve against
-the tool's own `docs/`, whichever board is asking.
+undocumented.
+
+**A doc key naming a tool block resolves against the tool's own `docs/`, whichever board is
+asking.** The rule was applied to the mirror alone and holds for every block this server draws:
+`project-board`, `issue-block`, `terminal`, `docs-block`, `board-sections`, `shared-library` and
+`workspaces`. They are listed in `TOOL_DOC_KEYS` in `src/core/tool-docs.ts`, and
+`scripts/check-tool-doc-keys.mjs` asks every one of them to resolve from a board that is not this
+repository.
+
+Two decisions come with it:
+
+- **It is an explicit list, not the whole of the tool's `docs/`.** Falling through for any
+  unmatched key would let a project's own `index` or `configuration` resolve to this
+  repository's — a wrong answer where the 404 it replaces is at least an honest one. The cost is
+  a list somebody will extend, so the check also fails on a key with no `docs/<key>.md` behind
+  it, and the key pattern and containment check above still bound every one of them to
+  `<dir>/<key>.md`.
+- **On a collision the tool's document wins.** Where a project keeps a file named after a tool
+  key, the reader who selected a terminal block asked about *this* terminal, and the block is the
+  tool's. A project's own keys — anything not in the list — still come from its `docsDir` as
+  before.
 
 ## Finding the key from a click
 
