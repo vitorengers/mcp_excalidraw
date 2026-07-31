@@ -1218,7 +1218,7 @@ rather than assumed, in `scripts/check-issue-progress.mjs`.
 ## Configuration
 
 ```
-EXCALIDRAW_ISSUE_AGENT='<agent-binary> -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob WebFetch WebSearch"'
+EXCALIDRAW_ISSUE_AGENT='<agent-binary> -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh issue list:*) Bash(gh issue view:*) Bash(gh issue create:*) Bash(gh issue edit:*) Bash(gh issue comment:*) Bash(gh project item-add:*) Bash(git log:*) Bash(git show:*) Bash(git diff:*) Bash(git blame:*) Read Grep Glob WebFetch WebSearch"'
 EXCALIDRAW_IMPLEMENT_CONCURRENCY=4
 EXCALIDRAW_ISSUE_MEMO_MS=30000
 ```
@@ -1236,8 +1236,14 @@ when an issue comes out worse than usual. The `[1m]` suffix selects the 1M-conte
 
 `--allowedTools` is mandatory. In `-p` mode the agent investigates fine, but any command needing
 approval is blocked, so it finishes with exit code 0 and no issue at all. The list is narrow on
-purpose — `gh`, `git`, and reading. No `Write`, no `Edit`, no open `Bash`: the agent opens
-issues, it does not touch the repository.
+purpose, and the narrowness is **by sub-command**: five `gh issue` verbs, `gh project item-add`,
+four read-only `git` verbs, and reading. What that leaves the agent able to do is write issues,
+comment on them and put them on the project board, under the operator's credentials, on any
+repository those credentials reach. What it cannot do is commit, push, branch, merge, delete or
+reconfigure anything, or reach the API by hand — a list naming `gh` and `git` whole granted
+every one of those, which is why this one names verbs.
+[trap-allowed-tools.md](trap-allowed-tools.md) has both halves as tables, what narrowing costs,
+and the CLI runs that confirmed sub-command scoping is honoured at all.
 
 **`WebFetch` and `WebSearch` are part of reading.** The prompt has always ordered the agent to
 research what the repository does not settle — "research it — do not invent it" — and until
@@ -1362,9 +1368,9 @@ no way to say so.
   prompt has always said "You may put helpers to work — sub-agents".
 
 **On the issue side the field is shipped but inert**, and that is the operator's call rather than
-this one's. The documented `EXCALIDRAW_ISSUE_AGENT` allowlist above — `Bash(gh:*) Bash(git:*)
-Read Grep Glob WebFetch WebSearch` — has no sub-agent tool in it, and in `-p` mode a tool outside
-the list is refused silently with exit 0 and no result. A workflow asking the issue agent to
+this one's. The documented `EXCALIDRAW_ISSUE_AGENT` allowlist above has no sub-agent tool in it —
+it is `gh` and `git` verbs, `Read`, `Grep`, `Glob` and the two web tools, and nothing else — and
+in `-p` mode a tool outside the list is refused silently with exit 0 and no result. A workflow asking the issue agent to
 orchestrate therefore does nothing until that variable is widened. The field is there for
 symmetry, and because the same setting already covers both of that agent's runs, researching and
 rewriting.
