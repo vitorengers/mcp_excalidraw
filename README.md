@@ -175,7 +175,7 @@ Install the Excalidraw canvas toolkit so you can draw diagrams for me:
 
 1. Choose the right skill directory for this agent and scope (project or global).
 2. Run: npx -y @vitorengers/vibemaxxing install-skill --dir <that-skills-directory>
-3. Read the installed excalidraw-skill/SKILL.md so you know the drawing workflow.
+3. Read the installed vibemaxxing-canvas/SKILL.md so you know the drawing workflow.
 4. Start the canvas with: npx -y @vitorengers/vibemaxxing start
    then tell me to open the URL it prints in my browser (screenshots need an open tab).
 5. Draw a small test diagram — two labeled boxes connected by an arrow — take a
@@ -236,13 +236,15 @@ npx -y @vitorengers/vibemaxxing install-skill --print-source  # inspect bundled 
 
 ## Agent Skill
 
-The skill at `skills/excalidraw-skill/` teaches agents the full workflow — layout planning, the screenshot-verify-fix quality loop, arrow routing, anti-patterns, snapshots, and file I/O. It works through the CLI (preferred, zero setup), MCP tools (if configured), or raw REST — in that order.
+The skill at `skills/vibemaxxing-canvas/` teaches agents the full workflow — layout planning, the screenshot-verify-fix quality loop, arrow routing, anti-patterns, snapshots, and file I/O. It works through the CLI (preferred, zero setup), MCP tools (if configured), or raw REST — in that order.
 
 ```bash
 npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>
 ```
 
-The command copies the bundled `excalidraw-skill/` directory into `<skills-root>/excalidraw-skill`. Let your agent choose whether that root should be project-level or global. Re-running `install-skill` upgrades in place — it replaces the target directory, so files removed upstream don't linger.
+The command copies the bundled `vibemaxxing-canvas/` directory into `<skills-root>/vibemaxxing-canvas`. Let your agent choose whether that root should be project-level or global. Re-running `install-skill` upgrades in place — it replaces the target directory, so files removed upstream don't linger.
+
+This skill used to install as `excalidraw-skill`, which is also the name upstream's published package installs. An agent loads every directory under its skills root, so `install-skill` removes a legacy `excalidraw-skill` directory from the root it is writing to — but only when that directory holds a `SKILL.md` whose own front matter names the legacy skill, so a directory of yours that happens to share the name is left alone. Whatever it removed is listed under `removed` in the command's JSON output.
 
 Where the skill shines:
 
@@ -452,7 +454,7 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
 | **Design Guide** | `read_diagram_guide` |
 | **Resources** | `get_resource` |
 
-Full schemas are discoverable via `tools/list` or in `skills/excalidraw-skill/references/cheatsheet.md`.
+Full schemas are discoverable via `tools/list` or in `skills/vibemaxxing-canvas/references/cheatsheet.md`.
 
 Viewport group focus can tune framing with `viewportZoomFactor`:
 
@@ -566,7 +568,7 @@ npm run type-check
 npm run build
 npm test                   # every scripts/check-*.mjs — see Testing above
 npm run cli -- status      # run the CLI from the local build
-npm run sync:skills        # after editing skills/excalidraw-skill, sync the repo-local agent copy
+npm run sync:skills        # after editing skills/vibemaxxing-canvas, sync the repo-local agent copy
 ```
 
 Every behaviour change in this fork ships with a `scripts/check-*.mjs` run against the old code

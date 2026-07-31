@@ -44,7 +44,7 @@ import { dirname, join, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const SKILL_NAME = 'excalidraw-skill';
+const SKILL_NAME = 'vibemaxxing-canvas';
 
 let failures = 0;
 
