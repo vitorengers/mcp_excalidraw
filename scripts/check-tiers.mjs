@@ -5,11 +5,11 @@
  * Nothing mechanical distinguished a check that runs anywhere from one that cannot run on a
  * hosted Linux runner. Five of them spawn `wsl.exe` and answer a skip without a distro;
  * `check-alt-arrow-accelerator.mjs` exits 0 on any platform that is not win32; sixty-nine
- * need a Chrome to drive; six assert this repository's own discipline — the board, the
- * README, the documentation index, the language rule, whose package the install commands
- * fetch, and how the board check behaves when the history is cut — rather than the product's
- * behaviour, and cannot be satisfied from a
- * clone that has neither the board nor the full history. A
+ * need a Chrome to drive; seven assert this repository's own discipline — the board, the
+ * README, the documentation index, the language rule, the attribution this fork ships, whose
+ * package the install commands fetch, and how the board check behaves when the history is cut
+ * — rather than the product's behaviour,
+ * and cannot be satisfied from a clone that has neither the board nor the full history. A
  * runner picking a subset for a CI matrix had no way to ask which was which, and a check
  * that skips itself is indistinguishable from one that passed.
  *
@@ -191,15 +191,17 @@ check('nothing in fast or repo needs a tool', pretendPortable.length === 0,
  * and so does `check-docs-encoding.mjs`, and only one of the two is about discipline the
  * maintainer's board has to be present for. `check-shallow-clone.mjs` is here for the other
  * half of the same prerequisite — it clones this repository at two depths and compares them,
- * so it needs the history the shallow one is missing. `check-install-paths.mjs` reads
- * `package.json` against `board.config.json` to decide whose package a command fetches, which
- * is a question about this repository and meaningless about the product.
+ * so it needs the history the shallow one is missing. `check-attribution.mjs` is here for the
+ * history alone: it resolves the fork base commit and asks who introduced `demo.gif`, and a
+ * depth-1 clone can answer neither. `check-install-paths.mjs` reads `package.json` against
+ * `board.config.json` to decide whose package a command fetches, which is a question about
+ * this repository and meaningless about the product.
  */
 const REPO_CHECKS = ['check-board-map.mjs', 'check-readme.mjs', 'check-docs-index.mjs',
                      'check-english-only.mjs', 'check-shallow-clone.mjs',
-                     'check-install-paths.mjs'];
+                     'check-attribution.mjs', 'check-install-paths.mjs'];
 const repoDeclared = [...tierOf].filter(([, tier]) => tier === 'repo').map(([file]) => file).sort();
-check('repo is the six discipline checks', repoDeclared.join(', ') === REPO_CHECKS.slice().sort().join(', '),
+check('repo is the seven discipline checks', repoDeclared.join(', ') === REPO_CHECKS.slice().sort().join(', '),
       `declared: ${repoDeclared.join(', ') || 'none'}`);
 
 // ─── 3. The runner selects by tier, and skips only what it must ──
