@@ -433,7 +433,7 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
 ### Notes
 
 - **No container**: this repository publishes no image and ships no `Dockerfile`. The MCP server and the canvas both run from `npx -y @vitorengers/vibemaxxing` or from a clone, on the host, where the `gh` and `git` a container has not got are the ones the issue blocks and the terminal need.
-- **In-memory storage**: The canvas server stores elements in memory. Restarting the server clears all elements — use `export` / `snapshot` for persistence.
+- **Elements survive a restart**: the canvas saves each board about a second after it last changed, into a state file beside the workspace registry in this tool's own per-user state directory, and reads it back at startup. That includes the board you get before any project is registered. Nothing is written into your repository — `export` is still the only way a scene reaches a tracked `.excalidraw` file. Pasted image files and named `snapshot`s are still memory only, so an exported image comes back as an element whose file the server no longer holds.
 
 ## MCP Tools (26 Total)
 
@@ -526,7 +526,7 @@ Only for rendering-dependent features: screenshots, PNG/SVG export, viewport con
 
 ### Are my diagrams persistent?
 
-The canvas is in-memory by design (restart = blank canvas). Persist by exporting `.excalidraw` files into your repo (`export --out docs/architecture.excalidraw`) or with named `snapshot`s while working. Re-`import` a file to keep refining it later.
+Yes, across a restart: each board is saved a second after it changes into the tool's per-user state directory and restored when the server comes back, whether or not you have registered a project. That is a working memory, not a place to keep anything — nothing there is committed, and a state directory is not a repository. Export `.excalidraw` files into your repo for the diagrams you mean to keep (`export --out docs/architecture.excalidraw`), and re-`import` one to keep refining it later. Named `snapshot`s are still in memory only, for undoing a change within a session.
 
 ### Are excalidraw.com share links private?
 
@@ -550,7 +550,7 @@ Yes — that's the recommended path for coding agents: `npx -y @vitorengers/vibe
 
 ## Known Issues / TODO
 
-- [ ] **Persistent storage**: Elements are stored in-memory — restarting the server clears everything. Use `export` / snapshots as a workaround.
+- [ ] **Images and snapshots do not survive a restart**: elements do, but the files behind pasted images and named `snapshot`s are memory only, so a restored image is an element whose file has gone. Use `export` for anything you mean to keep.
 - [ ] **Image export requires a browser**: screenshots and image export rely on the frontend doing the actual rendering. A headless rendering mode is planned.
 
 Contributions welcome!
