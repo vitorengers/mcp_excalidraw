@@ -88,12 +88,12 @@ its flag parser honouring more than the binary name:
 - `--allowedTools "Bash(git log:*)"` refuses `git commit --allow-empty -m x`;
 - and refuses `git log --oneline && git commit --allow-empty -m x`, so a compound command is
   judged per segment rather than by its first word;
-- and a list of several such rules in **one** argument still works — a scoped rule has spaces
-  inside it, so the list is split on the parentheses and not on whitespace, which a list of
-  four confirmed by running `gh issue list` and refusing `gh repo view` from the same argument.
+- and several such rules in **one** argument all apply, so the list is split on the parentheses
+  and not on the spaces inside each rule: four of them in one argument ran `gh issue list` and
+  still refused `gh repo view`.
 
-All three refusals exit 0 with no result, which is this document's subject and the shape the cost
-above takes.
+Every refusal there exits 0 with no result, which is this document's subject and the shape the
+cost above takes.
 
 ## The same trap, one tool along
 
@@ -104,7 +104,7 @@ told to look something up and refused the means, silently, exiting 0. Confirmed 
 running the command: without them, `Claude requested permissions to use WebFetch, but you
 haven't granted it yet`; with them, the fetch and the search both go through. Same exit code.
 
-They are read-only, so the narrowness that matters — nothing that writes — is untouched. The
+They are read-only, so the narrowness that matters — nothing that writes code — is untouched. The
 scoped form is `WebFetch(domain:example.com)`, or `WebFetch(domain:*.example.com)` for
 subdomains; `WebSearch` takes no argument. Scoping is left off here because a host nobody
 predicted is refused the same silent way, which is the defect rather than a fix for it.
