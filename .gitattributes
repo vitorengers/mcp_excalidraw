@@ -12,7 +12,12 @@
 
 *.sh text eol=lf
 *.command text eol=lf
+*.desktop text eol=lf
 *.mjs text eol=lf
 *.excalidraw text eol=lf
+
+# The one file that has to arrive with CRLF: cmd.exe is the reader, and `eol` decides what a
+# checkout writes rather than what the index stores — the blob stays LF like every other.
+*.cmd text eol=crlf
 
 demo.gif binary
