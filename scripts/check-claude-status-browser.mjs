@@ -154,7 +154,7 @@ for (const dir of [statusDir, projectDir, profileDir, shotDir]) mkdirSync(dir, {
 
 const WORKSPACE = 'hud-project';
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
-  name: 'HUD Project', repo: 'vitorengers/mcp_excalidraw',
+  name: 'HUD Project', repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const registryPath = join(workDir, 'workspaces.json');

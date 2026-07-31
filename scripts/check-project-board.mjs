@@ -63,10 +63,10 @@ function item(id, { number, title, createdAt, option, type = 'Issue', state = 'O
       __typename: type,
       number,
       title,
-      url: `https://github.com/vitorengers/mcp_excalidraw/${type === 'Issue' ? 'issues' : 'pull'}/${number}`,
+      url: `https://github.com/vitorengers/vibemaxxing/${type === 'Issue' ? 'issues' : 'pull'}/${number}`,
       createdAt,
       state,
-      repository: { nameWithOwner: 'vitorengers/mcp_excalidraw' },
+      repository: { nameWithOwner: 'vitorengers/vibemaxxing' },
     },
   };
 }
@@ -107,7 +107,7 @@ console.log('1. sections come from the project, not from a list written here');
 const board = await importDist(join('core', 'project-board.js'), 'the project board reader');
 const { toBoard, parseProjectUrl, buildMoveArgs, NO_STATUS_OPTION_ID } = board;
 
-const three = toBoard(payload(), { repo: 'vitorengers/mcp_excalidraw' });
+const three = toBoard(payload(), { repo: 'vitorengers/vibemaxxing' });
 check('one section per single-select option',
       three.sections.filter((section) => section.optionId !== NO_STATUS_OPTION_ID).length === 3,
       `got ${three.sections.map((s) => s.name).join(', ')}`);
@@ -272,7 +272,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Mirror Check',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
 

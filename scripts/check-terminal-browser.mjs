@@ -87,7 +87,7 @@ writeFileSync(registryPath, JSON.stringify({
 // check must not need — the same arrangement `check-board-drafts-browser.mjs` uses.
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Terminal Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
 
@@ -108,10 +108,10 @@ writeFileSync(fixturePath, JSON.stringify({
         __typename: 'Issue',
         number: 96,
         title: 'A card, so the mirror has a height worth clearing',
-        url: 'https://github.com/vitorengers/mcp_excalidraw/issues/96',
+        url: 'https://github.com/vitorengers/vibemaxxing/issues/96',
         createdAt: '2026-07-27T10:00:00Z',
         state: 'OPEN',
-        repository: { nameWithOwner: 'vitorengers/mcp_excalidraw' },
+        repository: { nameWithOwner: 'vitorengers/vibemaxxing' },
       },
     }] },
   } } },

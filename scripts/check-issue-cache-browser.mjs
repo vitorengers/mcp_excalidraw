@@ -77,7 +77,7 @@ const registryPath = join(workDir, 'workspaces.json');
 writeFileSync(counterPath, '', 'utf8');
 writeFileSync(versionPath, 'one', 'utf8');
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 const urlOf = (number) => `https://github.com/${REPO}/issues/${number}`;
 
 /** Open, nothing against it: the plain case the report was written about. */

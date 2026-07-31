@@ -111,10 +111,10 @@ writeFileSync(registryPath, JSON.stringify({
 // No githubProject on either: the mirror stays dormant, so the anchored origin is measured
 // against the board's own content and nothing else is drawing on these boards.
 writeFileSync(join(firstDir, 'board.config.json'), JSON.stringify({
-  name: 'First Project', repo: 'vitorengers/mcp_excalidraw',
+  name: 'First Project', repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 writeFileSync(join(secondDir, 'board.config.json'), JSON.stringify({
-  name: 'Second Project', repo: 'vitorengers/mcp_excalidraw',
+  name: 'Second Project', repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const PORT = await freePort();

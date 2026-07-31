@@ -121,7 +121,7 @@ mkdirSync(workDir, { recursive: true });
 const projectDir = join(workDir, 'project');
 mkdirSync(projectDir, { recursive: true });
 writeFileSync(join(projectDir, 'board.config.json'),
-  JSON.stringify({ name: 'Child Session Check', repo: 'vitorengers/mcp_excalidraw' }), 'utf8');
+  JSON.stringify({ name: 'Child Session Check', repo: 'vitorengers/vibemaxxing' }), 'utf8');
 
 const registryPath = join(workDir, 'workspaces.json');
 const WORKSPACE = 'child-session-check';
@@ -161,7 +161,7 @@ const agentStub = writeEnvStub(join(workDir, 'stub-agent.mjs'), 'agent',
   `let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', () => {
-  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/issues/1\\n');
+  process.stdout.write('https://github.com/vitorengers/vibemaxxing/issues/1\\n');
 });`);
 
 // ─── Servers ──────────────────────────────────────────────────

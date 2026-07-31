@@ -78,7 +78,7 @@ const profileDir = join(workDir, 'chrome-profile');
 const shotDir = argOf('--shots') ?? join(workDir, 'shots');
 for (const dir of [projectDir, profileDir, shotDir]) mkdirSync(dir, { recursive: true });
 
-const ISSUE = 'https://github.com/vitorengers/mcp_excalidraw/issues/701';
+const ISSUE = 'https://github.com/vitorengers/vibemaxxing/issues/701';
 const registryPath = join(workDir, 'workspaces.json');
 const WORKSPACE = 'progress-project';
 writeFileSync(registryPath, JSON.stringify({
@@ -87,7 +87,7 @@ writeFileSync(registryPath, JSON.stringify({
 // No githubProject: the mirror stays dormant, so nothing else is drawing on this board.
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Progress Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 /**
@@ -126,7 +126,7 @@ process.stdin.on('end', async () => {
   line({
     type: 'result',
     subtype: 'success',
-    result: 'https://github.com/vitorengers/mcp_excalidraw/pull/701',
+    result: 'https://github.com/vitorengers/vibemaxxing/pull/701',
     usage: { iterations: [usage(120, 900, 6800, 310)] },
   });
 });

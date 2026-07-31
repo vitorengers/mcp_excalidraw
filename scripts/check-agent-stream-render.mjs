@@ -167,7 +167,7 @@ check('and the tap is not what the block shows',
 // colour cannot reach it — but a URL is precisely the shape an SGR reset lands in the middle of,
 // and a renderer that ever came to paint one word of it would break the run's only report of
 // what it did. Asserted on the rendered transcript too, which is the harder of the two.
-const PULL = 'https://github.com/vitorengers/mcp_excalidraw/pull/242';
+const PULL = 'https://github.com/vitorengers/vibemaxxing/pull/242';
 const announced = await runSession(`${node} ${JSON.stringify(writeStub('url.mjs', [
   { type: 'assistant', message: { content: [{ type: 'text', text: `Opened ${PULL}` }] } },
   { type: 'user', message: { content: [{ type: 'tool_result', content: `${PULL}\n` }] } },

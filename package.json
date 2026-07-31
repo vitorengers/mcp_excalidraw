@@ -76,11 +76,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/vitorengers/mcp_excalidraw.git"
+    "url": "https://github.com/vitorengers/vibemaxxing.git"
   },
-  "homepage": "https://github.com/vitorengers/mcp_excalidraw#readme",
+  "homepage": "https://github.com/vitorengers/vibemaxxing#readme",
   "bugs": {
-    "url": "https://github.com/vitorengers/mcp_excalidraw/issues"
+    "url": "https://github.com/vitorengers/vibemaxxing/issues"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -94,6 +94,7 @@
     "dist/**/*",
     "skills/**/*",
     "docs/*.md",
+    "docs/blocks.excalidrawlib",
     "config.example.json",
     "*.d.ts",
     "README.md",

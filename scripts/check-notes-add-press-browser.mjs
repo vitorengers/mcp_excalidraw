@@ -124,10 +124,10 @@ writeFileSync(fixturePath, JSON.stringify({
         __typename: 'Issue',
         number: 3,
         title: 'Something already on the board',
-        url: 'https://github.com/vitorengers/mcp_excalidraw/issues/3',
+        url: 'https://github.com/vitorengers/vibemaxxing/issues/3',
         createdAt: '2026-07-01T10:00:00Z',
         state: 'OPEN',
-        repository: { nameWithOwner: 'vitorengers/mcp_excalidraw' },
+        repository: { nameWithOwner: 'vitorengers/vibemaxxing' },
       },
     }] },
   } } },
@@ -178,12 +178,12 @@ writeFileSync(barrenRegistry, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(stockedDir, 'board.config.json'), JSON.stringify({
   name: 'Stocked',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
 writeFileSync(join(barrenDir, 'board.config.json'), JSON.stringify({
   name: 'Barren',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
   library: 'no-issue.excalidrawlib',
 }), 'utf8');
@@ -595,7 +595,11 @@ try {
         JSON.stringify(label));
 
   console.log('\n4. a library with no issue block: the press says so, and the next one is heard');
-  startServer(BARREN_PORT, barrenRegistry);
+  // Empty rather than absent. Since #305 an unset `EXCALIDRAW_LIBRARY` means the library the
+  // package ships — which is the one carrying the issue block — so leaving it off would hand
+  // this board a template and the whole of section 4 would be asking nothing. An explicitly
+  // empty value is how a board says it wants no shared shapes at all.
+  startServer(BARREN_PORT, barrenRegistry, { EXCALIDRAW_LIBRARY: '' });
   await waitFor(async () => (await fetch(`${BARREN}/health`)).ok, 'the second canvas server');
   const said = saidNoTemplate();
   scene = await openBoard(BARREN);

@@ -176,10 +176,10 @@ writeFileSync(fixturePath, JSON.stringify({
         __typename: 'Issue',
         number: 245,
         title: 'Zoomed out the board is blurry',
-        url: 'https://github.com/vitorengers/mcp_excalidraw/issues/245',
+        url: 'https://github.com/vitorengers/vibemaxxing/issues/245',
         createdAt: '2026-07-30T10:00:00Z',
         state: 'OPEN',
-        repository: { nameWithOwner: 'vitorengers/mcp_excalidraw' },
+        repository: { nameWithOwner: 'vitorengers/vibemaxxing' },
       },
     }] },
   } } },
@@ -208,7 +208,7 @@ writeFileSync(join(dirs[OTHER], 'board.config.json'),
 for (const [id, name] of [[WIDE, 'Wide Display'], [LAPTOP, 'Laptop Display']]) {
   writeFileSync(join(dirs[id], 'board.config.json'), JSON.stringify({
     name,
-    repo: 'vitorengers/mcp_excalidraw',
+    repo: 'vitorengers/vibemaxxing',
     githubProject: 'https://github.com/users/vitorengers/projects/5',
   }), 'utf8');
 }

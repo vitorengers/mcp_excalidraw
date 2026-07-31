@@ -81,7 +81,7 @@ const { cleanElementsForShare, shareUploadNotice } = shareModule;
 // Every marker below is a value this fork writes into customData somewhere, and none of
 // them may appear in what is uploaded. The nested one is there because a stripper written
 // as a key-by-key deletion would miss it.
-const ISSUE_URL = 'https://github.com/vitorengers/mcp_excalidraw/issues/279';
+const ISSUE_URL = 'https://github.com/vitorengers/vibemaxxing/issues/279';
 const DOC_KEY = 'running.md';
 const IMPLEMENT_BRANCH = 'issue-279';
 

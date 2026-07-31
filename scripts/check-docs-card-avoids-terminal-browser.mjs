@@ -100,7 +100,7 @@ writeFileSync(registryPath, JSON.stringify({
 // card being placed and the terminal panel it has to avoid.
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Avoid Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   docsDir: 'docs',
 }), 'utf8');
 

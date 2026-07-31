@@ -79,7 +79,7 @@ const profileDir = join(workDir, 'chrome-profile');
 const shotDir = argOf('--shots') ?? join(workDir, 'shots');
 for (const dir of [projectDir, profileDir, shotDir]) mkdirSync(dir, { recursive: true });
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 const registryPath = join(workDir, 'workspaces.json');
 const WORKSPACE = 'research-project';
 writeFileSync(registryPath, JSON.stringify({

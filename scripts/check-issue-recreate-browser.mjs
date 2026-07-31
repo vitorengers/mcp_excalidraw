@@ -85,7 +85,7 @@ const storePath = join(workDir, 'issues.json');
 const promptPath = join(workDir, 'revise-prompt.txt');
 const releasePath = join(workDir, 'release');
 
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 const urlOf = (number) => `https://github.com/${REPO}/issues/${number}`;
 
 /** Open, in Todo, nothing against it: the case the control exists for. */

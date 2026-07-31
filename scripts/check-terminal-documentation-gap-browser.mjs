@@ -90,7 +90,7 @@ writeFileSync(registryPath, JSON.stringify({
 // two things on this board and every gap here has one cause.
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Gap Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 /** A shell that answers a line with `heard[<line>]`, so a tab can be seen to be alive. */

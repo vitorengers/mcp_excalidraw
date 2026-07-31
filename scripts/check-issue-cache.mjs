@@ -69,7 +69,7 @@ const { resolvePanelTarget } = await importDist(join('core', 'panel-target.js'),
 const { MIRROR_KIND } = await importDist(join('core', 'project-board-layout.js'), 'the mirror layout');
 const { offersImplement } = await importDist(join('core', 'issue-appearance.js'), 'the appearance rules');
 
-const CARD_URL = 'https://github.com/vitorengers/mcp_excalidraw/issues/9';
+const CARD_URL = 'https://github.com/vitorengers/vibemaxxing/issues/9';
 
 const cardWith = (run) => ({
   id: 'pb-c-PVTI_d',
@@ -175,7 +175,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Issue Cache Check',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const PORT = await freePort();
@@ -223,8 +223,8 @@ const readIssue = async (url) => {
   throw lastError;
 };
 
-const ISSUE = 'https://github.com/vitorengers/mcp_excalidraw/issues/3';
-const OTHER = 'https://github.com/vitorengers/mcp_excalidraw/issues/12';
+const ISSUE = 'https://github.com/vitorengers/vibemaxxing/issues/3';
+const OTHER = 'https://github.com/vitorengers/vibemaxxing/issues/12';
 
 try {
   for (let attempt = 0; ; attempt++) {

@@ -87,7 +87,7 @@ function makeProject(name) {
   git(dir, ['config', 'user.name', 'Check']);
   git(dir, ['config', 'commit.gpgsign', 'false']);
   writeFileSync(join(dir, 'board.config.json'),
-                JSON.stringify({ name, repo: 'vitorengers/mcp_excalidraw' }), 'utf8');
+                JSON.stringify({ name, repo: 'vitorengers/vibemaxxing' }), 'utf8');
   writeFileSync(join(dir, 'README.md'), `# ${name}\n`, 'utf8');
   git(dir, ['add', '.']);
   git(dir, ['commit', '-m', 'initial']);
@@ -135,7 +135,7 @@ function report(prompt, via) {
   return number;
 }
 
-const url = (number) => 'https://github.com/vitorengers/mcp_excalidraw/pull/' + number;
+const url = (number) => 'https://github.com/vitorengers/vibemaxxing/pull/' + number;
 
 if (headless) {
   let input = '';
@@ -252,7 +252,7 @@ async function call(base, workspace, path, options = {}) {
   throw last;
 }
 
-const issue = (n) => `https://github.com/vitorengers/mcp_excalidraw/issues/${n}`;
+const issue = (n) => `https://github.com/vitorengers/vibemaxxing/issues/${n}`;
 const started = (n) => existsSync(join(workDir, `run-${n}.json`));
 const runReport = (n) => JSON.parse(readFileSync(join(workDir, `run-${n}.json`), 'utf8'));
 

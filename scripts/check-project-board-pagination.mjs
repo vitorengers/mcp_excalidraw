@@ -58,10 +58,10 @@ function item(id, { number, title, createdAt, option, type = 'Issue', state = 'O
       __typename: type,
       number,
       title,
-      url: `https://github.com/vitorengers/mcp_excalidraw/${type === 'Issue' ? 'issues' : 'pull'}/${number}`,
+      url: `https://github.com/vitorengers/vibemaxxing/${type === 'Issue' ? 'issues' : 'pull'}/${number}`,
       createdAt,
       state,
-      repository: { nameWithOwner: 'vitorengers/mcp_excalidraw' },
+      repository: { nameWithOwner: 'vitorengers/vibemaxxing' },
     },
   };
 }
@@ -109,7 +109,7 @@ const PAGE_TWO = [
   item('PVTI_done_new', { number: 218, title: 'Newest of all, and Done', createdAt: '2026-07-29T09:00:00Z', option: DONE }),
 ];
 
-const PAGE_199_URL = 'https://github.com/vitorengers/mcp_excalidraw/issues/199';
+const PAGE_199_URL = 'https://github.com/vitorengers/vibemaxxing/issues/199';
 
 /**
  * A `gh` that pages.
@@ -180,7 +180,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Paged Check',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
 

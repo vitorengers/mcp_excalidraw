@@ -106,7 +106,7 @@ function asRgb(hex) {
 // assertion — "the text is all there" is what passed before any of this, because the raw JSON
 // contained it too.
 
-const PR_URL = 'https://github.com/vitorengers/mcp_excalidraw/pull/246';
+const PR_URL = 'https://github.com/vitorengers/vibemaxxing/pull/246';
 /** Past `oneLine`'s 120 characters, so the folded row cannot be carrying it. */
 const BASH_TAIL = 'ZZ-END-OF-THE-COMMAND-ZZ';
 /** Past `renderResult`'s six lines and 400 characters. */
@@ -350,7 +350,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Fold Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 // The streaming stub the block watches. It prints the capture and stays alive: a shell that

@@ -83,7 +83,7 @@ const TODO = { id: 'f75ad846', name: 'Todo' };
 const DOING = { id: '47fc9ee4', name: 'In Progress' };
 
 const PROJECT_URL = 'https://github.com/users/vitorengers/projects/5';
-const issueUrl = (number) => `https://github.com/vitorengers/mcp_excalidraw/issues/${number}`;
+const issueUrl = (number) => `https://github.com/vitorengers/vibemaxxing/issues/${number}`;
 
 const item = (id, number, title, option, createdAt) => ({
   id,
@@ -96,7 +96,7 @@ const item = (id, number, title, option, createdAt) => ({
     url: issueUrl(number),
     createdAt,
     state: 'OPEN',
-    repository: { nameWithOwner: 'vitorengers/mcp_excalidraw' },
+    repository: { nameWithOwner: 'vitorengers/vibemaxxing' },
   },
 });
 
@@ -129,7 +129,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Card Link Check',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   githubProject: PROJECT_URL,
 }), 'utf8');
 

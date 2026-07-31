@@ -123,7 +123,7 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_WORKSPACES` | unset | Path to the registry JSON. Unset means one `default` board and no project tabs — see [workspaces.md](workspaces.md) |
 | `EXCALIDRAW_BOARD_STATE` | beside the registry | Where each registered board is saved between processes. Unset puts them in a directory named after the registry file; with no registry, nothing is saved — [element-store.md](element-store.md) |
 | `EXCALIDRAW_DOCS_DIR` | unset | Where `GET /api/docs/:key` reads *this tool's own* documentation from. Unset disables it: serving arbitrary files from an unauthenticated local API is not a default |
-| `EXCALIDRAW_LIBRARY` | unset | An `.excalidrawlib` served to every board, alongside each project's own — [shared-library.md](shared-library.md) |
+| `EXCALIDRAW_LIBRARY` | the shipped `docs/blocks.excalidrawlib` | An `.excalidrawlib` served to every board, alongside each project's own. Set it **empty** for a board that wants no shared shapes at all — [shared-library.md](shared-library.md) |
 | `EXCALIDRAW_ISSUE_AGENT` | unset | The command line that researches an observation and opens the issue. Unset means issue blocks do nothing |
 | `EXCALIDRAW_IMPLEMENT_AGENT` | unset | The command line that implements one. Unset means the button is not offered |
 | `EXCALIDRAW_ISSUE_AGENT_TIMEOUT` | none | Seconds. Unset means no ceiling; a wedged run is handled by the block's reset instead |
@@ -290,11 +290,11 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 99 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 104 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 69 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
-| `repo` | the full history, and this repository's own board | anywhere with a full clone | 6 | no |
+| `repo` | the full history, and this repository's own board | anywhere with a full clone | 7 | no |
 
 The gate is `fast` plus `browser`. `repo` is off it because it cannot be satisfied from a
 contributor's fork — `check-board-map.mjs` reads `docs/board.excalidraw` and the merge history
