@@ -1,6 +1,7 @@
 import logger from '../utils/logger.js';
 import { ServerElement } from '../types.js';
 import { EXPRESS_SERVER_URL, ENABLE_CANVAS_SYNC } from './config.js';
+import { CANVAS_SERVICE_NAME, isAcceptedCanvasService } from './identity.js';
 
 // API Response types
 export interface ApiResponse {
@@ -266,8 +267,10 @@ export async function batchCreateElementsStrict(elements: ServerElement[]): Prom
   return data.elements || [];
 }
 
-// Identity marker the canvas server puts in /health (v1.1+)
-export const CANVAS_SERVICE_NAME = 'mcp-excalidraw-canvas';
+// Identity marker the canvas server puts in /health (v1.1+), and the set a
+// client accepts — which is larger than one string, so that the rename can
+// ship acceptance before it ships the new answer. See core/identity.ts.
+export { CANVAS_SERVICE_NAME };
 
 export function foreignServiceError(): Error {
   const error = new Error(
@@ -330,7 +333,7 @@ async function assertCanvasIdentity(): Promise<void> {
           health = await response.json() as { service?: string };
         } catch { /* non-JSON body: foreign */ }
 
-        if (!response.ok || health?.service !== CANVAS_SERVICE_NAME) {
+        if (!response.ok || !isAcceptedCanvasService(health?.service)) {
           throw foreignServiceError();
         }
         identityVerifiedAt = Date.now();

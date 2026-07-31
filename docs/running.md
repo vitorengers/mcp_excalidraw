@@ -83,18 +83,28 @@ the port goes to whatever auto-starts first.
 
 ## The environment
 
-`PORT` and `HOST` decide where it listens. **`PORT=3737`** on the development machine — 3000 is
-unusable there. The checks never use either: each starts its own instance on a port the kernel
-just handed out, and neither `PORT` nor anything else in the environment reaches it.
+`PORT` and `HOST` decide where it listens. Everything else is `EXCALIDRAW_*`, and every one of
+them is optional: unset means the feature is off, not degraded.
 
-Everything else is `EXCALIDRAW_*`, and every one of them is optional. Unset means the feature is
-off, not degraded.
-
-The nineteen below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
+The twenty-one below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
 and they are in [their own section](#windows-only-projects-inside-a-wsl-distro) rather than here.
+
+**3737 is the default port rather than one machine's habit** since #303: 3000 is the default of
+Next.js, Create React App and most tutorial servers, and it is unusable here for a reason of its
+own. A `PORT` that is set is a **pin** — the server binds that port or fails saying what is on
+it, which is what keeps a scripted start and a published container deterministic. With `PORT`
+unset, the launch path tries `EXCALIDRAW_CANVAS_PORT` or 3737 and, if something else is already
+there, walks up to the next free port; `start` prints the URL and writes it into a state file
+beside the pidfile, so `status` and `stop` find a board on a port nobody typed.
+`EXPRESS_SERVER_URL`, when set, overrides all of it and is never scanned past.
+
+The checks never use any of them: each starts its own instance on a port the kernel just handed
+out, and neither `PORT` nor anything else in the environment reaches it.
 
 | Variable | Default | What it does |
 |---|---|---|
+| `EXCALIDRAW_CANVAS_PORT` | `3737` | The port the launch path tries first. A preference, not a pin: with `PORT` unset the search walks past it to the next free port |
+| `EXCALIDRAW_STATE_HOME` | per-OS state directory | The parent of the directory holding the pidfile, the restart log and the running board's state file. For a check that needs a throwaway one |
 | `EXCALIDRAW_WORKSPACES` | unset | Path to the registry JSON. Unset means one `default` board and no project tabs — see [workspaces.md](workspaces.md) |
 | `EXCALIDRAW_BOARD_STATE` | beside the registry | Where each registered board is saved between processes. Unset puts them in a directory named after the registry file; with no registry, nothing is saved — [element-store.md](element-store.md) |
 | `EXCALIDRAW_DOCS_DIR` | unset | Where `GET /api/docs/:key` reads *this tool's own* documentation from. Unset disables it: serving arbitrary files from an unauthenticated local API is not a default |
