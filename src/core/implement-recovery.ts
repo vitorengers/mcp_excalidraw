@@ -31,7 +31,8 @@
  * where a person put it.
  */
 import logger from '../utils/logger.js';
-import { HeldWorktree, originRepo, worktreesHoldingWork } from './implement-worktree.js';
+import { GITHUB_HOST } from './github-host.js';
+import { HeldWorktree, originRemote, worktreesHoldingWork } from './implement-worktree.js';
 import { Workspace } from './workspaces.js';
 
 /** A checkout holding work, and the issue it was cut for. */
@@ -46,13 +47,40 @@ export interface InterruptedRun {
  * The inverse of `worktreeName`, and only of its numeric half. That function falls back to a
  * slug for a URL with no issue number in it, and a slug is lossy on purpose — there is nothing
  * to invert, so this answers null rather than guessing at a URL nobody can act on.
+ *
+ * The host it rebuilds on is the one this board requires, from `github-host.ts` — which is why
+ * the repository handed to it has to have been read on that host too. A repository parsed off a
+ * remote somewhere else and rebuilt here is a link to a stranger's issue.
  */
 export function issueUrlFor(repo: string | null | undefined, worktreeName: string): string | null {
   const owner = (repo ?? '').trim().replace(/^\/+|\/+$/g, '');
   if (!/^[^/\s]+\/[^/\s]+$/.test(owner)) return null;
 
   const number = worktreeName.match(/^issue-(\d+)$/)?.[1];
-  return number ? `https://github.com/${owner}/issues/${number}` : null;
+  return number ? `https://${GITHUB_HOST}/${owner}/issues/${number}` : null;
+}
+
+/**
+ * Why checkouts holding work could not be named, in the words the operator reads at startup.
+ *
+ * Two different facts, and they were one message. A board with no `origin` at all is missing a
+ * setting, and saying which two settings would supply it is the useful thing to say. A board
+ * whose `origin` is GitLab, or a GitHub Enterprise Server, is not missing a setting: it is on a
+ * host this board does not read, and offering it `repo` in `board.config.json` would be
+ * offering to rebuild its issue URLs on github.com — pointing the panel at whatever happens to
+ * live at that path on a host the operator never named. So that case names the host instead.
+ */
+export function unnamedWorktreesWarning(
+  workspaceId: string,
+  held: number,
+  remote: string | null
+): string {
+  const opening = `Workspace "${workspaceId}" has ${held} checkout(s) holding work, but no `
+    + 'repository to name their issues by';
+  return remote
+    ? `${opening} — its "origin" is ${remote}, which is not a ${GITHUB_HOST} remote. `
+      + `This board only reads issues on ${GITHUB_HOST}.`
+    : `${opening} — set "repo" in board.config.json, or add a ${GITHUB_HOST} "origin" remote.`;
 }
 
 /**
@@ -82,12 +110,10 @@ export async function interruptedRuns(workspace: Workspace): Promise<Interrupted
   const held = await worktreesHoldingWork(workspace);
   if (!held.length) return [];
 
-  const repo = workspace.repo || (await originRepo(workspace));
+  const origin = await originRemote(workspace);
+  const repo = workspace.repo || origin.repo;
   if (!repo) {
-    logger.warn(
-      `Workspace "${workspace.id}" has ${held.length} checkout(s) holding work, but no repository `
-      + 'to name their issues by — set "repo" in board.config.json, or add an origin remote.'
-    );
+    logger.warn(unnamedWorktreesWarning(workspace.id, held.length, origin.url));
     return [];
   }
 

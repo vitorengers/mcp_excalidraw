@@ -108,6 +108,16 @@ export interface ProbeSpec {
   command: string;
   args: string[];
   cwd?: string | undefined;
+  /**
+   * The child's environment, or nothing to inherit this process's.
+   *
+   * Nothing is what the agent probes pass, and that is unchanged from before this field
+   * existed. `core/github-status.ts` is the caller that needs it: the GitHub CLI is not on
+   * `PATH` on every machine this runs on, and `agentPath()` is the answer `runGh` already
+   * uses — a preflight that probed a bare `PATH` would report the CLI missing on a board
+   * where every `gh` call succeeds.
+   */
+  env?: NodeJS.ProcessEnv | undefined;
 }
 
 /**
@@ -205,8 +215,14 @@ export function probeSpec(
   return { command: binary, args: ['--version'], cwd: undefined };
 }
 
-/** The real spawn: output captured, deadline enforced, nothing ever thrown. */
-const spawnProbe: ProbeRunner = (spec, timeoutMs) => new Promise<ProbeRun>((resolve) => {
+/**
+ * The real spawn: output captured, deadline enforced, nothing ever thrown.
+ *
+ * Exported because `core/github-status.ts` asks the same question of a different binary, and
+ * every line below is about *not throwing* rather than about agents: a second copy would be a
+ * second place for a spawn error, a deadline or a stream to be handled differently.
+ */
+export const spawnProbe: ProbeRunner = (spec, timeoutMs) => new Promise<ProbeRun>((resolve) => {
   let settled = false;
   let stdout = '';
   let stderr = '';
@@ -220,6 +236,7 @@ const spawnProbe: ProbeRunner = (spec, timeoutMs) => new Promise<ProbeRun>((reso
   try {
     child = spawn(spec.command, spec.args, {
       cwd: spec.cwd,
+      env: spec.env,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

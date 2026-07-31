@@ -1750,6 +1750,21 @@ function App(): JSX.Element {
    */
   const announcedStallRef = useRef<string>('')
 
+  /**
+   * The GitHub failure each board has already said, so it says each one once.
+   *
+   * The same rule as `announcedStallRef` and a stronger reason for it: a `gh` that is not
+   * installed is not installed at every poll, so a toast per poll would be this board telling
+   * somebody every twenty seconds, for as long as their session lasts, a thing they cannot fix
+   * without leaving the canvas. Keyed by board, because two tabs can fail differently and the
+   * one being looked at is the one that has to be able to speak.
+   *
+   * Keyed on the *server's* sentence rather than on the one shown, which is what keeps the
+   * `/api/github-status` read off the repeat path: an unchanged failure is dropped before
+   * anything is asked, and only a failure that is new pays for the diagnosis.
+   */
+  const announcedBoardFailureRef = useRef<Record<string, string>>({})
+
   // Sync state management
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle')
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null)
@@ -2899,6 +2914,69 @@ function App(): JSX.Element {
     }
   }
 
+  /**
+   * What the server can add about `gh` itself, or nothing.
+   *
+   * `GET /api/project-board` says the read failed and repeats what `gh` printed, which is the
+   * half a reader can act on only if they already know what `gh` is. This is the other half:
+   * not installed, not logged in, and logged in without the `project` scope are three
+   * different things to go and do, and the first two are what a fresh clone hits before
+   * anything is configured at all.
+   *
+   * Never allowed to fail the announcement it is decorating: a diagnosis that could not be
+   * fetched must not swallow the failure it was fetched for.
+   */
+  const githubAdvice = async (): Promise<string> => {
+    try {
+      const response = await fetch(apiUrl('/api/github-status'))
+      if (!response.ok) return ''
+      const gh = (await response.json())?.gh
+      if (!gh) return ''
+      if (gh.installed === false) {
+        return ' The gh CLI was not found on this machine — install it, or set '
+          + 'EXCALIDRAW_GH_COMMAND to where it lives.'
+      }
+      if (gh.authenticated === false) {
+        return ` gh is installed but not logged in — run "gh auth login".${
+          gh.error ? ` It said: ${String(gh.error)}` : ''}`
+      }
+      if (Array.isArray(gh.scopes) && !gh.scopes.includes('project')) {
+        return ` gh is logged in as ${String(gh.login ?? 'an account')} without the "project" `
+          + 'scope, which reading a project board needs — run "gh auth refresh -s project".'
+      }
+      return ''
+    } catch {
+      return ''
+    }
+  }
+
+  /**
+   * Say, once per board, that the project could not be read — and why.
+   *
+   * The strip `renderUnreadable` draws is only for a *cold* board, because a blip must not wipe
+   * a mirror somebody is reading; a board that has drawn once and then starts failing had
+   * nothing at all until #317. A toast is what says it either way, and it says it without
+   * putting a shape on a canvas that is already showing the last good answer.
+   *
+   * The suppression is what keeps it from becoming its own nuisance: the same failure on the
+   * next poll is dropped before anything is fetched, and the memory is cleared by a read that
+   * succeeds, so a board that recovers and breaks again speaks afresh.
+   */
+  const announceProjectBoardFailure = async (
+    api: ExcalidrawImperativeAPI,
+    workspace: string,
+    reported: string
+  ): Promise<void> => {
+    if (announcedBoardFailureRef.current[workspace] === reported) return
+    announcedBoardFailureRef.current[workspace] = reported
+    const advice = await githubAdvice()
+    // The board may have been switched while the diagnosis was in flight, and a toast is a
+    // property of the window rather than of a scene — saying it now would put one board's
+    // failure in front of another board's canvas.
+    if (activeWorkspaceRef.current !== workspace) return
+    sayOnCanvas(api, `The project board could not be read. ${reported}${advice}`)
+  }
+
   /** Re-read the project and redraw. A board with no project configured keeps its notes column. */
   const refreshProjectBoard = async (): Promise<void> => {
     const api = excalidrawAPIRef.current
@@ -2914,23 +2992,38 @@ function App(): JSX.Element {
       // A tab switched while the request was in flight would draw one project's board
       // over another project's canvas.
       if (activeWorkspaceRef.current !== workspace) return
-      // No project here — none configured, or none this board is allowed to read. The
-      // canvas still has a column of its own to draw, and the `+` on it is the only route
-      // to an issue block, so what a 404 clears is the *mirrored* half of the region.
+      // The one status that means "this board has no project", and the only one that says
+      // nothing. Since #317 it means only that: a `githubProject` that is not a project URL
+      // answers 422 and falls through to the branch below, where it is said out loud. Most
+      // boards are this one, and a toast on every one of them would be the feature making
+      // itself unusable.
+      //
+      // Saying nothing is not the same as drawing nothing, which is what it used to do and
+      // what #316 is about: the notes column and its `+` are the canvas's own and need no
+      // project, so what a 404 clears is the *mirrored* half of the region. There is no
+      // failure here to announce — a board with no project is not a board that failed.
       if (response.status === 404) {
         renderNotesOnly()
+        announcedBoardFailureRef.current[workspace] = ''
         return
       }
       const body = await response.json().catch(() => ({}))
       if (!body?.success || !body.board) {
         // Not a 404 — that was answered above and means the board simply has no project.
         // This is `gh` unresolvable, an expired login, a token without the `project` scope,
-        // a GitHub outage, or the loopback refusal, and every one of them arrives here with
-        // its own sentence in `body.error`. Throwing that away is what #254 is about.
+        // a GitHub outage, an unparseable project URL, or the loopback refusal, and every one
+        // of them arrives here with its own sentence in `body.error`. Throwing that away is
+        // what #254 is about, and saying it on a board whose mirror is already up — where the
+        // strip below will not draw, on purpose — is what #317 is about.
         console.warn('Could not read the project board:', body?.error ?? response.status)
-        renderUnreadable(String(body?.error ?? `The server answered ${response.status}.`))
+        const reported = String(body?.error ?? `The server answered ${response.status}.`)
+        renderUnreadable(reported)
+        void announceProjectBoardFailure(api, workspace, reported)
         return
       }
+      // A read that came back is what clears the memory, so a board that recovers and then
+      // fails the same way again says so rather than being suppressed by its own history.
+      announcedBoardFailureRef.current[workspace] = ''
       await reconcileDrafts(body.board as ProjectBoard)
       if (activeWorkspaceRef.current !== workspace) return
       const { implementing, queue } = await readImplementRecords()
@@ -2951,6 +3044,7 @@ function App(): JSX.Element {
       console.warn('Could not read the project board:', error)
       if (activeWorkspaceRef.current !== workspace) return
       renderUnreadable((error as Error).message)
+      void announceProjectBoardFailure(api, workspace, (error as Error).message)
     }
   }
 
