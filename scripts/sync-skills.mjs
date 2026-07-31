@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Sync the canonical skill (skills/excalidraw-skill) to the repo-local agent
-// copy (.agents/skills/excalidraw-skill, which .claude/skills symlinks to).
+// Sync the canonical skill (skills/vibemaxxing-canvas) to the repo-local agent
+// copy (.agents/skills/vibemaxxing-canvas, which .claude/skills symlinks to).
 //
 // skills/ is the single source of truth: it is published to npm and installed
 // by `vibemaxxing install-skill`. Edit there, then run:
@@ -11,9 +11,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const canonical = path.join(repoRoot, 'skills', 'excalidraw-skill');
-const agentCopy = path.join(repoRoot, '.agents', 'skills', 'excalidraw-skill');
-const claudeLink = path.join(repoRoot, '.claude', 'skills', 'excalidraw-skill');
+const canonical = path.join(repoRoot, 'skills', 'vibemaxxing-canvas');
+const agentCopy = path.join(repoRoot, '.agents', 'skills', 'vibemaxxing-canvas');
+const claudeLink = path.join(repoRoot, '.claude', 'skills', 'vibemaxxing-canvas');
 
 if (!fs.existsSync(path.join(canonical, 'SKILL.md'))) {
   console.error(`Canonical skill not found at ${canonical}`);
