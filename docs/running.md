@@ -165,12 +165,23 @@ prefix says so once in the log file. Nothing breaks on the day the old one is dr
 not been named in that file for a release first — `src/core/settings.ts` is the one list, and
 `node scripts/check-env-prefix-compat.mjs` fails if it and this table disagree.
 
-The twenty-three below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
-and they are in [their own section](#windows-only-projects-inside-a-wsl-distro) rather than here.
+The table below is everything that means the same thing on Windows, macOS and Linux. The names
+ending `_WSL` are Windows-only and are in
+[their own section](#windows-only-projects-inside-a-wsl-distro); the three the tool reads without
+any prefix are in [the log file and the debug line](#the-log-file-and-the-debug-line).
 
-Every name in both tables can be set four ways — in `<state-dir>/config.json`, in a `<cwd>/.env`,
+**Every table here is generated** from `src/core/settings.ts` by
+`node scripts/generate-settings-docs.mjs`, and `node scripts/check-settings-documented.mjs` fails
+when what is tracked is not what that produces. Change a default or a description in the
+declaration rather than in this file. It is also why nothing anywhere says *how many* there are:
+a number typed into prose is a claim nothing derives, and this repository once carried three
+different ones for the same list at the same time.
+
+Every name in every table can be set four ways — in `<state-dir>/config.json`, in a `<cwd>/.env`,
 exported, or by a command-line flag — and they are read in that order, each beating the one
-before it. [configuration.md](configuration.md) is that half.
+before it. [configuration.md](configuration.md) is that half. The exception is the last table:
+its three names are read before any of that is applied, so only the real environment supplies
+them.
 
 **3737 is the default port rather than one machine's habit** since #303: 3000 is the default of
 Next.js, Create React App and most tutorial servers, and it is unusable here for a reason of its
@@ -183,6 +194,8 @@ beside the pidfile, so `status` and `stop` find a board on a port nobody typed.
 
 The checks never use any of them: each starts its own instance on a port the kernel just handed
 out, and neither `PORT` nor anything else in the environment reaches it.
+
+<!-- generated: settings-table — from src/core/settings.ts, by scripts/generate-settings-docs.mjs -->
 
 | Variable | Default | What it does |
 |---|---|---|
@@ -209,6 +222,8 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_NO_AUTOSTART` | unset | `1` stops the CLI and the MCP server auto-spawning a canvas |
 | `EXCALIDRAW_NO_DOTENV` | unset | `1` stops both configuration files being read — `<cwd>/.env` and `<state-dir>/config.json` alike — leaving only the real environment. The checks set it, because a file layer only ever fills in variables that are *unset*, which is exactly the set a check deleted on purpose — [trap-check-environment.md](trap-check-environment.md) |
 | `EXCALIDRAW_ENV_FILE` | `<cwd>/.env` | Read this file instead. Ignored when `EXCALIDRAW_NO_DOTENV=1`, and it does not move `config.json` |
+
+<!-- /generated: settings-table -->
 
 **Pin the agents' model and effort.** Without `--model` and `--effort` on those two command
 lines the agent inherits whatever `~/.claude/settings.json` says, so changing the model of an
@@ -237,11 +252,15 @@ new workspace kind with a command builder of its own, not this one renamed: they
 shape and neither the path translation nor the `--exec bash -lc` quoting.
 `node scripts/check-wsl-windows-only.mjs` holds this.
 
+<!-- generated: settings-wsl-table — from src/core/settings.ts, by scripts/generate-settings-docs.mjs -->
+
 | Variable | Default | What it does |
 |---|---|---|
 | `EXCALIDRAW_ISSUE_AGENT_WSL` | unset | The issue command, spelled as a **WSL-backed** project's distro spells it. Unset falls back to `EXCALIDRAW_ISSUE_AGENT`, which only resolves inside a distro if it was written without an absolute path |
 | `EXCALIDRAW_IMPLEMENT_AGENT_WSL` | unset | The same, for implementing. A pair rather than one variable for the reason `EXCALIDRAW_ISSUE_AGENT` and `EXCALIDRAW_IMPLEMENT_AGENT` are a pair: granting a distro research must not thereby grant it repository writes |
 | `EXCALIDRAW_GH_COMMAND_WSL` | `gh` | The GitHub CLI inside a **WSL-backed** project's distro. Unlike the agents' `_WSL` pair this does **not** fall back to the host value: a host path is exactly what cannot run there |
+
+<!-- /generated: settings-wsl-table -->
 
 **A project inside a WSL distro needs the `_WSL` command.** Its agent runs inside the distro, so
 the command is resolved there: a host path like `C:/Users/you/.local/bin/claude.exe` is
@@ -263,6 +282,32 @@ there is nothing to set: a WSL project falls back to the bare `gh` rather than t
 because a host path there can only produce `command not found`. Set
 `EXCALIDRAW_GH_COMMAND_WSL` where it does not. See
 [trap-gh-path.md](trap-gh-path.md#it-is-two-machines-and-two-binaries).
+
+## The log file and the debug line
+
+Three names the tool reads that carry no prefix and never did, and were in no table at all until
+#312. `LOG_FILE_PATH` is the one worth knowing: **the console transport is warn-and-above**, so
+every `logger.info` the server writes — the start it made, the registry it resolved, the
+deprecation notice about a name you are still spelling the old way — goes to that file and
+nowhere else. A reader watching stderr concludes the server said nothing.
+
+They are read in `src/utils/logger.ts` and `src/index.ts`, in the module body, before the
+configuration layers are applied — a logger that could be configured from `config.json` would
+have to import the module that reads `config.json`, and that module logs. So these three come
+from the real environment only: exporting them works, putting them in `config.json` does not.
+
+<!-- generated: settings-plain-table — from src/core/settings.ts, by scripts/generate-settings-docs.mjs -->
+
+| Variable | Default | What it does |
+|---|---|---|
+| `LOG_LEVEL` | `info` | The lowest level written to the log file — `error`, `warn`, `info`, `debug`. The console transport is fixed at warn-and-above whatever this says, so `info` here is how a server's own account of a start is read back |
+| `LOG_FILE_PATH` | a per-OS log file | Where that file is. Unset it is `%LOCALAPPDATA%\VibeMaxxing-MCP\vibemaxxing.log` on Windows, `~/Library/Logs/vibemaxxing-mcp.log` on macOS and `$XDG_STATE_HOME/vibemaxxing-mcp/vibemaxxing.log` elsewhere. Set and unwritable is a refusal to start; unset and unwritable falls back to the temp directory |
+| `DEBUG` | unset | `true` writes one line saying debug mode is on. Nothing else reads it — `LOG_LEVEL=debug` is what turns the detail on |
+
+<!-- /generated: settings-plain-table -->
+
+`LOG_LEVEL=info` with a `LOG_FILE_PATH` of your own is how a check reads back what a server said
+about itself; several in `scripts/` do exactly that.
 
 ## What a running board looks like
 
