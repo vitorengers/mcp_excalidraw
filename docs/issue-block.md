@@ -24,6 +24,35 @@ A second click while a run is in flight gets 409. So does a block that already h
 There is no time limit on the run, and a block stuck in `running` can be reset —
 [No time limit, and the way back](#no-time-limit-and-the-way-back) covers both agents.
 
+### A run needs a repository to create the issue in
+
+The `+` does not. Since #316 the notes column and its `+` are drawn on a board with **no**
+GitHub project at all (`docs/project-board.md`), because writing an observation down is the part
+that has to work before GitHub is connected — a first-run reader has nowhere else to put one, and
+a canvas that refuses the note is a canvas with nothing to offer until a config file is edited.
+
+Turning that note into an issue is the other half, and it is where the refusal belongs. The agent
+is told to *create the issue with `gh` in this repository*, so a project with no repository sends
+it off to spend minutes finding that out and comes back with whatever `gh` said. `POST
+/api/issue-block/:id` therefore answers **400** before the spawn when the workspace names no
+repository — `repo` in `board.config.json`, or an `origin` remote pointing at GitHub, resolved in
+that order, the same way `interruptedRuns` resolves it. A checkout with a GitHub remote has
+already said where its issues go; asking it to repeat that in a config file would refuse a
+project that works.
+
+An `origin` that is not on `github.com` is **named in the refusal** rather than reported as no
+remote at all, which is #322's rule (`src/core/github-host.ts`): a reader looking straight at an
+`origin` and told there is none goes hunting for something that is not wrong.
+
+The reason goes **onto the block** as `issueState: "failed"` and `issueError`, not only into the
+response: the panel showing it is one selection away from being closed, and the block is what the
+reader comes back to. The observation is kept, the run button stays offered, and configuring the
+repository is all it takes to press it again.
+
+`scripts/check-notes-column-without-project-browser.mjs` presses that button in a browser on a
+project with neither a `githubProject` nor a remote, and asserts the refusal is on the screen and
+that no agent was spawned to produce it.
+
 ## Writing the observation
 
 Writing into a block is typing into Excalidraw's own bound-label editor, and that editor
@@ -823,6 +852,13 @@ The issue URL is reconstructed from the checkout name and the repository — `re
 `board.config.json` first, then `origin` — because `issue-49` is only half of an issue URL. A
 board that declares neither gets a warning and no records rather than a URL pointing at somebody
 else's issue.
+
+That `origin` has to be a **github.com** remote, which is the one host this board reads
+([running.md](running.md), `src/core/github-host.ts`). The parse is anchored at the host now:
+`https://mygithub.com/acme/tools.git` used to match — the host's *name* contains github.com —
+and an interrupted run in that checkout was announced with a link to `github.com/acme/tools`, a
+repository belonging to somebody else on a host nobody had named. A remote elsewhere is reported
+as not being a github.com one, rather than turned into a path on this one.
 
 **Two things this deliberately does not do.** It does not commit on anyone's behalf: a commit
 nobody wrote, with a message claiming nothing, is a commit somebody has to interpret later. And it

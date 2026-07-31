@@ -287,7 +287,11 @@ try {
   check('state is failed, as it always was', silent.state === 'failed', JSON.stringify(silent));
   check('no url', !silent.url, String(silent.url));
   await sleep(300);
-  check('and gh was never run', ghCalls().length === 0, JSON.stringify(ghCalls()));
+  // Scoped to the pull request, not to `gh` as a whole: the server also runs `gh --version`
+  // and `gh auth status` at startup (#307's preflight), which has nothing to do with a run
+  // and would make this assertion fail for being about the wrong thing.
+  check('and no pull request was asked about',
+        ghCalls().filter((args) => args[0] === 'pr').length === 0, JSON.stringify(ghCalls()));
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);

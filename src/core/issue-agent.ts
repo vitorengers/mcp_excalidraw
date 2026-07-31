@@ -16,6 +16,7 @@ import os from 'os';
 import path from 'path';
 import logger from '../utils/logger.js';
 import { AgentUsage, streamsUsage, UsageMeter } from './agent-usage.js';
+import { GITHUB_HOST } from './github-host.js';
 import { AgentSettings, loadAgentWorkflow, Workspace } from './workspaces.js';
 import { env as settingValue } from './settings.js';
 
@@ -468,10 +469,14 @@ export interface IssueAgentResult {
 }
 
 /**
- * The last GitHub URL of a given kind in the output.
+ * The last github.com URL of a given kind in the output.
  *
  * The last, not the first: an agent may well have listed existing issues or pull
  * requests on its way to creating the one it is reporting.
+ *
+ * The host is the requirement `github-host.ts` states, which is why an agent that opened a
+ * perfectly good issue somewhere else comes back with nothing: the `noun` in `runAgent` names
+ * the host, so what it reports is a URL on the wrong host rather than an agent that failed.
  */
 export function extractGithubUrl(output: string, kind: 'issues' | 'pull'): string | null {
   const pattern = new RegExp(`https://github\\.com/[^\\s"'<>]+/${kind}/\\d+`, 'g');
@@ -996,7 +1001,14 @@ export async function runAgent(
 ): Promise<AgentRun> {
   const { command, args, cwd } = buildAgentCommand(workspace, options.agentCommand, options.directory);
   // The article travels with the noun. A fixed one reads as "a issue URL".
-  const noun = options.expects === 'pull' ? 'a pull request URL' : 'an issue URL';
+  //
+  // The host travels with it too, and that is the whole of #322 at this end: a run that
+  // created its issue on a GitHub Enterprise Server ended with "Agent finished without
+  // returning an issue URL" under a transcript that plainly contained one. It names the
+  // requirement now — see `github-host.ts`.
+  const noun = options.expects === 'pull'
+    ? `a ${GITHUB_HOST} pull request URL`
+    : `a ${GITHUB_HOST} issue URL`;
 
   logger.info(`Running ${options.what} for workspace "${workspace.id}"`, { command, cwd });
 

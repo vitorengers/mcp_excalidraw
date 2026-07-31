@@ -12,11 +12,18 @@ import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
 import { agentPath, buildAgentCommand } from './issue-agent.js';
 import { ghCommandFor, runGh as runGhCommand } from './gh.js';
+import { issueUrlRefusal } from './github-host.js';
 
 /** How long a read may take. Far shorter than an agent run — this is one API call. */
 const TIMEOUT_MS = 30_000;
 
-/** Issue URLs come from our own extraction, but this is what gets handed to a shell-less spawn. */
+/**
+ * Issue URLs come from our own extraction, but this is what gets handed to a shell-less spawn.
+ *
+ * `github.com` is spelled here rather than assembled, and it is a requirement rather than a
+ * default — `github-host.ts` is where that decision is written down, and where the refusal
+ * below comes from.
+ */
 const ISSUE_URL = /^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/issues\/\d+$/;
 
 /**
@@ -171,7 +178,7 @@ export async function commentOnIssue(
   body: string
 ): Promise<void> {
   if (!isIssueUrl(issueUrl)) {
-    throw new MalformedResponse(`Not a GitHub issue URL: ${issueUrl}`);
+    throw new MalformedResponse(issueUrlRefusal(issueUrl));
   }
 
   await runGhCommand(workspace, `issue comment ${issueUrl} --body-file -`, {
@@ -203,7 +210,7 @@ function closingPullRequests(value: unknown): ClosingPullRequest[] {
  */
 async function runGh(workspace: Workspace, issueUrl: string, fields: string): Promise<IssueDetail> {
   if (!isIssueUrl(issueUrl)) {
-    throw new MalformedResponse(`Not a GitHub issue URL: ${issueUrl}`);
+    throw new MalformedResponse(issueUrlRefusal(issueUrl));
   }
 
   // `ghCommandFor` rather than a constant, because this call site is spawned here rather
