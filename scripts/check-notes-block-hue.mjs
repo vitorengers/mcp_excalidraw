@@ -107,10 +107,10 @@ const card = (number) => ({
   contentType: 'Issue',
   number,
   title: `Issue number ${number}`,
-  url: `https://github.com/vitorengers/mcp_excalidraw/issues/${number}`,
+  url: `https://github.com/vitorengers/vibemaxxing/issues/${number}`,
   state: 'OPEN',
   createdAt: '2026-07-01T00:00:00Z',
-  repository: 'vitorengers/mcp_excalidraw',
+  repository: 'vitorengers/vibemaxxing',
   draggable: true,
 });
 
@@ -211,7 +211,7 @@ if (seed?.parseBoardScene) {
         customData: { kind: 'issue', projectBoardDraft: true, sectionOptionId: types.NOTES_OPTION_ID } },
       { id: 'old-created', type: 'rectangle', x: 0, y: 200, width: 400, height: 140, ...WAS.created,
         customData: { kind: 'issue', issueState: 'created',
-                      issueUrl: 'https://github.com/vitorengers/mcp_excalidraw/issues/54' } },
+                      issueUrl: 'https://github.com/vitorengers/vibemaxxing/issues/54' } },
       { id: 'not-a-block', type: 'rectangle', x: 0, y: 400, width: 100, height: 100, ...WAS.draft,
         customData: { docKey: 'issue-block' } },
     ],
@@ -301,7 +301,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Notes Hue',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
 

@@ -122,7 +122,7 @@ const card = (itemId, title) => ({
   itemId,
   number: 1,
   title,
-  url: `https://github.com/vitorengers/mcp_excalidraw/issues/${itemId}`,
+  url: `https://github.com/vitorengers/vibemaxxing/issues/${itemId}`,
   draggable: true,
 });
 

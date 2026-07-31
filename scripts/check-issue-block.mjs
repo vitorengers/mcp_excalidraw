@@ -79,7 +79,7 @@ process.stdin.on('end', async () => {
   // backstop for a check that failed before it released anything, not a timing assumption.
   for (let attempt = 0; attempt < 1800 && !existsSync(releaseFile); attempt++) await sleep(100);
   process.stdout.write('Investigated, and opened one issue.\\n');
-  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/issues/42\\n');
+  process.stdout.write('https://github.com/vitorengers/vibemaxxing/issues/42\\n');
 });
 `, 'utf8');
 
@@ -110,7 +110,7 @@ if (args[0] === 'issue' && args[1] === 'view') {
   }), 'utf8');
   writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
     name: 'Issue Block Check',
-    repo: 'vitorengers/mcp_excalidraw',
+    repo: 'vitorengers/vibemaxxing',
   }), 'utf8');
 }
 

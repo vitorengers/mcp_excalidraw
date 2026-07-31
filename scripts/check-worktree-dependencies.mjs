@@ -76,7 +76,7 @@ const workspace = {
   error: null,
 };
 
-const ISSUE = 'https://github.com/vitorengers/mcp_excalidraw/issues/999';
+const ISSUE = 'https://github.com/vitorengers/vibemaxxing/issues/999';
 
 try {
   console.log('1. the worktree gets the dependencies it needs to verify anything');

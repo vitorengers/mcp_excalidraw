@@ -64,10 +64,10 @@ function item(id, { number, title, createdAt, option, type = 'Issue', state = 'C
       __typename: type,
       number,
       title,
-      url: `https://github.com/vitorengers/mcp_excalidraw/${type === 'Issue' ? 'issues' : 'pull'}/${number}`,
+      url: `https://github.com/vitorengers/vibemaxxing/${type === 'Issue' ? 'issues' : 'pull'}/${number}`,
       createdAt,
       state,
-      repository: { nameWithOwner: 'vitorengers/mcp_excalidraw' },
+      repository: { nameWithOwner: 'vitorengers/vibemaxxing' },
     },
   };
 }
@@ -125,7 +125,7 @@ function workspaceDir(id, config) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'board.config.json'), JSON.stringify({
     name: id,
-    repo: 'vitorengers/mcp_excalidraw',
+    repo: 'vitorengers/vibemaxxing',
     githubProject: 'https://github.com/users/vitorengers/projects/5',
     ...config,
   }, null, 2), 'utf8');

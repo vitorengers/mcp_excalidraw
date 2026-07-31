@@ -62,7 +62,7 @@ let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', () => {
   writeFileSync(process.env.CAPTURE_TO, input, 'utf8');
-  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/pull/1\\n');
+  process.stdout.write('https://github.com/vitorengers/vibemaxxing/pull/1\\n');
 });
 `, 'utf8');
 
@@ -79,7 +79,7 @@ process.env.CAPTURE_TO = captured;
 
 async function promptFor(worktree) {
   rmSync(captured, { force: true });
-  await runImplementAgent(workspace, 'https://github.com/vitorengers/mcp_excalidraw/issues/54', {
+  await runImplementAgent(workspace, 'https://github.com/vitorengers/vibemaxxing/issues/54', {
     agentCommand: `node "${stub.replace(/\\/g, '/')}"`,
     timeoutMs: 60_000,
     worktree,

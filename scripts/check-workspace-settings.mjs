@@ -76,11 +76,11 @@ function makeProject(id, config) {
 }
 
 /** Configures nothing at all — the byte-for-byte case. */
-const plainDir = makeProject('plain', { name: 'Plain', repo: 'vitorengers/mcp_excalidraw' });
+const plainDir = makeProject('plain', { name: 'Plain', repo: 'vitorengers/vibemaxxing' });
 /** Retunes both agents. */
 const tunedDir = makeProject('tuned', {
   name: 'Tuned',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   agents: {
     issue: { model: 'claude-fable-5', effort: 'high' },
     implement: { model: 'claude-opus-5', effort: 'max' },
@@ -89,7 +89,7 @@ const tunedDir = makeProject('tuned', {
 /** Puts a ceiling back that the environment set much higher. */
 const impatientDir = makeProject('impatient', {
   name: 'Impatient',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   agents: {
     issue: { timeoutSeconds: 2 },
     implement: { timeoutSeconds: 2 },
@@ -98,7 +98,7 @@ const impatientDir = makeProject('impatient', {
 /** Edited through the config surface, and carries a key the loader never reads. */
 const editableDir = makeProject('editable', {
   name: 'Editable',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   note: 'hand-written, and it stays that way',
 });
 
@@ -140,7 +140,7 @@ process.stdin.on('end', async () => {
   }
 
   const number = kind === 'issue' ? '901' : '902';
-  process.stdout.write('https://github.com/vitorengers/mcp_excalidraw/'
+  process.stdout.write('https://github.com/vitorengers/vibemaxxing/'
     + (kind === 'issue' ? 'issues/' : 'pull/') + number + '\\n');
 });
 `, 'utf8');
@@ -421,7 +421,7 @@ try {
           && written.agents.implement.effort === 'low'
           && written.agents.implement.timeoutSeconds === 30,
         JSON.stringify(written.agents));
-  check('a field it was not asked about is left alone', written.repo === 'vitorengers/mcp_excalidraw',
+  check('a field it was not asked about is left alone', written.repo === 'vitorengers/vibemaxxing',
         JSON.stringify(written));
   check('and a key the loader never reads survives the round trip',
         written.note === 'hand-written, and it stays that way', JSON.stringify(written));

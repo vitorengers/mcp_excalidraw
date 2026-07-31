@@ -141,10 +141,10 @@ function card(number, { draggable = true } = {}) {
     contentType: 'Issue',
     number,
     title: `Issue number ${number}`,
-    url: `https://github.com/vitorengers/mcp_excalidraw/issues/${number}`,
+    url: `https://github.com/vitorengers/vibemaxxing/issues/${number}`,
     state: 'OPEN',
     createdAt: '2026-07-01T00:00:00Z',
-    repository: 'vitorengers/mcp_excalidraw',
+    repository: 'vitorengers/vibemaxxing',
     draggable,
   };
 }
@@ -267,7 +267,7 @@ if (appearance?.offersImplement) {
 }
 
 if (appearance?.closureView) {
-  const PR = { number: 77, url: 'https://github.com/vitorengers/mcp_excalidraw/pull/77' };
+  const PR = { number: 77, url: 'https://github.com/vitorengers/vibemaxxing/pull/77' };
   check('an open issue has no closure to show',
         appearance.closureView({ githubState: 'OPEN', stateReason: null, closedBy: [] }) === null);
 
@@ -295,8 +295,8 @@ rmSync(workDir, { recursive: true, force: true });
 const projectDir = join(workDir, 'appearance');
 mkdirSync(projectDir, { recursive: true });
 
-const ISSUE_URL = 'https://github.com/vitorengers/mcp_excalidraw/issues/54';
-const PR_URL = 'https://github.com/vitorengers/mcp_excalidraw/pull/77';
+const ISSUE_URL = 'https://github.com/vitorengers/vibemaxxing/issues/54';
+const PR_URL = 'https://github.com/vitorengers/vibemaxxing/pull/77';
 
 const registryPath = join(workDir, 'workspaces.json');
 const strictStub = join(workDir, 'gh-strict.mjs');
@@ -348,7 +348,7 @@ writeFileSync(registryPath, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Appearance Check',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const running = [];

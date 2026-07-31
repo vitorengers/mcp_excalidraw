@@ -114,7 +114,7 @@ writeFileSync(registryPath, JSON.stringify({
 for (const [id, dir] of Object.entries(projectDirs)) {
   writeFileSync(join(dir, 'board.config.json'), JSON.stringify({
     name: id === ONE ? 'Board One' : 'Board Two',
-    repo: 'vitorengers/mcp_excalidraw',
+    repo: 'vitorengers/vibemaxxing',
   }), 'utf8');
 }
 

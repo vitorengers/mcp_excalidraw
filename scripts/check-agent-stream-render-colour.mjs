@@ -315,7 +315,7 @@ check('and it is not left carrying a category colour',
 
 console.log('\n7. a coloured transcript still gives up its pull request URL');
 
-const URL = 'https://github.com/vitorengers/mcp_excalidraw/pull/242';
+const URL = 'https://github.com/vitorengers/vibemaxxing/pull/242';
 const announced = render(
   { type: 'assistant', message: { content: [{ type: 'text', text: `Opened ${URL}` }] } },
   toolResult(`${URL}\n`, false),

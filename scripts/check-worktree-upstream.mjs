@@ -97,7 +97,7 @@ const workspace = {
   error: null,
 };
 
-const issue = (number) => `https://github.com/vitorengers/mcp_excalidraw/issues/${number}`;
+const issue = (number) => `https://github.com/vitorengers/vibemaxxing/issues/${number}`;
 const worktreePath = (number) => join(worktreeRoot(workspace).path, `issue-${number}`);
 
 const configOf = (branch, key) => run(['config', '--get', `branch.${branch}.${key}`]).stdout;

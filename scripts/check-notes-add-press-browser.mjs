@@ -124,10 +124,10 @@ writeFileSync(fixturePath, JSON.stringify({
         __typename: 'Issue',
         number: 3,
         title: 'Something already on the board',
-        url: 'https://github.com/vitorengers/mcp_excalidraw/issues/3',
+        url: 'https://github.com/vitorengers/vibemaxxing/issues/3',
         createdAt: '2026-07-01T10:00:00Z',
         state: 'OPEN',
-        repository: { nameWithOwner: 'vitorengers/mcp_excalidraw' },
+        repository: { nameWithOwner: 'vitorengers/vibemaxxing' },
       },
     }] },
   } } },
@@ -178,12 +178,12 @@ writeFileSync(barrenRegistry, JSON.stringify({
 }), 'utf8');
 writeFileSync(join(stockedDir, 'board.config.json'), JSON.stringify({
   name: 'Stocked',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
 }), 'utf8');
 writeFileSync(join(barrenDir, 'board.config.json'), JSON.stringify({
   name: 'Barren',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
   githubProject: 'https://github.com/users/vitorengers/projects/5',
   library: 'no-issue.excalidrawlib',
 }), 'utf8');

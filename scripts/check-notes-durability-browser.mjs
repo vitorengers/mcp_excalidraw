@@ -102,7 +102,7 @@ const notesModule = await import(pathToFileURL(
 ).href);
 const NOTES = { id: notesModule.NOTES_OPTION_ID, name: notesModule.NOTES_NAME };
 const TODO = { id: 'f75ad846', name: 'Todo' };
-const REPO = 'vitorengers/mcp_excalidraw';
+const REPO = 'vitorengers/vibemaxxing';
 
 writeFileSync(fixturePath, JSON.stringify({
   data: { owner: { projectV2: {

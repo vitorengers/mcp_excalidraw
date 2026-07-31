@@ -91,9 +91,9 @@ writeFileSync(registryPath, JSON.stringify({
 // No githubProject on either: the mirror stays dormant, so nothing else is drawing on
 // these boards and nothing else is moving the camera.
 writeFileSync(join(alphaDir, 'board.config.json'),
-              JSON.stringify({ name: 'Alpha', repo: 'vitorengers/mcp_excalidraw' }), 'utf8');
+              JSON.stringify({ name: 'Alpha', repo: 'vitorengers/vibemaxxing' }), 'utf8');
 writeFileSync(join(betaDir, 'board.config.json'),
-              JSON.stringify({ name: 'Beta', repo: 'vitorengers/mcp_excalidraw' }), 'utf8');
+              JSON.stringify({ name: 'Beta', repo: 'vitorengers/vibemaxxing' }), 'utf8');
 
 const PORT = await freePort();
 const CDP_PORT = await freePort();

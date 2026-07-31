@@ -96,10 +96,10 @@ writeFileSync(registryPath, JSON.stringify({
 // No githubProject on either: the mirror stays dormant, so nothing but this check's own
 // block is drawn on the board and no coordinate below can land on somebody else's card.
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
-  name: 'Chrome A', repo: 'vitorengers/mcp_excalidraw', docsDir: 'docs',
+  name: 'Chrome A', repo: 'vitorengers/vibemaxxing', docsDir: 'docs',
 }), 'utf8');
 writeFileSync(join(otherDir, 'board.config.json'), JSON.stringify({
-  name: 'Chrome B', repo: 'vitorengers/mcp_excalidraw',
+  name: 'Chrome B', repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const DOC_KEY = 'chrome-sample';

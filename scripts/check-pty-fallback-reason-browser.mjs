@@ -89,7 +89,7 @@ for (const dir of [projectDir, profileDir, shotDir]) mkdirSync(dir, { recursive:
 
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
   name: 'Pipe Reason Project',
-  repo: 'vitorengers/mcp_excalidraw',
+  repo: 'vitorengers/vibemaxxing',
 }), 'utf8');
 
 const registryPath = join(workDir, 'workspaces.json');

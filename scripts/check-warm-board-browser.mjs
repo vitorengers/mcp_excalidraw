@@ -95,9 +95,9 @@ writeFileSync(registryPath, JSON.stringify({
   ],
 }), 'utf8');
 writeFileSync(join(alphaDir, 'board.config.json'),
-              JSON.stringify({ name: 'Alpha', repo: 'vitorengers/mcp_excalidraw' }), 'utf8');
+              JSON.stringify({ name: 'Alpha', repo: 'vitorengers/vibemaxxing' }), 'utf8');
 writeFileSync(join(betaDir, 'board.config.json'),
-              JSON.stringify({ name: 'Beta', repo: 'vitorengers/mcp_excalidraw' }), 'utf8');
+              JSON.stringify({ name: 'Beta', repo: 'vitorengers/vibemaxxing' }), 'utf8');
 
 const PORT = await freePort();
 const CDP_PORT = await freePort();
