@@ -41,6 +41,7 @@ import path from 'path';
 import { AgentCommands, buildAgentCommand, singleQuoted, tokenizeCommand } from './issue-agent.js';
 import { Workspace } from './workspaces.js';
 import { wslUnsupportedHere } from './workspace-paths.js';
+import { settingName } from './settings.js';
 
 /** The two agents, which are two because granting research must not grant repository writes. */
 export type AgentRole = 'issue' | 'implement';
@@ -87,7 +88,7 @@ export type AgentsHealth = Record<AgentRole, AgentRoleHealth>;
 /** One role as the board holds it: the commands, and the variable that would grant them. */
 export interface AgentRoleCommands {
   role: AgentRole;
-  /** `EXCALIDRAW_ISSUE_AGENT` / `EXCALIDRAW_IMPLEMENT_AGENT`; the WSL half adds `_WSL`. */
+  /** The `ISSUE_AGENT` / `IMPLEMENT_AGENT` setting, spelled by `settingName`; WSL adds `_WSL`. */
   variable: string;
   commands: AgentCommands;
 }
@@ -107,6 +108,16 @@ export interface ProbeSpec {
   command: string;
   args: string[];
   cwd?: string | undefined;
+  /**
+   * The child's environment, or nothing to inherit this process's.
+   *
+   * Nothing is what the agent probes pass, and that is unchanged from before this field
+   * existed. `core/github-status.ts` is the caller that needs it: the GitHub CLI is not on
+   * `PATH` on every machine this runs on, and `agentPath()` is the answer `runGh` already
+   * uses — a preflight that probed a bare `PATH` would report the CLI missing on a board
+   * where every `gh` call succeeds.
+   */
+  env?: NodeJS.ProcessEnv | undefined;
 }
 
 /**
@@ -204,8 +215,14 @@ export function probeSpec(
   return { command: binary, args: ['--version'], cwd: undefined };
 }
 
-/** The real spawn: output captured, deadline enforced, nothing ever thrown. */
-const spawnProbe: ProbeRunner = (spec, timeoutMs) => new Promise<ProbeRun>((resolve) => {
+/**
+ * The real spawn: output captured, deadline enforced, nothing ever thrown.
+ *
+ * Exported because `core/github-status.ts` asks the same question of a different binary, and
+ * every line below is about *not throwing* rather than about agents: a second copy would be a
+ * second place for a spawn error, a deadline or a stream to be handled differently.
+ */
+export const spawnProbe: ProbeRunner = (spec, timeoutMs) => new Promise<ProbeRun>((resolve) => {
   let settled = false;
   let stdout = '';
   let stderr = '';
@@ -219,6 +236,7 @@ const spawnProbe: ProbeRunner = (spec, timeoutMs) => new Promise<ProbeRun>((reso
   try {
     child = spawn(spec.command, spec.args, {
       cwd: spec.cwd,
+      env: spec.env,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -511,8 +529,8 @@ export function doctorLines(agents: AgentsHealth, roles: readonly AgentRoleComma
  */
 export function agentRoles(commands: { issue: AgentCommands; implement: AgentCommands }): AgentRoleCommands[] {
   return [
-    { role: 'issue', variable: 'EXCALIDRAW_ISSUE_AGENT', commands: commands.issue },
-    { role: 'implement', variable: 'EXCALIDRAW_IMPLEMENT_AGENT', commands: commands.implement },
+    { role: 'issue', variable: settingName('ISSUE_AGENT'), commands: commands.issue },
+    { role: 'implement', variable: settingName('IMPLEMENT_AGENT'), commands: commands.implement },
   ];
 }
 

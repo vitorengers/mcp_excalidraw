@@ -27,6 +27,34 @@ node dist/server.js      # with the environment below
 Then open `http://127.0.0.1:<PORT>`. A tab has to be open for anything that renders: screenshots,
 PNG/SVG export, viewport control and Mermaid conversion all happen in the frontend.
 
+An installed copy does all three of those in one word — `vibemaxxing`, with no arguments, starts
+the board, opens the tab and prints `VibeMaxxing <version> — <url>`. That is the path a user
+takes; the procedure above is the one an operator takes, because it is the environment below that
+this document exists for. See [cli.md](cli.md) for when a bare invocation means the MCP stdio
+server instead, and for `--no-open`.
+
+## What it requires: github.com
+
+The workbench half of this tool reads **github.com, and only github.com**. Issue blocks, the
+project-board mirror, implementations and interrupted-run recovery all require it: a GitHub
+Enterprise Server, a GitLab or any other forge is out of scope, and there is no host setting
+anywhere that points them somewhere else. `EXCALIDRAW_GH_COMMAND` below says *where the `gh`
+binary is*, never which host it talks to, and the `gh` it names has to be authenticated
+(`gh auth status`) against github.com.
+
+Stated rather than resolved, and deliberately (#322). The host used to be compiled into five
+separate patterns that each assumed it in silence, so an enterprise URL was refused as if it
+were **malformed** — `Not a GitHub issue URL` about a URL that plainly was one. It now lives in
+`src/core/github-host.ts` with the words each refusal uses: an issue URL somewhere else is
+answered with *This board only reads issues on github.com*, and a checkout whose `origin` is
+elsewhere is told that its remote is not a github.com one rather than offered a setting that
+would rebuild its issues on this host. `scripts/check-github-host.mjs` holds the five patterns
+to that one answer.
+
+The canvas itself requires none of this: drawing, the CLI, the MCP tools, the docs cards and the
+terminal work on a project with no GitHub remote at all. What such a project does not get is the
+three blocks that talk to GitHub.
+
 ## Before you start: kill what is already listening
 
 This is the trap that costs the most, because everything looks like it worked — see
@@ -131,12 +159,18 @@ the port goes to whatever auto-starts first.
 `PORT` and `HOST` decide where it listens. Everything else is `EXCALIDRAW_*`, and every one of
 them is optional: unset means the feature is off, not degraded.
 
-The twenty-one below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
+**Every name below can also be spelled `VIBEMAXXING_*`**, since #311, and that is the spelling to
+write new configuration in. Both are read, the new one first, and a variable found under the old
+prefix says so once in the log file. Nothing breaks on the day the old one is dropped that has
+not been named in that file for a release first — `src/core/settings.ts` is the one list, and
+`node scripts/check-env-prefix-compat.mjs` fails if it and this table disagree.
+
+The twenty-three below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
 and they are in [their own section](#windows-only-projects-inside-a-wsl-distro) rather than here.
 
-Every name in both tables can be set three ways — in `<state-dir>/config.json`, in a `<cwd>/.env`,
-or exported — and they are read in that order, the environment winning.
-[configuration.md](configuration.md) is that half.
+Every name in both tables can be set four ways — in `<state-dir>/config.json`, in a `<cwd>/.env`,
+exported, or by a command-line flag — and they are read in that order, each beating the one
+before it. [configuration.md](configuration.md) is that half.
 
 **3737 is the default port rather than one machine's habit** since #303: 3000 is the default of
 Next.js, Create React App and most tutorial servers, and it is unusable here for a reason of its
@@ -165,11 +199,13 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_IMPLEMENT_CONCURRENCY` | `4` | Runs at once. `0` is no cap, `1` serialises. Each one is a whole coding agent building on this machine |
 | `EXCALIDRAW_IMPLEMENT_QUEUE_MS` | `30000` | How often a workspace with its queue on looks for a free slot. The timer does not exist until a queue is turned on |
 | `EXCALIDRAW_ISSUE_MEMO_MS` | `30000` | How long one `gh` read of an issue is reused. `0` turns the memo off |
+| `EXCALIDRAW_GH_STATUS_MEMO_MS` | `30000` | How long one answer about `gh` *itself* — installed, logged in, which scopes — is reused before `GET /api/github-status` asks again. `0` turns the memo off. The canvas asks on a failing poll, so without it a board whose `gh` is broken would spawn two processes every twenty seconds to be told the same thing |
 | `EXCALIDRAW_GH_COMMAND` | `gh` | The GitHub CLI on **this machine**, when it is not on `PATH` — [trap-gh-path.md](trap-gh-path.md) |
 | `EXCALIDRAW_CLAUDE_STATUS` | unset | The directory your Claude Code status line command writes its usage files into. Unset means `GET /api/claude-status` answers 404 and the header shows nothing — [claude-status.md](claude-status.md) |
 | `EXCALIDRAW_TERMINAL` | unset | `1` for the default shell, or a command line of your own. Unset means the terminal routes answer 404 — [terminal.md](terminal.md) |
 | `EXCALIDRAW_TERMINAL_PTY` | unset | `0` forces the pipe instead of a real pty, for a machine with no prebuilt binary |
 | `EXCALIDRAW_EXPORT_DIR` | working dir | The base directory MCP file exports may write to |
+| `EXCALIDRAW_ALLOWED_HOSTS` | loopback names only | Extra `Host` authorities the origin gate accepts, comma-separated, for a real alias or a proxy in front of the board. The refusal names the authority it expected, so a lockout says what to put here |
 | `EXCALIDRAW_NO_AUTOSTART` | unset | `1` stops the CLI and the MCP server auto-spawning a canvas |
 | `EXCALIDRAW_NO_DOTENV` | unset | `1` stops both configuration files being read — `<cwd>/.env` and `<state-dir>/config.json` alike — leaving only the real environment. The checks set it, because a file layer only ever fills in variables that are *unset*, which is exactly the set a check deleted on purpose — [trap-check-environment.md](trap-check-environment.md) |
 | `EXCALIDRAW_ENV_FILE` | `<cwd>/.env` | Read this file instead. Ignored when `EXCALIDRAW_NO_DOTENV=1`, and it does not move `config.json` |

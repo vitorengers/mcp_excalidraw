@@ -16,7 +16,9 @@ import os from 'os';
 import path from 'path';
 import logger from '../utils/logger.js';
 import { AgentUsage, streamsUsage, UsageMeter } from './agent-usage.js';
+import { GITHUB_HOST } from './github-host.js';
 import { AgentSettings, loadAgentWorkflow, Workspace } from './workspaces.js';
+import { env as settingValue } from './settings.js';
 
 /**
  * The language paragraph — the one thing in these prompts a project gets to set.
@@ -455,7 +457,7 @@ export function agentEnv(probe: AgentPathProbe = {}): NodeJS.ProcessEnv {
  * no ceiling a wedged run holds the block in `running`, so the block offers a reset.
  */
 export const DEFAULT_TIMEOUT_MS: number | null = (() => {
-  const configured = Number(process.env.EXCALIDRAW_ISSUE_AGENT_TIMEOUT);
+  const configured = Number(settingValue('ISSUE_AGENT_TIMEOUT'));
   return Number.isFinite(configured) && configured > 0 ? configured * 1000 : null;
 })();
 
@@ -467,10 +469,14 @@ export interface IssueAgentResult {
 }
 
 /**
- * The last GitHub URL of a given kind in the output.
+ * The last github.com URL of a given kind in the output.
  *
  * The last, not the first: an agent may well have listed existing issues or pull
  * requests on its way to creating the one it is reporting.
+ *
+ * The host is the requirement `github-host.ts` states, which is why an agent that opened a
+ * perfectly good issue somewhere else comes back with nothing: the `noun` in `runAgent` names
+ * the host, so what it reports is a URL on the wrong host rather than an agent that failed.
  */
 export function extractGithubUrl(output: string, kind: 'issues' | 'pull'): string | null {
   const pattern = new RegExp(`https://github\\.com/[^\\s"'<>]+/${kind}/\\d+`, 'g');
@@ -790,6 +796,18 @@ export interface AgentRun {
   url: string | null;
   output: string;
   error: string | null;
+  /**
+   * What the process exited with, or null when it never got as far as exiting.
+   *
+   * `ok` folds two questions into one — the process exited zero *and* it printed a URL — and a
+   * caller that has to tell "ended early" from "crashed" cannot get that back out of it. That
+   * is exactly the distinction an automatic recovery turns on: a turn that ended while a
+   * background command was still pending exits **zero** and is worth finishing, while a command
+   * that could not be found or blew up is a broken machine and retrying it burns a run for
+   * nothing. Null for a timeout and for a refusal made before anything was spawned, both of
+   * which are also not worth a second attempt.
+   */
+  code: number | null;
 }
 
 /**
@@ -850,6 +868,50 @@ export type AgentHost = (spec: {
  * `stderr` is empty for a hosted run — a terminal shows one stream, so the two are already
  * interleaved in `stdout` — which is why the message falls back to the output it does have.
  */
+/**
+ * The last thing the agent actually *said*, for a message a person has to read.
+ *
+ * The tail of stdout used to be it, and for a streaming agent the tail of stdout is machinery.
+ * Issue #306's block reported its failure as this, verbatim:
+ *
+ *     "end_time":1785491933119},"uuid":"ee83a80f-…"}
+ *     {"type":"system","subtype":"task_notification",…,"summary":"Wait for the suite output…"}
+ *
+ * — which is true, and is not an explanation. What the agent said, one event earlier, was
+ * *"Waiting on npm test; both background waiters will report."*, which is the whole diagnosis.
+ *
+ * Falls back to the tail whenever no assistant text is found, because that is exactly right for
+ * the other kind of command: a plain `claude -p` with no `--output-format` prints prose, and its
+ * last 600 characters were always the correct answer. So this narrows a message when it can and
+ * changes nothing when it cannot.
+ *
+ * Deliberately tolerant of every shape but the one it wants. A line that is not JSON, an event
+ * with no message, a content block that is not text — all of them are simply not assistant text,
+ * and none of them is worth failing a run's error message over.
+ */
+export function lastThingSaid(stdout: string, limit = 600): string {
+  let said: string | null = null;
+
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('{')) continue;
+    let event: unknown;
+    try { event = JSON.parse(trimmed); } catch { continue; }
+    const message = (event as { type?: unknown; message?: unknown });
+    if (message.type !== 'assistant') continue;
+    const content = (message.message as { content?: unknown })?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      const part = block as { type?: unknown; text?: unknown };
+      if (part.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
+        said = part.text.trim();
+      }
+    }
+  }
+
+  return (said ?? stdout.trim()).slice(-limit);
+}
+
 function agentOutcome(
   code: number | null,
   stdout: string,
@@ -867,10 +929,11 @@ function agentOutcome(
     ok: code === 0 && Boolean(url),
     url,
     output: stdout,
+    code,
     error: code === 0
       ? (url
           ? null
-          : `Agent finished without returning ${noun}. It said: ${stdout.trim().slice(-600) || '(nothing)'}`)
+          : `Agent finished without returning ${noun}. It said: ${lastThingSaid(stdout) || '(nothing)'}`)
       : `Agent exited with code ${code}: ${(stderr || stdout).slice(-500)}${hint}`,
   };
 }
@@ -938,7 +1001,14 @@ export async function runAgent(
 ): Promise<AgentRun> {
   const { command, args, cwd } = buildAgentCommand(workspace, options.agentCommand, options.directory);
   // The article travels with the noun. A fixed one reads as "a issue URL".
-  const noun = options.expects === 'pull' ? 'a pull request URL' : 'an issue URL';
+  //
+  // The host travels with it too, and that is the whole of #322 at this end: a run that
+  // created its issue on a GitHub Enterprise Server ended with "Agent finished without
+  // returning an issue URL" under a transcript that plainly contained one. It names the
+  // requirement now — see `github-host.ts`.
+  const noun = options.expects === 'pull'
+    ? `a ${GITHUB_HOST} pull request URL`
+    : `a ${GITHUB_HOST} issue URL`;
 
   logger.info(`Running ${options.what} for workspace "${workspace.id}"`, { command, cwd });
 
@@ -1000,6 +1070,9 @@ export async function runAgent(
         ok: Boolean(salvaged),
         url: salvaged,
         output: stdout,
+        // Killed rather than exited: there is no code, and a run this process had to
+        // stop is not one to start again.
+        code: null,
         error: salvaged ? null : `Agent timed out after ${timeoutMs / 1000}s without returning ${noun}`,
       });
     }, timeoutMs) : null;
@@ -1018,7 +1091,8 @@ export async function runAgent(
       settled = true;
       clearIfSet();
       meter?.flush();
-      resolve({ ok: false, url: null, output: stdout, error: error.message });
+      // Never spawned, so there is no exit code and nothing a second attempt would fix.
+      resolve({ ok: false, url: null, output: stdout, code: null, error: error.message });
     });
 
     child.on('close', (code) => {
@@ -1106,6 +1180,7 @@ async function runHostedAgent(
       ok: Boolean(salvaged),
       url: salvaged,
       output: stdout,
+      code: null,
       error: salvaged
         ? null
         : `Agent timed out after ${(timeoutMs as number) / 1000}s without returning ${noun}`,
@@ -1122,10 +1197,11 @@ async function runHostedAgent(
       ok: Boolean(url),
       url,
       output: stdout,
+      code: null,
       error: url
         ? null
         : `The interactive session ended without ${noun}. It said: `
-          + `${transcript.trim().slice(-600) || '(nothing)'}`,
+          + `${lastThingSaid(transcript) || '(nothing)'}`,
     };
   }
 

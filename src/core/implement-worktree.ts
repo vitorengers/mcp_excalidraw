@@ -22,6 +22,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
+import { repoFromRemoteUrl } from './github-host.js';
 import { AgentDirectory, agentEnv } from './issue-agent.js';
 import { foldPathCase } from './workspace-paths.js';
 import { Workspace } from './workspaces.js';
@@ -615,19 +616,38 @@ export async function worktreesHoldingWork(workspace: Workspace): Promise<HeldWo
   return held;
 }
 
+/** What `origin` says a checkout is: the remote as configured, and the repository if it is ours. */
+export interface OriginRemote {
+  /** Whatever `git remote get-url origin` printed, or null when there is no `origin` at all. */
+  url: string | null;
+  /** `owner/name`, only when that remote is on github.com. */
+  repo: string | null;
+}
+
 /**
- * `owner/name` as the repository's own `origin` declares it, or null.
+ * `owner/name` as the repository's own `origin` declares it, and the remote it read it from.
  *
- * Read rather than guessed: reconstructing an issue URL from a branch name needs a repository,
- * and inventing one would point the panel at somebody else's issue. That is also why it is now
- * asked at *registration* — a `repo` shipped in a tracked config is an answer about whoever
- * wrote the file, while `origin` is an answer about the checkout in front of the board.
+ * The fallback for a board whose `board.config.json` names no `repo`, and — since a tracked
+ * config no longer ships one — the answer registration writes into a new project's. Read rather
+ * than guessed: reconstructing an issue URL from a branch name needs a repository, and inventing
+ * one would point the panel at somebody else's issue. A `repo` shipped in a tracked config is an
+ * answer about whoever wrote the file; `origin` is an answer about the checkout in front of the
+ * board.
+ *
+ * Both halves are returned because "there is no `origin`" and "`origin` is not on github.com"
+ * are different facts and the caller says different things about them — a warning that offers
+ * `repo` in `board.config.json` to somebody whose remote is GitLab is answering a question
+ * they did not ask. The parse itself is `github-host.ts`'s: the host is one decision.
+ *
+ * `GitLocation` rather than `Workspace`, because `ensureWorkspaceConfig` calls this while it is
+ * still deciding what the workspace is: it holds a resolved path and an environment and has no
+ * `Workspace` to hand over yet. Every other caller passes one, which satisfies the narrower type.
  */
-export async function originRepo(workspace: GitLocation): Promise<string | null> {
+export async function originRemote(workspace: GitLocation): Promise<OriginRemote> {
   const remote = await git(workspace, workspaceDirectory(workspace), ['remote', 'get-url', 'origin']);
-  if (!remote.ok) return null;
-  const match = remote.stdout.trim().match(/github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/*$/i);
-  return match ? `${match[1]}/${match[2]}` : null;
+  if (!remote.ok) return { url: null, repo: null };
+  const url = remote.stdout.trim() || null;
+  return { url, repo: repoFromRemoteUrl(url) };
 }
 
 export interface WorktreeRelease {

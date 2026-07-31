@@ -24,6 +24,8 @@
  *   on is what closes DNS rebinding.
  */
 
+import { settingName } from './settings.js';
+
 export interface OriginVerdict {
   ok: boolean;
   /** Why the request was refused, phrased for the operator rather than the caller. */
@@ -97,7 +99,7 @@ export function verifyOrigin(
       reason:
         `This board answers for ${expected}, and the request named ${headers.host}. ` +
         'A name that resolves here but is not this board is how DNS rebinding reaches a ' +
-        'local server; if this is a real alias or a proxy, add it to EXCALIDRAW_ALLOWED_HOSTS.',
+        `local server; if this is a real alias or a proxy, add it to ${settingName('ALLOWED_HOSTS')}.`,
     };
   }
 

@@ -300,7 +300,7 @@ try {
   check('404 with no directory configured', missing.status === 404,
     `got ${missing.status} — ${missing.text.slice(0, 200)}`);
   check('and the refusal names the variable that would turn it on',
-    /EXCALIDRAW_CLAUDE_STATUS/.test(missing.text), missing.text.slice(0, 200));
+    /VIBEMAXXING_CLAUDE_STATUS/.test(missing.text), missing.text.slice(0, 200));
 
   console.log('\n10. and never off loopback, because it carries an email');
 

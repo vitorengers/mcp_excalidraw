@@ -2,6 +2,18 @@
 // file is loaded from a module of its own rather than here.
 import './env.js';
 import { canvasUrlFor, DEFAULT_CANVAS_PORT } from './port.js';
+import { env } from './settings.js';
+
+/**
+ * The accessor, re-exported so that a module reading configuration can have it from the module
+ * named "config" without also pulling in the layering machinery it does not care about.
+ *
+ * It is declared in `core/settings.ts` rather than here because that is where the layers, the
+ * declarations and the two prefixes already are, and because this module cannot be imported as
+ * early as `settings.ts` has to be: the CLI entry point applies the layers before `core/port.ts`
+ * resolves a canvas URL, and the line below captures one.
+ */
+export { env };
 
 // Express server configuration.
 //
@@ -13,7 +25,7 @@ export const EXPRESS_SERVER_URL = process.env.EXPRESS_SERVER_URL || canvasUrlFor
 export const ENABLE_CANVAS_SYNC = process.env.ENABLE_CANVAS_SYNC !== 'false'; // Default to true
 
 // Opt-out for auto-starting the canvas server from the CLI / MCP server
-export const EXCALIDRAW_NO_AUTOSTART = process.env.EXCALIDRAW_NO_AUTOSTART === '1';
+export const EXCALIDRAW_NO_AUTOSTART = env('NO_AUTOSTART') === '1';
 
 // Safe file path validation base directory (see sanitizeFilePath)
-export const ALLOWED_EXPORT_DIR = process.env.EXCALIDRAW_EXPORT_DIR || process.cwd();
+export const ALLOWED_EXPORT_DIR = env('EXPORT_DIR') || process.cwd();

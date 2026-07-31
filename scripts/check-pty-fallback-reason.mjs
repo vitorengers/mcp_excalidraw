@@ -85,8 +85,16 @@ const url = (value) => JSON.stringify(pathToFileURL(value).href);
  */
 const IMPORT_ERROR = "Cannot find module '@lydell/node-pty-linux-x64'";
 
-/** The variable, spelled once: it is both what the check sets and what it looks for. */
+/**
+ * The variable, in both spellings, because since #311 they are no longer the same string.
+ *
+ * The check sets the **legacy** name, which is what an existing installation holds, and looks
+ * for the **new** one, which is what the server builds its reason from. So this case now also
+ * asserts the compatibility shim: a board configured the old way still gets the pipe, and the
+ * sentence it hands back teaches the spelling to migrate to.
+ */
 const PTY_SETTING = 'EXCALIDRAW_TERMINAL_PTY';
+const PTY_SETTING_REPORTED = 'VIBEMAXXING_TERMINAL_PTY';
 
 // ─── The throwaway world ──────────────────────────────────────
 
@@ -186,8 +194,10 @@ plain.close();
 function runProbe() {
   const env = { ...process.env, LOG_LEVEL: 'error', LOG_FILE_PATH: join(workDir, 'probe.log') };
   // The machine's own setting decides nothing here: the absent binding is the hook's doing,
-  // and a shell that exported the variable would make case 3 assert the wrong cause.
+  // and a shell that exported the variable would make case 3 assert the wrong cause. Both
+  // spellings, since #311 — deleting one and leaving the other is the leak this check is about.
   delete env[PTY_SETTING];
+  delete env[PTY_SETTING_REPORTED];
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [probePath], {
       cwd: repoRoot,
@@ -285,8 +295,8 @@ try {
         typeof askedSession.body?.session?.pipeReason === 'string',
         `pipeReason ${JSON.stringify(askedSession.body?.session?.pipeReason)} — a mode with no cause `
         + 'beside it is the whole of what this check is about');
-  check(`and the reason names ${PTY_SETTING}`,
-        String(askedSession.body?.session?.pipeReason ?? '').includes(`${PTY_SETTING}=0`),
+  check(`and the reason names ${PTY_SETTING_REPORTED}`,
+        String(askedSession.body?.session?.pipeReason ?? '').includes(`${PTY_SETTING_REPORTED}=0`),
         JSON.stringify(askedSession.body?.session?.pipeReason));
   check('nothing is warned about a fallback that was asked for',
         !warnedWith(asked.stderr(), PTY_SETTING),

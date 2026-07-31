@@ -614,7 +614,7 @@ try {
   check('404 with EXCALIDRAW_ISSUE_AGENT unset', disabled.status === 404,
         `got ${disabled.status}: ${JSON.stringify(disabled.body).slice(0, 200)}`);
   check('and it names the variable that would enable it',
-        /EXCALIDRAW_ISSUE_AGENT/.test(disabled.body?.error ?? ''), disabled.body?.error);
+        /VIBEMAXXING_ISSUE_AGENT/.test(disabled.body?.error ?? ''), disabled.body?.error);
 
   console.log('\n17. the panel can tell which shapes to offer it on, without reading a header');
   const layout = await import(

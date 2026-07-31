@@ -442,7 +442,7 @@ if (parsed) {
 check('its prose carries no command line, path or flag either',
   leaks(report.stderr).length === 0, `${leaks(report.stderr).join(', ')}: ${report.stderr.slice(0, 400)}`);
 check('and it names the variable the reader has to set, which is the actionable part',
-  report.stderr.includes('EXCALIDRAW_IMPLEMENT_AGENT'), report.stderr.slice(0, 400));
+  report.stderr.includes('VIBEMAXXING_IMPLEMENT_AGENT'), report.stderr.slice(0, 400));
 
 const quietReport = doctor(none.port);
 check('a board with no agent gets a report rather than an error',

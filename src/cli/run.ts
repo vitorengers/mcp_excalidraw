@@ -8,6 +8,7 @@ import { snapshot } from './commands/snapshot.js';
 import { arrange } from './commands/arrange.js';
 import { installSkill } from './commands/install-skill.js';
 import { doctor } from './commands/doctor.js';
+import { settingName } from '../core/settings.js';
 
 interface Command {
   handler: (argv: string[]) => Promise<void>;
@@ -16,6 +17,8 @@ interface Command {
 }
 
 const COMMANDS: Record<string, Command> = {
+  launch: { handler: server.launch, summary: 'Start the board, open it in a browser, print its URL', usage: 'launch [--no-open]' },
+  mcp: { handler: server.mcp, summary: 'Run the MCP stdio server (for MCP clients)', usage: 'mcp' },
   start: { handler: server.start, summary: 'Start the canvas server (detached)', usage: 'start' },
   stop: { handler: server.stop, summary: 'Stop the canvas server', usage: 'stop' },
   status: { handler: server.status, summary: 'Canvas health, element count, browser clients', usage: 'status' },
@@ -40,9 +43,15 @@ const COMMANDS: Record<string, Command> = {
 
 // Every way this package can be invoked, built from the bins it declares rather than written
 // out: a command named here that npm does not install is help nothing goes red over.
+//
+// The bare form is the launch, and that is what the first line has to say. It used to be the MCP
+// stdio server, which is the shortest thing a new user types connecting a JSON-RPC transport to
+// their terminal and then waiting on stdin for ever — output nobody sees, and no way to tell it
+// from a hang. Under a name this package does not install it still means the stdio server, so an
+// MCP client configuration written before the rename keeps working; `mcp` names it either way.
 function usageLines(): string[] {
   const rows: Array<[string, string]> = [
-    [BIN_NAME, 'Run the MCP stdio server (for MCP clients)'],
+    [BIN_NAME, 'Start the board, open it in a browser, print its URL'],
     [`${BIN_NAME} <command> [...]`, 'Drive the canvas from the command line'],
     ...BIN_NAMES.slice(1).map((alias): [string, string] =>
       [`${alias} <command> [...]`, 'Same CLI under its short alias'])
@@ -66,7 +75,7 @@ function printHelp(): void {
     '  output when --out is omitted (`export` scene JSON, `screenshot --format svg`).',
     '  Diagnostics go to stderr.',
     '  Exit codes: 0 ok, 1 error, 2 usage, 3 canvas unreachable, 4 browser tab required.',
-    '  Canvas-driving commands auto-start the server (disable with EXCALIDRAW_NO_AUTOSTART=1).',
+    `  Canvas-driving commands auto-start the server (disable with ${settingName('NO_AUTOSTART')}=1).`,
     `  Canvas URL comes from EXPRESS_SERVER_URL or --url; otherwise the running board`,
     `  named in the state file, or port ${DEFAULT_CANVAS_PORT} — the next free one above it if that is taken.`,
     '  PORT pins the port instead, and is never scanned past.',
