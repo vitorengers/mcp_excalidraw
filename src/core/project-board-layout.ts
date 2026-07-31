@@ -85,7 +85,7 @@ const NO_STATUS_STROKE = '#adb5bd';
 const NO_STATUS_FILL = '#f1f3f5';
 
 /** A card whose issue is being implemented, or has been. Anything else is unmarked. */
-export type CardImplementState = 'running' | 'done' | 'failed' | 'interrupted';
+export type CardImplementState = 'running' | 'done' | 'failed' | 'interrupted' | 'blocked';
 
 export interface MirrorElement {
   id: string;

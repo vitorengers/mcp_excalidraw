@@ -94,6 +94,8 @@ import { TOOL_DOC_KEYS } from './core/tool-docs.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
 import { GITHUB_HOST, issueUrlRefusal } from './core/github-host.js';
 import type { IssueDetail } from './core/github-issue.js';
+import { fetchPullLanding } from './core/github-pull.js';
+import { landingFor } from './core/implement-landing.js';
 import { IssueMemo, memoWindow } from './core/issue-memo.js';
 import {
   PtyModule,
@@ -2597,19 +2599,23 @@ async function runImplementation(
     });
     const kept = await releaseWorktreeFor(workspace, worktree, issueUrl);
 
-    if (result.ok && result.url) {
-      recordImplement(workspaceId, issueUrl, {
-        state: 'done', url: result.url, error: null, worktree: kept,
-        ...carriedImplement(workspaceId, issueUrl), endedAt: new Date().toISOString()
-      });
-      logger.info(`${issueUrl} implemented at ${result.url}`);
-    } else {
-      recordImplement(workspaceId, issueUrl, {
-        state: 'failed', url: null, error: result.error ?? null, worktree: kept,
-        ...carriedImplement(workspaceId, issueUrl), endedAt: new Date().toISOString()
-      });
-      logger.warn(`${issueUrl} implementation failed: ${result.error}`);
-    }
+    // What the agent printed is not what happened. A run that prints a pull request URL has
+    // proved that a pull request exists, and nothing more — so the one participant that knows
+    // whether it landed is asked before the record is written. Only for a run that claims to
+    // have produced one: the other paths never asked GitHub anything and must not start.
+    const pull = result.ok && result.url
+      ? await fetchPullLanding(workspace, result.url)
+      : null;
+    const landing = landingFor({
+      ok: result.ok, url: result.url, error: result.error, output: result.output, pull
+    });
+
+    recordImplement(workspaceId, issueUrl, {
+      state: landing.state, url: landing.url, error: landing.error, worktree: kept,
+      ...carriedImplement(workspaceId, issueUrl), endedAt: new Date().toISOString()
+    });
+    if (landing.state === 'done') logger.info(`${issueUrl} implemented at ${landing.url}`);
+    else logger.warn(`${issueUrl} implementation ${landing.state}: ${landing.error}`);
   } catch (error) {
     recordImplement(workspaceId, issueUrl, {
       state: 'failed',

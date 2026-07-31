@@ -23,13 +23,20 @@
 /**
  * `interrupted` is the state no run ever writes for itself.
  *
- * The other three are transitions this process made: it started a run, and the run settled one
+ * The others are transitions this process made: it started a run, and the run settled one
  * way or the other. `interrupted` is an inference made at startup about a run this process
  * never saw — a checkout named after an issue with commits the base does not have, or a dirty
  * tree, and no agent anywhere working in it. A run cannot survive the process that spawned it,
  * so anything found in that shape is over, whatever it looked like when it stopped.
+ *
+ * `blocked` is the run that ended correctly without landing anything. The implement prompt
+ * sanctions exactly one way to do that — leave the pull request open, say what could not be
+ * reconciled, and stop for a person — and until this existed that agent was recorded
+ * identically to one that walked away mid-sentence. It is neither a success nor a failure, and
+ * naming it is what stops the next thing that reads this signal from sending a second agent to
+ * force a merge the first one refused on purpose. See `implement-landing.ts`.
  */
-export type ImplementState = 'running' | 'done' | 'failed' | 'interrupted';
+export type ImplementState = 'running' | 'done' | 'failed' | 'interrupted' | 'blocked';
 
 export interface ImplementRecord {
   state: ImplementState;

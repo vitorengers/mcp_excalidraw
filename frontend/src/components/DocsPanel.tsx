@@ -984,6 +984,32 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
                   <p className="element-docs__error">{implement.error ?? 'The run failed.'}</p>
                 )}
 
+                {/* A run that ended correctly without landing anything: the agent could not
+                    reconcile a conflict and stopped for a person, which its prompt tells it to
+                    do. A hint rather than an error, because nothing here went wrong — and not a
+                    new button, because the action row already carries five. */}
+                {implement.state === 'blocked' && (
+                  <p className="element-docs__hint">
+                    {implement.error
+                      ?? 'The run stopped and asked for a person. Its pull request is open.'}
+                  </p>
+                )}
+
+                {/* The pull request of a run that did not land. Separate from the "Implemented"
+                    link above and deliberately worded differently: that one is gated on `done`
+                    and would otherwise call an unmerged pull request shipped. A board that has
+                    just been told where the pull request is must still say where it is. */}
+                {implement.state !== 'done' && implement.url && (
+                  <a
+                    className="element-docs__issue-link"
+                    href={implement.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Not merged · {implement.url.replace(/^https:\/\/github\.com\//, '')}
+                  </a>
+                )}
+
                 {/* A closed issue is done with, and what closed it is worth naming: the
                     pull request is the answer to "was this actually shipped", and it is
                     one gh field away rather than an inference. */}

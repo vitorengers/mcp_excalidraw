@@ -132,6 +132,12 @@ if (args.includes('graphql')) {
     process.exit(1);
   }
   process.stdout.write('{}\\n');
+} else if (args[0] === 'pr' && args[1] === 'view') {
+  // Every run here ends with the stub agent printing a pull request, and the server now asks
+  // what became of it. Nothing in this check is about that, so it answers the way
+  // lib/gh-unstubbed.mjs does — a well-formed reply that says nothing, which leaves the run's
+  // outcome exactly where it was. Refusing instead would work too, at three retries a run.
+  process.stdout.write('{}\\n');
 } else {
   process.stderr.write('stub gh: unexpected call ' + args.join(' ') + '\\n');
   process.exit(1);
@@ -390,14 +396,19 @@ try {
   check('nothing was moved, least of all to In Progress',
         ghCalls().filter(isEdit).length === 0, JSON.stringify(ghCalls()));
 
-  console.log('\n8. a board with no project spawns no gh at all');
+  console.log('\n8. a board with no project reads no board and moves no card');
   resetLog();
   const dormant = await startByUrl('board-none', issueUrl(27));
   check('202, exactly as before this existed', dormant.status === 202, `got ${dormant.status}`);
   const dormantState = await settle('board-none', issueUrl(27));
   check('the implementation ran', dormantState === 'done', dormantState);
   await sleep(500);
-  check('gh was never run', ghCalls().length === 0, JSON.stringify(ghCalls()));
+  // This used to assert `gh` was never run at all, which was true and overreaching: the
+  // question here is whether a workspace with no project touches a project, and the server now
+  // also asks GitHub what became of the run's pull request — a call that has nothing to do
+  // with a board and happens whether or not one is configured.
+  check('the board was never read', ghCalls().filter(isRead).length === 0, JSON.stringify(ghCalls()));
+  check('and no card was moved', ghCalls().filter(isEdit).length === 0, JSON.stringify(ghCalls()));
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);

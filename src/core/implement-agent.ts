@@ -12,6 +12,7 @@
  * only a block that already has an issue has anything to implement.
  */
 import { AgentUsage } from './agent-usage.js';
+import { ESCALATION_MARKER } from './implement-landing.js';
 import { HeldWorktree, ImplementWorktree } from './implement-worktree.js';
 import { applyAgentSettings, AgentHost, AgentRun, runAgent, workflowSection } from './issue-agent.js';
 import { loadAgentWorkflow, Workspace } from './workspaces.js';
@@ -89,7 +90,8 @@ Then:
    the other side is a guess that compiles.
    If you genuinely cannot reconcile them, leave the pull request open, say which files and
    what the disagreement is, and stop. A merge that quietly discards someone else's work is
-   worse than one that waits for a person.
+   worse than one that waits for a person. Say so in the words below when you do, because
+   from outside, stopping on purpose and stopping mid-sentence look identical.
 6. Report faithfully. If part of the issue is not done, say which part and why. A partial
    implementation described accurately is worth more than a complete one claimed falsely.
 
@@ -110,6 +112,16 @@ things stay yours and do not transfer with the work:
   already opened, you print the pull request URL yourself, last, on a line of its own — and
   you wait for every helper to come back before you do. A run that ends without that line
   leaves the board waiting forever on a pull request that already exists.
+
+**A pull request you did not merge is not a finished run**, and the board now checks: it asks
+GitHub what became of the URL you printed, and a pull request still open is recorded as a run
+that ended without landing anything. There is one exception, and it is the case above — you
+could not reconcile a conflict and stopped for a person. Print that as
+
+    ${ESCALATION_MARKER}: <pull request URL>
+
+and it is recorded as its own thing rather than as a failure. Print it only when it is true. A
+run that merged prints the bare URL.
 
 Return only the pull request URL on a line of its own as the last thing you print.`;
 
