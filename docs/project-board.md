@@ -36,11 +36,18 @@ feature of GitHub's and is refused as one, by name.
 
 **A value that can never resolve is refused when it is saved**, by
 `PUT /api/workspaces/:id/config`, and the settings dialog shows the sentence. It used to be
-accepted happily and fail at the far end: the mirror answers 404 for a URL it cannot parse, the
-canvas reads 404 as "this board has no project" and clears the region, so a board configured with
-a URL somebody had copied out of their browser was indistinguishable from a board that named none
-(**#318**). `scripts/check-project-url-forms.mjs` covers the whole wire, from the paste to the
-`gh` command line.
+accepted happily and fail at the far end: the mirror answered 404 for a URL it could not parse,
+the canvas read 404 as "this board has no project" and cleared the region, so a board configured
+with a URL somebody had copied out of their browser was indistinguishable from a board that named
+none (**#318**). `scripts/check-project-url-forms.mjs` covers the whole wire, from the paste to
+the `gh` command line.
+
+**And a value that gets in anyway is no longer silent at the far end either** (**#317**). The
+save-time refusal is the front door; a `board.config.json` edited by hand is not, and neither is
+a config written before the refusal existed. So the mirror answers **422 `bad-project-url`**
+rather than 404 for a URL it cannot parse, and the canvas says so — the two fixes meet in the
+middle, and neither is the other's fallback. See *"No project" and "that is not a project URL"
+are two answers* below.
 
 ## Where the columns come from
 
@@ -126,7 +133,7 @@ every twenty seconds, and only while the tab is on screen. A run that just finis
 immediately rather than waiting out the interval: that is the one moment the project changed for a
 reason the canvas already knows about.
 
-## A read that fails says so on a cold board, and is ignored on a warm one
+## A read that fails says so — on a strip when the board is cold, in words either way
 
 `GET /api/project-board` answers **502 with `gh`'s own message in it** when the read fails — `gh`
 unresolvable, an expired login, a token without the `project` scope, a GitHub outage, the loopback
@@ -142,12 +149,23 @@ the server sent, and a warm one still draws nothing at all (**#254**). `layoutUn
 whole of it, and `placeMirror` puts it exactly where the mirror goes, so the board arriving
 afterwards replaces it in place rather than beside it.
 
-A strip rather than a toast, and `morePages` above is the precedent — *a mirror that is missing
-cards says so on its own strip*. What is wrong here lasts as long as the failure does, and a toast
-has come and gone ten seconds later, leaving the canvas indistinguishable again, which is the
-complaint. It would also need a rule of its own to stop a twenty-second poll raising it a hundred
-and eighty times an hour; redrawing the same strip is simply idempotent, and the signature the
-mirror already keeps skips even that.
+A strip rather than *only* a toast, and `morePages` above is the precedent — *a mirror that is
+missing cards says so on its own strip*. What is wrong here lasts as long as the failure does, and
+a toast has come and gone ten seconds later, leaving a cold canvas indistinguishable again.
+
+**And a toast as well, since #317**, because the strip is the half that only a cold board gets.
+A board whose mirror is already up and then stops being read draws nothing new — deliberately,
+so a blip cannot wipe a region somebody is reading — and until #317 that meant it said nothing
+at all. The toast carries the server's own sentence, and it is the same `sayOnCanvas` a mirror
+button that cannot be served uses.
+
+**Said once per distinct failure per board.** That rule lands with the toast rather than after
+it: a twenty-second poll finds the same failure every twenty seconds, so a toast per poll would
+be a hundred and eighty an hour telling somebody a thing they cannot fix from the canvas. The
+memory is the sentence the server sent, and it is cleared by a read that succeeds — so a board
+that recovers and breaks again speaks afresh, and a failure that *changes* is a new sentence and
+is said. The strip needs no such rule: redrawing it is idempotent, and the signature the mirror
+already keeps skips even that.
 
 There is no `ProjectBoard` behind the strip — that is what failed — so it carries no link, no
 columns and no count, and it is a fixed three columns wide rather than the project's. Everything
@@ -166,8 +184,49 @@ the one that stays. Measured in a browser: the label was 467 wide against a sent
 510 of, and `bash: … command not found` lost a character off each end. So `document.fonts.ready`
 buys exactly one more pass.
 
-404 is untouched and still means something else entirely: the board has no project, so the region
-is cleared rather than explained.
+404 still means something else entirely: the board has no project, so the region is cleared rather
+than explained, and nothing is said. What changed in #317 is what a 404 no longer covers.
+
+### "No project" and "that is not a project URL" are two answers
+
+They were one 404 for as long as this route existed, and only one of them should be silent. A
+board with no `githubProject` is most boards, and a toast on every one of them would make the
+feature unusable. A board *with* one that `parseProjectUrl` refuses is somebody who tried — and
+what they got was the silence meant for somebody who had not.
+
+So `readProjectBoard` throws two different errors and the route answers two different statuses:
+
+| Status | `reason` | Means |
+|---|---|---|
+| 404 | `no-project` | No `githubProject` in `board.config.json` |
+| 404 | `no-workspace` | The board is not in the registry, or the registry could not resolve it |
+| 422 | `bad-project-url` | There is a `githubProject` and it is not `https://github.com/{users,orgs}/<login>/projects/<number>` |
+
+The canvas keys on the status alone: 404 is the one that draws nothing and says nothing, and
+everything else is said out loud.
+
+### Why the mirror is empty, when the mirror is not the problem
+
+`GET /api/project-board` can say that `gh` refused. It cannot say that `gh` is not installed, or
+that nobody is logged into it, or that the token has no `project` scope — three different things
+to go and do, and the first two are what a fresh clone hits before anything is configured.
+
+`GET /api/github-status` is that question, asked of `gh` itself: `gh --version` and `gh auth
+status`, per board, behind the same memo the issue reads use — without one, a board whose `gh` is
+broken would spawn two more processes every twenty seconds to be told the same thing. It answers
+`{ installed, authenticated, login, scopes, version, resolved, error }`, where `error` is the raw
+first line of whatever `gh` printed. Loopback only, because the login and the token's scopes are
+in it.
+
+The canvas asks it only when it is about to speak — a failure that is the same as the last one is
+dropped before anything is fetched — and appends what it learns to the toast.
+
+`/health` carries the same probe run once at startup, for the host's own `gh` rather than any one
+board's, and carries only `resolved` and a version number: that route is not loopback-gated, so
+it gets nothing that names an account. `src/core/github-status.ts` holds both, under the rules
+`src/core/agent-preflight.ts` already established for the same class of question about the agents.
+
+`scripts/check-github-status-browser.mjs` holds all of it, in a browser.
 
 ## Where the region sits
 

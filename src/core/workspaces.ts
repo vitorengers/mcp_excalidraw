@@ -20,7 +20,7 @@ import {
 } from './workspace-paths.js';
 // The shapes module rather than the reader: this is the write path, and `project-board.ts`
 // spawns `gh`. What is needed here is the pattern the reader will hold the value to.
-import { isClassicProjectUrl, parseProjectUrl } from './project-board-types.js';
+import { githubProjectRefusal, parseProjectUrl } from './project-board-types.js';
 
 /** What the registry is called when nobody has named a file for it. */
 const REGISTRY_FILENAME = 'workspaces.json';
@@ -927,21 +927,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /**
  * Why a `githubProject` was refused, in the words the settings dialog will show.
  *
- * It quotes the value back, because the reader pasted it and the difference between what
- * works and what does not is a few characters long. A **classic** repository project is
- * named as one: it is a real project somebody is looking at, so "not a project URL" would
- * send them hunting for a typo instead of telling them the board reads Projects v2.
+ * The diagnosis is `githubProjectRefusal` in `project-board-types.ts`, shared with the read
+ * path that refuses the same value when a config was edited by hand (#317). Only the tail is
+ * this caller's: "Nothing was written" is true of a refused save and false of a refused read.
  */
-function githubProjectRefusal(value: string): string {
-  const forms = 'https://github.com/users/<login>/projects/<number> or '
-    + 'https://github.com/orgs/<org>/projects/<number>';
-  if (isClassicProjectUrl(value)) {
-    return `"githubProject" is a classic repository project: ${value}. The mirror reads a user or `
-      + `organisation Projects (v2) board — ${forms}. Nothing was written.`;
-  }
-  return `"githubProject" is not a GitHub project URL: ${value}. It has to be ${forms}, `
-    + 'and the /views/<n>, query and fragment the address bar adds are accepted and dropped. '
-    + 'Nothing was written.';
+function refuseGithubProject(value: string): string {
+  return `${githubProjectRefusal(value)} Nothing was written.`;
 }
 
 /**
@@ -981,7 +972,7 @@ export function validateWorkspaceConfigPatch(
       // looking at the field they just typed into.
       if (key === 'githubProject' && typeof value === 'string' && value.trim()
           && !parseProjectUrl(value)) {
-        return { ok: false, error: githubProjectRefusal(value.trim()) };
+        return { ok: false, error: refuseGithubProject(value.trim()) };
       }
       continue;
     }

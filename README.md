@@ -21,7 +21,7 @@ One canvas, three ways to drive it:
 
 - **Agent Skill + CLI** — recommended for coding agents (Claude Code, Codex CLI, Cursor, OpenCode): `npx -y @vitorengers/vibemaxxing <command>`. Zero config, auto-starts the canvas, composable JSON in/out.
 - **MCP Server** — 26 tools over stdio for any Model Context Protocol client (Claude Desktop, Cursor, Codex CLI, Antigravity, ...).
-- **REST API** — 56 routes over plain HTTP; the only workspace-aware surface, and what the board itself is built on.
+- **REST API** — 57 routes over plain HTTP; the only workspace-aware surface, and what the board itself is built on.
 
 Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Mermaid conversion runs in the local browser canvas; `share` is optional and uploads an encrypted scene to excalidraw.com.
 
@@ -117,7 +117,7 @@ GitHub Enterprise Server or a GitLab is out of scope. The canvas itself requires
 The canvas server is `node dist/server.js` after `npm run build`, and everything else is
 environment. [docs/running.md](docs/running.md) is the procedure: the port (3737 by default, and
 3000 is unusable on the development machine — [docs/trap-port-3000.md](docs/trap-port-3000.md)), the kill-the-stale-server
-step that comes before it, and all twenty-five `EXCALIDRAW_*` variables with their defaults —
+step that comes before it, and all twenty-six `EXCALIDRAW_*` variables with their defaults —
 which can each be spelled `VIBEMAXXING_*` instead, and are read from
 [`config.json`](docs/configuration.md) in a per-OS directory as well as from the environment.
 

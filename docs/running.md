@@ -159,7 +159,7 @@ prefix says so once in the log file. Nothing breaks on the day the old one is dr
 not been named in that file for a release first — `src/core/settings.ts` is the one list, and
 `node scripts/check-env-prefix-compat.mjs` fails if it and this table disagree.
 
-The twenty-two below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
+The twenty-three below mean the same thing on Windows, macOS and Linux. Three more are Windows-only,
 and they are in [their own section](#windows-only-projects-inside-a-wsl-distro) rather than here.
 
 Every name in both tables can be set four ways — in `<state-dir>/config.json`, in a `<cwd>/.env`,
@@ -193,6 +193,7 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_IMPLEMENT_CONCURRENCY` | `4` | Runs at once. `0` is no cap, `1` serialises. Each one is a whole coding agent building on this machine |
 | `EXCALIDRAW_IMPLEMENT_QUEUE_MS` | `30000` | How often a workspace with its queue on looks for a free slot. The timer does not exist until a queue is turned on |
 | `EXCALIDRAW_ISSUE_MEMO_MS` | `30000` | How long one `gh` read of an issue is reused. `0` turns the memo off |
+| `EXCALIDRAW_GH_STATUS_MEMO_MS` | `30000` | How long one answer about `gh` *itself* — installed, logged in, which scopes — is reused before `GET /api/github-status` asks again. `0` turns the memo off. The canvas asks on a failing poll, so without it a board whose `gh` is broken would spawn two processes every twenty seconds to be told the same thing |
 | `EXCALIDRAW_GH_COMMAND` | `gh` | The GitHub CLI on **this machine**, when it is not on `PATH` — [trap-gh-path.md](trap-gh-path.md) |
 | `EXCALIDRAW_CLAUDE_STATUS` | unset | The directory your Claude Code status line command writes its usage files into. Unset means `GET /api/claude-status` answers 404 and the header shows nothing — [claude-status.md](claude-status.md) |
 | `EXCALIDRAW_TERMINAL` | unset | `1` for the default shell, or a command line of your own. Unset means the terminal routes answer 404 — [terminal.md](terminal.md) |

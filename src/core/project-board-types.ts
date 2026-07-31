@@ -110,7 +110,9 @@ export interface ProjectRef {
  * nobody could check by reading it.
  *
  * `github.com` is a requirement, not a default: `github-host.ts` is where that was decided and
- * written down, and the refusal in `workspaces.ts` shows the two forms that do work.
+ * written down, and `githubProjectRefusal` below shows the two forms that do work — it moved
+ * here from `workspaces.ts` with #317, so that the value refused as it is *typed* and the same
+ * value refused as it is *read* say one sentence rather than two.
  */
 const PROJECT_URL =
   /^https:\/\/github\.com\/(users|orgs)\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/projects\/(\d{1,10})(?:\/views\/\d{1,10})?\/?(?:\?[\w%.~!$&()*+,;:@/=|-]*)?(?:#[\w%.~!$&()*+,;:@/=|?-]*)?$/;
@@ -152,4 +154,32 @@ export function isClassicProjectUrl(url: string | null | undefined): boolean {
   if (typeof url !== 'string') return false;
   return /^https:\/\/github\.com\/(?!users\/|orgs\/)[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}\/projects(\/\d{1,10})?\/?$/
     .test(url.trim());
+}
+
+/**
+ * Why a `githubProject` was refused, in the words whoever is looking will be shown.
+ *
+ * **Two callers, and they are the two ends of the same value.** `validateWorkspaceConfigPatch`
+ * refuses it as it is typed, which is the front door (#318); `readProjectBoard` refuses it as
+ * it is read, which is the config edited by hand and the config written before that check
+ * existed (#317). One sentence rather than two, here beside the parse for the reason the parse
+ * is here: both ends need it, and the reader spawns `gh`.
+ *
+ * It quotes the value back, because the reader pasted it and the difference between what works
+ * and what does not is a few characters long. A **classic** repository project is named as one:
+ * it is a real project somebody is looking at, so "not a project URL" would send them hunting
+ * for a typo instead of telling them the board reads Projects v2.
+ *
+ * What each caller does about it is the caller's own tail — "Nothing was written" is true of a
+ * refused save and false of a refused read.
+ */
+export function githubProjectRefusal(value: string): string {
+  const forms = 'https://github.com/users/<login>/projects/<number> or '
+    + 'https://github.com/orgs/<org>/projects/<number>';
+  if (isClassicProjectUrl(value)) {
+    return `"githubProject" is a classic repository project: ${value}. The mirror reads a user or `
+      + `organisation Projects (v2) board — ${forms}.`;
+  }
+  return `"githubProject" is not a GitHub project URL: ${value}. It has to be ${forms}, `
+    + 'and the /views/<n>, query and fragment the address bar adds are accepted and dropped.';
 }
