@@ -72,6 +72,29 @@
  * building, and one that builds after running them — so the analysis is known to catch the
  * defect rather than to describe whatever `ci.yml` happens to say.
  *
+ * ### And that the three images it names can each get as far as starting the board (#281)
+ *
+ * The matrix grew to three operating systems before anything in the tree had ever started a
+ * server on two of them. Sections 8 and 9 are the other half of that: `scripts/run-checks.mjs
+ * --tier fast` has to include a check that starts the board and watches it come up, so the
+ * platform-forked code underneath — the state directory, the log path, the pidfile — is
+ * exercised rather than merely compiled on macOS and Windows.
+ *
+ * Two rules beside it, both about a matrix that claims more than it runs:
+ *
+ *   - **no step depends on a POSIX shell built-in.** `windows-latest` runs a `run:` block under
+ *     PowerShell unless the step says `shell:`, and `test -f dist/server.js` — which this
+ *     workflow carried until #280 — is not a program it can find. A step meant to prove the
+ *     build would have been the first thing to fail there, for a reason that is not the build.
+ *   - **`engines.node` names the oldest Node a job runs.** The field claimed `>=18` and CI ran
+ *     18 on ubuntu alone to see whether that held; Node 18 is past end of life, so the answer
+ *     is to drop it and raise the floor rather than to keep buying one job's worth of evidence
+ *     about a runtime nobody should install.
+ *
+ * Section 8 drives both over inline fixtures — a `test -f` hidden behind an `&&`, the bracket
+ * spelling, a step that names `shell: bash` and is therefore fine, and a matrix whose 18 is in
+ * an `include:` rather than on the axis.
+ *
  * Offline and self-contained: it reads `.github/workflows/*.yml`. No server, no browser, no
  * network, no Docker.
  *
@@ -457,6 +480,71 @@ function tiersRunBy(job) {
 const checkoutWith = (job) =>
   stepsOf(job).find((step) => usesAction(step, 'actions/checkout'))?.with ?? {};
 
+/**
+ * Every Node version a job can be handed, matrix axis and `include:` entries together.
+ *
+ * The `include:` half is the one that matters here: a version dropped from the axis and left in
+ * an `include` is still a version CI runs, and a rule that read only `matrix.node` would call
+ * that removed.
+ */
+function nodeVersions(job) {
+  const out = [];
+  const axis = job?.strategy?.matrix?.node;
+  if (Array.isArray(axis)) out.push(...axis.map(String));
+  else if (typeof axis === 'string' && axis !== '') out.push(axis);
+  for (const entry of job?.strategy?.matrix?.include ?? []) {
+    if (entry?.node !== undefined) out.push(String(entry.node));
+  }
+  const setup = stepsOf(job).find((step) => usesAction(step, 'actions/setup-node'));
+  const pinned = setup?.with?.['node-version'];
+  if (typeof pinned === 'string' && !/\$\{\{/.test(pinned)) out.push(pinned);
+  return out;
+}
+
+/** `'20.x'` → 20, `'>=18.0.0'` → 18. The major is the whole of what these rules compare. */
+const majorOf = (version) => {
+  const found = /(\d+)/.exec(String(version));
+  return found ? Number(found[1]) : NaN;
+};
+
+/**
+ * Shell words that only a POSIX shell has.
+ *
+ * `windows-latest` runs a `run:` block under PowerShell unless the step says otherwise, and
+ * these are not programs it could find — they are built into `sh`. `test -f dist/server.js`
+ * was in this workflow until #280, on a job that only ever ran on ubuntu, and it would have
+ * been the first thing to fail the moment the matrix grew: a step meant to prove the build
+ * failing for a reason that has nothing to do with the build.
+ *
+ * Only built-ins, deliberately. A rule that also banned `grep` or `touch` would be guessing at
+ * what a hosted image happens to carry, and the guess would be wrong on some of them; a
+ * built-in of the wrong shell is absent by definition.
+ */
+const POSIX_BUILTINS = ['test', '[', '[[', 'source', '.', 'export', 'unset', 'local', 'trap', 'eval'];
+
+/** A step that names its own `shell:` is not depending on the runner's default one. */
+const declaresShell = (step) => typeof step?.shell === 'string' && step.shell !== '';
+
+/** `{ job, command }` for every `run:` command line that starts with one of the built-ins. */
+function posixOnlyCommands(workflow) {
+  const out = [];
+  for (const [id, job] of Object.entries(workflow?.jobs ?? {})) {
+    for (const step of stepsOf(job)) {
+      if (typeof step.run !== 'string' || declaresShell(step)) continue;
+      // `&&`, `||`, `;` and `|` each start a new command, and so does a newline. Splitting on
+      // all of them is what catches `npm ci && test -f dist/server.js`, which reads as an npm
+      // invocation to anything that only looks at the first word of the block.
+      for (const piece of step.run.split(/\n|&&|\|\||[;|]/)) {
+        const command = piece.trim();
+        if (command === '') continue;
+        const [word] = command.split(/\s+/);
+        if (POSIX_BUILTINS.includes(word)) out.push({ job: id, command });
+      }
+    }
+  }
+  return out;
+}
+
 /** Jobs that run a check and do not run `npm run build` in an earlier step. */
 function jobsRunningChecksUnbuilt(workflow) {
   const out = [];
@@ -798,6 +886,112 @@ check('ci.yml declares a concurrency group that cancels the run it replaces',
 check('no step in ci.yml reads a secret',
       !/secrets\./.test(ciText),
       'a pull request from a fork gets none of them, and would fail on the step that asks');
+
+// ─── 8. The rules catch a workflow that cannot run on Windows ─
+
+console.log('\n8. a step written for sh, and a matrix that outruns engines, are caught');
+
+const FIXTURE_POSIX = `name: Posix
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  sh:
+    runs-on: \${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['20.x', '22.x']
+        include:
+          - os: ubuntu-latest
+            node: '18.x'
+    steps:
+      - name: Build project
+        run: npm run build
+      - name: Assert the artifacts
+        run: |
+          npm run build && test -f dist/server.js
+          [ -f dist/frontend/index.html ]
+      - name: Deliberately bash
+        shell: bash
+        run: test -f dist/bin.js
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+      - name: Assert the artifacts
+        run: node -e "require('node:fs').statSync('dist/server.js')"
+`;
+
+const posixFixture = parseYaml(FIXTURE_POSIX);
+const caught = posixOnlyCommands(posixFixture);
+
+check('a `test -f` after an `&&` is caught, not read as the npm invocation in front of it',
+      caught.some(({ job, command }) => job === 'sh' && command === 'test -f dist/server.js'),
+      JSON.stringify(caught));
+check('so is the bracket spelling of the same thing',
+      caught.some(({ command }) => command.startsWith('[ -f')), JSON.stringify(caught));
+check('a step that names shell: bash is not caught — GitHub ships one on all three images',
+      !caught.some(({ command }) => command.includes('dist/bin.js')), JSON.stringify(caught));
+check('and a node one-liner doing the same job is not caught',
+      !caught.some(({ job }) => job === 'clean'), JSON.stringify(caught));
+check('the node versions of a job are its axis and its include entries together',
+      nodeVersions(posixFixture.jobs.sh).join() === '20.x,22.x,18.x',
+      JSON.stringify(nodeVersions(posixFixture.jobs.sh)));
+check('a job with no matrix is read off the version its setup-node pins',
+      nodeVersions(posixFixture.jobs.clean).join() === '20.x',
+      JSON.stringify(nodeVersions(posixFixture.jobs.clean)));
+
+// ─── 9. ci.yml runs the smoke check, in a shell every runner has ─
+
+console.log('\n9. ci.yml starts the board on every image it claims, and engines agrees');
+
+const SMOKE_CHECK = 'check-smoke-start.mjs';
+const smokePath = join(repoRoot, 'scripts', SMOKE_CHECK);
+const smokeSource = existsSync(smokePath) ? readFileSync(smokePath, 'utf8') : '';
+
+check(`scripts/${SMOKE_CHECK} exists`, smokeSource !== '',
+      'three workflows ran only on Linux and nothing had ever started the board anywhere else');
+check(`scripts/${SMOKE_CHECK} declares the fast tier`,
+      /^\s*\*?\s*Tier:\s*fast\s*$/m.test(smokeSource),
+      'the fast tier is the one ci.yml runs on all three images; any other tier and this runs '
+      + 'on none of them');
+
+const stray = posixOnlyCommands(ci ?? {});
+check('no step in ci.yml depends on a POSIX shell built-in',
+      stray.length === 0,
+      stray.map(({ job, command }) => `${job}: ${command}`).join(' / ')
+      + ' — windows-latest runs a step under PowerShell unless it says otherwise');
+
+const fastJobs = runningJobs.filter(([, job]) => tiersRunBy(job).includes('fast'));
+for (const [id, job] of fastJobs) {
+  check(`the ${id} job type-checks before it runs anything`,
+        firstRunning(job, /type-check|\btsc\b/) !== -1
+        && firstRunning(job, /type-check|\btsc\b/) < firstRunning(job, RUNS_CHECKS),
+        'the type check is one of the three things the done-when asks for on all three images');
+}
+
+/**
+ * `engines.node` and the matrix are one claim, and CI is the half with evidence.
+ *
+ * Node 18 went end of life in April 2025 and the fork has never published, so the field was
+ * describing a runtime nothing would ever be run on. Either the matrix proves the floor or the
+ * floor comes up to the matrix; what cannot stand is the field claiming a version no job runs.
+ */
+const enginesNode = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).engines?.node ?? '';
+const ciNodeMajors = [...new Set(Object.values(ciJobs).flatMap((job) => nodeVersions(job).map(majorOf)))]
+  .filter(Number.isFinite).sort((a, b) => a - b);
+
+check('no job in ci.yml runs Node 18', !ciNodeMajors.includes(18),
+      `node majors in the matrix: ${ciNodeMajors.join(', ') || 'none'} — 18 reached end of life `
+      + 'in April 2025');
+check('engines.node names the oldest Node ci.yml actually runs',
+      majorOf(enginesNode) === ciNodeMajors[0],
+      `engines.node is ${JSON.stringify(enginesNode)} and the oldest job runs `
+      + `${ciNodeMajors[0] ?? 'nothing this can read'}`);
 
 console.log('');
 if (failures) {

@@ -36,13 +36,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        # 20 and 22, and `package.json`'s `engines.node` says the same. It claimed `>=18` and
+        # this matrix carried one ubuntu job at 18 to find out whether that held; 18 reached end
+        # of life in April 2025, so the answer worth buying was the floor rather than the
+        # evidence. `check-ci-workflow.mjs` fails if the two disagree again.
         node: ['20.x', '22.x']
-        # `package.json` claims `>=18` and nothing has ever tested it. One combination is what
-        # that claim is worth — either it holds, or this job is the evidence that the engines
-        # field needs raising.
-        include:
-          - os: ubuntu-latest
-            node: '18.x'
 
     steps:
       - name: Checkout code
