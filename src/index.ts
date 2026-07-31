@@ -16,7 +16,7 @@ import { z } from 'zod';
 import fs from 'fs';
 import logger from './utils/logger.js';
 import { isMainModule } from './core/entry.js';
-import { packageVersion } from './core/version.js';
+import { packageVersion, packageDescription, BIN_NAME } from './core/version.js';
 import {
   EXCALIDRAW_ELEMENT_TYPES,
   ServerElement,
@@ -649,9 +649,12 @@ const tools: Tool[] = [
 // Initialize MCP server
 const server = new Server(
   {
-    name: "vibemaxxing",
+    // What a client shows in its server list, and what it builds tool ids out of. Both come
+    // from package.json (core/version.ts) so the handshake cannot name a product this package
+    // is not.
+    name: BIN_NAME,
     version: packageVersion(),
-    description: "Programmatic canvas toolkit for Excalidraw with file I/O, image export, and real-time sync"
+    description: packageDescription()
   },
   {
     capabilities: {

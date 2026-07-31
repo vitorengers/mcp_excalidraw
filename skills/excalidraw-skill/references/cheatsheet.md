@@ -8,7 +8,7 @@
 
 ## CLI Reference
 
-`npx -y @vitorengers/vibemaxxing <command>` (or `excalidraw-canvas <command>` after `npm i -g`).
+`npx -y @vitorengers/vibemaxxing <command>` (or `vibemaxxing <command>` / `vibemax <command>` after `npm i -g`).
 JSON results on stdout — except `describe` (plain text) and raw-content output when `--out` is omitted (`export` scene JSON, `screenshot --format svg`). Diagnostics on stderr. Exit codes: 0 ok, 1 error, 2 usage, 3 canvas unreachable, 4 browser tab required. Explicit `start` overrides `EXCALIDRAW_NO_AUTOSTART=1`.
 
 ### Server

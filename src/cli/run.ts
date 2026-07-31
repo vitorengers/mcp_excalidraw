@@ -1,5 +1,5 @@
 import { CliUsageError } from './args.js';
-import { packageVersion } from '../core/version.js';
+import { packageVersion, BIN_NAME, BIN_NAMES } from '../core/version.js';
 import { DEFAULT_CANVAS_PORT } from '../core/port.js';
 import * as server from './commands/server.js';
 import * as elements from './commands/elements.js';
@@ -36,15 +36,25 @@ const COMMANDS: Record<string, Command> = {
   'install-skill': { handler: installSkill, summary: 'Install the bundled agent skill', usage: 'install-skill [--dir <skills-root>] [--target claude|codex|<skills-root>] [--print-source]' }
 };
 
+// Every way this package can be invoked, built from the bins it declares rather than written
+// out: a command named here that npm does not install is help nothing goes red over.
+function usageLines(): string[] {
+  const rows: Array<[string, string]> = [
+    [BIN_NAME, 'Run the MCP stdio server (for MCP clients)'],
+    [`${BIN_NAME} <command> [...]`, 'Drive the canvas from the command line'],
+    ...BIN_NAMES.slice(1).map((alias): [string, string] =>
+      [`${alias} <command> [...]`, 'Same CLI under its short alias'])
+  ];
+  const width = Math.max(...rows.map(([form]) => form.length)) + 2;
+  return rows.map(([form, summary]) => `  ${form.padEnd(width)}${summary}`);
+}
+
 function printHelp(): void {
   const lines = [
-    `vibemaxxing ${packageVersion()} — Excalidraw workbench for AI coding agents`,
+    `${BIN_NAME} ${packageVersion()} — Excalidraw workbench for AI coding agents`,
     '',
     'Usage:',
-    '  vibemaxxing                            Run the MCP stdio server (for MCP clients)',
-    '  vibemaxxing <command> [...]            Drive the canvas from the command line',
-    '  excalidraw-canvas <command> [...]      Same CLI under its short alias',
-    '  mcp-excalidraw-server <command> [...]  … and under the name it shipped as before',
+    ...usageLines(),
     '',
     'Commands:',
     ...Object.entries(COMMANDS).map(([name, cmd]) => `  ${name.padEnd(14)} ${cmd.summary}`),
@@ -59,7 +69,7 @@ function printHelp(): void {
     `  named in the state file, or port ${DEFAULT_CANVAS_PORT} — the next free one above it if that is taken.`,
     '  PORT pins the port instead, and is never scanned past.',
     '',
-    'Run `vibemaxxing help <command>` for per-command usage.'
+    `Run \`${BIN_NAME} help <command>\` for per-command usage.`
   ];
   process.stdout.write(lines.join('\n') + '\n');
 }
@@ -78,7 +88,7 @@ export async function runCli(argv: string[]): Promise<void> {
   if (!name || name === 'help' || name === '--help' || name === '-h') {
     const topic = name === 'help' ? rest[0] : undefined;
     if (topic && COMMANDS[topic]) {
-      process.stdout.write(`Usage: vibemaxxing ${COMMANDS[topic].usage}\n  ${COMMANDS[topic].summary}\n`);
+      process.stdout.write(`Usage: ${BIN_NAME} ${COMMANDS[topic].usage}\n  ${COMMANDS[topic].summary}\n`);
     } else {
       printHelp();
     }
@@ -92,7 +102,7 @@ export async function runCli(argv: string[]): Promise<void> {
 
   const command = COMMANDS[name];
   if (!command) {
-    process.stderr.write(`Unknown command "${name}". Run \`vibemaxxing help\` for the list.\n`);
+    process.stderr.write(`Unknown command "${name}". Run \`${BIN_NAME} help\` for the list.\n`);
     process.exitCode = 2;
     return;
   }
@@ -104,7 +114,7 @@ export async function runCli(argv: string[]): Promise<void> {
       process.stderr.write(`Error: ${(error as Error).message}\n`);
     }
     if (error instanceof CliUsageError) {
-      process.stderr.write(`Usage: vibemaxxing ${command.usage}\n`);
+      process.stderr.write(`Usage: ${BIN_NAME} ${command.usage}\n`);
     }
     process.exitCode = exitCodeFor(error);
   }

@@ -3,6 +3,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
 import { EXPRESS_SERVER_URL, ENABLE_CANVAS_SYNC, EXCALIDRAW_NO_AUTOSTART } from './config.js';
+import { BIN_NAME } from './version.js';
 import { getHealth, CANVAS_SERVICE_NAME, foreignServiceError, markCanvasIdentityVerified } from './canvas-client.js';
 import { isAcceptedCanvasService } from './identity.js';
 import { DEFAULT_CANVAS_PORT, removeCanvasState, whatIsOn } from './port.js';
@@ -47,7 +48,7 @@ function isLoopbackUrl(): boolean {
 function unreachableError(reason: string): Error {
   const error = new Error(
     `Canvas server is not reachable at ${EXPRESS_SERVER_URL} (${reason}). ` +
-    `Start it with \`vibemaxxing start\` or \`node dist/server.js\`.`
+    `Start it with \`${BIN_NAME} start\` or \`node dist/server.js\`.`
   );
   (error as any).code = 'CANVAS_UNREACHABLE';
   return error;

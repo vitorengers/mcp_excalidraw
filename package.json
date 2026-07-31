@@ -6,8 +6,7 @@
   "type": "module",
   "bin": {
     "vibemaxxing": "dist/bin.js",
-    "mcp-excalidraw-server": "dist/bin.js",
-    "excalidraw-canvas": "dist/bin.js"
+    "vibemax": "dist/bin.js"
   },
   "scripts": {
     "start": "npm run build:server && node dist/index.js",

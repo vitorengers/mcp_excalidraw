@@ -1,9 +1,16 @@
 # CLI
 
 `src/bin.ts`, published as `@vitorengers/vibemaxxing` and installed as `vibemaxxing`, with
-`excalidraw-canvas` and `mcp-excalidraw-server` kept as aliases. 19 commands. It is
+`vibemax` beside it as a shorter alias. 19 commands. It is
 the interface the bundled agent skill actually uses, because a shell command is cheaper for an
 agent to reach for than a tool definition it has to be handed first.
+
+The names come from one place. `package.json` `bin` declares them, `BIN_NAME` and `BIN_NAMES`
+in `src/core/version.ts` read that map, and every command named in help or error text is built
+out of those — so a rename lands in the manifest alone and cannot leave help text advertising a
+command npm does not install. `scripts/check-bin-identity.mjs` holds it, along with the rule
+that the two command names inherited from upstream may not come back: upstream's published
+package installs both, so a global install of the two packages fights over the same command.
 
 ## The commands
 
