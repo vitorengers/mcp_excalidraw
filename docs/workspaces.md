@@ -259,6 +259,32 @@ blank field can go on meaning "not set" — and saves through
 A field it has never heard of is refused rather than stored, so a typo says so instead of quietly
 doing nothing.
 
+### Five rows, and `Advanced`
+
+The dialog opens on **Name, Issue language, Docs folder, GitHub repo and GitHub project**, each
+marked *optional*. Everything else — Board file, Library file, Project field, Cards per column,
+the two column names, and both agent fieldsets — is behind an `Advanced` control.
+
+It used to open on all of them: eleven free-text rows and two fieldsets of four, presented the
+moment a folder is picked, with nothing saying any of it could be left alone. That is a
+questionnaire rather than a form, and every answer on it already had a default that is right
+until somebody has a reason.
+
+The hidden rows are **unmounted, not hidden**. `<details>` and `display: none` both leave every
+one of them in the tab order and in a screen reader's reading of the form, which is the thing
+that made the dialog read long in the first place. Nothing else changes with the disclosure: the
+draft holds the whole config either way and the save sends all of it, so **a collapsed dialog
+saves the settings it never showed** rather than clearing them.
+
+`Workflow` is a row in each agent fieldset, and it is new. `agents.<kind>.workflow` — the one
+setting that changes *what a run does* rather than how well it runs — was accepted by the write
+path and refused by the dialog, which sent `model`, `effort` and `timeoutSeconds` and nothing
+else. Blank still means the board default, and a project that already selects a workflow sends
+its own value back, so leaving the field alone cannot clear it.
+
+`scripts/check-workspace-settings-browser.mjs` is the check, and it is a browser one because
+"in the DOM only after `Advanced` is pressed" is a claim about the DOM.
+
 ## What reads it
 
 `GET /api/workspaces` loads the registry **per request**, not once at boot: a project's config
@@ -273,4 +299,5 @@ agents resolve their model, effort and ceiling per run for the same reason.
   two dialogs
 - `scripts/check-workspaces.mjs`, `scripts/check-workspace-isolation.mjs`,
   `scripts/check-workspace-create.mjs`, `scripts/check-workspace-settings.mjs`,
-  `scripts/check-workspace-reorder.mjs`, `scripts/check-workspace-tabs-browser.mjs`
+  `scripts/check-workspace-reorder.mjs`, `scripts/check-workspace-tabs-browser.mjs`,
+  `scripts/check-workspace-settings-browser.mjs`

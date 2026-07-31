@@ -22,7 +22,9 @@ The canvas — drawing, the CLI, the MCP tools, the documentation cards, the ter
 account and no network. The workbench half needs **github.com** and an authenticated
 [`gh`](https://cli.github.com): issue blocks, the project-board mirror and implementations all
 read it, and no other forge is supported. [running.md](running.md#what-it-requires-githubcom)
-is that boundary in full.
+is that boundary, and [without-github.md](without-github.md) is what a board keeps and loses at
+each level of not having it — installing without `gh` is a real way to run this tool, not a
+half-installed one.
 
 ## The one command
 
