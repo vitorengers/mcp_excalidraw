@@ -104,7 +104,9 @@ function classify(source) {
     const line = raw.trim();
     if (/^<!--\s*generated:/.test(line)) { generated = true; return { raw, fenced, generated }; }
     if (/^<!--\s*\/generated:/.test(line)) { generated = false; return { raw, fenced, generated: true }; }
-    if (/^(?:```|~~~)/.test(line)) { const was = fenced; fenced = !fenced; return { raw, fenced: true, generated }; }
+    // The fence line itself is neither prose nor content: counting it as fenced keeps a
+    // heading-shaped line inside a block from being read as a heading.
+    if (/^(?:```|~~~)/.test(line)) { fenced = !fenced; return { raw, fenced: true, generated }; }
     return { raw, fenced, generated };
   });
 }
