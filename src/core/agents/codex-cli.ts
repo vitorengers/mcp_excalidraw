@@ -19,6 +19,10 @@
  *  - `--json` turns stdout into a JSON Lines stream of every event;
  *  - `-m` / `--model` selects the model, and `-c key=value` overrides one config key, which is
  *    where `model_reasoning_effort` lives;
+ *  - the sandbox is `--sandbox read-only|workspace-write|danger-full-access`, `read-only` is the
+ *    default and permits no network, and under `workspace-write` the network is off unless
+ *    `sandbox_workspace_write.network_access` turns it on and `.git` stays read-only whatever
+ *    else is writable — which is what `AGENT_PERMISSIONS` is built out of;
  *  - the events are `thread.started`, `turn.started`, `turn.completed` (carrying
  *    `usage: { input_tokens, cached_input_tokens, output_tokens }`), `turn.failed`, a top-level
  *    `error`, and `item.started` / `item.updated` / `item.completed` whose `item.type` is one of
@@ -41,7 +45,8 @@
  * fills in as it goes, item by item.
  */
 import {
-  hasArgument, quotedLine, tokenizeCommand,
+  AGENT_PERMISSIONS, hasArgument, permissionArgs, postureFor, quotedLine, tokenizeCommand,
+  withoutFullAccess,
   type AgentAdapter, type AgentInvocation, type AgentInvokeSpec, type UsagePatch,
 } from '../agent-adapter.js';
 import type { TranscriptState } from '../agent-stream-render.js';
@@ -77,15 +82,22 @@ export const codexCliAdapter: AgentAdapter = {
     const [binary, ...rest] = tokenizeCommand(spec.command);
     const command = binary ?? spec.command;
     const headless = spec.mode === 'headless';
-    const args = [...rest];
+    // The research agent never carries `--yolo`, whoever wrote it — see `PermissionPosture`.
+    const permissions = AGENT_PERMISSIONS['codex-cli'];
+    const args = spec.role === 'issue' ? withoutFullAccess(permissions, rest) : [...rest];
     // Read off the operator's own tokens, not off `args`, so that nothing this adapter appends
-    // below could ever be mistaken for something they asked for.
+    // below could ever be mistaken for something they asked for. `rest` rather than `args` for
+    // the other direction too: `withoutFullAccess` takes a sandbox flag off a research run, and
+    // a `-` they wrote is not one of those and must survive it.
     const pinned = rest.includes(STDIN_MARKER);
 
     // First, because it is a subcommand and not a flag. An operator who already wrote it — as
     // they would to reach `--full-auto` — keeps their own spelling and their own position.
     if (headless && !args.includes(EXEC)) args.unshift(EXEC);
     if (headless && !hasArgument(args, '--json')) args.push('--json');
+    // Whatever the mode: a sandbox is what the run may do, not how it reports itself, and an
+    // interactive Codex run is still a run in a repository somebody's board is driving.
+    args.push(...permissionArgs(permissions, postureFor(spec.role, spec.fullAccess), args));
     if (spec.model && !hasArgument(args, '-m', '--model')) args.push('--model', spec.model);
     // A config override rather than a flag of its own: `-c` is repeatable and takes the last
     // word, so a project's effort placed after the operator's own overrides wins.

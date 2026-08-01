@@ -587,10 +587,10 @@ export class TerminalSession {
     // exactly that, and this is what the class did before backends existed.
     const adapter = options.agent?.adapter ?? adapterFor('raw');
     const invocation = options.agent?.invocation ?? commandLineInvocation(shellCommand);
-    // The invocation has the only word on where a prompt goes — not a caller's flag beside it,
-    // which could only ever disagree, and not the presence of a binding, which is a fact about
-    // this machine rather than about what the CLI reads.
-    const asArgument = Boolean(options.input) && invocation.prompt.via === 'argv';
+    // The prompt is handed over unconditionally, and `buildTerminalCommand` puts it on argv only
+    // where this invocation says it goes there. The invocation has the only word on that — not a
+    // caller's flag beside it, which could only ever disagree with it, and not the presence of a
+    // binding, which is a fact about this machine rather than about what the CLI reads.
     const { command, args, cwd } = buildTerminalCommand(
       workspace, invocation, directory, options.input ?? null
     );
@@ -609,10 +609,10 @@ export class TerminalSession {
     this.shell = shellCommand;
     this.mode = binding ? 'pty' : 'pipe';
     this.owner = options.owner ?? null;
-    // Read off the binding rather than off `asArgument`, because the question is what a
-    // keystroke could reach and not where the prompt went. A session given a prompt and put on
-    // pipes has had its stdin closed either way — spent on the prompt, or closed empty behind a
-    // prompt that travelled on argv — and in neither case is there anything left to type into.
+    // Read off the binding rather than off where the prompt went, because the question is what a
+    // keystroke could reach. A session given a prompt and put on pipes has had its stdin closed
+    // either way — spent on the prompt, or closed empty behind a prompt that travelled on argv —
+    // and in neither case is there anything left to type into.
     this.stdinClosed = Boolean(options.input) && !binding;
     // A cause only where there is one to give. A prompt on stdin puts the session on pipes
     // whatever the machine can offer — a pseudoterminal has no end of file — so naming this

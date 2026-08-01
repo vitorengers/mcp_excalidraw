@@ -67,25 +67,34 @@ The board holds these of both agents. What differs between the two is power, and
 the issue agent gets reading, and the handful of `gh` and `git` sub-commands the prompt actually
 names, and nothing that writes, so that turning on issue blocks cannot quietly turn on
 repository writes. The implement agent has to write code, run the build and run the checks, so
-it gets everything.
+it gets writing, `git`, `gh` and the runners — wide, and still bounded rather than everything.
 
 ## Claude Code
 
 ```
 EXCALIDRAW_ISSUE_AGENT='claude -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh issue list:*) Bash(gh issue view:*) Bash(gh issue create:*) Bash(gh issue edit:*) Bash(gh issue comment:*) Bash(gh project item-add:*) Bash(git log:*) Bash(git show:*) Bash(git diff:*) Bash(git blame:*) Read Grep Glob WebFetch WebSearch"'
-EXCALIDRAW_IMPLEMENT_AGENT='claude -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
+EXCALIDRAW_IMPLEMENT_AGENT='claude -p --model claude-opus-5[1m] --effort high --allowedTools "Read Grep Glob Write Edit NotebookEdit Task TodoWrite WebFetch WebSearch Bash(git:*) Bash(gh:*) Bash(npm:*) Bash(npx:*) Bash(node:*)"'
 ```
 
 `-p` is what makes it answer and exit. `--allowedTools` is an enumerated list and therefore also
-a *deny* list, which is why the implement command does not use one: an agent stopped from
-reading a page of documentation would have been stopped by the configuration rather than by
-anything it did. The narrow list on the issue side is the point of the split, and `WebFetch` and
-`WebSearch` are in it because the prompt orders the agent to research what the repository does
-not settle — see [trap-allowed-tools.md](trap-allowed-tools.md) for both halves of that,
-observed rather than reasoned about.
+a *deny* list, so **both** lists cost something: a tool nobody predicted is refused with no
+prompt and the run exits 0 having quietly not done it. The issue list is narrow because that is
+the point of the split; the implement list is wide and bounded — everything a change needs, and
+no arbitrary shell — because since #327 the alternative it replaced was
+`--dangerously-skip-permissions` as a *default*, on an agent whose prompt is built from issue
+text anybody can write. `WebFetch` and `WebSearch` are in both because both prompts order the
+agent to research what the repository does not settle. See
+[trap-allowed-tools.md](trap-allowed-tools.md) for both halves, per backend, observed rather
+than reasoned about — and widen either list **by name**, never by dropping it.
 
-**Every `Bash` rule in it names a sub-command rather than a binary**, which is why the list is
-ten rules long instead of two. A rule naming `gh` or `git` with no verb after it grants every
+`VIBEMAXXING_IMPLEMENT_FULL_ACCESS=1` is how a board asks for `--dangerously-skip-permissions`
+on purpose. It reaches the implement agent only, and a board that has it — or writes the flag
+into the command line itself — says so in a warning at startup.
+
+**Every `Bash` rule in the issue list names a sub-command rather than a binary**, which is why
+it is ten rules long instead of two — the implement list names binaries because an agent that
+has to commit, push and open a pull request needs those two whole, and scoping them by verb
+there would be theatre. A rule naming `gh` or `git` with no verb after it grants every
 verb the binary has: `gh repo delete` and `gh api -X DELETE`, `git commit`, `git push --force`
 and `git config` — the whole write reach of the account behind `gh`, handed to an agent whose
 prompt sends it to read the open web and act on what it finds.
@@ -135,7 +144,11 @@ been plausible and wrong:
   implementation that cannot commit is an implementation that ends with nothing.
   `--dangerously-bypass-approvals-and-sandbox` is the counterpart of Claude Code's
   `--dangerously-skip-permissions`, and it is the same deliberate choice, made by whoever runs
-  the board: the implement agent is given the machine.
+  the board: the implement agent is given the machine. It is the one recipe here that is
+  full access, and it is written out rather than assumed for that reason — a named `codex-cli`
+  backend writes `--sandbox workspace-write` for the implement role and reaches this row only
+  through `VIBEMAXXING_IMPLEMENT_FULL_ACCESS=1`, which is the same choice made where a board can
+  see it. Both spellings warn at startup.
 - **Effort is a config override, not a flag.** `-c model_reasoning_effort="high"`; `-c` is
   repeatable and its value is parsed as TOML, falling back to the raw string. The quotes are
   consumed by `tokenizeCommand` in `src/core/issue-agent.ts`, which keeps a quoted run together
