@@ -27,7 +27,9 @@ import { Workspace } from './workspaces.js';
 // `resolveExecutable` moved to `issue-agent.ts` — `agentPath()` asks it the same question
 // there, and one PATH lookup shared is one that cannot drift from the terminal's.
 import { AgentDirectory, agentEnv, buildAgentCommand, resolveExecutable } from './issue-agent.js';
-import { commandLineInvocation, type AgentAdapter, type AgentInvocation } from './agent-adapter.js';
+import {
+  commandLineInvocation, deliverStdin, type AgentAdapter, type AgentInvocation,
+} from './agent-adapter.js';
 import { adapterFor } from './agents/index.js';
 import { AgentStreamRenderer } from './agent-stream-render.js';
 import { env as settingValue, settingName } from './settings.js';
@@ -415,34 +417,25 @@ export interface TerminalSessionOptions {
   directory?: AgentDirectory | null;
   owner?: TerminalSessionOwner | null;
   /**
-   * Written to the process's stdin once, which is then closed.
+   * The agent's prompt, delivered wherever the invocation says it goes.
    *
-   * This is how an agent's prompt arrives, and it is **why an owned session runs on pipes**.
-   * A pseudoterminal has no end of file to send: measured on ConPTY, a child reading stdin
-   * sees neither `^Z` nor `^D` as one and simply goes on reading, so a `claude -p` handed
-   * its prompt that way would wait forever for a prompt that never ended. The constructor
-   * therefore ignores the PTY binding when this is set, rather than leaving the trap for a
-   * caller to fall into — and `mode` in the summary says `pipe`, so the block does not
-   * claim otherwise. `docs/terminal.md` records the measurement.
+   * **Where is not this option's to say, and it never was the caller's.** The backend running
+   * knows what its CLI reads: `claude -p` takes the prompt on stdin and needs the end of file
+   * that closes it, `codex exec` takes it as an argument and reads a piped stdin beside one as
+   * mere context. So this is the prompt, and `AgentInvocation.prompt` is the channel.
    *
-   * Unless `interactive` says the prompt need not go through stdin at all.
+   * A prompt on stdin is **why such a session runs on pipes**. A pseudoterminal has no end of
+   * file to send: measured on ConPTY, a child reading stdin sees neither `^Z` nor `^D` as one
+   * and simply goes on reading, so a `claude -p` handed its prompt that way would wait forever
+   * for a prompt that never ended. The constructor therefore ignores the PTY binding for such a
+   * run rather than leaving the trap for a caller to fall into — and `mode` in the summary says
+   * `pipe`, so the block does not claim otherwise. `docs/terminal.md` records the measurement.
+   *
+   * A prompt on argv leaves stdin unspent, and what becomes of it is the invocation's answer
+   * too: kept for the reader, which is what a pseudoterminal is *for*, or closed empty, because
+   * a CLI handed a pipe with no writer blocks in `read()` rather than starting.
    */
   input?: string | null;
-  /**
-   * Hand `input` to the command as its last argument, and keep the pseudoterminal.
-   *
-   * The measurement above constrains how a prompt is *delivered*, not whether the thing
-   * receiving it can be an interface. `claude [options] [prompt]` takes one as an argument
-   * and starts an interactive session with it, so nothing has to be ended and stdin is never
-   * spent — which is what leaves it free for the reader. `write()` then works, `mode` says
-   * `pty`, and the tab is a terminal rather than a window onto one.
-   *
-   * Ignored without a PTY binding, and that is the fallback rather than an oversight: on
-   * three pipes `stdin.isTTY` is false and a full-screen program takes its non-interactive
-   * path anyway, so a session that could not be a terminal delivers the prompt the way it
-   * always did.
-   */
-  interactive?: boolean;
   /**
    * The agent this session is running, when it is running one rather than a shell.
    *
@@ -573,8 +566,8 @@ export class TerminalSession {
   private hasExited = false;
   private exitCode: number | null = null;
   private closing = false;
-  /** Whether stdin was spent on a prompt, which is what makes this session read-only. */
-  private readonly promptSent: boolean;
+  /** Whether stdin is gone — spent on a prompt or closed behind one — which is read-only. */
+  private readonly stdinClosed: boolean;
 
   constructor(
     id: string,
@@ -594,17 +587,20 @@ export class TerminalSession {
     // exactly that, and this is what the class did before backends existed.
     const adapter = options.agent?.adapter ?? adapterFor('raw');
     const invocation = options.agent?.invocation ?? commandLineInvocation(shellCommand);
-    // The invocation has the last word on where a prompt may go. Without that clause a caller
-    // could ask for an interactive session around a command whose prompt belongs on stdin, and
-    // the prompt would reach neither place: stdin is spent on the pseudoterminal, and argv is
-    // not where this invocation says it goes.
-    const asArgument = Boolean(
-      options.interactive && options.input && pty && invocation.prompt.via === 'argv'
-    );
+    // The invocation has the only word on where a prompt goes — not a caller's flag beside it,
+    // which could only ever disagree, and not the presence of a binding, which is a fact about
+    // this machine rather than about what the CLI reads.
+    const asArgument = Boolean(options.input) && invocation.prompt.via === 'argv';
     const { command, args, cwd } = buildTerminalCommand(
-      workspace, invocation, directory, asArgument ? options.input : null
+      workspace, invocation, directory, options.input ?? null
     );
-    const binding = options.input && !asArgument ? null : pty;
+    // Whether there is a terminal to give is a different question with a different answer, and
+    // `prompt.stdin` is the one that answers it: a run that keeps stdin for a reader is a run
+    // worth drawing an interface for, and one that spends or closes it is not. A prompt on
+    // stdin could never have had one — a pseudoterminal has no end of file — and `codex exec
+    // --json`, which takes its prompt on argv, must not have one either: a pseudoterminal wraps
+    // at `cols`, and a wrapped JSON envelope is no longer JSON.
+    const binding = options.input && invocation.prompt.stdin !== 'reader' ? null : pty;
     // Asked of the invocation rather than of the string this session displays: a named backend
     // spells the flag itself, and for `raw` the two are the same question about the same text.
     this.render = adapter.streams(invocation) ? new AgentStreamRenderer(adapter) : null;
@@ -613,11 +609,15 @@ export class TerminalSession {
     this.shell = shellCommand;
     this.mode = binding ? 'pty' : 'pipe';
     this.owner = options.owner ?? null;
-    this.promptSent = Boolean(options.input) && !asArgument;
+    // Read off the binding rather than off `asArgument`, because the question is what a
+    // keystroke could reach and not where the prompt went. A session given a prompt and put on
+    // pipes has had its stdin closed either way — spent on the prompt, or closed empty behind a
+    // prompt that travelled on argv — and in neither case is there anything left to type into.
+    this.stdinClosed = Boolean(options.input) && !binding;
     // A cause only where there is one to give. A prompt on stdin puts the session on pipes
     // whatever the machine can offer — a pseudoterminal has no end of file — so naming this
     // board's missing binding there would explain a tab with something that did not decide it.
-    this.pipeReason = this.mode === 'pipe' && !this.promptSent ? ptyUnavailableReason() : null;
+    this.pipeReason = this.mode === 'pipe' && !this.stdinClosed ? ptyUnavailableReason() : null;
     // What the shell itself will report from `pwd`, which for a WSL project is not the
     // path this process used to spawn it.
     this.cwd = workspace.environment.kind === 'wsl'
@@ -670,11 +670,12 @@ export class TerminalSession {
     this.child.stderr?.on('data', (chunk: string) => this.emit(chunk));
     this.child.stdin?.on('error', () => { /* the shell may be gone before a write lands */ });
 
-    // The prompt, and then the end of file the agent is waiting for. Not echoed into the
-    // transcript the way `write()` echoes what was typed: several hundred words of
-    // instruction ahead of the first line the agent prints would bury the run in the thing
-    // the tab was opened to watch.
-    if (options.input) this.child.stdin?.end(options.input);
+    // The prompt and the end of file the agent is waiting for — or, where the prompt went out
+    // on argv above, the end of file alone, because a CLI handed a pipe with no writer waits on
+    // it rather than starting. Not echoed into the transcript the way `write()` echoes what was
+    // typed: several hundred words of instruction ahead of the first line the agent prints
+    // would bury the run in the thing the tab was opened to watch.
+    if (options.input) deliverStdin(this.child.stdin, invocation, options.input);
 
     this.child.on('error', (error) => {
       this.emit(`\n[the shell could not be started: ${error.message}]\n`);
@@ -691,9 +692,9 @@ export class TerminalSession {
     return !this.hasExited;
   }
 
-  /** Whether stdin was spent on a prompt, so there is nothing a keystroke could reach. */
+  /** Whether stdin is gone, so there is nothing a keystroke could reach. */
   get readOnly(): boolean {
-    return this.promptSent;
+    return this.stdinClosed;
   }
 
   get scrollback(): string {
@@ -718,7 +719,7 @@ export class TerminalSession {
       rows: this.rows,
       exitCode: this.exitCode,
       owner: this.owner,
-      readOnly: this.promptSent,
+      readOnly: this.stdinClosed,
     };
   }
 
@@ -737,10 +738,11 @@ export class TerminalSession {
    */
   write(data: string): number {
     if (!this.alive) return this.sequenceNumber;
-    // A session that was handed a prompt has had its stdin closed behind it, so there is
-    // nothing for a keystroke to reach. Echoing it anyway would put the reader's typing in
-    // the transcript and let it read as though the agent had received it.
-    if (this.promptSent) return this.sequenceNumber;
+    // A session that was handed a prompt has had its stdin closed — spent on the prompt, or
+    // closed empty behind one that went out on argv — so there is nothing for a keystroke to
+    // reach. Echoing it anyway would put the reader's typing in the transcript and let it read
+    // as though the agent had received it.
+    if (this.stdinClosed) return this.sequenceNumber;
     if (this.pty) {
       this.pty.write(data);
       return this.sequenceNumber;
