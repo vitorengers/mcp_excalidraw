@@ -6,6 +6,10 @@ written for a person, at more length and with the reasoning; [CLAUDE.md](CLAUDE.
 at this one. Where they say the same thing they are meant to, and where you find them
 disagreeing that is a defect worth an issue.
 
+Not to be confused with [docs/agents.md](docs/agents.md), which is a different subject under a
+similar name: that one is for an *operator* configuring which agent binary this board spawns,
+and this one is the agreement whatever binary you turn out to be.
+
 Nothing here depends on which vendor you are. What does depend on the machine — which project
 board this repository's own board is pointed at, which port it is started on, how a merge is
 done in the maintainer's own checkout — is in [MAINTAINERS.md](MAINTAINERS.md). **If you were
