@@ -259,6 +259,17 @@ function offeredToken(headers: IncomingHttpHeaders, url: string | undefined): st
 const wss = new WebSocketServer({
   server,
   verifyClient: ({ origin, req }, done) => {
+    // The bind first, because the origin gate cannot see this caller at all. It asks a browser
+    // question, and a program connecting from the network supplies whatever `Host` it likes and
+    // is waved through — so a socket left on a non-loopback bind hands the whole board and every
+    // live shell's scrollback to anyone who reaches the port, which is the same read the routes
+    // below refuse (#366). Guarding the reads and not this one would have made them decorative.
+    if (!boundToLoopback()) {
+      logger.warn('Refused a WebSocket upgrade: the board is served over the socket only while '
+                  + 'the server is bound to loopback.');
+      done(false, 403, 'Forbidden');
+      return;
+    }
     const verdict = verifyOrigin({ origin, host: req.headers.host }, boardAuthorities(), PORT);
     if (!verdict.ok) {
       logger.warn(`Refused a WebSocket upgrade: ${verdict.reason}`);
@@ -739,10 +750,57 @@ const UpdateElementSchema = z.object({
   containerId: z.string().nullable().optional(),
 });
 
+// ─── The loopback guard ───────────────────────────────────────
+//
+// Every route below that answers with something this machine owns asks this first. `HOST` and
+// `LOOPBACK_ADDRESSES` are resolved at the bottom of this file; both functions are called from
+// request handlers, which run long after that.
+
+/** Whether this server was told to bind an address only this machine can reach. */
+function boundToLoopback(): boolean {
+  return LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost';
+}
+
+/**
+ * Refuse a caller that arrived over the network, and say which question was asked.
+ *
+ * Two kinds of route call this, and the second is the one worth explaining. Most of them write
+ * files this machine owns, spawn a process holding the operator's `gh` credentials, or list its
+ * directories — reaching those from the network is obviously worse than reaching a route that
+ * only reads. The rest are **reads of board contents**: the elements, the images, the documents,
+ * the library and the snapshots. They were left open when the writes were guarded, on the
+ * reasoning that a read is the safe half; #366 decided that it is not. A board bound to an
+ * interface was publishing everything on it to whoever reached the port, and the only honest
+ * choice between guarding the reads and writing down that they are open was to guard them.
+ *
+ * The consequence is stated rather than hidden: a non-loopback bind is now useless for
+ * everything, not merely for the GitHub half. #278 had already taken the tab strip and the
+ * picker; this takes the canvas. A reverse proxy is unaffected — it reaches this server on
+ * loopback, which is the configuration `EXCALIDRAW_ALLOWED_HOSTS` exists for.
+ *
+ * Three controls stand in front of these routes and none replaces another. The token (#350) is
+ * what the caller carries, and it is a `VIBEMAXXING_NO_AUTH` away from not being there — which
+ * is the state every check in `scripts/` runs in. The origin gate
+ * (`src/core/origin-gate.ts`) asks a browser question, `Origin` and `Host`, and its own comment
+ * says a program that can set headers can set any header. This asks about the **bind**, which is
+ * the one thing about a caller that nobody can forge, and it answers 403 to a request holding a
+ * perfectly good token.
+ */
+function offLoopback(res: Response, what: string): boolean {
+  if (boundToLoopback()) return false;
+  res.status(403).json({
+    success: false,
+    error: `${what} only while the server is bound to loopback.`
+  });
+  return true;
+}
+
 // API Routes
 
 // Get all elements
 app.get('/api/elements', (req: Request, res: Response) => {
+  if (offLoopback(res, 'The board is read')) return;
+
   try {
     const elementsArray = Array.from(elementsFor(workspaceIdFrom(req)).values());
     res.json({
@@ -986,6 +1044,11 @@ app.delete('/api/elements/:id', (req: Request, res: Response) => {
 
 // Query elements with filters
 app.get('/api/elements/search', (req: Request, res: Response) => {
+  // With no query at all this is `GET /api/elements` by another name, so it carries the same
+  // guard. A lock beside an open door is not a decision, it is the shape the routes happened
+  // to have.
+  if (offLoopback(res, 'The board is searched')) return;
+
   try {
     const { type, x_min, x_max, y_min, y_max, ...filters } = req.query;
     let results = Array.from(elementsFor(workspaceIdFrom(req)).values());
@@ -1035,6 +1098,8 @@ app.get('/api/elements/search', (req: Request, res: Response) => {
 
 // Get element by ID
 app.get('/api/elements/:id', (req: Request, res: Response) => {
+  if (offLoopback(res, 'An element is read')) return;
+
   try {
     const { id } = req.params;
 
@@ -1441,25 +1506,13 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
 
 // ─── Workspaces API (one project per board) ───────────────────
 
-/**
- * The guard every route in this block shares.
- *
- * Most of these write files this machine owns, and one of them lists its directories, so
- * reaching them from the network would be strictly worse than reaching the routes that only
- * read a project. The read below is guarded for the same reason rather than in spite of being
- * a read: it does not read *a* project, it reads the map of all of them — every registered
- * project's absolute path, and a WSL project's path inside its distro too. Same shape as the
- * issue block's guard, and for the same reason.
- */
-function offLoopback(res: Response, what: string): boolean {
-  if (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost') return false;
-  res.status(403).json({
-    success: false,
-    error: `${what} only while the server is bound to loopback.`
-  });
-  return true;
-}
-
+// Every route in this block calls `offLoopback`, declared above the first route of the file.
+// Most of them write files this machine owns, and one lists its directories, so reaching them
+// from the network would be strictly worse than reaching a route that only reads a project. The
+// read below is guarded for the same reason rather than in spite of being a read: it does not
+// read *a* project, it reads the map of all of them — every registered project's absolute path,
+// and a WSL project's path inside its distro too.
+//
 // Loaded per request rather than cached at boot: a project's board.config.json gets
 // edited while the server runs, and restarting to notice a config change would be silly.
 app.get('/api/workspaces', async (_req: Request, res: Response) => {
@@ -4669,6 +4722,8 @@ async function readLibrary(filePath: string): Promise<unknown[]> {
 const packagedLibrary = path.join(__dirname, '..', 'docs', 'blocks.excalidrawlib');
 
 app.get('/api/library', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'The library is read')) return;
+
   const sources: { origin: string; path: string }[] = [];
 
   // `??`, not `||`: an *explicitly empty* `EXCALIDRAW_LIBRARY` is how a board says it wants no
@@ -5195,6 +5250,8 @@ const NO_DOCS_DIR = 'no-docs-dir';
 const NO_DOC = 'no-doc';
 
 app.get('/api/docs/:key', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Documents are read')) return;
+
   const key = req.params.key ?? '';
   if (!DOC_KEY_PATTERN.test(key) || key.includes('..')) {
     return res.status(400).json({ success: false, error: 'Invalid doc key' });
@@ -5264,6 +5321,8 @@ function filesForWorkspace(workspaceId: string): Record<string, ExcalidrawFile> 
 
 // GET the files this board's elements reference
 app.get('/api/files', (req: Request, res: Response) => {
+  if (offLoopback(res, 'A board\'s images are read')) return;
+
   res.json({ files: filesForWorkspace(workspaceIdFrom(req)) });
 });
 
@@ -5275,6 +5334,8 @@ app.get('/api/files', (req: Request, res: Response) => {
  * of screenshots that is megabytes to render a thumbnail.
  */
 app.get('/api/files/:id', (req: Request, res: Response) => {
+  if (offLoopback(res, 'An image is read')) return;
+
   const file = files.get(req.params.id as string);
   if (!file) {
     return res.status(404).json({ success: false, error: `File with ID ${req.params.id} not found` });
@@ -5636,6 +5697,8 @@ app.post('/api/snapshots', (req: Request, res: Response) => {
 
 // Snapshots: list
 app.get('/api/snapshots', (req: Request, res: Response) => {
+  if (offLoopback(res, 'Snapshots are listed')) return;
+
   try {
     const list = Array.from(snapshotsFor(workspaceIdFrom(req)).values()).map(s => ({
       name: s.name,
@@ -5659,6 +5722,8 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
 
 // Snapshots: get by name
 app.get('/api/snapshots/:name', (req: Request, res: Response) => {
+  if (offLoopback(res, 'A snapshot is read')) return;
+
   try {
     const { name } = req.params;
     const workspaceId = workspaceIdFrom(req);
