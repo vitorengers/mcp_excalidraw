@@ -598,8 +598,25 @@ export function agentRunFor(
       command: agent.command,
       model: settings?.model ?? null,
       effort: settings?.effort ?? null,
+      fullAccess: role === 'implement' && implementFullAccess(),
     }),
   };
+}
+
+/**
+ * Whether the board has been told, on purpose, to take the guard off the implement agent.
+ *
+ * The environment rather than a project's own configuration, and that is the same boundary
+ * `workspaces.ts` argues for `--allowedTools`: a project file is data this board reads, so a
+ * project that could raise its own posture would be a project granting itself an agent. It is
+ * read here rather than inside an adapter because an adapter is a value — given a spec it
+ * returns an argv, and one that consulted the environment could not be asked what it would do.
+ *
+ * It reaches `implement` alone. `agentRunFor` above is where that is enforced, and it is the
+ * only caller: there is no setting that makes the issue agent a full-access one.
+ */
+export function implementFullAccess(): boolean {
+  return (settingValue('IMPLEMENT_FULL_ACCESS') ?? '').trim() === '1';
 }
 
 /**

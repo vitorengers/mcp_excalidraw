@@ -579,27 +579,40 @@ A created block carries an **Implement / Fix** button above the description.
 issue, and the pull request URL comes back onto the block the way the issue URL did.
 
 **It is a different agent with different powers, and that is the whole point.** The issue
-agent is deliberately powerless — `gh`, `git` and reading, nothing that writes. An agent
-that implements must write code, run the build and run the checks, so it needs `Write`,
-`Edit` and an unrestricted `Bash`. Sharing a command between the two would mean that
+agent is deliberately powerless — a handful of `gh` and `git` verbs and reading, nothing that
+writes. An agent that implements must write code, run the build and run the checks, so it needs
+`Write`, `Edit` and enough of `Bash` to build. Sharing a command between the two would mean that
 turning on issue blocks quietly turned on repository writes, which is not a decision
 anyone would have made on purpose. So it has its own variable and is **off until it is
 set**:
 
 ```
-EXCALIDRAW_IMPLEMENT_AGENT='claude -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
+EXCALIDRAW_IMPLEMENT_AGENT='claude -p --model claude-opus-5[1m] --effort high --allowedTools "Read Grep Glob Write Edit NotebookEdit Task TodoWrite WebFetch WebSearch Bash(git:*) Bash(gh:*) Bash(npm:*) Bash(npx:*) Bash(node:*)"'
 ```
 
-Claude Code's spelling of it; [agents.md](agents.md) has Codex CLI's, which is
-`--dangerously-bypass-approvals-and-sandbox`, and what makes the grant the same decision either
-way.
+Claude Code's spelling of it; [agents.md](agents.md) has Codex CLI's, which is a sandbox mode
+rather than a list, and what makes the grant the same decision either way.
 
-`--dangerously-skip-permissions` rather than a list of tools, because an enumerated list is
-also a *deny* list: in `-p` mode there is no prompt to answer, so a tool outside the list is
-simply refused, and an agent stopped from reading a page of documentation has been stopped
-by the configuration rather than by anything it did. The flag's own help says it is
-recommended only for sandboxes with no internet access; using it here is a deliberate
-choice, made by whoever runs the board, to let the agent do the work.
+**A list rather than `--dangerously-skip-permissions`, since #327**, and the change is worth the
+sentence it costs. That flag was the documented default here, and the flag's own help recommends
+it only for sandboxes with no internet access — while this agent runs in a worktree of the
+operator's own checkout, with their `gh` on the PATH the server assembles, on a prompt built
+from an issue URL and *its comments*, which on a public repository anybody can write. The list
+above is what a run needs and the bound is what it excludes: no `curl`, no installer, no command
+it does not name.
+
+The cost is real and is the trap one document along: an enumerated list is also a *deny* list,
+and in `-p` mode a tool outside it is refused with no prompt, so the run exits 0 having quietly
+not done the thing. **Widen it by name** — a project whose build is not `npm` adds its runner —
+rather than by dropping the list. [trap-allowed-tools.md](trap-allowed-tools.md) has both halves
+of that, per backend, and `VIBEMAXXING_IMPLEMENT_FULL_ACCESS=1` is how a board asks for the
+unbounded grant on purpose, which is then said out loud in a warning at startup.
+
+The flags are not only documentation any more: since #327 a board that names a backend
+(`claude-code`, `codex-cli`) has this posture written for it by the adapter, per role, and the
+issue role cannot carry a full-access flag even if one is configured. The default backend is
+still `raw` — an arbitrary command line, spawned byte for byte — so for a board configured as
+every board is today, the line above *is* the boundary.
 
 The other guards carry over — loopback only, one run at a time per element — and one is
 added: a block with no issue has nothing to implement, and a block that already produced a
@@ -1463,8 +1476,8 @@ no way to say so.
   as many words. `scripts/check-agent-workflow.mjs` asserts the mechanical form of it: selecting
   a workflow changes the prompt and leaves the command line byte-identical to the one a project
   selecting nothing spawns. Nothing new has to be granted for a pipeline, either — the implement
-  agent already runs with `--dangerously-skip-permissions` rather than an allowlist, and its
-  prompt has always said "You may put helpers to work — sub-agents".
+  agent's documented list carries `Task`, and its prompt has always said "You may put helpers to
+  work — sub-agents".
 
 **On the issue side the field is shipped but inert**, and that is the operator's call rather than
 this one's. The documented `EXCALIDRAW_ISSUE_AGENT` allowlist above has no sub-agent tool in it —
