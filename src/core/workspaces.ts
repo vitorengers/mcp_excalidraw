@@ -140,12 +140,10 @@ export const DEFAULT_AGENT_BACKENDS: AgentBackends = {
  * The backends a project may name, which is only ever a subset of what the operator enabled.
  *
  * Choosing which binary runs is *granting*, not retuning — the rule this whole file is built on
- * — so the set comes from the operator's environment and a project picks within it. A board
- * that enabled one backend has a project that can name that one and nothing else, which is the
- * ordinary case and the safe one.
- *
- * Read from the environment where no caller supplies it, because the callers here are a
- * registry read and a settings write, neither of which has a board around it.
+ * — so the set comes from the operator's environment and a project picks within it. A board that
+ * enabled one backend has projects that can name that one and nothing else, which is the
+ * ordinary case and the safe one; a board that enabled none refuses every `backend` a project
+ * could write, which is the correct answer for a board that granted no agent.
  */
 export type AgentBackendChoices = readonly AgentBackendId[];
 
