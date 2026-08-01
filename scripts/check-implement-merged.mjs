@@ -74,6 +74,10 @@ mkdirSync(boardDir, { recursive: true });
  *
  * `refuse` is a `gh` that exits non-zero, which is the blip case rather than a fourth answer:
  * the point of that case is that nothing is learned, not that something bad was learned.
+ *
+ * `phantom` exits non-zero too, and that is exactly why it is here: it is the case where
+ * something *was* learned, and the only thing telling it apart from `refuse` is what GitHub
+ * wrote on stderr.
  */
 const PULLS = {
   [1000 + 31]: { state: 'MERGED', mergedAt: '2026-07-31T10:00:12Z' },
@@ -81,6 +85,7 @@ const PULLS = {
   [1000 + 33]: { state: 'CLOSED', mergedAt: null },
   [1000 + 34]: { refuse: true },
   [1000 + 35]: { state: 'OPEN', mergedAt: null },
+  [1000 + 37]: { phantom: true },
 };
 
 /** A `gh` that answers for a pull request and logs every call. */
@@ -98,6 +103,15 @@ if (args[0] === 'pr' && args[1] === 'view') {
   }
   if (answer.refuse) {
     process.stderr.write('dial tcp: connect: connection reset by peer\\n');
+    process.exit(1);
+  }
+  if (answer.phantom) {
+    // Verbatim what GitHub answered on 2026-08-01 for the pull request issue #326's run
+    // printed and never opened. The wording is the whole signal, so it is copied rather
+    // than paraphrased.
+    process.stderr.write(
+      'GraphQL: Could not resolve to a PullRequest with the number of '
+      + number + '. (repository.pullRequest)\\n');
     process.exit(1);
   }
   process.stdout.write(JSON.stringify({
@@ -270,9 +284,23 @@ try {
   check('the pull request is on the record', blip.url === pullUrl(34), JSON.stringify(blip));
   check('gh was asked and gave up', ghCalls().filter((a) => a[0] === 'pr').length >= 1,
         JSON.stringify(ghCalls()));
+
+  console.log('\n5. a pull request GitHub says does not exist is not done');
+  // Beside case 4 on purpose: both are a `gh` that exited non-zero, and everything that
+  // separates them is the stderr. A run that printed a URL it never opened landed nothing,
+  // and recording it `done` is what froze issue #326 and the seven cards that depend on it —
+  // `recoverable` only ever considers a `failed` landing, so the automatic recovery from #415
+  // was not even reached, and `dispatchQueue` skips any issue that already has a record.
+  const phantom = await run(37);
+  check('state is failed', phantom.state === 'failed', JSON.stringify(phantom));
+  check('not done', phantom.state !== 'done', JSON.stringify(phantom));
+  check('the pull request is on the record', phantom.url === pullUrl(37), JSON.stringify(phantom));
+  check('and the error names it', String(phantom.error).includes(pullUrl(37)), String(phantom.error));
+  check('and says GitHub denies it exists',
+        /does not exist|no such pull request/i.test(String(phantom.error)), String(phantom.error));
   await stopCanvas();
 
-  console.log('\n5. a run that stopped deliberately is blocked, not failed');
+  console.log('\n6. a run that stopped deliberately is blocked, not failed');
   await startCanvas({ STUB_AGENT_SAY: 'NEEDS A PERSON:' });
   const escalated = await run(35);
   check('state is blocked', escalated.state === 'blocked', JSON.stringify(escalated));
@@ -281,7 +309,7 @@ try {
   check('the pull request is on the record', escalated.url === pullUrl(35), JSON.stringify(escalated));
   await stopCanvas();
 
-  console.log('\n6. a run that produced no pull request asks gh nothing');
+  console.log('\n7. a run that produced no pull request asks gh nothing');
   await startCanvas({ STUB_AGENT_SILENT: '1' });
   const silent = await run(36);
   check('state is failed, as it always was', silent.state === 'failed', JSON.stringify(silent));
