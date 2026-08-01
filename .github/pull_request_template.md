@@ -18,11 +18,36 @@ Every behaviour change ships with a `scripts/check-*.mjs`, and it is run against
 first, to prove it catches the defect before the fix goes in. A check written after the fix
 tends to describe the fix rather than the defect, and passes for the wrong reason.
 
-Name it here, and say what it printed when it was red.
+`scripts/check-change-has-check.mjs` runs on this pull request and can see that a check is
+there. It cannot see that it was written first — nothing in a squashed pull request records
+that — so this section is read by a person, and the paste below is the evidence. Three things:
+the check's name, the command that ran it, and the real output from before the fix. Do not
+describe the output; paste it.
 -->
 
-- [ ] a `scripts/check-*.mjs` — name it here — run against the old code first, and it failed there
-- [ ] …or this changes no behaviour (documentation, a rename, board data), and here is why:
+- [ ] a `scripts/check-*.mjs`, run against the old code first, and it failed there
+
+Its name, the command that ran it against the old code, and the real output from that run:
+
+```
+scripts/check-______.mjs
+node scripts/check-______.mjs
+
+… paste what it printed when it was red …
+```
+
+<!--
+If this genuinely changes no behaviour — a rename, a formatting sweep, a dependency bump,
+documentation, board data — delete the three boxes above and put a line of your own here
+instead, with a real reason after the colon:
+
+No-behaviour-change: renamed the module, no call site changed
+
+It is a trailer in the body rather than a label, so the squash merge carries it into `git log`.
+An empty one, or this example left inside its comment, does not count.
+-->
+
+
 
 ## The board
 

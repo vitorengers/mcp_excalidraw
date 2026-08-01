@@ -718,6 +718,36 @@ the record, so `GET /api/implement` says where the work is.
 A workspace that is not a git repository gets no worktree and runs in the project directory, the
 way everything did before. Isolation is what a repository buys; nothing else changes.
 
+### A run the account cannot push is refused before the worktree exists
+
+Everything after the first commit assumes the account behind `gh` can push. The worktree is cut
+with no upstream, because the one an agent wants is written by its own
+`git push -u origin issue-N`; the prompt makes opening and merging the pull request the agent's
+own and demands its URL as the last line it prints; and the branch is removed with
+`git branch -d`. A reader who **cloned** this repository rather than forking it bought the whole
+run — investigate, build, verify — and got `Agent finished without returning a pull request URL`
+with six hundred characters of tail, commits stranded in a worktree, and every later server start
+calling the run interrupted.
+
+So one `gh repo view <origin> --json viewerPermission` is asked at the start, and `ADMIN`,
+`MAINTAIN` and `WRITE` are the three answers that carry a push. `READ` and `TRIAGE` refuse the run
+with **403** and a sentence naming the fork and the `git remote set-url origin` that follows it.
+The probe is asked about **`origin`**, not the configured `repo`: what a run pushes to is the
+remote the checkout has, and a fork's `repo` names where the *issues* live.
+
+**A probe that cannot say lets the run through.** An older `gh` without the field, a call that
+fails at connect, a login that has expired, an `origin` on another host or none at all — every one
+of those starts the run and writes an `info` line saying why nobody could say. Blocking on the
+probe's own failure would take implementing away from a board whose GitHub is merely having a bad
+minute, which is a larger defect than the one this guards.
+
+It sits after the slot is claimed and gives the slot back, for the reason below: it needs the
+workspace, which is resolved two awaits later. What matters is that it is before `ensureWorktree`
+— a refusal leaves no directory, no branch and no record behind it. The answer is memoised per
+workspace behind `EXCALIDRAW_GH_STATUS_MEMO_MS`, so a queue pass starting four runs makes one
+`gh`. `scripts/check-implement-no-push.mjs` covers both directions and both shapes of "cannot
+say".
+
 ### How many at once
 
 `EXCALIDRAW_IMPLEMENT_CONCURRENCY` caps the implementations one workspace may have in flight,

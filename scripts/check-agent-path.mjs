@@ -103,6 +103,28 @@ const entriesOf = (value) => value.split(delimiter).filter(Boolean);
 const countOf = (value, entry) => entriesOf(value).filter((one) => one === entry).length;
 
 /**
+ * A variable's value as an environment object actually holds it.
+ *
+ * `process.env` on Windows is a case-insensitive proxy over the process's environment block, so
+ * `process.env.SystemRoot` answers whichever spelling the block stored — `SYSTEMROOT` from Git
+ * Bash, `SystemRoot` from PowerShell. `agentEnv()` returns a plain object built by spreading
+ * that proxy, and a spread copies every key under its *stored* spelling into an object that has
+ * no such lookup. A comparison written for one shell therefore reads `undefined` in the other,
+ * which is the whole of what this used to fail on: the expectation was spelled for POSIX, and
+ * the variable was in the object all along.
+ *
+ * The match is the host's own rule rather than a blanket loosening. On win32 the environment
+ * block ignores case and the child sees the variable whatever spelling it was stored under; on
+ * Linux and macOS it does not, so there the key is compared exactly and a `systemroot` that is
+ * not `SystemRoot` is still a dropped variable.
+ */
+function valueOf(env, name) {
+  if (process.platform !== 'win32') return env[name];
+  const key = Object.keys(env).find((one) => one.toLowerCase() === name.toLowerCase());
+  return key === undefined ? undefined : env[key];
+}
+
+/**
  * A PATH short enough to read in a failure.
  *
  * The interesting entries are the planted ones at the end, and against the defect this file
@@ -208,9 +230,19 @@ try {
         env.PATH !== process.env.PATH && env.PATH !== minimalPath(posixRoot), brief(env.PATH));
   check('and it holds the planted directory', entriesOf(env.PATH ?? '').includes(under(posixRoot, '/opt/homebrew/bin')),
         brief(env.PATH));
+  // Named, then filtered by what this process actually has: a variable the host never set
+  // would compare `undefined` to `undefined` and pass whatever `agentEnv()` did with it.
+  // `SystemRoot` exists only on Windows and `HOME` only where something POSIX-shaped put it
+  // there, so a fixed pair is half vacuous on either platform. The list is long enough that
+  // every host this runs on keeps at least one, and the count is asserted rather than assumed.
+  const witnesses = ['SystemRoot', 'HOME', 'PATHEXT', 'USER', 'LANG']
+    .filter((name) => valueOf(process.env, name) !== undefined);
+  const dropped = witnesses.filter((name) => valueOf(env, name) !== valueOf(process.env, name));
   check('the rest of the environment is still the process\'s',
-        env.SystemRoot === process.env.SystemRoot && env.HOME === process.env.HOME,
-        'agentEnv corrects keys, it does not filter the environment');
+        witnesses.length > 0 && dropped.length === 0,
+        witnesses.length === 0
+          ? 'this check found none of its own process\'s variables to look for'
+          : `agentEnv corrects keys, it does not filter the environment — ${dropped.join(', ')} did not survive it`);
 
   // Called the way every caller in `src/` calls it: with nothing at all.
   const live = agentPath();
