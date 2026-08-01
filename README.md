@@ -7,7 +7,7 @@ it, a workbench for running a software project on that canvas: blocks that open 
 your GitHub project mirrored beside them, implementations that each get a git worktree of their
 own, and real shells.
 
-![This repository's own board: the GitHub project mirrored on the canvas, an issue block, and a terminal tab](docs/media/board.png)
+![This repository's own board: the GitHub project mirrored on the canvas, an issue block, and a terminal tab](docs/media/board-hero.png)
 
 ## Installation
 
@@ -49,6 +49,8 @@ catalogue and a configuration block for each MCP client.
    the repository, opens the issue with `gh`, and the URL lands back on the block. From the
    mirror's Todo column you can then have it implemented.
 
+![Two projects on the tab strip, and the board a project with none of its own comes up holding: two marked regions with their keys in their titles, cards that open this tool's documentation, and an issue block](docs/media/first-run-welcome-board.png)
+
 ## The blocks on the canvas
 
 A shape's `customData.kind` decides what it is; a `docKey` instead makes it a documentation card
@@ -61,6 +63,8 @@ that opens the matching markdown in a panel ([docs/docs-block.md](docs/docs-bloc
 | `issue` | Write an observation into the shape; an agent investigates the repository, opens the issue, and the URL lands back on the block — [docs/issue-block.md](docs/issue-block.md) |
 | `project-board` | Your GitHub project, mirrored on the canvas and redrawn from GitHub on every read, with two-way moves and a queue that implements issues — [docs/project-board.md](docs/project-board.md) |
 | `terminal` | Real shells on the canvas, as tabs — [docs/terminal.md](docs/terminal.md) |
+
+![An observation written into an issue block, with the block's panel open beside it and the button that sends an agent to research the repository and open the issue](docs/media/issue-block-panel.png)
 
 **Marks** — a shape drawn *around* part of the board, which does nothing but say where a key
 lands:
