@@ -58,6 +58,42 @@ Each check declares a `Tier:` in its banner saying what it needs beyond Node and
 `dist/` — `fast`, `browser`, `windows`, `wsl` or `repo`. Put yours in the narrowest one that is
 true.
 
+### Half of that rule is a gate, and half of it is a person
+
+`scripts/check-change-has-check.mjs` is the half a machine can see. A `pr-discipline` job runs
+it on every pull request: if the range changes anything under `src/` or `frontend/src/` and adds
+or modifies no `scripts/check-*.mjs`, the job is red. You can run it yourself before you open
+anything:
+
+```
+node scripts/check-change-has-check.mjs --base origin/main
+```
+
+What it cannot see is the **ordering**, and it does not pretend to. A squashed pull request is
+one commit, and which file was written first is not recoverable from it; a check that guessed
+from commit timestamps would be one you could satisfy by committing in the other order. So the
+ordering is verified by a person, reading the failing output you pasted into the pull request.
+That paste is the evidence, and it is the reason `.github/pull_request_template.md` asks for
+three things rather than one — the check's name, the command that ran it, and what it printed
+when it was red.
+
+### When the change really has no check to bring
+
+Renames, formatting sweeps, dependency bumps, a pure refactor with no call site moved: real
+changes under `src/` that alter no behaviour. Put a line in the pull request body saying so, and
+the gate stands down:
+
+```
+No-behaviour-change: renamed the module, no call site changed
+```
+
+A trailer in the body rather than a label on the pull request, because GitHub's squash merge
+carries the body into the merge commit and drops the labels — a year from now `git log` still
+has the sentence. The reason after the colon is the whole of it: an empty trailer, or a
+placeholder left in its angle brackets, is a box ticked rather than an argument, and the gate
+treats it as one. If you find yourself typing it on a change that does alter behaviour, that is
+the rule working.
+
 ## Every change updates the board and the log
 
 This repository's own board is `docs/board.excalidraw`, cut into two marked sections
