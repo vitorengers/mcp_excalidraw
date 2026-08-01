@@ -125,6 +125,9 @@ const captured = join(workDir, 'prompt.txt');
 process.env.CAPTURE_TO = captured;
 
 const AGENT_COMMAND = `node "${slash(stub)}" --output-format stream-json`;
+// A backend beside the command, `raw` being the passthrough one: an arbitrary command line
+// spawned byte for byte, which is what this stub is and what every board configured today is.
+const AGENT = { backend: 'raw', command: AGENT_COMMAND };
 /** What the stub must see on its command line whatever a project configured. */
 const BASE_ARGV = ['--output-format', 'stream-json'];
 
@@ -152,7 +155,7 @@ async function researchRun(id) {
   clearCapture();
   process.env.CAPTURE_URL = ISSUE_URL;
   return runIssueAgent(workspaceOf(id), OBSERVATION, {
-    agentCommand: AGENT_COMMAND,
+    agent: AGENT,
     timeoutMs: 60_000,
   });
 }
@@ -161,7 +164,7 @@ async function reviseRun(id) {
   clearCapture();
   process.env.CAPTURE_URL = ISSUE_URL;
   return runReviseAgent(workspaceOf(id), ISSUE_URL, OBSERVATIONS, {
-    agentCommand: AGENT_COMMAND,
+    agent: AGENT,
     timeoutMs: 60_000,
   });
 }
