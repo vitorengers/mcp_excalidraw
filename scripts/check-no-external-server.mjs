@@ -163,7 +163,11 @@ console.log(`\n2. the ${RETIRED_PORT} convention is gone from the prose too`);
 // convention, and every script — `scripts/lib/` included, because that is where the helper
 // the eight now share explains itself.
 const prose = new Map([
-  ['CLAUDE.md', readFileSync(join(repoRoot, 'CLAUDE.md'), 'utf8')],
+  // The working agreement is three files since #339 — `CLAUDE.md` is a pointer at `AGENTS.md`
+  // now — and the convention this rule is about was in the one it used to be. All four are
+  // read, so the prose cannot get the retired port back by moving.
+  ...['CLAUDE.md', 'AGENTS.md', 'CONTRIBUTING.md', 'MAINTAINERS.md']
+    .map((name) => [name, readFileSync(join(repoRoot, name), 'utf8')]),
   ...readdirSync(docsDir)
     .filter((name) => name.endsWith('.md') && name !== 'development-log.md')
     .map((name) => [`docs/${name}`, readFileSync(join(docsDir, name), 'utf8')]),
