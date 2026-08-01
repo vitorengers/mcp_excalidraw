@@ -95,6 +95,7 @@ import {
 import { TOOL_DOC_KEYS } from './core/tool-docs.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
 import { GITHUB_HOST, issueUrlRefusal } from './core/github-host.js';
+import { PushAccess, pushRefusal, readPushAccess } from './core/github-push.js';
 import type { IssueDetail } from './core/github-issue.js';
 import { fetchPullLanding } from './core/github-pull.js';
 import { Landing, landingFor } from './core/implement-landing.js';
@@ -2286,6 +2287,24 @@ const ghStatusMemo = new IssueMemo<GithubStatus>(
 );
 
 /**
+ * And the same for "can this account push", which every run start now asks.
+ *
+ * A second instance rather than a second setting: the two answers have different types, but
+ * they are the same *question* — one `gh` interrogation about this workspace, worth reusing for
+ * a few seconds and worth nothing after that. So it shares `GH_STATUS_MEMO_MS` and holds the
+ * property that matters most here, which is `IssueMemo`'s joining of reads already in flight:
+ * the queue starts runs in a loop, and four starts in one pass are one `gh repo view`.
+ *
+ * `readPushAccess` never rejects, so unlike a status read this memo also remembers "nobody
+ * could say" — which is the answer a board with no `gh` at all gives, on every card, for ever.
+ * Remembering it is what keeps that board from spawning a doomed process per start.
+ */
+const GH_PUSH_KEY = 'gh-push';
+const ghPushMemo = new IssueMemo<PushAccess>(
+  memoWindow(env('GH_STATUS_MEMO_MS'))
+);
+
+/**
  * How many implementations one workspace may have in flight at once.
  *
  * It used to be unlimited, and unlimited by accident: nothing counted runs, because the
@@ -2584,6 +2603,34 @@ async function beginImplement(
   if (agentRefusal) {
     releaseSlot();
     return { status: 404, body: { success: false, error: agentRefusal } };
+  }
+
+  // The last question asked before anything exists to clean up, and the only one about GitHub:
+  // can this account push? Everything downstream of here assumes it can — the worktree is cut
+  // with no upstream because the agent's own `git push -u` writes one, the prompt demands a
+  // pull request URL as the last line it prints, and `releaseWorktree` deletes the branch with
+  // `git branch -d`, which only succeeds once it has merged. A clone rather than a fork
+  // therefore bought a full run and got `Agent finished without returning a pull request URL`,
+  // with the commits stranded in a worktree that the next server start reports as interrupted.
+  //
+  // Deliberately *after* the claim and behind `releaseSlot`, unlike the interactive refusal:
+  // this one needs the workspace, which is two awaits below where the slot is taken. It is
+  // still before `ensureWorktree`, which is the placement that matters — a refusal here leaves
+  // no directory, no branch and no record behind it.
+  //
+  // 403 rather than 409: this is not a conflict with what the board is doing, it is a
+  // permission the board cannot change.
+  const push = await ghPushMemo.read(workspaceId, GH_PUSH_KEY, () => readPushAccess(workspace));
+  if (push.verdict === 'no') {
+    releaseSlot();
+    return { status: 403, body: { success: false, error: pushRefusal(push) } };
+  }
+  if (push.verdict === 'unknown') {
+    // Info rather than warn: a board whose `origin` is not on github.com, or which has no `gh`
+    // at all, is a supported board and its every run would otherwise raise a warning. The line
+    // exists so that a run which *did* fail at the push can be traced back to the moment the
+    // probe declined to say.
+    logger.info(`Push permission for "${workspaceId}" could not be settled, so the run starts: ${push.why}`);
   }
 
   // Not awaited: the run outlives the answer, which is the whole reason the answer is 202.
