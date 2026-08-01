@@ -46,4 +46,24 @@ export function agentEfforts(id: AgentBackendId): readonly string[] {
   return ADAPTERS[id].efforts;
 }
 
+/**
+ * The backends that can say what this machine has spent, in the order they are declared.
+ *
+ * `readLimits` is optional, so this is the whole of the capability lookup: a backend that
+ * cannot answer is not in the list rather than in it answering nothing. `agentEfforts` above
+ * asks a *named* backend what it accepts; this asks the set of them which can answer at all,
+ * because its caller has no backend in hand — see below.
+ *
+ * **Not the board's configured backend, deliberately.** Every board that exists runs `raw` — an
+ * arbitrary command line — and a `raw` command line is very often Claude Code, so gating the
+ * limits route on the configured backend would turn the HUD off for every reader who has one
+ * today. What the route is asking is a question about the *machine*: has anything on it written
+ * a reading these files can be read from. So it asks whoever can read, which is one backend
+ * today; when a second can, the choice between them is a decision that belongs with the second
+ * reader rather than guessed at here (#334).
+ */
+export function limitsReaders(): AgentAdapter[] {
+  return Object.values(ADAPTERS).filter((adapter) => typeof adapter.readLimits === 'function');
+}
+
 export { claudeCodeAdapter, codexCliAdapter, rawAdapter };

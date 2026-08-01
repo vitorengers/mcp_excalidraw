@@ -8,9 +8,12 @@
  */
 import path from 'path';
 
-export type WorkspaceEnvironment =
-  | { kind: 'native' }
-  | { kind: 'wsl'; distro: string };
+// Declared in a module of its own, and re-exported here so that every caller that had it from
+// this file still does. The reason it moved is written down where it went: this module imports
+// `path` and reads `process`, and the frontend's type check compiles `agent-adapter.ts`, which
+// has to be able to name it.
+import type { WorkspaceEnvironment } from './workspace-environment.js';
+export type { WorkspaceEnvironment };
 
 /**
  * Why a WSL-backed project cannot be used on this machine, or null when it can.

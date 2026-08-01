@@ -66,10 +66,10 @@ import type { Bounds } from '../../src/core/terminal-block'
 import { terminalAdvance, terminalFontReady, terminalLineBox } from './terminal-metrics'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
-import { ClaudeStatusHud } from './components/ClaudeStatusHud'
+import { AgentLimitsHud } from './components/AgentLimitsHud'
 import { RestartButton } from './components/RestartButton'
 import { ClearCanvasButton } from './components/ClearCanvasButton'
-import type { ClaudeEnvironmentStatus } from './components/ClaudeStatusHud'
+import type { AgentLimitsReading } from './components/AgentLimitsHud'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
 // Type definitions
@@ -220,7 +220,7 @@ const PRODUCT_NAME = 'VibeMaxxing';
 const PROJECT_BOARD_POLL_MS = 20000;
 
 /**
- * How often the header re-reads what Claude Code has spent.
+ * How often the header re-reads what the coding agent has spent.
  *
  * A minute, which is what the observation asked for and is a ceiling rather than a promise:
  * the figures underneath are only as fresh as the last session that ran a status line, so
@@ -228,10 +228,10 @@ const PROJECT_BOARD_POLL_MS = 20000;
  * files. Slower than the mirror above deliberately — that one is watching a board somebody
  * else can move, this one is watching a file this machine writes.
  */
-const CLAUDE_STATUS_POLL_MS = 60000;
+const AGENT_LIMITS_POLL_MS = 60000;
 
 /**
- * `?claudeStatusPollMs=` on the board's own URL, for a reader who wants it slower.
+ * `?agentLimitsPollMs=` on the board's own URL, for a reader who wants it slower.
  *
  * Clamped rather than trusted: `0` would be a busy loop against the disk and a very large
  * number would be a HUD that never moves again. Read from the query string rather than
@@ -239,9 +239,9 @@ const CLAUDE_STATUS_POLL_MS = 60000;
  * server's, and the server's own variable is the one that decides whether any of this
  * exists at all.
  */
-function claudeStatusPollMs(): number {
-  const asked = Number(new URLSearchParams(window.location.search).get('claudeStatusPollMs'))
-  if (!Number.isFinite(asked) || asked <= 0) return CLAUDE_STATUS_POLL_MS
+function agentLimitsPollMs(): number {
+  const asked = Number(new URLSearchParams(window.location.search).get('agentLimitsPollMs'))
+  if (!Number.isFinite(asked) || asked <= 0) return AGENT_LIMITS_POLL_MS
   return Math.min(600000, Math.max(200, asked))
 }
 
@@ -1329,15 +1329,15 @@ function App(): JSX.Element {
   })
 
   /**
-   * What each Claude Code environment on this machine has spent, per `GET /api/claude-status`.
+   * What each coding-agent environment on this machine has spent, per `GET /api/agent-limits`.
    *
    * Empty until the first read answers, and empty for good on a board that was never
    * configured to look — the HUD draws nothing rather than drawing an empty frame, because a
    * row that says nothing is indistinguishable from a machine that has nothing to say.
    */
-  const [claudeStatus, setClaudeStatus] = useState<ClaudeEnvironmentStatus[]>([])
+  const [agentLimits, setAgentLimits] = useState<AgentLimitsReading[]>([])
   /** Settled once, at mount: the cadence cannot change without the URL changing. */
-  const [claudeStatusPoll] = useState<number>(() => claudeStatusPollMs())
+  const [agentLimitsPoll] = useState<number>(() => agentLimitsPollMs())
 
   // Boards, one per project
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
@@ -4658,13 +4658,13 @@ function App(): JSX.Element {
   }, [activeWorkspace, excalidrawAPI])
 
   /**
-   * What Claude Code has spent, per environment on this machine.
+   * What the coding agent has spent, per environment on this machine.
    *
    * Not keyed on the active project, and that is the point: it describes the machines the
    * board runs agents on rather than any one repository, so switching tabs must not restart
    * it and must not empty it.
    *
-   * A 404 is the answer for a board that was never asked to look — `EXCALIDRAW_CLAUDE_STATUS`
+   * A 404 is the answer for a board that was never asked to look — `VIBEMAXXING_AGENT_LIMITS`
    * unset — and it ends the loop rather than retrying every minute for the life of the page:
    * that is a decision made when the server started, and nothing short of a restart changes
    * it. Visibility-gated for the same reason as the mirror above; a background tab reading
@@ -4673,16 +4673,16 @@ function App(): JSX.Element {
   useEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
-    const everyMs = claudeStatusPoll
+    const everyMs = agentLimitsPoll
 
     const read = async (): Promise<boolean> => {
       try {
-        const response = await fetch('/api/claude-status')
+        const response = await fetch('/api/agent-limits')
         if (response.status === 404) return false
         if (!response.ok) return true
         const body = await response.json()
         if (!cancelled && Array.isArray(body?.environments)) {
-          setClaudeStatus(body.environments as ClaudeEnvironmentStatus[])
+          setAgentLimits(body.environments as AgentLimitsReading[])
         }
       } catch {
         // A dropped read is the previous reading kept, not the HUD blanked: the figures were
@@ -4702,7 +4702,7 @@ function App(): JSX.Element {
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [claudeStatusPoll])
+  }, [agentLimitsPoll])
 
   // On `window`, because Excalidraw never sees a key pressed outside its canvas, and the
   // point of this one is to work from anywhere on the page.
@@ -6690,7 +6690,7 @@ function App(): JSX.Element {
             fight that grid and would go with the rest of the chrome. Here it survives
             `Hide Menus`, which only ever touches Excalidraw's own.
           */}
-          <ClaudeStatusHud environments={claudeStatus} pollMs={claudeStatusPoll} />
+          <AgentLimitsHud environments={agentLimits} pollMs={agentLimitsPoll} />
         </div>
       </div>
 
