@@ -45,6 +45,7 @@ import {
   hasWorkspaceRegistry,
   loadWorkspaces,
   registryPath,
+  removeWorkspace,
   reorderWorkspaces,
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -143,6 +144,7 @@ import {
   backupBoardBefore,
   boardStateExists,
   boardStateFile,
+  dropBoardState,
   flushBoardStateSaves,
   persistBoardFor,
   readBoardState,
@@ -1200,7 +1202,10 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
   try {
     const { elements: frontendElements, timestamp } = req.body;
 
-    logger.info(`Sync request received: ${frontendElements.length} elements`, {
+    // `debug`, not `info`: the browser autosyncs whenever anything on the canvas moves, so this
+    // and the reconciliation below were two lines per nudge in a file nothing rotated — the bulk
+    // of the 14 MB a day #348 measured. A sync that goes wrong still says so at `warn`.
+    logger.debug(`Sync request received: ${frontendElements.length} elements`, {
       timestamp,
       elementCount: frontendElements.length
     });
@@ -1286,7 +1291,7 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       }
     });
 
-    logger.info(
+    logger.debug(
       `Sync reconciled: ${successCount} applied (${updatedCount} updates), ` +
       `${deletedCount} deleted, ${staleCount} ignored as stale, ` +
       `${carriedCount} kept their server-authored state, ${store.size} total`
@@ -1392,6 +1397,79 @@ app.post('/api/workspaces', async (req: Request, res: Response) => {
     res.status(201).json({ success: true, workspace: result.workspace, workspaces: result.workspaces });
   } catch (error) {
     logger.error('Failed to add a workspace:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/**
+ * Take a project off the board.
+ *
+ * The other half of the `+`, and the thing whose absence made the first mistake a stranger
+ * makes permanent: the wrong folder picked, or a project moved after registering, left a tab
+ * that `loadWorkspace` marks broken rather than dropping, and the only way out was
+ * hand-editing a JSON file whose path the reader has never been told.
+ *
+ * **It removes a line from the registry, and nothing else.** The project directory is not
+ * this board's to delete and neither is its `board.config.json` — which is what the
+ * confirmation in the settings dialog promises, in those words.
+ *
+ * The one thing that is arguably the board's own is the drawing, saved beside the registry
+ * and copied nowhere. It is kept, so a project removed by mistake and added back comes back
+ * drawn, and `?board=delete` is how a caller who means otherwise says so. An opt-in rather
+ * than a side effect, because nothing else has that scene.
+ *
+ * A run in flight is refused rather than orphaned. The worktree, the branch and the pull
+ * request a run is in the middle of all hang off the entry this would delete, and the process
+ * writing to them would carry on against a project the board no longer knows: the refusal
+ * names the runs so the reader knows what to wait for.
+ */
+app.delete('/api/workspaces/:id', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Projects are removed')) return;
+
+  const id = req.params.id ?? '';
+
+  // Spelled out rather than "anything that is not `delete` means keep": a typo in the one
+  // parameter that decides whether a drawing survives should be an error, not a default.
+  const board = typeof req.query.board === 'string' && req.query.board ? req.query.board : 'keep';
+  if (board !== 'keep' && board !== 'delete') {
+    return res.status(400).json({
+      success: false,
+      error: `board must be "keep" or "delete", not "${board}". `
+        + 'Leaving it out keeps the board this project was drawn on.'
+    });
+  }
+
+  const inFlight = runningImplements(normalizeWorkspaceId(id));
+  if (inFlight.length) {
+    return res.status(409).json({
+      success: false,
+      error: `"${id}" still has ${inFlight.length} implementation(s) running, and removing it now `
+        + 'would orphan them: the worktree, the branch and the pull request would outlive the '
+        + `project they belong to. In flight: ${inFlight.map((run) => run.issueUrl).join(', ')}`,
+      running: inFlight.map((run) => run.issueUrl)
+    });
+  }
+
+  try {
+    const result = await removeWorkspace(registryPath(), id);
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, error: result.error });
+    }
+    // After the registry write, never before it: a board forgotten on a removal that then
+    // failed would stop being saved while its project was still on the strip.
+    const dropped = await dropBoardState(result.removed.id, { deleteFile: board === 'delete' });
+    logger.info(
+      `Workspace "${result.removed.id}" removed from the registry; ${result.removed.path} was left alone`
+      + `${dropped.deleted ? `, and its saved board at ${dropped.file} was deleted` : ''}.`
+    );
+    res.json({
+      success: true,
+      removed: result.removed,
+      workspaces: result.workspaces,
+      board: dropped
+    });
+  } catch (error) {
+    logger.error('Failed to remove a workspace:', error);
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 });

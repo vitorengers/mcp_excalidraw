@@ -908,6 +908,85 @@ export async function addWorkspace(
   return { ok: true, workspace, workspaces };
 }
 
+/**
+ * A removal either happened or did not. `WorkspaceWritten` cannot describe it: there is no
+ * workspace left to hand back, and the entry as the *file* had it — the path a confirmation
+ * promised to leave alone — is the only account of what went.
+ */
+export interface WorkspaceRemoved {
+  ok: true;
+  removed: { id: string; path: string; distro?: string };
+  workspaces: Workspace[];
+}
+
+export type WorkspaceRemoveResult = WorkspaceRemoved | WorkspaceWriteRefusal;
+
+/**
+ * Take a project out of the registry.
+ *
+ * The other half of `addWorkspace`, and it was missing for long enough to be the first thing
+ * a stranger could not undo: pick the wrong folder, or move a project after registering it,
+ * and the tab stayed for good — `loadWorkspace` marks such an entry broken rather than
+ * dropping it, `reorderWorkspaces` refuses a list that leaves an id out, and the only way
+ * back was hand-editing a file outside this repository whose path the reader was never told.
+ *
+ * **A line of the registry, and nothing else.** The project directory belongs to whoever
+ * made it and its `board.config.json` belongs to the project — neither is this board's to
+ * delete, and the confirmation in the settings dialog promises exactly that. The one thing
+ * that is arguably the board's own is the drawing saved beside the registry, and that is the
+ * route's decision rather than this function's: `board-state.ts` owns those files, and
+ * importing it here would point the registry module at the module that reads the registry.
+ *
+ * **Exactly one entry**, the first whose id matches, in the same read–modify–write the rest
+ * of this file uses so keys nobody here understands survive. Two entries can resolve to one
+ * id — `loadWorkspaces` warns and drops the second — and removing both on one request would
+ * be deleting a line of somebody's file that no tab on screen stood for.
+ */
+export async function removeWorkspace(
+  registryPath: string,
+  id: unknown
+): Promise<WorkspaceRemoveResult> {
+  const wanted = typeof id === 'string' ? id.trim() : '';
+  if (!wanted) return { ok: false, status: 400, error: 'A removal needs the id of a project.' };
+
+  const read = await readRegistry(registryPath);
+  if (!read.ok) return read;
+  const { registry, entries } = read;
+
+  const at = entries.findIndex((entry) => idOfEntry(entry) === wanted);
+  if (at < 0) {
+    // Named against the *registry* rather than against `loadWorkspaces`, so an entry that
+    // failed to load is still removable: a project whose folder has been deleted is exactly
+    // the tab somebody is trying to get rid of, and answering "not registered" about a line
+    // that is plainly in the file would be the old dead end wearing a 404.
+    const known = entries.map(idOfEntry).filter(Boolean);
+    return {
+      ok: false,
+      status: 404,
+      error: `No project "${wanted}" is registered. `
+        + `The board currently has: ${known.join(', ') || 'no projects'}.`,
+    };
+  }
+
+  const [dropped] = entries.splice(at, 1);
+
+  try {
+    await writeJsonFile(registryPath, registry);
+  } catch (error) {
+    return { ok: false, status: 500, error: `Could not write the registry at ${registryPath}: ${(error as Error).message}` };
+  }
+
+  return {
+    ok: true,
+    removed: {
+      id: wanted,
+      path: typeof dropped?.path === 'string' ? dropped.path : '',
+      ...(typeof dropped?.distro === 'string' ? { distro: dropped.distro } : {}),
+    },
+    workspaces: await loadWorkspaces(registryPath),
+  };
+}
+
 /** A reorder either happened, or did not and says why. There is no one workspace it is about. */
 export type WorkspaceOrderResult =
   | { ok: true; workspaces: Workspace[] }
