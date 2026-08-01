@@ -108,9 +108,11 @@ Somebody presses it and then presses **Implement / Fix**. What happens, in order
 7. **The agent is spawned.** `runImplementAgent` in `src/core/implement-agent.ts` assembles
    the prompt — what the board tells every agent, then the worktree paragraph, then the
    project's own workflow file last — and hands it to `runAgent` in
-   `src/core/issue-agent.ts`. That builds the command line from the configured agent command,
-   gives the child the environment `agentEnv` resolves, and runs it with the worktree as its
-   working directory. If the board has a terminal tab to spare the run is given one, and a
+   `src/core/issue-agent.ts`. The argv is built by the *backend* the board named —
+   `src/core/agent-adapter.ts` and `src/core/agents/`, where `raw` is the passthrough that
+   spawns an operator's command line byte for byte, and is what every board gets today.
+   `runAgent` spawns exactly that, gives the child the environment `agentEnv` resolves, and
+   runs it with the worktree as its working directory. If the board has a terminal tab to spare the run is given one, and a
    reader watches it; with none it happens in a private child, exactly as it did before the
    two features knew about each other.
 

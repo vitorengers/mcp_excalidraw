@@ -17,7 +17,8 @@
 import { AgentUsage } from './agent-usage.js';
 import { ESCALATION_MARKER } from './implement-landing.js';
 import { HeldWorktree, ImplementWorktree } from './implement-worktree.js';
-import { applyAgentSettings, AgentHost, AgentRun, runAgent, workflowSection } from './issue-agent.js';
+import type { AgentCommandSpec } from './agent-adapter.js';
+import { agentRunFor, AgentHost, AgentRun, runAgent, workflowSection } from './issue-agent.js';
 import { loadAgentWorkflow, Workspace } from './workspaces.js';
 import { env } from './settings.js';
 
@@ -288,7 +289,22 @@ export async function runImplementAgent(
   workspace: Workspace,
   issueUrl: string,
   options: {
-    agentCommand: string;
+    /** Which agent, and the command that reaches it. See `agentCommandFor`. */
+    agent: AgentCommandSpec;
+    /**
+     * Whether the reader asked for a tab to answer rather than one to watch.
+     *
+     * The whole of what it changes is the mode the backend is asked for, and that is the point
+     * of it living here rather than in a rewritten command line: for `raw` it takes the print
+     * flags off the operator's string — the same request they make by leaving them out of
+     * `EXCALIDRAW_IMPLEMENT_AGENT`, made once instead of forever — and for a named backend it
+     * is simply the other kind of run, spelled by something that knows how.
+     *
+     * It does **not** change the prompt. Whether a reader can watch a run is a fact about the
+     * board it was started from, and telling the agent about it would make the same run send
+     * two different prompts on two boards.
+     */
+    interactive?: boolean;
     timeoutMs?: number | null;
     /** Named when the command turns out not to exist where it was run. See RunAgentOptions. */
     notFoundVariable?: string | null;
@@ -363,7 +379,9 @@ export async function runImplementAgent(
     // and the project's own workflow has to be the last thing a literal reader is told.
     + workflowSection(workflow.text);
   return runAgent(workspace, prompt, {
-    agentCommand: applyAgentSettings(options.agentCommand, settings),
+    ...agentRunFor(
+      options.agent, 'implement', settings, options.interactive ? 'interactive' : 'headless'
+    ),
     timeoutMs: options.timeoutMs === undefined
       ? settings?.timeoutMs ?? IMPLEMENT_TIMEOUT_MS
       : options.timeoutMs,

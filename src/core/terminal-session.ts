@@ -27,7 +27,8 @@ import { Workspace } from './workspaces.js';
 // `resolveExecutable` moved to `issue-agent.ts` — `agentPath()` asks it the same question
 // there, and one PATH lookup shared is one that cannot drift from the terminal's.
 import { AgentDirectory, agentEnv, buildAgentCommand, resolveExecutable } from './issue-agent.js';
-import { streamsUsage } from './agent-usage.js';
+import { commandLineInvocation, type AgentAdapter, type AgentInvocation } from './agent-adapter.js';
+import { adapterFor } from './agents/index.js';
 import { AgentStreamRenderer } from './agent-stream-render.js';
 import { env as settingValue, settingName } from './settings.js';
 
@@ -286,11 +287,11 @@ export function shellCommandFrom(
  */
 export function buildTerminalCommand(
   workspace: Workspace,
-  shellCommand: string,
+  shell: AgentInvocation | string,
   directory?: AgentDirectory | null,
   prompt?: string | null
 ): { command: string; args: string[]; cwd: string | undefined } {
-  return buildAgentCommand(workspace, shellCommand, directory, prompt);
+  return buildAgentCommand(workspace, shell, directory, prompt);
 }
 
 /**
@@ -442,6 +443,16 @@ export interface TerminalSessionOptions {
    * always did.
    */
   interactive?: boolean;
+  /**
+   * The agent this session is running, when it is running one rather than a shell.
+   *
+   * Two things come from it and nothing else does: the argv the process is spawned with — so
+   * a backend that builds its own flags is not re-derived from the string this session
+   * *displays* — and the grammar the transcript is rendered in. Absent, the command is taken
+   * as a command line and read the way the `raw` backend reads one, which is exactly what
+   * this class did before backends existed and is right for a shell somebody typed.
+   */
+  agent?: { adapter: AgentAdapter; invocation: AgentInvocation } | null;
 }
 
 export interface TerminalSessionSummary {
@@ -578,14 +589,25 @@ export class TerminalSession {
     // decides everything else about the session: on argv the binding is kept and the tab is
     // a terminal; on stdin the binding has to go, because a pseudoterminal has no end of
     // file — see `TerminalSessionOptions.input` for the measurement that settles it.
-    const asArgument = Boolean(options.interactive && options.input && pty);
+    // The agent's own invocation where there is one, and the command line read the way the
+    // `raw` backend reads one where there is not — a shell somebody typed into a tab is
+    // exactly that, and this is what the class did before backends existed.
+    const adapter = options.agent?.adapter ?? adapterFor('raw');
+    const invocation = options.agent?.invocation ?? commandLineInvocation(shellCommand);
+    // The invocation has the last word on where a prompt may go. Without that clause a caller
+    // could ask for an interactive session around a command whose prompt belongs on stdin, and
+    // the prompt would reach neither place: stdin is spent on the pseudoterminal, and argv is
+    // not where this invocation says it goes.
+    const asArgument = Boolean(
+      options.interactive && options.input && pty && invocation.prompt.via === 'argv'
+    );
     const { command, args, cwd } = buildTerminalCommand(
-      workspace, shellCommand, directory, asArgument ? options.input : null
+      workspace, invocation, directory, asArgument ? options.input : null
     );
     const binding = options.input && !asArgument ? null : pty;
-    // Read off the command as configured, before anything wraps it for a distro: the flag is
-    // the operator's, and it means the same thing on either side of the boundary.
-    this.render = streamsUsage(shellCommand) ? new AgentStreamRenderer() : null;
+    // Asked of the invocation rather than of the string this session displays: a named backend
+    // spells the flag itself, and for `raw` the two are the same question about the same text.
+    this.render = adapter.streams(invocation) ? new AgentStreamRenderer(adapter) : null;
     this.id = id;
     this.workspaceId = workspace.id;
     this.shell = shellCommand;

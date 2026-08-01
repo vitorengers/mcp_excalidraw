@@ -370,8 +370,12 @@ try {
       environment: { kind: 'native' },
       error: null,
     };
-    const run = await agentModule.runIssueAgent(workspace, 'An observation.',
-                                                { agentCommand: agentStub, timeoutMs: 60_000 });
+    // A backend beside the command, `raw` being the passthrough one: an arbitrary command
+    // line spawned byte for byte, which is what this stub is and what every board is today.
+    const run = await agentModule.runIssueAgent(workspace, 'An observation.', {
+      agent: { backend: 'raw', command: agentStub },
+      timeoutMs: 60_000,
+    });
     check('the agent ran', run?.ok === true, JSON.stringify(run?.error ?? run));
     if (existsSync(dumpPath('agent'))) {
       assertStripped('   the environment the agent was handed', readDump('agent'));

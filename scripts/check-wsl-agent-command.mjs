@@ -66,7 +66,12 @@ async function importDist(relative, what) {
 }
 
 const agentModule = await importDist(join('core', 'issue-agent.js'), 'the command builder');
-const { agentCommandFor, commandNotFoundHint, runAgent } = agentModule;
+const { agentCommandFor, agentRunFor, commandNotFoundHint, runAgent } = agentModule;
+
+/** A command line as the board holds one: the passthrough backend beside the command. */
+const raw = (command) => (command === null || command === undefined ? null : { backend: 'raw', command });
+/** The command a spec names, so the cases below can stay about which command was picked. */
+const commandOf = (spec) => (spec && typeof spec === 'object' ? spec.command : spec);
 
 /**
  * Resolve through whatever the build exports, or record the seam as missing.
@@ -77,7 +82,7 @@ const { agentCommandFor, commandNotFoundHint, runAgent } = agentModule;
  * is the one that shows what the reader actually sees.
  */
 const resolve = typeof agentCommandFor === 'function'
-  ? agentCommandFor
+  ? (workspace, commands) => commandOf(agentCommandFor(workspace, { native: raw(commands.native), wsl: raw(commands.wsl && commands.wsl.trim() ? commands.wsl : null) }))
   : () => '<no resolver: issue-agent exports no agentCommandFor>';
 
 const NATIVE = { id: 'native-check', environment: { kind: 'native' }, innerPath: '/p', path: '/p' };
@@ -138,7 +143,8 @@ console.log('\n3. a command that is not there says which environment it was not 
     check('issue-agent exports commandNotFoundHint', false,
           'exit 127 from a distro reports a Windows path and nothing about the distro');
   } else {
-    const hint = commandNotFoundHint(WSL, 'C:/Users/x/.local/bin/claude.exe -p', 'VIBEMAXXING_ISSUE_AGENT_WSL');
+    const invocationOf = (command) => agentRunFor(raw(command), 'issue', null).invocation;
+    const hint = commandNotFoundHint(WSL, invocationOf('C:/Users/x/.local/bin/claude.exe -p'), 'VIBEMAXXING_ISSUE_AGENT_WSL');
 
     check('it names the distro the command was not found in',
           typeof hint === 'string' && hint.includes('Some-Distro'),
@@ -150,7 +156,7 @@ console.log('\n3. a command that is not there says which environment it was not 
           typeof hint === 'string' && /inside/i.test(hint),
           `hint was ${JSON.stringify(hint)}`);
     check('a native workspace gets no such hint',
-          commandNotFoundHint(NATIVE, 'claude -p', 'VIBEMAXXING_ISSUE_AGENT_WSL') === null,
+          commandNotFoundHint(NATIVE, invocationOf('claude -p'), 'VIBEMAXXING_ISSUE_AGENT_WSL') === null,
           'there is no distro to name');
   }
 }
@@ -180,7 +186,7 @@ console.log('\n4. a real run in a real distro reports it');
     };
     // A path that cannot exist in either environment, so nothing installed can make this pass.
     const run = await runAgent(workspace, 'ignored', {
-      agentCommand: 'C:/farol-not-a-real-binary/claude.exe -p',
+      ...agentRunFor(raw('C:/farol-not-a-real-binary/claude.exe -p'), 'issue', null),
       expects: 'issues',
       what: 'the WSL agent command check',
       timeoutMs: 30_000,

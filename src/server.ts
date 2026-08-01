@@ -54,9 +54,10 @@ import {
 import { BoardScene, parseBoardScene } from './core/board-seed.js';
 import { listDirectories } from './core/directory-browse.js';
 import {
-  AgentCommands, AgentHost, AgentRun, agentCommandFor, runIssueAgent, runReviseAgent, runsHeadless,
-  withoutPrintFlags
+  AgentCommands, AgentHost, AgentRun, agentCommandFor, agentCommandSpec, runIssueAgent,
+  runReviseAgent
 } from './core/issue-agent.js';
+import { DEFAULT_AGENT_BACKEND, type AgentCommandSpec } from './core/agent-adapter.js';
 import {
   AgentRoleCommands, AgentsHealth, agentRoles, initialAgents, preflightAgents, preflightLines
 } from './core/agent-preflight.js';
@@ -1733,9 +1734,15 @@ app.get('/api/fs/directories', async (req: Request, res: Response) => {
 // distro's `claude` is nowhere on the host. `agentCommandFor` picks per workspace and falls
 // back to the native one, which is what keeps a command written without an absolute path
 // working in both.
+//
+// Each half carries the backend it runs under as well as the command, and today both say
+// `raw` — the passthrough backend, which is an arbitrary command line spawned byte for byte.
+// That is deliberate and it is the whole of what a board configured before backends existed
+// has ever had: naming a *different* backend needs a variable to name it in, and the four
+// variables here belong to a separate change. `core/agents/` is where the others live.
 const ISSUE_AGENT_COMMANDS: AgentCommands = {
-  native: env('ISSUE_AGENT') || null,
-  wsl: env('ISSUE_AGENT_WSL') || null,
+  native: agentCommandSpec(env('ISSUE_AGENT'), DEFAULT_AGENT_BACKEND),
+  wsl: agentCommandSpec(env('ISSUE_AGENT_WSL'), DEFAULT_AGENT_BACKEND),
 };
 
 /** Whether any board at all may research. A workspace's own answer comes later. */
@@ -1771,7 +1778,7 @@ function agentCommandOrRefuse(
   commands: AgentCommands,
   what: string,
   variable: string
-): string | null {
+): AgentCommandSpec | null {
   const refusal = agentCommandRefusal(workspace, commands, what, variable);
   if (!refusal) return agentCommandFor(workspace, commands);
   res.status(404).json({ success: false, error: refusal });
@@ -2046,10 +2053,10 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: reason });
   }
 
-  const agentCommand = agentCommandOrRefuse(
+  const agent = agentCommandOrRefuse(
     res, workspace, ISSUE_AGENT_COMMANDS, 'Researching', settingName('ISSUE_AGENT')
   );
-  if (!agentCommand) return;
+  if (!agent) return;
 
   const startedAt = new Date().toISOString();
   issueRuns.set(elementId, { state: 'running', startedAt, endedAt: null, usage: null });
@@ -2098,7 +2105,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     }
 
     const result = await runIssueAgent(workspace, observation, {
-      agentCommand,
+      agent,
       imagePaths: images.paths,
       notFoundVariable: settingName('ISSUE_AGENT_WSL'),
       onUsage: (usage) => recordIssueUsage(elementId, usage)
@@ -2346,8 +2353,8 @@ const issueMemo = new IssueMemo<IssueDetail>(memoWindow(env('ISSUE_MEMO_MS')));
 // half is a pair rather than one variable: a board that granted a distro an agent for
 // research must not thereby have granted it one that writes.
 const IMPLEMENT_AGENT_COMMANDS: AgentCommands = {
-  native: env('IMPLEMENT_AGENT') || null,
-  wsl: env('IMPLEMENT_AGENT_WSL') || null,
+  native: agentCommandSpec(env('IMPLEMENT_AGENT'), DEFAULT_AGENT_BACKEND),
+  wsl: agentCommandSpec(env('IMPLEMENT_AGENT_WSL'), DEFAULT_AGENT_BACKEND),
 };
 
 /** Whether any board at all may implement. A workspace's own answer comes later. */
@@ -2869,17 +2876,6 @@ async function beginImplement(
  * A 409 rather than a 400, like the cap: a conflict with what this board *is*, not a request
  * that was malformed.
  */
-/**
- * The command line this run is spawned with, which is the operator's unless the reader asked.
- *
- * Named rather than written inline so the "unless" is one expression: a run nobody asked
- * anything about must spawn the string in `EXCALIDRAW_IMPLEMENT_AGENT` byte for byte, and
- * that is the rule every other feature that touches this command already keeps.
- */
-function interactiveCommand(agentCommand: string, interactive?: boolean): string {
-  return interactive ? withoutPrintFlags(agentCommand) : agentCommand;
-}
-
 async function interactiveTabRefusal(workspaceId: string): Promise<string | null> {
   if (!terminalAvailable()) {
     return 'An interactive run needs a terminal tab to run in, and the terminal is off on '
@@ -2965,17 +2961,16 @@ async function runImplementation(
         // Resolved here rather than handed down: `beginImplement` has already refused a
         // workspace with no command for its environment, so by this line there is one.
         //
-        // And this is the whole of what a per-run "interactive" changes. Everything downstream
-        // already reads the shape of the command rather than a second setting — `runsHeadless`
-        // decides whether the tab gets a pseudoterminal, `buildAgentCommand` decides whether
-        // the prompt goes to stdin or travels as the last argument, `streamsUsage` decides
-        // whether there are token counts to read — so taking the print flags off is the same
-        // request the operator makes by leaving them out of `EXCALIDRAW_IMPLEMENT_AGENT`, made
-        // once instead of forever. `withoutPrintFlags` only ever removes; a command with no
-        // print flags in it comes back byte for byte.
-        agentCommand: interactiveCommand(
-          agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS) as string, options.interactive
-        ),
+        // And the per-run "interactive" is now the *mode* the backend is asked for, rather than
+        // a rewritten command line. Everything downstream reads the invocation the backend
+        // built — `AgentInvocation.prompt.via` decides whether the tab gets a pseudoterminal
+        // and whether the prompt goes to stdin or travels as the last argument,
+        // `AgentAdapter.streams` decides whether there are token counts to read. For the `raw`
+        // backend that is still the operator's own command with its print flags removed, which
+        // is the same request they make by leaving them out of `EXCALIDRAW_IMPLEMENT_AGENT`,
+        // made once instead of forever; a command with none in it comes back byte for byte.
+        agent: agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS) as AgentCommandSpec,
+        ...(options.interactive ? { interactive: true } : {}),
         notFoundVariable: settingName('IMPLEMENT_AGENT_WSL'),
         worktree,
         resuming,
@@ -3325,10 +3320,14 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
     // would take it and stops as soon as it has found enough startable cards to fill every
     // free slot — on a healthy board that is the first one or two, and the reads are behind
     // the same memo an issue block uses.
-    const onBoard = new Map<number, string | null>();
+    // The URL comes along with the state because a dependency's *record* is the other half of
+    // whether it can ever be met, and a record is keyed by URL.
+    const onBoard = new Map<number, { state: string | null; url: string | null }>();
     for (const section of board.sections) {
       for (const boardCard of section.cards) {
-        if (boardCard.number !== null) onBoard.set(boardCard.number, boardCard.state);
+        if (boardCard.number !== null) {
+          onBoard.set(boardCard.number, { state: boardCard.state, url: boardCard.url });
+        }
       }
     }
     const free = IMPLEMENT_CONCURRENCY <= 0
@@ -3336,6 +3335,16 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
       : Math.max(0, IMPLEMENT_CONCURRENCY - runningImplements(workspaceId).length);
     const blocked = new Set<number>();
     const waiting: string[] = [];
+    /**
+     * The dependencies that can never be met, which is a different fact from waiting.
+     *
+     * A dependency that is open and has no record is waiting: something will start it, and a
+     * queue that shouted about that would be shouting about the rule working. A dependency
+     * that is open and already holds a *settled* record is a deadlock — the loop below skips
+     * any issue `readImplement` answers for, so nothing this queue does will ever start it
+     * again, and every card built on it waits forever.
+     */
+    const deadlocked: string[] = [];
     let clear = 0;
     for (const candidate of startableCards(column.cards)) {
       if (clear >= free) break;
@@ -3348,10 +3357,10 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
           () => fetchIssue(workspace, candidate.url as string)
         );
         unmet = dependenciesOf(detail.body).filter((number) => {
-          const state = onBoard.get(number);
+          const known = onBoard.get(number);
           // A dependency this board has never heard of cannot be resolved, and a declaration
           // nothing can answer must not be what stops a queue: it starts.
-          return state !== undefined && state !== 'CLOSED';
+          return known !== undefined && known.state !== 'CLOSED';
         });
       } catch (error) {
         // The body is an optimisation, not a gate. A read that fails leaves the card exactly
@@ -3361,8 +3370,25 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
       if (unmet.length === 0) { clear++; continue; }
       blocked.add(candidate.number);
       waiting.push(`#${candidate.number} waits on ${unmet.map((n) => `#${n}`).join(', ')}`);
+      for (const number of unmet) {
+        const url = onBoard.get(number)?.url;
+        const record = url ? readImplement(workspaceId, url) : null;
+        if (!record || record.state === 'running') continue;
+        deadlocked.push(
+          `#${candidate.number} waits on #${number}, whose run is already recorded `
+          + `"${record.state}" while the issue is open`
+        );
+      }
     }
-    if (blocked.size > 0) {
+    if (deadlocked.length > 0) {
+      // Above `blocked` because it is the same set of cards seen more exactly: every card here
+      // is also waiting, and reporting the milder fact would be the silence this exists to end.
+      outcome = {
+        reason: 'deadlocked',
+        detail: `Waiting on work nothing will start again: ${deadlocked.join('; ')}. `
+          + 'Reset the run or land the issue by hand — the queue will not start it a second time.'
+      };
+    } else if (blocked.size > 0) {
       outcome = {
         reason: 'blocked',
         detail: `Waiting on work that has not landed: ${waiting.join('; ')}.`
@@ -4424,10 +4450,10 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
     });
   }
 
-  const agentCommand = agentCommandOrRefuse(
+  const agent = agentCommandOrRefuse(
     res, workspace, ISSUE_AGENT_COMMANDS, 'Researching an issue again', settingName('ISSUE_AGENT')
   );
-  if (!agentCommand) return;
+  if (!agent) return;
 
   // Read rather than taken from the memo: a thirty-second-old "OPEN" is fine for drawing a
   // panel and is not fine for deciding whether to send an agent at somebody's issue.
@@ -4503,7 +4529,7 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
     }
 
     const result = await runReviseAgent(workspace, issueUrl, observations, {
-      agentCommand,
+      agent,
       notFoundVariable: settingName('ISSUE_AGENT_WSL'),
       onUsage: takeUsage
     });
@@ -5139,19 +5165,22 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
 function implementTerminalHost(workspace: Workspace, issueUrl: string): AgentHost | null {
   if (!terminalAvailable()) return null;
 
-  return async ({ agentCommand, directory, prompt, onOutput }) => {
+  return async ({ adapter, invocation, directory, prompt, onOutput }) => {
     let announce: (code: number | null) => void = () => { /* replaced below */ };
     const exited = new Promise<number | null>((resolve) => { announce = resolve; });
 
-    // Loaded only for a command that could use one. A headless run took `null` here from the
-    // day this existed, and asking for a binding it would then have to ignore would be a new
-    // import on the path that must not change.
-    const pty = runsHeadless(agentCommand) ? null : await loadPty();
-    const started = await startTerminalSession(workspace, agentCommand, pty, {
+    // Loaded only for a run that could use one. A run whose prompt goes on stdin took `null`
+    // here from the day this existed — a pseudoterminal has no end of file to close the prompt
+    // with — and asking for a binding it would then have to ignore would be a new import on the
+    // path that must not change. The invocation is what says which kind this is, rather than a
+    // regular expression over the command line a second time.
+    const pty = invocation.prompt.via === 'stdin' ? null : await loadPty();
+    const started = await startTerminalSession(workspace, invocation.line, pty, {
       directory,
       owner: { agent: 'implement', issueUrl, label: issueTabLabel(issueUrl) },
       input: prompt,
-      interactive: Boolean(pty)
+      interactive: Boolean(pty),
+      agent: { adapter, invocation }
     }, { onOutput, onExit: (code) => announce(code) });
 
     if (!started.ok) {

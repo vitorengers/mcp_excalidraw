@@ -178,10 +178,22 @@ function runnerFor(answers) {
   return { run, seen };
 }
 
+/**
+ * A pair of command lines as the board holds them: a backend beside each command.
+ *
+ * `raw` throughout, because that is what every board configured today is and what the
+ * preflight probes — argv[0] of an operator's own command line. The cases below are written
+ * as bare strings and wrapped here, so what they say stays about the *preflight*.
+ */
+const commandsOf = (pair) => ({
+  native: pair.native ? { backend: 'raw', command: pair.native } : null,
+  wsl: pair.wsl && pair.wsl.trim() ? { backend: 'raw', command: pair.wsl } : null,
+});
+
 function rolesFor(issue, implement) {
   return [
-    { role: 'issue', variable: 'EXCALIDRAW_ISSUE_AGENT', commands: issue },
-    { role: 'implement', variable: 'EXCALIDRAW_IMPLEMENT_AGENT', commands: implement },
+    { role: 'issue', variable: 'EXCALIDRAW_ISSUE_AGENT', commands: commandsOf(issue) },
+    { role: 'implement', variable: 'EXCALIDRAW_IMPLEMENT_AGENT', commands: commandsOf(implement) },
   ];
 }
 

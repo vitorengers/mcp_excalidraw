@@ -10,16 +10,42 @@
  *  - it refuses to run unless the server is bound to loopback;
  *  - one run at a time per element, tracked by the caller, so a double click cannot
  *    open two issues.
+ *
+ * **What it does not decide any more is which agent it is running.** `runAgent` takes an
+ * `AgentAdapter` and the `AgentInvocation` that adapter built, and spawns exactly that: it never
+ * reads a command line for a flag. Everything it used to work out by regular expression — does
+ * the run print and exit, does it stream token counts, how does a project's model reach it, how
+ * are the print flags taken off for one interactive run — belongs to a named backend now, in
+ * `core/agent-adapter.ts` and `core/agents/`. What stays here is what is the same whichever agent
+ * is running: where a run happens, how long it may take, what its exit code and its transcript
+ * mean, and which URL counts.
  */
 import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import logger from '../utils/logger.js';
-import { AgentUsage, streamsUsage, UsageMeter } from './agent-usage.js';
+import {
+  commandLineInvocation, invocationArgs, singleQuoted,
+  type AgentAdapter, type AgentCommandSpec, type AgentInvocation, type AgentRole,
+} from './agent-adapter.js';
+import { adapterFor } from './agents/index.js';
+import { AgentUsage, UsageMeter } from './agent-usage.js';
 import { GITHUB_HOST } from './github-host.js';
 import { AgentSettings, loadAgentWorkflow, Workspace } from './workspaces.js';
 import { env as settingValue } from './settings.js';
+
+/**
+ * The command-line helpers, still reachable from here.
+ *
+ * They moved to `agent-adapter.ts` when the `raw` backend became the thing that reads a command
+ * line: an adapter that imported them from this module would close a cycle, since this module
+ * imports the adapters. Re-exported rather than relocated silently, because every caller — the
+ * preflight, the terminal, three check scripts — had them from here.
+ */
+export {
+  runsHeadless, singleQuoted, tokenizeCommand, withoutPrintFlags,
+} from './agent-adapter.js';
 
 /**
  * The language paragraph — the one thing in these prompts a project gets to set.
@@ -500,10 +526,19 @@ export function extractIssueUrl(output: string): string | null {
  * in; only the environment says what runs there.
  */
 export interface AgentCommands {
-  /** `EXCALIDRAW_ISSUE_AGENT` / `EXCALIDRAW_IMPLEMENT_AGENT`. */
-  native: string | null;
+  /** `EXCALIDRAW_ISSUE_AGENT` / `EXCALIDRAW_IMPLEMENT_AGENT`, with the backend it names. */
+  native: AgentCommandSpec | null;
   /** The `_WSL` half, or null where the operator granted none. */
-  wsl: string | null;
+  wsl: AgentCommandSpec | null;
+}
+
+/** A command line and the backend it is run under. Null for an empty or absent command. */
+export function agentCommandSpec(
+  command: string | null | undefined,
+  backend: AgentCommandSpec['backend']
+): AgentCommandSpec | null {
+  const trimmed = command?.trim() || null;
+  return trimmed ? { backend, command: trimmed } : null;
 }
 
 /**
@@ -519,11 +554,52 @@ export interface AgentCommands {
  * way works today; refusing it to fix the absolute-path case would break a working setup to
  * repair a broken one. The reverse is not symmetric: a command granted for the distro says
  * nothing about what may run on the host, so a native workspace never reads the `_WSL` half.
+ *
+ * **The backend travels with the command**, which is why this returns a spec rather than a
+ * string. The two are one grant: an operator with Claude Code on the host and something else
+ * inside a distro has named two agents, not one agent spelled twice — and the fallback above
+ * carries the native backend with the native command, because a distro falling back to the
+ * host's command is running the host's agent.
  */
-export function agentCommandFor(workspace: Workspace, commands: AgentCommands): string | null {
-  const native = commands.native?.trim() || null;
-  if (workspace.environment.kind !== 'wsl') return native;
-  return (commands.wsl?.trim() || null) ?? native;
+export function agentCommandFor(
+  workspace: Workspace,
+  commands: AgentCommands
+): AgentCommandSpec | null {
+  if (workspace.environment.kind !== 'wsl') return commands.native;
+  return commands.wsl ?? commands.native;
+}
+
+/**
+ * The backend and the argv one run is spawned with, from what the board was granted.
+ *
+ * The one place a `{ backend, command }` becomes something that can be spawned, so that the
+ * three run functions below — research, rewrite, implement — cannot drift apart on how a
+ * project's model or effort reaches an agent, or on what "interactive" means.
+ *
+ * The project's settings arrive as *values* rather than as flags. That is the whole trade this
+ * replaced: `--model x --effort y` appended to somebody's command line is Claude Code's
+ * spelling written by a module that had no way of knowing whether the command was Claude Code.
+ * Now the backend spells it, and the `raw` backend still spells it exactly that way — because
+ * for a passthrough that is the honest answer, and because a board configured today has to
+ * spawn what it spawned yesterday.
+ */
+export function agentRunFor(
+  agent: AgentCommandSpec,
+  role: AgentRole,
+  settings: AgentSettings | null | undefined,
+  mode: 'headless' | 'interactive' = 'headless'
+): { adapter: AgentAdapter; invocation: AgentInvocation } {
+  const adapter = adapterFor(agent.backend);
+  return {
+    adapter,
+    invocation: adapter.invoke({
+      mode,
+      role,
+      command: agent.command,
+      model: settings?.model ?? null,
+      effort: settings?.effort ?? null,
+    }),
+  };
 }
 
 /**
@@ -539,73 +615,16 @@ export function agentCommandFor(workspace: Workspace, commands: AgentCommands): 
  */
 export function commandNotFoundHint(
   workspace: Workspace,
-  agentCommand: string,
+  invocation: AgentInvocation,
   variable: string
 ): string | null {
   if (workspace.environment.kind !== 'wsl') return null;
-  const binary = tokenizeCommand(agentCommand)[0] ?? agentCommand;
+  // The invocation's own argv[0], rather than the command line read a second time: the backend
+  // has already decided what the binary is, and a second reading is a second answer.
+  const binary = invocation.command;
   return `The command was run inside the WSL distro "${workspace.environment.distro}", `
     + `where "${binary}" is not on PATH. Set ${variable} to the command as that distro `
     + `names it — a path from the host cannot resolve there.`;
-}
-
-/**
- * Whether the configured command asks its agent to print an answer and exit.
- *
- * The mirror of `streamsUsage()`, and named the same way: the flag is Claude Code's, and it
- * is read rather than required because an operator who already asks for a non-interactive
- * run gets the run they have always had without changing anything. A command that says
- * neither `-p` nor `--print` is one that would start an interface if it were given a
- * terminal, and that is the whole of the signal — there is no second variable, and nothing
- * here assumes the command is Claude Code. It is not: `--print` is what this looks for, and
- * a command that spells "non-interactive" some other way reads as interactive, which costs
- * it a terminal it can simply ignore.
- *
- * Matched as a whole argument. `--print-mode` is not `--print`, and a path with `-p` inside
- * it is not a flag.
- */
-export function runsHeadless(agentCommand: string): boolean {
-  return /(?:^|\s)(?:-p|--print)(?:\s|$)/.test(agentCommand);
-}
-
-/**
- * The same command line with the flags that make it headless taken off it.
- *
- * This is how the board offers an interactive tab for one run without the operator editing
- * `EXCALIDRAW_IMPLEMENT_AGENT` and restarting the server — #220's comment, and the second
- * time it has been asked for (#174 was the first, answered with documentation). The shape of
- * the command still decides the *default*; what changes is that the reader can say "not this
- * one" at the moment they start it.
- *
- * **It only ever removes**, and that asymmetry is deliberate. Adding `-p` to a command that
- * does not have it would leave the run with no `--output-format stream-json` to read token
- * counts from and no way to invent one — a board writing flags into a command line it does
- * not own is the rewrite `agent-usage.ts` refuses to make, and `runsHeadless` exists because
- * of it. So a command that is already interactive comes back unchanged, and the queue keeps
- * the headless one it is configured with.
- *
- * **More than `-p` comes off, because `-p` does not travel alone.** `--output-format`,
- * `--input-format` and `--include-partial-messages` are documented by `claude --help` as
- * *"only works with --print"*, so a command left carrying one of them after `--print` went
- * would be refused by the CLI rather than started. Removing exactly those is the same reading
- * of the same command line that `runsHeadless` and `streamsUsage` already do — three flags
- * whose whole meaning is "this run prints and exits". Nothing else is touched: a `--model`,
- * an `--add-dir` or anything else the operator wrote survives untouched, and a command that
- * is not Claude Code loses nothing it did not spell that way.
- *
- * Matched as whole arguments, like `runsHeadless`: `--print-mode` is not `--print`, and a
- * path with `-p` inside it is not a flag. An option's value goes with it in either spelling,
- * `--output-format json` and `--output-format=json`, because a value left behind would become
- * the prompt.
- */
-export function withoutPrintFlags(agentCommand: string): string {
-  // Each pattern eats the whitespace in front of the flag it removes, so what is left needs
-  // no tidying up — which matters, because tidying up a command line means touching the parts
-  // that were not the point. A quoted path with two spaces in it comes back with two spaces.
-  return agentCommand
-    .replace(/(?:^|\s)(?:--output-format|--input-format)(?:=\S+|\s+\S+)(?=\s|$)/g, '')
-    .replace(/(?:^|\s)(?:-p|--print|--include-partial-messages)(?=\s|$)/g, '')
-    .trim();
 }
 
 /**
@@ -627,18 +646,6 @@ export function stripAnsi(text: string): string {
     .replace(/\u001b[\]P^_X][\s\S]*?(?:\u0007|\u001b\\)/g, '')
     .replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '')
     .replace(/\u001b[@-Z\\_]/g, '');
-}
-
-/**
- * A value a shell inside the distro will hand on exactly as it was given.
- *
- * Single quotes, because they are the one quoting in `sh` that means "no expansion at all" —
- * the `$name` trap `buildAgentCommand` records below is precisely what double quotes would
- * leave open. A single quote inside the value is the only thing that has to be spelled out,
- * and `'\''` is how: close the run, an escaped quote, open it again.
- */
-export function singleQuoted(value: string): string {
-  return `'${value.split("'").join(`'\\''`)}'`;
 }
 
 /**
@@ -694,13 +701,26 @@ export interface AgentDirectory {
  * would tear it apart. On the host it is one more element of argv, which no shell ever sees.
  * Inside a distro there *is* a shell, so it is single-quoted into the string `bash -lc`
  * parses: the one quoting that expands nothing, which is the same `$name` trap as above.
+ * Whether it goes there at all is the invocation's to say — see `AgentInvocation.prompt`.
+ *
+ * **An invocation rather than a command line, and a command line is still accepted.** What the
+ * distro is handed is `invocation.line`, which for the `raw` backend *is* the operator's own
+ * string, untouched — a shell parses it, and one that says `source ~/.nvm/nvm.sh && claude -p`
+ * means it, so tokenising and re-quoting would be silently narrowing what a board may run. A
+ * plain string is taken as such a command line, for the callers that hold one rather than an
+ * agent: the preflight's `--version` probe, and a shell somebody typed into a terminal block.
  */
 export function buildAgentCommand(
   workspace: Workspace,
-  agentCommand: string,
+  agent: AgentInvocation | string,
   directory?: AgentDirectory | null,
   prompt?: string | null
 ): { command: string; args: string[]; cwd: string | undefined } {
+  const invocation = typeof agent === 'string' ? commandLineInvocation(agent) : agent;
+  // Only where the invocation says the prompt belongs on argv. A backend that reads it from
+  // stdin has already placed whatever stands for it — `codex exec -` — and a prompt appended
+  // after that would be a second positional rather than the instruction.
+  const onArgv = prompt && invocation.prompt.via === 'argv' ? prompt : null;
   if (workspace.environment.kind === 'wsl') {
     return {
       command: 'wsl.exe',
@@ -708,87 +728,18 @@ export function buildAgentCommand(
         '-d', workspace.environment.distro,
         '--cd', directory?.innerPath ?? workspace.innerPath,
         '--exec', 'bash', '-lc',
-        prompt ? `${agentCommand} ${singleQuoted(prompt)}` : agentCommand,
+        onArgv ? `${invocation.line} ${singleQuoted(onArgv)}` : invocation.line,
       ],
       // wsl.exe itself runs from wherever; --cd places the agent inside the project.
       cwd: undefined,
     };
   }
 
-  const [command, ...args] = tokenizeCommand(agentCommand);
-  if (prompt) args.push(prompt);
   return {
-    command: command ?? agentCommand,
-    args,
+    command: invocation.command,
+    args: invocationArgs(invocation, prompt),
     cwd: directory?.path ?? workspace.path,
   };
-}
-
-/**
- * The project's own model and effort on the end of the operator's command — or nothing.
- *
- * Nothing is the important half again: a project that configures neither must spawn the
- * command line it spawned before any of this existed, byte for byte, which is the rule
- * `worktreeSection` and `imageReferenceSection` already keep about the prompt.
- *
- * Appended rather than substituted, and appended rather than prepended, because the last
- * flag is the one the CLI keeps. That is not assumed: `claude --model sonnet --model
- * definitely-not-a-model -p hi` complains about the second one, so a project's setting
- * placed after the operator's wins. Nothing else in the operator's command is touched —
- * the alternative, a whole per-workspace command string, would be a project granting
- * itself an agent rather than retuning the one the board already allows.
- */
-export function applyAgentSettings(
-  agentCommand: string,
-  settings: AgentSettings | null | undefined
-): string {
-  if (!settings) return agentCommand;
-
-  // Quoted only when it has to be: `tokenizeCommand` consumes quotes, and a bare value is
-  // what somebody reading the log would have typed.
-  const value = (raw: string) => (/\s/.test(raw) ? `"${raw}"` : raw);
-  const flags = [
-    settings.model ? `--model ${value(settings.model)}` : null,
-    settings.effort ? `--effort ${value(settings.effort)}` : null,
-  ].filter(Boolean);
-
-  return flags.length ? `${agentCommand} ${flags.join(' ')}` : agentCommand;
-}
-
-/**
- * Split a command line into argv, keeping quoted runs together.
- *
- * Splitting on whitespace alone would tear apart a flag whose value contains spaces,
- * which is exactly the shape of a permission list: --allowedTools "Bash(gh:*) Read".
- * Quotes are consumed, not passed on — there is no shell here to strip them later.
- */
-export function tokenizeCommand(input: string): string[] {
-  const tokens: string[] = [];
-  let current = '';
-  let quote: '"' | "'" | null = null;
-  let started = false;
-
-  for (const char of input.trim()) {
-    if (quote) {
-      if (char === quote) quote = null;
-      else current += char;
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      started = true;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (started || current) { tokens.push(current); current = ''; started = false; }
-      continue;
-    }
-    current += char;
-    started = true;
-  }
-  if (started || current) tokens.push(current);
-
-  return tokens;
 }
 
 export interface AgentRun {
@@ -860,9 +811,18 @@ export interface AgentHostHandle {
  * nothing here may turn a refusal into a failed implementation.
  */
 export type AgentHost = (spec: {
-  agentCommand: string;
+  /** Which backend is running, so the host can render its stream the way its CLI reads. */
+  adapter: AgentAdapter;
+  /** The argv to run, and where the prompt goes — see `AgentInvocation.prompt`. */
+  invocation: AgentInvocation;
   directory: AgentDirectory | null;
-  /** The prompt, which the host has to deliver on the process's stdin and then close. */
+  /**
+   * The prompt.
+   *
+   * Where it goes is `invocation.prompt.via`'s answer and not the host's: on stdin, followed by
+   * the end of file the agent is waiting for, or as the last element of argv for a run that is
+   * going to draw an interface and needs stdin left for the reader.
+   */
   prompt: string;
   /** Every chunk the process writes, as it writes it. */
   onOutput: (chunk: string) => void;
@@ -952,7 +912,17 @@ function agentOutcome(
 const COMMAND_NOT_FOUND = 127;
 
 export interface RunAgentOptions {
-  agentCommand: string;
+  /**
+   * Which agent this is.
+   *
+   * There is no command line here any more, and that is the change: everything this module
+   * used to work out by reading one — does the run print and exit, does it stream, what does an
+   * event of its output mean — is now the backend's to answer, once, rather than four regular
+   * expressions that had to agree with each other.
+   */
+  adapter: AgentAdapter;
+  /** The argv to spawn and where its prompt goes, as the adapter built it. */
+  invocation: AgentInvocation;
   /**
    * Ceiling on the run, or `null` for none — which is now what both agents default to.
    *
@@ -1038,7 +1008,11 @@ async function runAgentProcess(
   prompt: string,
   options: RunAgentOptions
 ): Promise<AgentRun> {
-  const { command, args, cwd } = buildAgentCommand(workspace, options.agentCommand, options.directory);
+  // A private child always gets the prompt on stdin: it has no interface to draw and no reader
+  // to type into it, so the end of file that closes the prompt is free. What the invocation's
+  // `prompt.via` decides is whether a *hosted* run gets a pseudoterminal — and the marker a
+  // backend needs for stdin is already in its argv.
+  const { command, args, cwd } = buildAgentCommand(workspace, options.invocation, options.directory);
   // The article travels with the noun. A fixed one reads as "a issue URL".
   //
   // The host travels with it too, and that is the whole of #322 at this end: a run that
@@ -1054,7 +1028,7 @@ async function runAgentProcess(
   // Worked out once, here, because both paths below end in the same `agentOutcome` and a
   // second copy of this would be a second answer to the same question.
   const notFoundHint = options.notFoundVariable
-    ? commandNotFoundHint(workspace, options.agentCommand, options.notFoundVariable)
+    ? commandNotFoundHint(workspace, options.invocation, options.notFoundVariable)
     : null;
 
   // `undefined` means "use the default"; `null` and 0 mean "no ceiling at all".
@@ -1088,9 +1062,9 @@ async function runAgentProcess(
     let settled = false;
 
     // Reads the totals out of the stream the agent is already writing. Null unless the
-    // caller asked *and* the command streams, which is what keeps this off by default.
-    const meter = options.onUsage && streamsUsage(options.agentCommand)
-      ? new UsageMeter(options.onUsage)
+    // caller asked *and* this invocation streams, which is what keeps this off by default.
+    const meter = options.onUsage && options.adapter.streams(options.invocation)
+      ? new UsageMeter(options.onUsage, undefined, options.adapter)
       : null;
 
     const timeout = timeoutMs ? setTimeout(() => {
@@ -1176,14 +1150,15 @@ async function runHostedAgent(
 
   // Reads the totals out of the stream the agent is already writing. Null unless the
   // caller asked *and* the command streams, which is what keeps this off by default.
-  const meter = options.onUsage && streamsUsage(options.agentCommand)
-    ? new UsageMeter(options.onUsage)
+  const meter = options.onUsage && options.adapter.streams(options.invocation)
+    ? new UsageMeter(options.onUsage, undefined, options.adapter)
     : null;
 
   let handle: AgentHostHandle | null = null;
   try {
     handle = await host({
-      agentCommand: options.agentCommand,
+      adapter: options.adapter,
+      invocation: options.invocation,
       directory: options.directory ?? null,
       prompt,
       onOutput: (chunk) => { stdout += chunk; meter?.take(chunk); },
@@ -1384,7 +1359,8 @@ export async function runIssueAgent(
   workspace: Workspace,
   observation: string,
   options: {
-    agentCommand: string;
+    /** Which agent, and the command that reaches it. See `agentCommandFor`. */
+    agent: AgentCommandSpec;
     timeoutMs?: number;
     imagePaths?: readonly string[];
     /** Named when the command turns out not to exist where it was run. See RunAgentOptions. */
@@ -1423,7 +1399,7 @@ export async function runIssueAgent(
     ? options.timeoutMs
     : settings?.timeoutMs ?? undefined;
   const run = await runAgent(workspace, prompt, {
-    agentCommand: applyAgentSettings(options.agentCommand, settings),
+    ...agentRunFor(options.agent, 'issue', settings),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     expects: 'issues',
     what: 'issue agent',
@@ -1454,7 +1430,8 @@ export async function runReviseAgent(
   issueUrl: string,
   observations: string,
   options: {
-    agentCommand: string;
+    /** The issue agent, which is the same agent researching one. See `agentCommandFor`. */
+    agent: AgentCommandSpec;
     timeoutMs?: number;
     /** Named when the command turns out not to exist where it was run. See RunAgentOptions. */
     notFoundVariable?: string | null;
@@ -1477,7 +1454,7 @@ export async function runReviseAgent(
     ? options.timeoutMs
     : settings?.timeoutMs ?? undefined;
   const run = await runAgent(workspace, prompt, {
-    agentCommand: applyAgentSettings(options.agentCommand, settings),
+    ...agentRunFor(options.agent, 'issue', settings),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     expects: 'issues',
     what: 'issue revise agent',
