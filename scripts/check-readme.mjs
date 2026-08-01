@@ -30,6 +30,13 @@
  *     upstream asset named only where the line says whose it is, and a table saying which
  *     machines it runs on — a table, because the list of Claude Desktop config paths already
  *     named three operating systems and answered a different question.
+ *  7. And rule 6's image, in the plural. One picture is a hero and answers only the reader who
+ *     already has the tool running; the first five minutes had none. So `docs/media/` holds
+ *     three or four, the front page shows at least two, and none of them is carried by the
+ *     repository with nothing pointing at it. The names are held too — `image10.png` is not a
+ *     name somebody chose, and a name nobody chose is the first symptom of a capture nobody
+ *     looked at. What is *in* the picture stays a person's job, which is the whole argument
+ *     for `scripts/capture-media.mjs` taking them against a registry that belongs to nobody.
  *
  * `check-docs-index.mjs` separately holds it to naming only files that exist.
  *
@@ -398,6 +405,77 @@ check(`${UPSTREAM_ASSET} is named only where the line says whose it is`, unmarke
 const support = platformTable(readme);
 check(`a table says it runs on ${PLATFORMS.join(', ')}`, support !== null,
       'a reader on a Mac, on Linux or in WSL had to infer it from a Claude Desktop config path');
+
+// ─── 7. The curated media is curated ──────────────────────────
+
+/**
+ * How many pictures `docs/media/` is allowed to hold, and the shape of the name each carries.
+ *
+ * One image is a hero and nothing else: it shows the board a reader who already has the tool
+ * running would recognise, and says nothing about the first five minutes before that. More
+ * than four and the directory is a dumping ground again, which is the state #337 wrote the
+ * root images rule against — eighteen loose PNGs called `image.png` through `image10.png`.
+ *
+ * The name is the half a check can actually hold. Nothing here can look at a picture, so
+ * whether an image leaks a home directory or a private project name is a person's job (the
+ * argument for `scripts/capture-media.mjs`, which takes them against a registry that belongs
+ * to nobody). What is mechanical is that `image10.png` is not a name somebody chose, and a
+ * name nobody chose is the first symptom of a capture nobody looked at.
+ */
+const MEDIA_MIN = 3;
+const MEDIA_MAX = 4;
+
+/** Why this file name says nothing about what is in the picture, or null if it does. */
+function nameIssue(path) {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const match = /^([a-z0-9]+(?:-[a-z0-9]+)*)\.(?:png|jpe?g|gif|webp)$/.exec(name);
+  if (!match) return 'not lower-case words joined by hyphens';
+  const words = match[1].split('-');
+  if (words.length < 2) return 'one word — a picture needs saying what of';
+  if (words.some((word) => /^\d+$/.test(word) || /\d$/.test(word))) return 'a counter is not a description';
+  return null;
+}
+
+console.log(`\n7. ${MEDIA_DIR} holds ${MEDIA_MIN} or ${MEDIA_MAX} pictures of this tool, each named for what it shows`);
+
+const NAME_FIXTURES = [
+  ['words joined by hyphens say what a picture is', true, 'docs/media/first-run-welcome-board.png'],
+  ['and two of them are enough', true, 'docs/media/board-hero.png'],
+  ['one word is not', false, 'docs/media/board.png'],
+  ['nor is what a screenshot tool calls its tenth file', false, 'docs/media/image10.png'],
+  ['nor the same thing with the counter split off', false, 'docs/media/image-10.png'],
+  ['nor a capital and a space', false, 'docs/media/Screenshot 2026-08-01 at 09.41.22.png'],
+];
+
+for (const [name, expected, path] of NAME_FIXTURES) {
+  check(`the rule: ${name}`, (nameIssue(path) === null) === expected, nameIssue(path) ?? 'accepted');
+}
+
+const curated = [...tracked].filter((file) => file.startsWith(MEDIA_DIR)
+                                          && /\.(png|jpe?g|gif|webp)$/i.test(file)).sort();
+check(`${MEDIA_DIR} holds ${MEDIA_MIN} to ${MEDIA_MAX} tracked images (${curated.length})`,
+      curated.length >= MEDIA_MIN && curated.length <= MEDIA_MAX,
+      curated.join(', ') || 'none — the front page opens on a fork of somebody else\'s demo');
+
+const vague = curated.map((file) => [file, nameIssue(file)]).filter(([, issue]) => issue);
+check('each of them is named for what it shows', vague.length === 0,
+      vague.map(([file, issue]) => `${file} — ${issue}`).join('\n        '));
+
+// The hero says what the tool looks like in use; a reader who has not started it yet is
+// answered by neither the hero nor the prose, which is what the second image is for.
+check(`the front page shows at least two of them (${own.length})`, own.length >= 2,
+      `${own.join(', ') || 'none'} — the hero alone shows the board a reader does not have yet`);
+
+// An image nothing points at is an image nobody is looking after, and the next person to
+// re-shoot the set cannot tell whether it is still wanted.
+const shown = new Set();
+for (const file of tracked) {
+  if (!file.endsWith('.md')) continue;
+  for (const path of imagesIn(readFileSync(join(repoRoot, file), 'utf8'))) shown.add(path);
+}
+const orphans = curated.filter((file) => !shown.has(file));
+check('and every curated image is shown by some tracked document', orphans.length === 0,
+      `${orphans.join(', ')} — carried by the repository and pointed at by nothing`);
 
 if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
 console.log('\nall cases passed');
