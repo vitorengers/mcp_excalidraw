@@ -5294,6 +5294,25 @@ function App(): JSX.Element {
   }
 
   /**
+   * A project the settings dialog has just taken off the registry.
+   *
+   * The mirror of `adoptWorkspace`, and it has the same reason not to reload: the registry is
+   * read per request, so the list the route answered with is already the truth, and a reload
+   * here would throw away every unsynced shape on whatever board is open.
+   *
+   * The tab that was removed is by construction the active one — the gear that opens this
+   * dialog is only drawn on the tab in front — so the board has to go somewhere. The first of
+   * what is left, and `default` when nothing is: that is the board of somebody who has
+   * registered nothing, which is exactly what removing the last project makes them again.
+   */
+  const forgetWorkspace = (removedId: string, list: WorkspaceSummary[]): void => {
+    setWorkspaces(list)
+    setWorkspaceDialog(null)
+    if (removedId !== activeWorkspaceRef.current) return
+    switchWorkspace(list[0]?.id ?? 'default')
+  }
+
+  /**
    * A tab dragged, or moved with the chord, to a new place on the strip.
    *
    * Shown before it is written and reconciled against what the route answers with, the way
@@ -6497,10 +6516,12 @@ function App(): JSX.Element {
       {workspaceDialog === 'config' && (
         <WorkspaceConfigDialog
           workspaceId={activeWorkspace}
+          workspacePath={workspaces.find((workspace) => workspace.id === activeWorkspace)?.path ?? ''}
           onClose={() => setWorkspaceDialog(null)}
           // Only the list is replaced: the board is already showing this project, so
           // switching to it again would empty the scene and reconnect for nothing.
           onSaved={(_workspace, list) => { setWorkspaces(list); setWorkspaceDialog(null) }}
+          onRemoved={forgetWorkspace}
         />
       )}
 

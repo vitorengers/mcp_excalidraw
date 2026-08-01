@@ -15,6 +15,7 @@ The board itself is cut into two halves, each with a key that scrolls onto it â€
 
 | Document | What it covers |
 |---|---|
+| [architecture.md](architecture.md) | How the pieces fit: every directory, and one press on an issue block traced to the agent it spawns |
 | [install.md](install.md) | Getting a board up on Windows, macOS or Linux â€” the one command, the launchers, and from source |
 | [running.md](running.md) | The operator and development procedure: the build, the port, and what every `EXCALIDRAW_*` variable means |
 | [launchers.md](launchers.md) | The three double-click launchers, and why not a SEA, an Electron shell or a signed app |

@@ -63,6 +63,45 @@ than to this repository:
   elsewhere gets the blank and fills it in the settings dialog; a project already registered is
   never rewritten to repair it.
 
+## Removing a project from the board
+
+`DELETE /api/workspaces/:id`, **loopback only** like the rest of this block. It drops exactly
+that entry, writes the file back through the same read–modify–write the `+` uses, and answers
+with the reloaded list — so the tab goes with no restart. Removing an id the registry does not
+hold is a `404` naming what the board does have, and the file is left byte for byte as it was.
+
+This existed nowhere until #346, and its absence was the first thing a stranger could not undo.
+Pick the wrong folder, or move a project after registering it, and the tab stayed for good:
+`loadWorkspace` marks such an entry broken rather than dropping it, `PUT /api/workspaces/order`
+refuses a list that leaves an id out, so it could not be pressed into service as a removal, and
+the only way back was hand-editing a JSON file whose path comes from a variable the reader has
+never set.
+
+What it does **not** touch is most of the point:
+
+- **The project directory is not the board's to delete**, and neither is its
+  `board.config.json`. A removal is a line out of a registry. The confirmation on screen says so
+  in those words, because "remove" is a word people have learned to read as "delete the files".
+- **The board you drew on is kept.** It is saved beside the registry, in `<registry>-state/`
+  (*The save half* in [element-store.md](element-store.md)), and copied nowhere else — so a
+  project removed by mistake and added back comes back drawn. `DELETE /api/workspaces/:id?board=delete` is how a
+  caller who means otherwise says so — an opt-in on the request, never a side effect, and the
+  answer's `board` field reports which of the two happened. The parameter takes `keep` or
+  `delete` and refuses anything else: a typo in the one flag that decides whether a drawing
+  survives should be an error rather than a default.
+- **A run in flight is refused**, with a `409` naming the issue URLs holding it. The worktree,
+  the branch and the pull request an implementation is in the middle of all hang off the entry
+  being deleted, and the agent would carry on writing to a project the board no longer knows.
+  Wait for the run, or restart the board.
+
+On screen it is at the foot of the project settings dialog — the ⚙ on the tab in front — as
+*Remove this project from the board*, behind a confirmation that names the folder. There rather
+than on the tab itself because the dialog is already about one project and has already named it;
+a control on the strip would offer to remove whichever tab a pointer was over. When the board
+being removed is the one on screen, the canvas moves to the first project left, or to `default`
+— the board of somebody who has registered nothing, which is what removing the last one makes
+you again.
+
 ## The order of the tabs
 
 The strip renders the list exactly as `GET /api/workspaces` hands it over, and that route answers
