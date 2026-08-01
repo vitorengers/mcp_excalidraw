@@ -77,7 +77,9 @@ It is a file rather than a password. The server writes it into your per-user sta
 beside its pidfile — `server-<port>.token`, owner-only — and everything entitled to drive the
 board reads it from there: the launcher puts it in the URL it opens in your browser, and the CLI
 and the MCP server read the file directly. You never type it, there is nothing to configure, and
-it is gone when the server stops. A new start is a new secret.
+it is gone when the server stops. A new start is a new secret — except a **restart**, which is a
+replacement rather than a stop: the board hands its secret to the one taking its place, so the tab
+watching the Restart button does not come back to a board that refuses it.
 
 The page's half is worth knowing about, because it is what keeps the secret out of your history:
 the launcher opens `http://127.0.0.1:<port>/?t=<secret>`, the page reads it once, keeps it in
@@ -97,7 +99,7 @@ the control rather than an oversight.
 
 `VIBEMAXXING_NO_AUTH=1` turns it off, and it exists for the checks in `scripts/`, each of which
 starts a throwaway board and drives it over plain HTTP. There is no reason to set it on a board
-a person uses, and a board started with it says so on its console.
+a person uses, and a board started with it writes a line saying so into its log file.
 
 `scripts/check-token-auth.mjs` holds this — the refusal and the acceptance, the file's mode, the
 refused upgrade, and, in a real browser, the launcher URL loading a working board whose address

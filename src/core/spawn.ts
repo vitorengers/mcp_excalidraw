@@ -12,7 +12,7 @@ import { DEFAULT_CANVAS_PORT, removeCanvasState, whatIsOn } from './port.js';
 
 export { foreignServiceError };
 import { readPidFile, removePidFile, startupLogPath } from './pidfile.js';
-import { boardUrlWithToken, removeAuthToken } from './auth-token.js';
+import { boardUrlWithToken, removeAuthToken, removeTokenHandover } from './auth-token.js';
 import { ensureStateDir, realEnvironment, settingName } from './settings.js';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
@@ -340,10 +340,12 @@ export async function stopCanvas(): Promise<StopResult> {
       // And the token beside them. A process killed outright never runs its own cleanup, and a
       // token left behind is a secret on disk for a server that no longer exists.
       removeAuthToken(port);
+      removeTokenHandover(port);
       return { stopped: false, pid: filePid, message: `Canvas server is not running; stale pidfile removed (pid ${filePid}).` };
     }
     removeCanvasState(port);
     removeAuthToken(port);
+      removeTokenHandover(port);
     return { stopped: false, message: 'Canvas server is not running.' };
   }
 
@@ -368,6 +370,7 @@ export async function stopCanvas(): Promise<StopResult> {
       removePidFile(port);
       removeCanvasState(port);
       removeAuthToken(port);
+      removeTokenHandover(port);
       return { stopped: true, pid, message: `Canvas server (pid ${pid}) stopped.` };
     }
     await new Promise(resolve => setTimeout(resolve, 200));

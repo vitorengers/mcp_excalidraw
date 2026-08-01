@@ -141,11 +141,14 @@ import {
 import { allowedAuthorities, verifyOrigin } from './core/origin-gate.js';
 import {
   authRequired,
+  consumeTokenHandover,
   newToken,
   removeAuthToken,
+  removeTokenHandover,
   sameToken,
   tokenFilePath,
   writeAuthToken,
+  writeTokenHandover,
   TOKEN_HEADER,
   TOKEN_QUERY
 } from './core/auth-token.js';
@@ -194,20 +197,30 @@ function boardAuthorities(): Set<string> {
 }
 
 /**
- * The secret this start of the server knows, or null when it was told to want none.
+ * Whether this board is behind a secret at all, and what that secret is.
  *
- * Generated here rather than read from anywhere: it is per *start*, and a token that came from
- * a file would be valid for whatever else had held this port. It is written to the state
- * directory once `listen` succeeds — see `startServer` at the bottom — and every caller that may
- * drive this board reads it from there: the launcher puts it in the URL it opens, the page keeps
- * it for the tab, and the CLI and the MCP server read the file directly.
+ * Two names rather than one so that the gate below can **fail closed**: the token cannot be
+ * chosen up here, because it is per start and per port and `PORT` is resolved at the bottom of
+ * this file, so `startServer` sets it. Anything that reached a route before then — nothing does,
+ * but the shape of the code should not be what says so — is refused rather than let through.
  *
  * The gate this feeds is authentication and not authorization: one secret, and holding it is the
  * whole of being allowed. What it defends against is another *account* and a sandboxed process,
  * because the file's permissions are the operating system's own boundary. It defends against
  * nothing already running as the operator, and `docs/SECURITY.md` says so in those words.
  */
-const AUTH_TOKEN: string | null = authRequired() ? newToken() : null;
+const AUTH_REQUIRED = authRequired();
+let AUTH_TOKEN: string | null = null;
+
+/**
+ * Whether this exit is a replacement rather than a stop.
+ *
+ * `POST /api/restart` hands the board to a supervisor that brings it back on the same port while
+ * the reader's tab watches. The exit handlers clear the state files, and clearing the token there
+ * would leave that tab holding a secret nothing accepts — a board that reports itself back and
+ * then answers 401 to everything. So a restart writes a handover instead; see `core/auth-token.ts`.
+ */
+let handingOver = false;
 
 /**
  * The token a caller offered, in the two spellings there are.
@@ -245,7 +258,7 @@ const wss = new WebSocketServer({
     // is one of the two things the token has to cover — the other being everything under `/api`.
     // Refused here rather than after `connection`, because a socket that opens and is then closed
     // has already been handed `initial_elements`.
-    if (AUTH_TOKEN && !sameToken(offeredToken(req.headers, req.url), AUTH_TOKEN)) {
+    if (AUTH_REQUIRED && !sameToken(offeredToken(req.headers, req.url), AUTH_TOKEN)) {
       logger.warn('Refused a WebSocket upgrade: it carried no valid board token.');
       done(false, 401, 'Unauthorized');
       return;
@@ -293,7 +306,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
  * megabytes of body before being turned away.
  */
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (!AUTH_TOKEN) return next();
+  if (!AUTH_REQUIRED) return next();
   if (req.path !== '/api' && !req.path.startsWith('/api/')) return next();
   if (sameToken(offeredToken(req.headers, req.url), AUTH_TOKEN)) return next();
 
@@ -5423,6 +5436,22 @@ app.post('/api/restart', (_req: Request, res: Response) => {
     });
   }
 
+  // The board is being replaced rather than stopped, and the reader's tab is watching it happen.
+  // So the secret goes with it: written where the replacement will take it, and kept out of the
+  // exit handlers' cleanup. Without this the tab comes back to a board that reports itself up and
+  // then refuses everything it asks — see `core/auth-token.ts`.
+  handingOver = true;
+  if (AUTH_TOKEN) {
+    try {
+      writeTokenHandover(PORT, AUTH_TOKEN);
+    } catch (error) {
+      // Said, and not fatal: the restart still happens and the board still comes up. What is lost
+      // is the tab, which has to be re-opened with `vibemaxxing` — worth a line, not a refusal.
+      logger.warn(`Could not hand this board's token to its replacement: ${(error as Error).message}. `
+        + 'The open tab will have to be re-opened after the restart.');
+    }
+  }
+
   // warn rather than info: on this machine the console is warn and above, and a process about
   // to exit on purpose should say so where somebody watching the server can see it.
   logger.warn(`Restart requested: supervisor ${supervisor} will replace pid ${process.pid}. Log: ${log}`);
@@ -5621,6 +5650,13 @@ server.on('error', (error: NodeJS.ErrnoException) => {
 });
 
 async function startServer(): Promise<void> {
+  // Before anything can be served, and here rather than at the declaration because `PORT` is
+  // resolved at the bottom of this file. A restart left its secret for this start (see
+  // `core/auth-token.ts`); any other start makes one, and the handover — if a restart wrote one
+  // and never came back — is taken and deleted either way.
+  const inherited = AUTH_REQUIRED ? consumeTokenHandover(PORT) : (removeTokenHandover(PORT), null);
+  AUTH_TOKEN = AUTH_REQUIRED ? (inherited ?? newToken()) : null;
+
   if (LOOPBACK_GUARD_HOSTS.has(HOST)) {
     const existingHost = await findExistingLoopbackListener(PORT);
     if (existingHost) {
@@ -5662,7 +5698,10 @@ async function startServer(): Promise<void> {
           + `${(error as Error).message}. Nothing would be able to drive this board.`);
       }
     } else {
-      logger.warn(`${settingName('NO_AUTH')}=1: this board has no token, so anything that can `
+      // `info`, so it reaches the log file and not the console. Every check in `scripts/` starts
+      // its board with this set, and one of them asserts that an unconfigured board warns about
+      // nothing at all — a line here on `warn` is a paragraph of stderr under the whole suite.
+      logger.info(`${settingName('NO_AUTH')}=1: this board has no token, so anything that can `
         + 'reach the port drives it — see docs/SECURITY.md.');
     }
     // And beside it, the port itself — the one thing a later command cannot work out on its
@@ -5699,7 +5738,7 @@ async function startServer(): Promise<void> {
     // rather than a minute — but a shutdown that discarded the last edit would be the same
     // loss #225 is about, arriving through the one door that could have been closed politely.
     flushBoardStateSaves();
-    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); removeAuthToken(PORT); }
+    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); if (!handingOver) removeAuthToken(PORT); }
     server.close(() => process.exit(0));
     // Force-exit if open sockets keep the server from closing promptly
     setTimeout(() => process.exit(0), 2000).unref();
@@ -5708,7 +5747,7 @@ async function startServer(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('exit', () => {
     flushBoardStateSaves();
-    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); removeAuthToken(PORT); }
+    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); if (!handingOver) removeAuthToken(PORT); }
   });
 }
 

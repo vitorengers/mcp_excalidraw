@@ -29,21 +29,28 @@
  * runs behind (`scripts/lib/spawn-canvas.mjs`). A switch nothing exercises is a switch that
  * stops working on the day it is needed, and the day it is needed is every other check.
  *
+ * And the restart, which is the one exit that is not a stop: the board is replaced on the same
+ * port while a tab watches, so the secret has to travel with it. Per-start secrets and nothing
+ * else would leave that tab holding one nothing accepts — a board that reports itself back up
+ * and then refuses everything it is asked.
+ *
  * The board is given a throwaway `HOME`/`USERPROFILE`/`LOCALAPPDATA`/`XDG_STATE_HOME`, so the
  * token lands inside this check's own temporary directory and the operator's real state
  * directory is never read or written. Where it lands is spelled out here from the platform
  * rather than imported, so that a change to the convention has to be made twice on purpose.
  *
- * Self-contained: two canvas servers on ports the kernel just handed out, one headless Chrome,
- * all killed at the end. Run `./node_modules/.bin/tsc` and `./node_modules/.bin/vite build`
- * first — it loads the built frontend.
+ * Self-contained: canvas servers on ports the kernel just handed out, one headless Chrome, all
+ * killed at the end — the replacement a restart brings up included, since a detached one nothing
+ * tracked would leave a port held on whichever machine ran this. Run `./node_modules/.bin/tsc`
+ * and `./node_modules/.bin/vite build` first — it loads the built frontend, and it runs the
+ * built CLI.
  *
  * Usage: node scripts/check-token-auth.mjs [--chrome <path>] [--shots <dir>]
  *
  * Tier: browser
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -52,7 +59,7 @@ import WebSocket from 'ws';
 
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 import { freePort } from './lib/free-port.mjs';
-import { startCanvas } from './lib/spawn-canvas.mjs';
+import { canvasEnvironment, startCanvas } from './lib/spawn-canvas.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -108,6 +115,8 @@ function conventionalTokenFile(port) {
 }
 
 const children = [];
+/** The board the restart case brings up: detached, so it is not one of `children`. */
+let replacementPid = null;
 let log = '';
 
 async function waitFor(fn, what, tries = 120) {
@@ -415,9 +424,44 @@ try {
   check('a reload of the bare URL still works, from what the tab remembered',
         reloaded.connected === true, JSON.stringify(reloaded.dot));
 
-  // ─── 5. The opt-out every other check runs behind ───────────
+  // ─── 5. The CLI, which reads the same file ──────────────────
 
-  console.log('\n5. the opt-out is real, because every other check in this directory is behind it');
+  console.log('\n5. the CLI reads the token off disk, so nothing there needs a flag');
+  /** A `vibemaxxing` run against this board, with `home` as the only place it may look. */
+  const runCli = (home) => spawnSync(process.execPath, [join(repoRoot, 'dist', 'bin.js'), 'describe'], {
+    encoding: 'utf8',
+    cwd: repoRoot,
+    env: canvasEnvironment({
+      // Explicit, so the resolution in `core/port.ts` cannot walk off and find a real board on
+      // this machine — see docs/trap-check-environment.md.
+      EXPRESS_SERVER_URL: board.base,
+      LOG_LEVEL: 'error',
+      LOG_FILE_PATH: join(workDir, 'cli.log'),
+      HOME: home,
+      USERPROFILE: home,
+      LOCALAPPDATA: home,
+      XDG_STATE_HOME: home,
+    }),
+  });
+
+  const reading = runCli(fakeHome);
+  check('`describe` against a board behind a token succeeds', reading.status === 0,
+        `exit ${reading.status}: ${(reading.stderr ?? '').slice(-300)}`);
+  check('and it read the actual board, so the token came out of the state directory',
+        (reading.stdout ?? '').includes('token-check-shape'), (reading.stdout ?? '').slice(0, 300));
+
+  // The other half, and it is the one that makes the first mean anything: a caller that cannot
+  // read the file is refused. Without it, "succeeded" would also be the answer for a board that
+  // was never gated.
+  const strangerHome = join(workDir, 'stranger');
+  mkdirSync(strangerHome, { recursive: true });
+  const stranger = runCli(strangerHome);
+  check('a CLI that cannot see the state directory is refused', stranger.status !== 0,
+        `exit ${stranger.status}: ${(stranger.stdout ?? '').slice(0, 200)}`);
+
+  // ─── 6. The opt-out every other check runs behind ───────────
+
+  console.log('\n6. the opt-out is real, because every other check in this directory is behind it');
   const open = await startBoard({ auth: false });
   const openRead = await call(open.base, '/api/elements');
   check('a board started with the opt-out answers /api with no token', openRead.status === 200,
@@ -426,6 +470,39 @@ try {
         !existsSync(conventionalTokenFile(open.port)), conventionalTokenFile(open.port));
   const openSocket = await handshake(`${open.base.replace(/^http/, 'ws')}/?workspace=default`);
   check('its socket opens with no token either', openSocket.opened, openSocket.message);
+
+  // ─── 7. A restart is a replacement, not a stop ──────────────
+
+  console.log('\n7. a restart hands the secret on, so the tab watching it does not go dead');
+  const replaced = await startBoard({ auth: true });
+  const carried = readFileSync(conventionalTokenFile(replaced.port), 'utf8').trim();
+  const wasPid = (await call(replaced.base, '/health')).body?.pid ?? null;
+  check('the board about to be restarted names a pid', typeof wasPid === 'number', String(wasPid));
+
+  const asked = await call(replaced.base, '/api/restart', {
+    method: 'POST',
+    headers: { [TOKEN_HEADER]: carried },
+  });
+  check('POST /api/restart is itself behind the token, and this one carries it',
+        asked.status === 200 && asked.body?.success === true,
+        `got ${asked.status} ${JSON.stringify(asked.body).slice(0, 200)}`);
+
+  // The replacement is a detached process the supervisor starts, so it is not one of `children`.
+  // Its pid is read here and killed in the `finally`; a check that orphaned a canvas would leave
+  // a port held on the machine that runs it.
+  const back = await waitFor(async () => {
+    const now = await call(replaced.base, '/health');
+    const pid = now.body?.pid;
+    return typeof pid === 'number' && pid !== wasPid ? pid : null;
+  }, 'a different pid to answer on the same port', 200);
+  replacementPid = back;
+  check('a different process answers on the same port', back !== wasPid, `${wasPid} -> ${back}`);
+
+  const afterRestart = await call(replaced.base, '/api/elements', { headers: { [TOKEN_HEADER]: carried } });
+  check('the secret the open tab is holding still works against the replacement',
+        afterRestart.status === 200, `got ${afterRestart.status}`);
+  check('and the handover file is gone, consumed by the start that used it',
+        !existsSync(join(dirname(conventionalTokenFile(replaced.port)), `server-${replaced.port}.handover`)));
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);
@@ -433,6 +510,7 @@ try {
   try { socket?.close(); } catch { /* already gone */ }
   await sleep(300);
   for (const child of children) { try { child.kill(); } catch { /* already gone */ } }
+  if (replacementPid) { try { process.kill(replacementPid); } catch { /* already gone */ } }
   await sleep(400);
   // Windows can still hold a handle on a directory a killed browser was reading; a temporary
   // directory left behind is not a failed check.

@@ -25,7 +25,9 @@ import { DEFAULT_CANVAS_PORT } from './port.js';
  * the deliberate limit of the control and is written down in `docs/SECURITY.md`.
  *
  * Per start rather than per install: a token that outlived the process would sit in a file
- * forever and would still be valid for whatever came next on that port.
+ * forever and would still be valid for whatever came next on that port. The one exit that is
+ * not a stop — `POST /api/restart`, where the reader's tab is watching the board be replaced —
+ * hands its secret to its replacement through `writeTokenHandover` below.
  */
 
 /**
@@ -111,6 +113,61 @@ export function readAuthToken(port: number): string | null {
 
 export function removeAuthToken(port: number): void {
   for (const file of tokenFilePaths(port)) {
+    try { fs.unlinkSync(file); } catch { /* already gone */ }
+  }
+}
+
+/**
+ * Where a server about to be replaced leaves its secret for the one replacing it.
+ *
+ * A restart is the one exit that is not a stop: `POST /api/restart` hands the board to a
+ * supervisor which brings the same board up again on the same port, and the reader's tab is
+ * watching the whole time. Per-start secrets would leave that tab holding a token nothing
+ * accepts — a board that says `Back as pid N` and then answers 401 to everything, which is
+ * precisely the shape of failure this repository is built around noticing.
+ *
+ * So the restart, and only the restart, hands the secret over. A file rather than an
+ * environment variable because the two processes already share this directory and nothing
+ * else: the supervisor is spawned detached, and a variable would have to be read out of
+ * `process.env` by name, which is a setting an operator can find and pin.
+ *
+ * Consumed and deleted by the next start on that port, so a restart that never completes leaves
+ * it for one start and no longer. Everything else — a clean stop, `vibemaxxing stop`, a crash —
+ * writes no handover, so the next board on that port makes a new secret.
+ */
+export function handoverFilePath(port: number): string {
+  return path.join(stateDir(), `server-${port}.handover`);
+}
+
+function handoverFilePaths(port: number): string[] {
+  return stateDirCandidates().map(dir => path.join(dir, `server-${port}.handover`));
+}
+
+export function writeTokenHandover(port: number, token: string): void {
+  const file = handoverFilePath(port);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  try { fs.unlinkSync(file); } catch { /* not there */ }
+  fs.writeFileSync(file, token, { encoding: 'utf-8', mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch { /* not this platform's idea of permissions */ }
+}
+
+/** The secret a restart left for this start, taken and removed. Null when this is not one. */
+export function consumeTokenHandover(port: number): string | null {
+  let found: string | null = null;
+  for (const file of handoverFilePaths(port)) {
+    try {
+      const raw = fs.readFileSync(file, 'utf-8').trim();
+      if (raw && !found) found = raw;
+    } catch { /* not in this directory */ }
+    // Deleted whether or not it was the one used: a handover nobody consumed is a secret lying
+    // in a file, and the whole point of this one is that it lives for a single start.
+    try { fs.unlinkSync(file); } catch { /* already gone */ }
+  }
+  return found;
+}
+
+export function removeTokenHandover(port: number): void {
+  for (const file of handoverFilePaths(port)) {
     try { fs.unlinkSync(file); } catch { /* already gone */ }
   }
 }
