@@ -85,10 +85,21 @@ and not a minute.
 mirror is rebuilt from GitHub on every read, and the terminal's block exists for as long as its
 shell does. The browser already keeps both out of the autosync and `scripts/export-board.mjs` keeps
 them out of the export; this is the third door, and it needs to be, because the store is reachable
-from the REST API too. Files are not saved, exactly as the export does not save them: an image
-pasted onto a board comes back as an element whose file the process no longer holds.
+from the REST API too.
 
-`scripts/export-board.mjs` is still the only path into the tracked board file, and still run by hand.
+**Images are saved too**, since #343, and that is the one thing here with a ceiling on it. Until then
+the save wrote `files: {}` and the autosync uploaded no bytes at all, so an image pasted on a board
+was an element whose file existed only in the tab it was pasted into — every reload came back with a
+hole where the picture was, and a second window never saw it. Both halves are closed: the browser
+posts the bytes its scene names to `POST /api/files` before the elements that name them, and the
+save writes the files its own saved elements point at. A dataURL is base64 and this file is
+rewritten on a one-second debounce, so a board's images are written up to
+`BOARD_IMAGE_BUDGET_BYTES` — 32 MB, which is a save of 60 to 100 ms and about twenty full-screen
+screenshots. Past that line the board still shows every image and the ones over it are named in a
+warning and said on the canvas; what they lose is surviving the process.
+
+`scripts/export-board.mjs` is still the only path into the tracked board file, and still run by hand,
+and it still writes no files — so a *tracked* board carries none.
 
 ## Which of the two a board comes back from
 
@@ -124,6 +135,8 @@ which is the only participant that was still there.
 A tombstone (`isDeleted`) is dropped rather than stored: it travels through a live sync so a client
 can be told about a removal it has not seen, and a board read from cold has nobody to tell.
 
-`scene.files` is read into the process-wide file store. Nothing comes back through it today —
-`scripts/export-board.mjs` writes an empty `files` object unconditionally — and it is what keeps the
-first export that does save them from seeding image elements as broken references.
+`scene.files` is read into the process-wide file store, and since #343 this is how a board gets its
+pictures back: the save writes the files its elements point at, and without this door the seed would
+put those elements back as references to bytes nobody holds. A tracked board file still carries none
+— `scripts/export-board.mjs` writes an empty `files` object unconditionally — so the read is lenient
+about the object being absent rather than treating it as a malformed scene.

@@ -20,6 +20,13 @@ import fs from 'fs/promises';
 import logger from '../utils/logger.js';
 import { ExcalidrawFile } from '../types.js';
 import { Workspace } from './workspaces.js';
+// Moved to `board-files.ts` with #343 and re-exported here, because the same question — which
+// file ids does this scene name — is now asked by the frontend too, and this module reads the
+// filesystem. Re-exported rather than relocated outright so a caller that already knows where
+// to ask keeps asking there.
+import { issueImageIds } from './board-files.js';
+
+export { issueImageIds };
 
 /** Where a run's images live, relative to the project root. */
 export const ISSUE_IMAGE_DIR = '.excalidraw-issue-images';
@@ -75,13 +82,6 @@ export function decodeDataUrl(dataURL: unknown): { data: Buffer; mimeType: strin
     return null;
   }
   return data.length ? { data, mimeType } : null;
-}
-
-/** The ids a block has attached. Anything that is not a list of ids reads as none. */
-export function issueImageIds(customData: unknown): string[] {
-  const value = (customData as Record<string, unknown> | null | undefined)?.issueImages;
-  if (!Array.isArray(value)) return [];
-  return value.filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
 }
 
 /** A directory name that cannot escape the project or surprise a filesystem. */

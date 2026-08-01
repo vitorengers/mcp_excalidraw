@@ -106,6 +106,9 @@ bound to that — off loopback every GitHub-backed route answers `403`, so what 
 network interface is a drawing canvas and nothing else, and the board says so on itself rather
 than showing you an empty region. If you expose it on a network interface (`HOST=0.0.0.0`)
 anyway, put network-level access controls in front: the API has no built-in authentication.
+**[docs/SECURITY.md](docs/SECURITY.md) is the whole of it** — what the tool runs as, which
+switches spawn a coding agent or a real shell and what each one grants, the origin gate in front
+of every route, and where to report a vulnerability.
 
 ## Testing
 
@@ -139,6 +142,9 @@ is reported as a skip rather than passing quietly.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how work is done in this repository, with
   [AGENTS.md](AGENTS.md) as the copy a coding agent loads, and
   [docs/development-log.md](docs/development-log.md), one dated entry per merged pull request
+- [docs/SECURITY.md](docs/SECURITY.md) — the trust model of a tool that spawns coding agents and
+  real shells: what it runs as, which switches grant that, and where to report a vulnerability.
+  [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) is what is expected of everyone taking part
 
 Core drawing runs fully local and needs no API key. The optional `share` command uploads an
 encrypted scene to excalidraw.com; nothing else leaves the machine except the calls to
