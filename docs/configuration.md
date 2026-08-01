@@ -68,8 +68,10 @@ directory whichever way the tool was started:
 | Linux and other POSIX | `$XDG_STATE_HOME/excalidraw-canvas`, or `~/.local/state/excalidraw-canvas` |
 
 The pidfile, the restart log, the startup log and the running board's `canvas.json` were already
-there; the configuration joins them. A reader tries the `VibeMaxxing-Canvas` spelling first and
-falls back to the one above, which is the rename-survival order `src/core/identity.ts` explains.
+there; the configuration joins them, and so does `server-<port>.token`, the secret the running
+board is behind — written owner-only, replaced on every start, removed when it stops
+([SECURITY.md](SECURITY.md)). A reader tries the `VibeMaxxing-Canvas` spelling first and falls
+back to the one above, which is the rename-survival order `src/core/identity.ts` explains.
 
 `EXCALIDRAW_STATE_HOME` redirects the *parent* of that directory, and it is read from the
 environment only — a file cannot name the directory it is in.

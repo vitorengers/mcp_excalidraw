@@ -64,6 +64,16 @@ export function canvasEnvironment(overrides = {}) {
   delete env.PORT;
   delete env.HOST;
   env.EXCALIDRAW_NO_DOTENV = '1';
+  // No board token, for the checks and for nothing else (#350). Every check in this directory
+  // drives its throwaway server over plain `fetch` — around a hundred and fifty call sites, plus
+  // the browser ones, which navigate a real Chrome at the board and would each need the token in
+  // the URL. The choice the issue put was between that and one switch here; a hundred and fifty
+  // call sites is a hundred and fifty chances to write a check that passes because it forgot the
+  // header, and this is one line in one file that a reader of any check can find.
+  //
+  // A check that is *about* the token deletes it again — `{ EXCALIDRAW_NO_AUTH: undefined }` —
+  // and `check-token-auth.mjs` is the one that does.
+  env.EXCALIDRAW_NO_AUTH = '1';
   // Before the overrides, so a check that stubs `gh` itself still wins. Quoted and with forward
   // slashes because the server tokenizes this string and spawns argv[0] directly — there is no
   // shell to forgive a space in the path.
@@ -74,6 +84,16 @@ export function canvasEnvironment(overrides = {}) {
   // fixtures with this. Written under the old one, both spellings beat it: the new prefix by
   // precedence, the old by overwriting this very key below.
   env.EXCALIDRAW_GH_COMMAND = `node "${unstubbedGh.replace(/\\/g, '/')}"`;
+  // And the welcome board, for the same reason and one door further in: a check's throwaway
+  // project declares no `board`, so since #351 it comes up holding the board this tool ships to
+  // a first-time reader — 32 elements a check never asked for, on a canvas whose element counts
+  // and click coordinates it is asserting. `check-agent-transcript-fold.mjs` was the proof: five
+  // cases red on a click that landed nowhere, in a check about a transcript.
+  //
+  // Empty rather than deleted, because unset is the *default* and the default is on.
+  // `check-welcome-board.mjs` overrides it back to `undefined`, which is how the shipped
+  // behaviour is still covered by something.
+  env.EXCALIDRAW_WELCOME_BOARD = '';
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete env[key];
     else env[key] = String(value);

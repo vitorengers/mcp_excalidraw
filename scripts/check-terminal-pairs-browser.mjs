@@ -604,7 +604,7 @@ try {
   // a check whose answer depends on the machine's own setting passes somewhere and fails
   // somewhere else for a reason nobody can see.
   await send('Page.addScriptToEvaluateOnNewDocument', {
-    source: `try { localStorage.setItem('excalidraw-canvas-theme', 'light') } catch (error) { /* no storage */ }`,
+    source: `try { localStorage.setItem('vibemaxxing-canvas-theme', 'light') } catch (error) { /* no storage */ }`,
   });
   await send('Page.reload', { ignoreCache: false });
   await sleep(500);

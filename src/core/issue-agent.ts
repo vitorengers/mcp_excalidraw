@@ -4,8 +4,9 @@
  * This spawns a process with full access to a repository, which is the most dangerous
  * thing this server does. Three guards apply, and none of them is optional:
  *
- *  - it only runs when EXCALIDRAW_ISSUE_AGENT is set, so it cannot be reached by
- *    default on a server that has no authentication;
+ *  - it only runs when EXCALIDRAW_ISSUE_AGENT is set, so it cannot be reached by default,
+ *    and the token in front of every route (#350) does not make it reachable either — a
+ *    secret this account can read is no boundary against a process running as this account;
  *  - it refuses to run unless the server is bound to loopback;
  *  - one run at a time per element, tracked by the caller, so a double click cannot
  *    open two issues.

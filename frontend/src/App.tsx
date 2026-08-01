@@ -12,6 +12,8 @@ import {
 import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
 import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/mermaidConverter'
 import { canvasFontsReady } from './canvas-fonts'
+import { withBoardToken } from './auth'
+import { STORAGE_KEYS, readSetting, writeSetting } from './storage'
 import { CollapsibleTarget, CommentPosted, IssueTarget } from './components/DocsPanel'
 import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
 import type { Rect } from '../../src/core/anchored-placement'
@@ -288,8 +290,11 @@ const FLUSH_POLL_MS = 50;
  * every board. Deliberately **not** `customData` — the block is derived and stripped at
  * both doors, so a size stored there would be dropped on the way to the store and read as
  * the block forgetting it.
+ *
+ * The name it is kept under, old and new, is `frontend/src/storage.ts`'s to say — as it is
+ * for the seven settings beside it.
  */
-const TERMINAL_FONT_STORAGE_KEY = 'excalidraw-terminal-font-size';
+const TERMINAL_FONT_STORAGE_KEY = STORAGE_KEYS.terminalFont;
 
 /**
  * Where the rect a board's terminal block was last left at is kept.
@@ -305,7 +310,7 @@ const TERMINAL_FONT_STORAGE_KEY = 'excalidraw-terminal-font-size';
  * second machine, viewing the same board gets its own arrangement — which is what every
  * other viewing preference here already does.
  */
-const TERMINAL_GEOMETRY_STORAGE_KEY = 'excalidraw-terminal-geometry';
+const TERMINAL_GEOMETRY_STORAGE_KEY = STORAGE_KEYS.terminalGeometry;
 
 interface TerminalRect { x: number; y: number; width: number; height: number }
 
@@ -318,7 +323,7 @@ interface TerminalRect { x: number; y: number; width: number; height: number }
  */
 const readTerminalGeometry = (workspace: string): TerminalRect | null => {
   try {
-    const raw = window.localStorage?.getItem(TERMINAL_GEOMETRY_STORAGE_KEY);
+    const raw = readSetting(TERMINAL_GEOMETRY_STORAGE_KEY);
     const stored = raw ? (JSON.parse(raw) ?? {})[workspace] : null;
     if (!stored || typeof stored !== 'object') return null;
     const { x, y, width, height } = stored as Record<string, unknown>;
@@ -336,10 +341,12 @@ const readTerminalGeometry = (workspace: string): TerminalRect | null => {
 /** Remember one board's rect, leaving every other board's alone. */
 const writeTerminalGeometry = (workspace: string, rect: TerminalRect): void => {
   try {
-    const raw = window.localStorage?.getItem(TERMINAL_GEOMETRY_STORAGE_KEY);
+    // Through the same door the read uses, so a first write after the rename merges into
+    // what the old key holds instead of over it: every other board's rect is in there.
+    const raw = readSetting(TERMINAL_GEOMETRY_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     const stored = parsed && typeof parsed === 'object' ? parsed : {};
-    window.localStorage?.setItem(
+    writeSetting(
       TERMINAL_GEOMETRY_STORAGE_KEY,
       JSON.stringify({ ...stored, [workspace]: rect })
     );
@@ -368,11 +375,11 @@ const writeTerminalGeometry = (workspace: string, rect: TerminalRect): void => {
  * from wherever the content stands rather than from a home it cannot know, and the worst it
  * costs is a documentation that stays where the last session's shells left it.
  */
-const DOCUMENTATION_SHIFT_STORAGE_KEY = 'excalidraw-documentation-shift';
+const DOCUMENTATION_SHIFT_STORAGE_KEY = STORAGE_KEYS.documentationShift;
 
 const readDocumentationShift = (workspace: string): number => {
   try {
-    const raw = window.localStorage?.getItem(DOCUMENTATION_SHIFT_STORAGE_KEY);
+    const raw = readSetting(DOCUMENTATION_SHIFT_STORAGE_KEY);
     const stored = raw ? (JSON.parse(raw) ?? {})[workspace] : null;
     // Validated rather than trusted, like the rect beside it: a key anybody can edit, and a
     // `NaN` here would move every authored shape on the board to nowhere.
@@ -386,10 +393,10 @@ const readDocumentationShift = (workspace: string): number => {
 /** Remember one board's shift, leaving every other board's alone. */
 const writeDocumentationShift = (workspace: string, shift: number): void => {
   try {
-    const raw = window.localStorage?.getItem(DOCUMENTATION_SHIFT_STORAGE_KEY);
+    const raw = readSetting(DOCUMENTATION_SHIFT_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     const stored = parsed && typeof parsed === 'object' ? parsed : {};
-    window.localStorage?.setItem(
+    writeSetting(
       DOCUMENTATION_SHIFT_STORAGE_KEY,
       JSON.stringify({ ...stored, [workspace]: shift })
     );
@@ -408,7 +415,7 @@ const writeDocumentationShift = (workspace: string, shift: number): void => {
  * turned "the board opens too small" into "if I dont zoom in": the correction had to be made
  * again on every refresh.
  */
-const BOARD_VIEWPORT_STORAGE_KEY = 'excalidraw-board-viewports';
+const BOARD_VIEWPORT_STORAGE_KEY = STORAGE_KEYS.boardViewports;
 
 /** How long a camera has to sit still before it is written down. */
 const VIEWPORT_SAVE_MS = 400;
@@ -435,7 +442,7 @@ const rememberedViewports = (): Map<string, BoardViewport> => {
   if (storedViewports) return storedViewports;
   storedViewports = new Map();
   try {
-    const raw = window.localStorage?.getItem(BOARD_VIEWPORT_STORAGE_KEY);
+    const raw = readSetting(BOARD_VIEWPORT_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     if (parsed && typeof parsed === 'object') {
       for (const [workspace, view] of Object.entries(parsed as Record<string, unknown>)) {
@@ -459,10 +466,10 @@ const rememberedViewports = (): Map<string, BoardViewport> => {
  */
 const writeBoardViewports = (views: Map<string, BoardViewport>): void => {
   try {
-    const raw = window.localStorage?.getItem(BOARD_VIEWPORT_STORAGE_KEY);
+    const raw = readSetting(BOARD_VIEWPORT_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     const stored = parsed && typeof parsed === 'object' ? parsed : {};
-    window.localStorage?.setItem(
+    writeSetting(
       BOARD_VIEWPORT_STORAGE_KEY,
       JSON.stringify({ ...stored, ...Object.fromEntries(views) })
     );
@@ -1076,7 +1083,7 @@ const convertElementsPreservingImageProps = (
 }
 
 /** Where the board a browser was last looking at is kept. */
-const WORKSPACE_STORAGE_KEY = 'excalidraw-canvas-workspace'
+const WORKSPACE_STORAGE_KEY = STORAGE_KEYS.workspace
 
 /**
  * The board this load should open, decided before anything connects.
@@ -1105,7 +1112,7 @@ function resolveInitialWorkspace(list: WorkspaceSummary[]): string | null {
     console.warn('Could not read the workspace from the URL:', error)
   }
   try {
-    hints.push(window.localStorage?.getItem(WORKSPACE_STORAGE_KEY) ?? null)
+    hints.push(readSetting(WORKSPACE_STORAGE_KEY))
   } catch (error) {
     console.warn('Could not read the last workspace:', error)
   }
@@ -1122,7 +1129,7 @@ function resolveInitialWorkspace(list: WorkspaceSummary[]): string | null {
  */
 function rememberWorkspace(workspaceId: string): void {
   try {
-    window.localStorage?.setItem(WORKSPACE_STORAGE_KEY, workspaceId)
+    writeSetting(WORKSPACE_STORAGE_KEY, workspaceId)
   } catch (error) {
     console.warn('Could not remember the workspace:', error)
   }
@@ -1202,7 +1209,17 @@ interface WarmBoard {
 }
 
 /** Where this browser remembers whether Excalidraw's own menus are hidden. */
-const CHROME_STORAGE_KEY = 'excalidraw-canvas-chrome'
+const CHROME_STORAGE_KEY = STORAGE_KEYS.chrome
+
+/**
+ * Where this browser remembers the board's palette.
+ *
+ * A constant because it was not one: the theme was the oldest of these settings and the only
+ * one written as a bare literal, the read at the top of `App` and the write in the hamburger
+ * five thousand lines below it. Two spellings of the same string is a key a rename pass can
+ * catch one half of, which is the shape of defect this whole set is now arranged against.
+ */
+const THEME_STORAGE_KEY = STORAGE_KEYS.theme
 
 function App(): JSX.Element {
   const [excalidrawAPI, setExcalidrawAPI] = useState<ExcalidrawAPIRefValue | null>(null)
@@ -1251,7 +1268,7 @@ function App(): JSX.Element {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window === 'undefined') return 'light'
     try {
-      const saved = window.localStorage?.getItem('excalidraw-canvas-theme')
+      const saved = readSetting(THEME_STORAGE_KEY)
       if (saved === 'light' || saved === 'dark') return saved
     } catch (error) {
       console.warn('Failed to read theme from localStorage:', error)
@@ -1276,7 +1293,7 @@ function App(): JSX.Element {
   const [chromeHidden, setChromeHidden] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false
     try {
-      return window.localStorage?.getItem(CHROME_STORAGE_KEY) === 'hidden'
+      return readSetting(CHROME_STORAGE_KEY) === 'hidden'
     } catch (error) {
       console.warn('Failed to read the menu setting from localStorage:', error)
       return false
@@ -3509,7 +3526,7 @@ function App(): JSX.Element {
   const [terminalFont, setTerminalFont] = useState<number>(() => {
     if (typeof window === 'undefined') return TERMINAL_FONT_SIZE
     try {
-      return clampTerminalFont(window.localStorage?.getItem(TERMINAL_FONT_STORAGE_KEY))
+      return clampTerminalFont(readSetting(TERMINAL_FONT_STORAGE_KEY))
     } catch (error) {
       console.warn('Failed to read the terminal font size from localStorage:', error)
       return TERMINAL_FONT_SIZE
@@ -4474,7 +4491,7 @@ function App(): JSX.Element {
   useEffect(() => {
     terminalFontRef.current = terminalFont
     try {
-      window.localStorage?.setItem(TERMINAL_FONT_STORAGE_KEY, String(terminalFont))
+      writeSetting(TERMINAL_FONT_STORAGE_KEY, String(terminalFont))
     } catch (error) {
       console.warn('Failed to save the terminal font size to localStorage:', error)
     }
@@ -5587,9 +5604,12 @@ function App(): JSX.Element {
     // The socket declares its board once: the server then filters events to it, so a
     // tab never redraws with another board's shapes. And who it is, so that a write this
     // page sends over HTTP is not read back to it over here — see `CLIENT_ID`.
-    const wsUrl = `${protocol}//${window.location.host}`
+    // And the board token, because the upgrade is gated on it exactly as `/api` is — it streams
+    // the scene and every live shell's scrollback the moment it opens. On the URL rather than in
+    // a header because the `WebSocket` constructor has nowhere to put one; see ./auth.ts.
+    const wsUrl = withBoardToken(`${protocol}//${window.location.host}`
       + `?workspace=${encodeURIComponent(activeWorkspaceRef.current)}`
-      + `&client=${encodeURIComponent(CLIENT_ID)}`
+      + `&client=${encodeURIComponent(CLIENT_ID)}`)
 
     connectionGenerationRef.current += 1
     const socket = new WebSocket(wsUrl)
@@ -6434,7 +6454,7 @@ function App(): JSX.Element {
     setChromeHidden((hidden) => {
       const next = !hidden
       try {
-        window.localStorage?.setItem(CHROME_STORAGE_KEY, next ? 'hidden' : 'visible')
+        writeSetting(CHROME_STORAGE_KEY, next ? 'hidden' : 'visible')
       } catch (error) {
         console.warn('Failed to save the menu setting to localStorage:', error)
       }
@@ -6674,7 +6694,7 @@ function App(): JSX.Element {
               if (appState?.theme && appState.theme !== theme) {
                 setTheme(appState.theme)
                 try {
-                  window.localStorage?.setItem('excalidraw-canvas-theme', appState.theme)
+                  writeSetting(THEME_STORAGE_KEY, appState.theme)
                 } catch (error) {
                   console.warn('Failed to save theme to localStorage:', error)
                 }

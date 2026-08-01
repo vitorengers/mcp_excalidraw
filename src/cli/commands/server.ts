@@ -9,6 +9,7 @@ import { EXPRESS_SERVER_URL } from '../../core/config.js';
 import { readPidFile } from '../../core/pidfile.js';
 import { ensureSettingsFile } from '../../core/settings.js';
 import { openBrowser } from '../../core/open-browser.js';
+import { boardUrlWithToken } from '../../core/auth-token.js';
 import { BIN_NAME, packageVersion, productName } from '../../core/version.js';
 import { logFilePath } from '../../utils/logger.js';
 
@@ -38,10 +39,17 @@ export async function launch(argv: string[]): Promise<void> {
   // Typing the command is user intent, exactly as `start` is, so the auto-start opt-outs do not
   // apply: somebody who asked for the board is asking for the board.
   const result = await ensureCanvasRunning({ force: true });
-  openBrowser(result.url);
+  // With the token on it, which is the whole of the bootstrap (#350): the board refuses every
+  // `/api` request that does not carry it, and this is the one place a person is handed it. The
+  // page takes it out of the address bar as soon as it has read it, so what stays on screen — and
+  // in the history, and in a bookmark — is the bare URL printed below.
+  openBrowser(boardUrlWithToken(result.url));
 
   // Exactly one line, and it is the only thing on stdout. Everything `ensureCanvasRunning` has to
   // say about spawning, and the note above, are diagnostics and went to stderr.
+  //
+  // Deliberately without the token: this is the address of the board, and a secret on stdout is a
+  // secret in whatever a caller piped it into.
   process.stdout.write(`${productName()} ${packageVersion()} — ${result.url}\n`);
 }
 

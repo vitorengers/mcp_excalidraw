@@ -5,7 +5,7 @@ import './core/env.js';
 import { env, settingName } from './core/settings.js';
 import express, { Request, Response, NextFunction } from 'express';
 import { WebSocketServer } from 'ws';
-import { createServer } from 'http';
+import { createServer, IncomingHttpHeaders } from 'http';
 import net from 'net';
 import path from 'path';
 import fs from 'fs/promises';
@@ -141,7 +141,21 @@ import {
 } from './core/element-store.js';
 import { allowedAuthorities, verifyOrigin } from './core/origin-gate.js';
 import {
+  authRequired,
+  consumeTokenHandover,
+  newToken,
+  removeAuthToken,
+  removeTokenHandover,
+  sameToken,
+  tokenFilePath,
+  writeAuthToken,
+  writeTokenHandover,
+  TOKEN_HEADER,
+  TOKEN_QUERY
+} from './core/auth-token.js';
+import {
   backupBoardBefore,
+  boardStateExists,
   boardStateFile,
   dropBoardState,
   flushBoardStateSaves,
@@ -185,6 +199,52 @@ function boardAuthorities(): Set<string> {
   return authorities;
 }
 
+/**
+ * Whether this board is behind a secret at all, and what that secret is.
+ *
+ * Two names rather than one so that the gate below can **fail closed**: the token cannot be
+ * chosen up here, because it is per start and per port and `PORT` is resolved at the bottom of
+ * this file, so `startServer` sets it. Anything that reached a route before then — nothing does,
+ * but the shape of the code should not be what says so — is refused rather than let through.
+ *
+ * The gate this feeds is authentication and not authorization: one secret, and holding it is the
+ * whole of being allowed. What it defends against is another *account* and a sandboxed process,
+ * because the file's permissions are the operating system's own boundary. It defends against
+ * nothing already running as the operator, and `docs/SECURITY.md` says so in those words.
+ */
+const AUTH_REQUIRED = authRequired();
+let AUTH_TOKEN: string | null = null;
+
+/**
+ * Whether this exit is a replacement rather than a stop.
+ *
+ * `POST /api/restart` hands the board to a supervisor that brings it back on the same port while
+ * the reader's tab watches. The exit handlers clear the state files, and clearing the token there
+ * would leave that tab holding a secret nothing accepts — a board that reports itself back and
+ * then answers 401 to everything. So a restart writes a handover instead; see `core/auth-token.ts`.
+ */
+let handingOver = false;
+
+/**
+ * The token a caller offered, in the two spellings there are.
+ *
+ * A header for a program, because it stays out of logs and out of an address bar. A query
+ * parameter because a browser's `WebSocket` constructor takes a URL and nothing else, so the
+ * upgrade has no other door — and once it is accepted there it may as well be accepted on an
+ * ordinary request, so that `curl` and a check script have one spelling that works everywhere.
+ */
+function offeredToken(headers: IncomingHttpHeaders, url: string | undefined): string | null {
+  const header = headers[TOKEN_HEADER];
+  if (typeof header === 'string' && header.trim()) return header.trim();
+  try {
+    // A base, because a request URL is a path and `new URL` needs an origin to parse one. Which
+    // origin is irrelevant: nothing but the query is read out of it.
+    const query = new URL(url ?? '/', 'http://board.invalid').searchParams.get(TOKEN_QUERY);
+    if (query && query.trim()) return query.trim();
+  } catch { /* not a URL we can read a query out of */ }
+  return null;
+}
+
 // The socket is the same hole as the routes by a door CORS does not cover at all: it declared
 // no `verifyClient`, so a page at any origin got `initial_elements` and every live shell's
 // scrollback on connect. Both gates have to exist; either one alone leaves the board readable.
@@ -195,6 +255,15 @@ const wss = new WebSocketServer({
     if (!verdict.ok) {
       logger.warn(`Refused a WebSocket upgrade: ${verdict.reason}`);
       done(false, 403, 'Forbidden');
+      return;
+    }
+    // The upgrade streams the scene and every live shell's scrollback the moment it opens, so it
+    // is one of the two things the token has to cover — the other being everything under `/api`.
+    // Refused here rather than after `connection`, because a socket that opens and is then closed
+    // has already been handed `initial_elements`.
+    if (AUTH_REQUIRED && !sameToken(offeredToken(req.headers, req.url), AUTH_TOKEN)) {
+      logger.warn('Refused a WebSocket upgrade: it carried no valid board token.');
+      done(false, 401, 'Unauthorized');
       return;
     }
     done(true);
@@ -220,6 +289,41 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   }
   next();
 });
+
+/**
+ * The token gate, and what it deliberately leaves open.
+ *
+ * `GET /` and the static mounts below stay open, because the page has to be able to bootstrap:
+ * it is the page that reads the token out of the address bar, and it cannot do that before it
+ * has loaded. What they serve is this build's own frontend and Excalidraw's fonts — a bundle
+ * anybody could fetch from npm — so what an unauthenticated caller gets from them is the
+ * software, not the board. `/health` stays open for the same shape of reason and a second one:
+ * it is how `core/port.ts`, `core/spawn.ts` and the restart supervisor find out whether anything
+ * of ours is on a port at all, and it is answered before the token file exists.
+ *
+ * Everything under `/api` requires the token. That is the whole of the reachable surface — the
+ * scene, the files, the terminal, the agents, the registry and the directory picker — and until
+ * #350 every one of them was open to any process on the machine that could open a socket.
+ *
+ * In front of `express.json`, so an unauthenticated caller cannot make this process parse ten
+ * megabytes of body before being turned away.
+ */
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (!AUTH_REQUIRED) return next();
+  if (req.path !== '/api' && !req.path.startsWith('/api/')) return next();
+  if (sameToken(offeredToken(req.headers, req.url), AUTH_TOKEN)) return next();
+
+  // The path, never the token: a refusal that echoed what it was offered would put a near-miss
+  // in the log file, and the log file is not where a secret goes.
+  logger.warn(`Refused ${req.method} ${req.path}: it carried no valid board token.`);
+  res.status(401).json({
+    success: false,
+    error: 'This board requires its token. The launcher puts it in the URL it opens; a program '
+      + `reads it from ${tokenFilePath(PORT)} and sends it as the ${TOKEN_HEADER} header or as `
+      + `?${TOKEN_QUERY}=. See docs/SECURITY.md.`
+  });
+});
+
 app.use(express.json({ limit: '10mb' }));
 
 // Serve static files from the build directory
@@ -1550,8 +1654,10 @@ app.get('/api/fs/directories', async (req: Request, res: Response) => {
 //
 // Turns an observation written on the board into a researched GitHub issue by running
 // an agent inside the project. This is the most dangerous thing the server does: it
-// spawns a process with full repository access on an API that has no authentication.
-// Hence three guards — opt-in by env var, loopback only, and one run per element.
+// spawns a process with full repository access. Hence three guards — opt-in by env var,
+// loopback only, and one run per element. They outlive the token #350 put in front of every
+// route, because that token is a file this account can read: it shuts out another account and
+// says nothing about a process already running as this one.
 //
 // Two commands rather than one, because a workspace may live in a WSL distro and a command
 // is a path: the host's `claude.exe` is `No such file or directory` inside a distro, and the
@@ -3313,6 +3419,65 @@ function chooseSeed(
 }
 
 /**
+ * The board a project that has never had one comes up on, or nothing.
+ *
+ * `__dirname` is `dist/` once compiled, so the default is this build's own `docs/`, the way
+ * `TOOL_DOCS_DIR` is — the repository's in a checkout and the package's in an installed copy,
+ * where `files` ships it beside the documents its cards point at. A project registered through
+ * the `+` gets a config with a name and possibly a `docsDir` and no `board` at all, which used
+ * to mean a blank canvas: nothing explaining the section keys, the blocks or the tabs, and
+ * `Alt+P` and `Alt+G` doing nothing at all, because those keys are declared by board data and
+ * there was none.
+ *
+ * `undefined`, not falsy, exactly as `DOCS_DIR` and `LIBRARY` are read: an **explicitly empty**
+ * setting is how a board says it wants new projects to come up blank, which is a thing somebody
+ * has to be able to say now that unset no longer means none. Every self-contained check sets it
+ * empty (`scripts/lib/spawn-canvas.mjs`) for the reason that helper deletes the rest of the
+ * machine's configuration — a throwaway project growing a board it never asked for decides
+ * assertions about element counts and about where a click lands, in checks that are about
+ * neither. `scripts/check-welcome-board.mjs` is the one that unsets it again.
+ */
+const WELCOME_BOARD_SETTING = env('WELCOME_BOARD');
+const WELCOME_BOARD_FILE = WELCOME_BOARD_SETTING === undefined
+  ? path.resolve(__dirname, '../docs/welcome.excalidraw')
+  : (WELCOME_BOARD_SETTING ? path.resolve(WELCOME_BOARD_SETTING) : null);
+
+/**
+ * The welcome board, for a project that has nothing else to come up as — or nothing.
+ *
+ * Three conditions, and each of them is a way of saying *nobody has been here yet*:
+ *
+ * - there is a welcome board to seed from at all: `WELCOME_BOARD` set empty is a board saying
+ *   its projects come up blank, and that answer is honoured before anything else is read.
+ * - the project declares no `board`. One that declares a file it cannot read is a project with
+ *   a board and a problem, and it stays empty and says so — putting a welcome board over that
+ *   would answer a broken path with a board the reader never asked for.
+ * - nothing was chosen from the two places a board is kept, which the caller has already
+ *   established by the time this runs.
+ * - and this canvas has never written a state file for it *at all*. That is the strict form of
+ *   "no saved state", and it is what makes this happen once: a board somebody emptied has a
+ *   saved scene with no elements in it, which `readBoardState` reports as nothing to come back
+ *   as — so the looser reading would put the welcome board back over a deliberate clear, every
+ *   start, forever.
+ *
+ * Past the first seed nothing here runs again: the elements land in a store that is already
+ * marked as worth saving, the file appears a second later, and every later start reads that.
+ */
+async function welcomeSeed(
+  workspaceId: string,
+  boardFile: string | null
+): Promise<{ scene: BoardScene; from: string } | null> {
+  if (!WELCOME_BOARD_FILE || boardFile) return null;
+  if (await boardStateExists(workspaceId)) return null;
+
+  const welcome = await readBoardFile(workspaceId, WELCOME_BOARD_FILE);
+  if (!welcome) return null;
+
+  logger.info(`"${workspaceId}" has no board of its own; seeding the welcome board.`);
+  return { scene: welcome.scene, from: WELCOME_BOARD_FILE };
+}
+
+/**
  * Put one registered board's saved scene into its store, and say it is worth saving from now
  * on.
  *
@@ -3322,6 +3487,11 @@ function chooseSeed(
  * every project, in the canvas's own state directory — because a draft on a board that
  * declares no file has even fewer places to survive than one on a board that does.
  *
+ * What it also gains, and only on the very first start, is the welcome board: a project that
+ * declares no `board` and that this canvas has never saved has nothing at all to show, and a
+ * blank canvas is where every one of them used to arrive. `welcomeSeed` is the whole of that
+ * decision, and it still writes nothing into the project.
+ *
  * Seeded by the *normalised* id. `elementsFor` normalises its argument and the registry
  * does not, so the raw id would reach the same store — but `broadcast` compares against
  * what a socket registered, which is normalised, and a project id with a capital letter
@@ -3329,7 +3499,7 @@ function chooseSeed(
  */
 async function seedBoardFromFile(workspace: Workspace): Promise<void> {
   if (workspace.error) return;
-  await seedBoard(normalizeWorkspaceId(workspace.id), workspace.boardFile);
+  await seedBoard(normalizeWorkspaceId(workspace.id), workspace.boardFile, welcomeSeed);
 }
 
 /**
@@ -3341,8 +3511,18 @@ async function seedBoardFromFile(workspace: Workspace): Promise<void> {
  * `Map` that could not have reported a change if anything had. It has no tracked board file
  * and never will: nothing on disk is a project's, so there is nothing to seed it from but the
  * state this canvas keeps of it.
+ *
+ * And no welcome board either, which is why `fallback` is a parameter rather than something
+ * this function decides. `default` is not a project somebody registered and has no directory,
+ * no documents and no settings behind it; a welcome board there would be a canvas somebody
+ * opened to draw on, filled with cards about projects they have not added.
  */
-async function seedBoard(workspaceId: string, boardFile: string | null): Promise<void> {
+async function seedBoard(
+  workspaceId: string,
+  boardFile: string | null,
+  fallback?: (workspaceId: string, boardFile: string | null)
+    => Promise<{ scene: BoardScene; from: string } | null>
+): Promise<void> {
   const store = elementsFor(workspaceId);
   if (store.size) {
     // Empty at startup, which is when this runs. Said out loud rather than assumed, because
@@ -3361,7 +3541,8 @@ async function seedBoard(workspaceId: string, boardFile: string | null): Promise
   // to read before anybody has seen it.
   persistBoardFor(workspaceId);
 
-  const chosen = chooseSeed(workspaceId, boardFile, saved, fromFile);
+  const chosen = chooseSeed(workspaceId, boardFile, saved, fromFile)
+    ?? (fallback ? await fallback(workspaceId, boardFile) : null);
   if (!chosen) return;
   const scene = chosen.scene;
 
@@ -5409,6 +5590,22 @@ app.post('/api/restart', (_req: Request, res: Response) => {
     });
   }
 
+  // The board is being replaced rather than stopped, and the reader's tab is watching it happen.
+  // So the secret goes with it: written where the replacement will take it, and kept out of the
+  // exit handlers' cleanup. Without this the tab comes back to a board that reports itself up and
+  // then refuses everything it asks — see `core/auth-token.ts`.
+  handingOver = true;
+  if (AUTH_TOKEN) {
+    try {
+      writeTokenHandover(PORT, AUTH_TOKEN);
+    } catch (error) {
+      // Said, and not fatal: the restart still happens and the board still comes up. What is lost
+      // is the tab, which has to be re-opened with `vibemaxxing` — worth a line, not a refusal.
+      logger.warn(`Could not hand this board's token to its replacement: ${(error as Error).message}. `
+        + 'The open tab will have to be re-opened after the restart.');
+    }
+  }
+
   // warn rather than info: on this machine the console is warn and above, and a process about
   // to exit on purpose should say so where somebody watching the server can see it.
   logger.warn(`Restart requested: supervisor ${supervisor} will replace pid ${process.pid}. Log: ${log}`);
@@ -5607,6 +5804,19 @@ server.on('error', (error: NodeJS.ErrnoException) => {
 });
 
 async function startServer(): Promise<void> {
+  // Before anything can be served, and here rather than at the declaration because `PORT` is
+  // resolved at the bottom of this file. A restart left its secret for this start (see
+  // `core/auth-token.ts`); any other start makes one, and the handover — if a restart wrote one
+  // and never came back — is taken and deleted either way.
+  if (AUTH_REQUIRED) {
+    AUTH_TOKEN = consumeTokenHandover(PORT) ?? newToken();
+  } else {
+    AUTH_TOKEN = null;
+    // Cleared even here: a board that wants no token must not leave one lying in the directory
+    // for the next start on this port to adopt.
+    removeTokenHandover(PORT);
+  }
+
   if (LOOPBACK_GUARD_HOSTS.has(HOST)) {
     const existingHost = await findExistingLoopbackListener(PORT);
     if (existingHost) {
@@ -5631,6 +5841,29 @@ async function startServer(): Promise<void> {
     // Written only after listen succeeds so stale files can't shadow a
     // server that never came up; lets the CLI's `stop` command find us.
     writePidFile(PORT, process.pid);
+    // And the token, on the same terms and for a sharper version of the same reason: a
+    // concurrent-start loser that wrote its own would replace the winner's, and every caller
+    // reading that file would then be refused by the board that is actually running.
+    //
+    // A failure here is fatal rather than a warning. Nothing can drive a board whose token
+    // cannot be read — not the page, not the CLI, not the MCP server — and it would answer
+    // `status: healthy` throughout, which is the failure that is hardest to diagnose from
+    // outside. `warn` when there is no token at all, because a board anything on the machine
+    // can drive is worth one line on the console.
+    if (AUTH_TOKEN) {
+      try {
+        writeAuthToken(PORT, AUTH_TOKEN);
+      } catch (error) {
+        failStartup(`Canvas server cannot write its token to ${tokenFilePath(PORT)}: `
+          + `${(error as Error).message}. Nothing would be able to drive this board.`);
+      }
+    } else {
+      // `info`, so it reaches the log file and not the console. Every check in `scripts/` starts
+      // its board with this set, and one of them asserts that an unconfigured board warns about
+      // nothing at all — a line here on `warn` is a paragraph of stderr under the whole suite.
+      logger.info(`${settingName('NO_AUTH')}=1: this board has no token, so anything that can `
+        + 'reach the port drives it — see docs/SECURITY.md.');
+    }
     // And beside it, the port itself — the one thing a later command cannot work out on its
     // own once the port stopped being a constant. It is written, never trusted: every reader
     // probes /health before believing it.
@@ -5665,7 +5898,7 @@ async function startServer(): Promise<void> {
     // rather than a minute — but a shutdown that discarded the last edit would be the same
     // loss #225 is about, arriving through the one door that could have been closed politely.
     flushBoardStateSaves();
-    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); }
+    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); if (!handingOver) removeAuthToken(PORT); }
     server.close(() => process.exit(0));
     // Force-exit if open sockets keep the server from closing promptly
     setTimeout(() => process.exit(0), 2000).unref();
@@ -5674,7 +5907,7 @@ async function startServer(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('exit', () => {
     flushBoardStateSaves();
-    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); }
+    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); if (!handingOver) removeAuthToken(PORT); }
   });
 }
 

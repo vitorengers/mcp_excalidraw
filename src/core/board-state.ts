@@ -450,6 +450,26 @@ export interface SavedBoard {
  * asserted as running, and a tombstone is dropped. A saved board is exactly as unable to
  * tell a live run from an abandoned one as a committed board is.
  */
+/**
+ * Whether this canvas has ever written a state file for the board, whatever is in it.
+ *
+ * A separate question from `readBoardState`, and the difference is the whole point: that one
+ * answers nothing for a board somebody emptied, because a scene with no elements is not a
+ * scene to come back as. This one answers "somebody has been here", which is what a *first*
+ * run has to ask before it puts a welcome board on a canvas. Without it, clearing the welcome
+ * board would bring it back on the next start — a deliberate emptying read as a fresh project.
+ */
+export async function boardStateExists(workspaceId: string): Promise<boolean> {
+  const file = boardStateFile(normalizeWorkspaceId(workspaceId));
+  if (!file) return false;
+  try {
+    await fs.access(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function readBoardState(workspaceId: string): Promise<SavedBoard | null> {
   const id = normalizeWorkspaceId(workspaceId);
   const file = boardStateFile(id);

@@ -135,6 +135,11 @@ export const SETTINGS = [
     description: 'Where `GET /api/docs/:key` reads from for a board with no `docsDir` of its own. Set it **empty** for a setup that wants per-project documents and no fallback — [docs-block.md](docs-block.md)'
   },
   {
+    name: 'WELCOME_BOARD',
+    fallback: 'the shipped `docs/welcome.excalidraw`',
+    description: 'The board a project that names none of its own is seeded from, once, the first time this canvas starts with it registered. Set it **empty** for projects that should come up blank — [workspaces.md](workspaces.md)'
+  },
+  {
     name: 'LIBRARY',
     fallback: 'the shipped `docs/blocks.excalidrawlib`',
     description: 'An `.excalidrawlib` served to every board, alongside each project\'s own. Set it **empty** for a board that wants no shared shapes at all — [shared-library.md](shared-library.md)'
@@ -213,6 +218,11 @@ export const SETTINGS = [
     name: 'NO_AUTOSTART',
     fallback: 'unset',
     description: '`1` stops the CLI and the MCP server auto-spawning a canvas'
+  },
+  {
+    name: 'NO_AUTH',
+    fallback: 'unset',
+    description: '`1` starts the board with **no token**, so anything that can reach the port drives it — see [SECURITY.md](SECURITY.md). It is what the checks set, because each of them spawns a server and drives it over plain `fetch`; on a board a person uses, the token costs nothing to keep, since the launcher hands it over and the page remembers it'
   },
   {
     name: 'ALLOW_VERSION_SKEW',

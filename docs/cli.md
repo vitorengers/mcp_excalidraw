@@ -64,7 +64,7 @@ Labels and arrow bindings take the agent-friendly spelling everywhere: `"text"` 
 
 | Command | What it does |
 |---|---|
-| *(no arguments)* / `launch` | Start the board, open it in a browser, print one line |
+| *(no arguments)* / `launch` | Start the board, open it in a browser with its token in the URL, print one line. Against a board that is already running it starts nothing and just opens the tab — which is the way to open one, since the bare address is refused by everything under `/api` ([SECURITY.md](SECURITY.md)) |
 | `start` / `stop` / `status` | Manage the canvas server; `stop` identity-checks the live server via `/health` before signalling, and `status` prints the running version beside the installed one |
 | `restart` | Replace the running canvas with this build, on the same port — see below |
 | `mcp` | Run the MCP stdio server by name |

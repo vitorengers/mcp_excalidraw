@@ -76,10 +76,14 @@ Somebody presses it and then presses **Implement / Fix**. What happens, in order
    either way. Every request the browser sends carries `?workspace=` naming the board it was
    sent from.
 
-3. **The route refuses, or admits.** In `src/server.ts`, both entrances to a run pass
-   `implementingRefused` first: an agent command has to be configured, and the server has to
-   be bound to loopback. Off loopback this answers `403` — an agent that writes to a
-   repository is not something a machine on the network gets to start.
+3. **The route refuses, or admits.** Two gates run in front of every route in `src/server.ts`
+   before any of them: the origin gate (`src/core/origin-gate.ts`), and the board's token,
+   which the page took out of its own address bar on load and now sends as a header
+   ([SECURITY.md](SECURITY.md)) — without it the answer is `401` and nothing below happens.
+   Then both entrances to a run pass `implementingRefused`: an agent command has to be
+   configured, and the server has to be bound to loopback. Off loopback this answers `403` —
+   an agent that writes to a repository is not something a machine on the network gets to
+   start.
 
 4. **The board is resolved to a project.** `workspaceIdFrom` in `src/core/element-store.ts`
    turns `?workspace=` into a workspace id; `loadWorkspaces` in `src/core/workspaces.ts`
