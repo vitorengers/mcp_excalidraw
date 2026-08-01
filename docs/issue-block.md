@@ -794,6 +794,7 @@ Each pass now records how it ended, and `GET /api/implement` carries it as `queu
 | `started` | It started runs. `started` says how many. | no |
 | `nothing-startable` | The column held nothing this queue may start. The resting state of a drained board. | no |
 | `cap-full` | Every slot is taken. `detail` names the runs holding them. | **yes** |
+| `reclaimed` | It gave slots back from runs that were over and never said so. `detail` names them and what closed each. | no |
 | `no-column` | The project has no column by the configured name. | **yes** |
 | `no-project` | The workspace is gone, unusable, or has no `githubProject`. | **yes** |
 | `unreadable` | The board read failed — `gh` unresolvable, an expired login, an outage. | **yes** |
@@ -810,9 +811,45 @@ clears whatever the last one found: a queue that is off is not stalled, it is of
 
 **The commonest stall is `cap-full` with nobody working.** Implementing has no timeout by design,
 so an agent that wedged — or an interactive run nobody ended (see "Interactive runs and `-p`") —
-holds its slot until somebody resets it. Four of those and the queue is on and permanently stuck,
-which is the shape #263's board was most likely in. The reset is `DELETE /api/implement`, or the
-button on the block.
+holds its slot. Four of those and the queue is on and permanently stuck, which is the shape
+#263's board was most likely in. Since #357 the board takes those slots back itself, on evidence
+rather than on a clock; the reset — `DELETE /api/implement`, or the button on the block — is what
+is left for a run no evidence can settle.
+
+#### Taking a slot back from a run that is over
+
+Observed on 2026-07-30: a run started at 18:01:26 was still `running` at 22:50, four and a half
+hours later, while its work had landed — the pull request merged and the issue closed. The record
+is what the cap counts, so the slot was held for ever and the board could say only `cap-full`.
+
+`src/core/implement-reclaim.ts` closes such a record, and **only on positive evidence — never on
+age**. A run that is merely old is left exactly where it is, because a slot given back while an
+agent is still writing puts a second agent on the machine beside it, and nothing can tell those
+two apart from outside. Nothing is stopped or thrown away either: a reclaim closes a record, the
+checkout stays, and the run's own report overwrites this if it ever arrives.
+
+Two evidences, gathered in the order they cost:
+
+- **The process is gone.** `runAgent` resolves on the child's *close*, which waits for the
+  process to exit *and* for its stdio to reach end of file — so an agent that leaves a detached
+  grandchild holding stdout exits, is reaped, and the server waits for ever. `ImplementRecord.pid`
+  carries the process from the spawn and is **cleared the moment the agent's promise resolves**,
+  which is the half that makes this safe: a `running` record with no pid is a run whose server is
+  merely finishing up, asking GitHub about the pull request and releasing the worktree, and that
+  takes seconds. A pid `process.kill(pid, 0)` cannot find, seen on two passes, closes the record
+  as `interrupted` — the state **Resume** already offers back.
+- **The work landed.** When the workspace is at its cap, and only then, GitHub is asked: an issue
+  that is `CLOSED` with a closing pull request that `MERGED` closes the record as `done` against
+  that URL. Closed is not landed, so the pull request is read rather than inferred, and
+  `github-pull.ts` answering `null` for a `gh` blip falls through as "learned nothing".
+
+`EXCALIDRAW_IMPLEMENT_RECLAIM_MS` (default `30000`) is the grace after a process is first seen
+gone, and the floor under asking GitHub about a run at all. Every record carries
+`reclaimed: { evidence, detail, at }`, or `null` for the runs that reported for themselves, so a
+reader can tell a slot the server took back from a run that finished — and which fact took it.
+The reclaim happens at the top of a queue pass, which is the unattended door, and in
+`beginImplement` before the cap is counted, which is the door a board with no queue on it uses.
+`scripts/check-implement-reclaim.mjs` holds all of it.
 
 #### A pass that never comes back
 
