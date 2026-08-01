@@ -243,9 +243,12 @@ try {
   const missing = Object.keys(process.env).map(upper)
     .filter((name) => !DELIBERATELY_STRIPPED.includes(name))
     .filter((name) => !arrived.has(name));
+  // Named, but not all sixty of them: against a function that filtered the lot, the list is
+  // this machine's whole environment block and the first few say it just as well.
+  const named = missing.length > 6 ? `${missing.slice(0, 6).join(', ')} and ${missing.length - 6} more` : missing.join(', ');
   check('the rest of the environment is still the process\'s',
         missing.length === 0,
-        `agentEnv corrects keys, it does not filter the environment — ${missing.join(', ')} did not arrive`);
+        `agentEnv corrects keys, it does not filter the environment — ${named} did not arrive`);
 
   // Called the way every caller in `src/` calls it: with nothing at all.
   const live = agentPath();
