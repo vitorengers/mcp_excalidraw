@@ -543,11 +543,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-<<<<<<< HEAD
-| `fast` | nothing | Linux, macOS, Windows | 139 | yes |
-=======
-| `fast` | nothing | Linux, macOS, Windows | 139 | yes |
->>>>>>> origin/main
+| `fast` | nothing | Linux, macOS, Windows | 140 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 79 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |

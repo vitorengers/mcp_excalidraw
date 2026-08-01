@@ -136,3 +136,40 @@ jobs:
       # measurement.
       - name: Run the repo tier
         run: node scripts/run-checks.mjs --tier repo
+
+  # The one job that asks a question about the pull request rather than about the tree: did a
+  # change to `src/` or `frontend/src/` arrive with a `scripts/check-*.mjs`, or does the body
+  # say why it needed none. `pull_request` only — a push to the default branch has no body to
+  # carry the `No-behaviour-change:` trailer, and by then the question has been answered.
+  pr-discipline:
+    name: pr-discipline / ubuntu-latest
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      # The full history, because the gate diffs against the base commit and a depth-1 clone
+      # does not hold it. Without this the check exits 2 — "the checkout cannot answer" — on
+      # every run, which is a red job that says nothing about the branch.
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+
+      # No `npm ci` and no build: the check reads `git diff` and a file, and depends on nothing
+      # in `node_modules`.
+      #
+      # The body goes through the environment and into a file rather than being interpolated
+      # into the `run:` script, because `${{ }}` is substituted before the shell sees the line
+      # and a pull request body is text a stranger wrote.
+      - name: A source change arrived with a check, or says why it did not
+        run: |
+          node -e "require('node:fs').writeFileSync('pr-body.txt', process.env.PR_BODY || '')"
+          node scripts/check-change-has-check.mjs --base "$BASE_SHA" --body-file pr-body.txt
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
