@@ -231,7 +231,19 @@ try {
     // No `LOG_LEVEL`: the claim is about what a *default* run writes, so the level has to be the
     // one an operator who set nothing gets. Deleted rather than left alone, because this
     // machine's shell may export one.
-    env: { LOG_FILE_PATH: serverLog, LOG_LEVEL: undefined, DEBUG: undefined },
+    //
+    // `STATE_HOME` is a throwaway, and it is not optional. The registry, and with it the
+    // directory every board is saved into, defaults to the per-user state directory — so the
+    // element this creates below would be written into the real `default.excalidraw` and
+    // restored by the *next* check that starts a canvas. It is not a mess this run can see:
+    // `check-sync-reconcile.mjs` refuses to run against a canvas that is not empty, and the
+    // first version of this check left two rectangles behind that made it exit non-zero.
+    env: {
+      LOG_FILE_PATH: serverLog,
+      LOG_LEVEL: undefined,
+      DEBUG: undefined,
+      EXCALIDRAW_STATE_HOME: join(workDir, 'state'),
+    },
     cwd: workDir,
   });
 
