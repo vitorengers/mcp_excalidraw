@@ -162,6 +162,25 @@ export function runningImplements(workspaceId: string): ImplementEntry[] {
 }
 
 /**
+ * How many runs are in flight anywhere in this process, across every workspace.
+ *
+ * The cap counts per workspace, because that is the thing being capped. This counts across all
+ * of them, because the thing it answers for is the *process*: `restart` ends the server, and
+ * with it every coding agent the server is hosting, whichever board asked for it. A caller with
+ * no workspace to ask about — the CLI has none, `docs/cli.md` says so — could otherwise only
+ * ever be told about `default`, and a registered project's runs are not in that one.
+ */
+export function runningImplementCount(): number {
+  let running = 0;
+  for (const records of byWorkspace.values()) {
+    for (const record of records.values()) {
+      if (record.state === 'running') running++;
+    }
+  }
+  return running;
+}
+
+/**
  * Whether a run is in flight *in this process*.
  *
  * Nothing else can write this map, so `running` here is the live truth — unlike the copy

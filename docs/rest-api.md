@@ -131,7 +131,7 @@ loopback only, and capped per board.
 | `GET /api/snapshots` | List the names this workspace has taken |
 | `GET /api/snapshots/:name` | Read one back, from the workspace that took it |
 | `GET /` | The built frontend |
-| `GET /health` | Liveness, plus the `pid` of whatever is actually answering, the `platform` it is answering from, and what the startup preflights found: `agents` per role and environment, and `gh` (`resolved` plus a version number — never the login, the scopes or stderr, which this route is not authenticated enough for) |
+| `GET /health` | Liveness, plus the `pid` of whatever is actually answering, the `version` it was built from, the `platform` it is answering from, how many issues it is `implementing`, and what the startup preflights found: `agents` per role and environment, and `gh` (`resolved` plus a version number — never the login, the scopes or stderr, which this route is not authenticated enough for) |
 | `POST /api/restart` | Replace this server with a new one on the same port (loopback only) |
 | `GET /api/sync/status` | What the store and the connected browsers currently hold |
 | `GET /api/claude-status` | What each Claude Code environment on this machine has spent (loopback only) — [claude-status.md](claude-status.md) |
@@ -162,6 +162,12 @@ exactly what the stand-in said. It writes what happened to `restart-<port>.log` 
 pidfile, because the process that asked is deliberately gone by then.
 
 It restarts the build that is on disk. It does not run a build.
+
+It also restarts the build *this* server came from — `dist/server.js` is resolved relative to the
+dying process's own module URL — which is right for a board restarting itself and wrong for a
+canvas left behind by a previous release. Replacing that one is the CLI's `restart`
+([cli.md](cli.md)), which stops the old server and starts one from the install that ran the
+command.
 
 `scripts/check-restart-route.mjs` starts a configured server, restarts it through the route and
 asserts all of that, including the 403 off loopback.
