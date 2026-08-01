@@ -8,6 +8,23 @@ heading that said twenty-seven, while the server answered on fifty;
 `scripts/check-docs-counts.mjs` now reads the routes out of `src/server.ts` and fails when one of
 them is missing from here.
 
+## Every route here needs the board's token
+
+`/api` answers **401** to a request that does not carry it, and so does the WebSocket upgrade.
+The server writes the secret to `server-<port>.token` in its state directory at startup, owner
+only ([configuration.md](configuration.md)), and a caller sends it either as the
+`X-VibeMaxxing-Token` header or as `?token=` — the second because a browser's `WebSocket`
+constructor has nowhere to put a header. `GET /` and `GET /health` are outside the gate, so that
+a page can load before it has read anything and so that a tool can find out what is on a port.
+[SECURITY.md](SECURITY.md) is what the secret is for and what it does not do.
+
+```bash
+curl -H "X-VibeMaxxing-Token: $(cat "$XDG_STATE_HOME/excalidraw-canvas/server-3737.token")" \
+  http://127.0.0.1:3737/api/elements
+```
+
+The CLI and the MCP server read that file themselves, so nothing below needs a flag.
+
 ## Elements
 
 The canvas store, one `Map` per workspace — see [element-store.md](element-store.md).

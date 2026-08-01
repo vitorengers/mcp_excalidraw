@@ -288,7 +288,7 @@ const PROBE = `(() => {
     library: box('.default-sidebar-trigger'),
     canvasWidth: (document.querySelector('.excalidraw') || { clientWidth: 0 }).clientWidth,
     attr: root ? (root.dataset.chrome || null) : null,
-    stored: (() => { try { return window.localStorage.getItem('excalidraw-canvas-chrome'); } catch { return null; } })(),
+    stored: (() => { try { return window.localStorage.getItem('vibemaxxing-canvas-chrome'); } catch { return null; } })(),
     docsCard: Boolean(document.querySelector('.docs-card')),
     activeTab: (document.querySelector('.workspace-tab--active .workspace-tab__name') || {}).textContent || null,
     selected: state ? Object.keys(state.selectedElementIds || {}).filter((id) => state.selectedElementIds[id]) : [],
