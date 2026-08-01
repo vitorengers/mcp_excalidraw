@@ -208,12 +208,15 @@ viewport needs a real Excalidraw instance, which only exists in an open tab. The
 the WebSocket, the browser does the work and POSTs the answer to the matching `/result` route.
 With no tab open, those calls have nobody to ask.
 
-## No authentication
+## Where it listens, and what that decides
 
-There is none. `HOST` defaults to `127.0.0.1` — IPv4 loopback, not `::` — and startup refuses
-when another loopback listener already holds the port, which is what would otherwise leave two
-canvas servers splitting state across IPv4 and IPv6. `scripts/check-local-bind.mjs` pins both
-down.
+This section said **No authentication** and opened with *there is none* until #350 put the token
+above in front of `/api`. What has not changed is that the token is one shared secret and the
+bind is a separate answer underneath it, so both are still worth reading here.
+
+`HOST` defaults to `127.0.0.1` — IPv4 loopback, not `::` — and startup refuses when another
+loopback listener already holds the port, which is what would otherwise leave two canvas servers
+splitting state across IPv4 and IPv6. `scripts/check-local-bind.mjs` pins both down.
 
 `HOST` can still be set wider; nothing stops that. What does stop is every route marked
 *loopback only* above, each of which refuses with 403 rather than answering a caller that
@@ -235,9 +238,13 @@ proxy is unaffected, because it reaches this server on loopback, which is the sh
 `EXCALIDRAW_ALLOWED_HOSTS` exists for.
 
 The guard tests the **bind address**, which is the one thing about a caller that cannot be
-forged. The origin gate beside it ([SECURITY.md](SECURITY.md)) tests `Origin` and `Host`, which
-is a question only a browser has to answer honestly, and neither stands in for the other.
+forged. The origin gate beside it tests `Origin` and `Host`, which is a question only a browser
+has to answer honestly, and the token above tests what the caller carries. None of the three
+stands in for the others — a request holding a valid token is still refused off loopback, and
+the bind is the only one of the three still answering wherever `VIBEMAXXING_NO_AUTH` is set.
+[SECURITY.md](SECURITY.md) is all of it in one place, and
+`scripts/check-board-reads-guard.mjs` holds this part.
 
-The writes are not behind this guard, and saying so is the point of writing it down: a board
-bound off loopback can still be *drawn on* by whoever reaches the port. Only reading it back is
-refused.
+The writes are not behind the bind guard, and saying so is the point of writing it down: a board
+bound off loopback can still be *drawn on* by anyone holding the token, even though none of them
+can read it back. That is #456.

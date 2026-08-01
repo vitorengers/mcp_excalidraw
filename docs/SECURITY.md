@@ -133,7 +133,8 @@ What a non-loopback bind actually leaves, now that the reads are behind the same
   cannot see it.
 - **Still answered** — the writes, and `/health`. A board bound that way can be drawn on by
   anyone holding the token even though none of them can read it back. Treat everything on one as
-  anybody's to change.
+  anybody's to change. That asymmetry is deliberate only in the sense that it was noticed rather
+  than folded in: #456 is where the same question gets asked of the writes.
 
 Before #366 the second list was the whole drawing canvas — elements, files, documents, the
 library and the snapshots. The two honest options were to guard them or to write down that a
