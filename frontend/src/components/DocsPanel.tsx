@@ -304,9 +304,14 @@ function formatTokens(count: number): string {
  * it is running.
  *
  * A finished run is a frozen total: `endedAt` is set, so there is nothing to tick.
+ *
+ * A hook rather than a component because there are two readings of the same elapsed time on
+ * that line now — the duration and the rate beside it — and two components each holding their
+ * own `setInterval` would be two clocks that agree only by luck. Null when the run has no
+ * start to measure from.
  */
-const RunClock: React.FC<{ startedAt: string; endedAt: string | null }> = ({ startedAt, endedAt }) => {
-  const started = Date.parse(startedAt)
+function useElapsedMs(startedAt: string | null, endedAt: string | null): number | null {
+  const started = startedAt ? Date.parse(startedAt) : NaN
   const ended = endedAt ? Date.parse(endedAt) : NaN
   const live = !Number.isFinite(ended)
   const [now, setNow] = useState(() => Date.now())
@@ -318,7 +323,28 @@ const RunClock: React.FC<{ startedAt: string; endedAt: string | null }> = ({ sta
   }, [live, startedAt])
 
   if (!Number.isFinite(started)) return null
-  return <>{formatDuration((live ? now : ended) - started)}</>
+  return (live ? now : ended) - started
+}
+
+/**
+ * `806 tok/s`, or `1.2k tok/s` once a run is spending faster than a reader can add up.
+ *
+ * Everything the run has spent — input and output both — over how long it took, which is the
+ * division a reader would do from the two figures beside it and the clock in front of them.
+ * Not output alone: what the two totals answer together is *what this board is consuming*, and
+ * with cache reads inside `in` that is where nearly all of it is.
+ *
+ * Null rather than `0` in three cases, and they are the same case: the run has not said enough
+ * to divide. No usage reported at all — which is most runs, since the agent command has to
+ * stream it — nothing spent yet, or less than a second to average over. A rate over half a
+ * second is not an average, it is the sampling interval.
+ */
+function averageRate(totalTokens: number, elapsedMs: number | null): string | null {
+  if (elapsedMs === null || elapsedMs < 1000 || totalTokens <= 0) return null
+  const perSecond = totalTokens / (elapsedMs / 1000)
+  // One decimal below ten, because a slow run rounded to the nearest whole token a second is
+  // `0 tok/s` — the one thing this is not allowed to say about a run that has spent something.
+  return `${perSecond >= 10 ? formatTokens(Math.round(perSecond)) : perSecond.toFixed(1)} tok/s`
 }
 
 /**
@@ -339,13 +365,25 @@ const RunClock: React.FC<{ startedAt: string; endedAt: string | null }> = ({ sta
  * how much of the figure in front of it went on thinking rather than on saying anything.
  * Absent when the agent never broke it down, which is not the same as a run that thought
  * for nothing.
+ *
+ * The rate is last because it is derived from everything in front of it: the two totals over
+ * the clock, and nothing that is not already on the line. A total says what a run cost and
+ * says nothing about whether it is *going*; two runs at the same total are the same picture
+ * whether one of them spent it in a minute and the other in an hour.
  */
 const RunProgress: React.FC<{ run: RunView }> = ({ run }) => {
+  const elapsedMs = useElapsedMs(run.startedAt, run.endedAt)
   if (!run.startedAt) return null
   const thinking = run.usage?.thinkingTokens
+  // A finished run's average is a fact about that run, so it stops with `endedAt` — the clock
+  // it divides by is the frozen one, not a live one that would walk the figure towards zero
+  // for as long as the panel is left open.
+  const rate = run.usage
+    ? averageRate(run.usage.inputTokens + run.usage.outputTokens, elapsedMs)
+    : null
   return (
     <p className="element-docs__progress">
-      <RunClock startedAt={run.startedAt} endedAt={run.endedAt} />
+      {elapsedMs !== null && formatDuration(elapsedMs)}
       {run.usage && (
         <span className="element-docs__tokens">
           {' · '}{formatTokens(run.usage.inputTokens)} in
@@ -356,6 +394,14 @@ const RunProgress: React.FC<{ run: RunView }> = ({ run }) => {
               title="Of the output tokens, how many the agent spent on internal reasoning. Its own estimate, and already inside the figure before it."
             >
               {' ('}{formatTokens(thinking)} thinking{')'}
+            </span>
+          )}
+          {rate && (
+            <span
+              className="element-docs__rate"
+              title="Input and output together, averaged over the whole run. A finished run's average stops with it."
+            >
+              {' · '}{rate}
             </span>
           )}
         </span>
