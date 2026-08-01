@@ -116,6 +116,28 @@ const entriesOf = (value) => value.split(delimiter).filter(Boolean);
 const countOf = (value, entry) => entriesOf(value).filter((one) => one === entry).length;
 
 /**
+ * A variable's value as an environment object actually holds it.
+ *
+ * `process.env` on Windows is a case-insensitive proxy over the process's environment block, so
+ * `process.env.SystemRoot` answers whichever spelling the block stored — `SYSTEMROOT` from Git
+ * Bash, `SystemRoot` from PowerShell. `agentEnv()` returns a plain object built by spreading
+ * that proxy, and a spread copies every key under its *stored* spelling into an object that has
+ * no such lookup. A comparison written for one shell therefore reads `undefined` in the other,
+ * which is the whole of what this used to fail on: the expectation was spelled for POSIX, and
+ * the variable was in the object all along.
+ *
+ * The match is the host's own rule rather than a blanket loosening. On win32 the environment
+ * block ignores case and the child sees the variable whatever spelling it was stored under; on
+ * Linux and macOS it does not, so there the key is compared exactly and a `systemroot` that is
+ * not `SystemRoot` is still a dropped variable.
+ */
+function valueOf(env, name) {
+  if (process.platform !== 'win32') return env[name];
+  const key = Object.keys(env).find((one) => one.toLowerCase() === name.toLowerCase());
+  return key === undefined ? undefined : env[key];
+}
+
+/**
  * A PATH short enough to read in a failure.
  *
  * The interesting entries are the planted ones at the end, and against the defect this file
@@ -216,13 +238,11 @@ try {
 
   console.log('\n4. agentEnv carries the repair, on POSIX as on Windows');
 
-  // A key this check plants in its own environment, so the case that asserts the environment
-  // survives does not depend on what the invoking shell happens to have set — nor on how it
-  // spelled it. `process.env` on Windows is case-insensitive and the plain object `agentEnv`
-  // spreads it into is not, so naming a real variable asserts the shell rather than the code:
-  // Git Bash exports `SYSTEMROOT` and PowerShell exports `SystemRoot`, and a case written
-  // against either spelling flips on which one ran it. This one has a single spelling on all
-  // three platforms because nothing but this file ever sets it.
+  // A key this check plants in its own environment, so that one case at least does not depend
+  // on what the invoking shell happens to have set, nor on how it spelled it — see `valueOf`
+  // for why a real Windows variable answers to two spellings. This one has a single spelling
+  // on all three platforms because nothing but this file ever sets it, and a value only this
+  // file could have written.
   process.env[WITNESS] = 'planted by check-agent-path';
 
   const env = agentEnv({ platform: 'linux', path: minimalPath(posixRoot), home: HOME, root: posixRoot });
@@ -231,21 +251,39 @@ try {
   check('and it holds the planted directory', entriesOf(env.PATH ?? '').includes(under(posixRoot, '/opt/homebrew/bin')),
         brief(env.PATH));
   check('a variable this check planted reaches the child with its value',
-        env[WITNESS] === process.env[WITNESS], `${WITNESS}=${String(env[WITNESS])}`);
+        valueOf(env, WITNESS) === valueOf(process.env, WITNESS),
+        `${WITNESS}=${String(valueOf(env, WITNESS))}`);
 
-  // Every other key too, compared by name and case-insensitively: the point of the case is
-  // that `agentEnv` corrects keys rather than filtering the environment, and one witness
-  // would still pass if it dropped everything around it. Only the two names it strips on
-  // purpose are exempt, and those belong to `check-child-session-env.mjs` and
-  // `check-no-color-env.mjs` rather than to this file.
-  const upper = (name) => name.toUpperCase();
-  const arrived = new Set(Object.keys(env).map(upper));
-  const missing = Object.keys(process.env).map(upper)
-    .filter((name) => !DELIBERATELY_STRIPPED.includes(name))
-    .filter((name) => !arrived.has(name));
-  // Named, but not all sixty of them: against a function that filtered the lot, the list is
-  // this machine's whole environment block and the first few say it just as well.
-  const named = missing.length > 6 ? `${missing.slice(0, 6).join(', ')} and ${missing.length - 6} more` : missing.join(', ');
+  // Named, then filtered by what this process actually has: a variable the host never set
+  // would compare `undefined` to `undefined` and pass whatever `agentEnv()` did with it.
+  // `SystemRoot` exists only on Windows and `HOME` only where something POSIX-shaped put it
+  // there, so a fixed pair is half vacuous on either platform. The list is long enough that
+  // every host this runs on keeps at least one, and the count is asserted rather than assumed.
+  const witnesses = ['SystemRoot', 'HOME', 'PATHEXT', 'USER', 'LANG']
+    .filter((name) => valueOf(process.env, name) !== undefined);
+  const dropped = witnesses.filter((name) => valueOf(env, name) !== valueOf(process.env, name));
+  check('the variables it names arrive with the values this process holds',
+        witnesses.length > 0 && dropped.length === 0,
+        witnesses.length === 0
+          ? 'this check found none of its own process\'s variables to look for'
+          : `agentEnv corrects keys, it does not filter the environment — ${dropped.join(', ')} did not survive it`);
+
+  // And then every key, by name, because a named list cannot notice a variable it does not
+  // name: the five above would all survive a function that dropped everything else. The
+  // comparison is the host's own rule again — case-insensitive where the environment block
+  // is, exact where it is not — so it agrees with `valueOf` above rather than loosening what
+  // that half asserts. Only the two names `agentEnv` strips on purpose are exempt, and those
+  // are asserted by `check-child-session-env.mjs` and `check-no-color-env.mjs`.
+  const keyOf = (name) => (process.platform === 'win32' ? name.toUpperCase() : name);
+  const arrived = new Set(Object.keys(env).map(keyOf));
+  const missing = Object.keys(process.env)
+    .filter((name) => !DELIBERATELY_STRIPPED.includes(name.toUpperCase()))
+    .filter((name) => !arrived.has(keyOf(name)));
+  // Named, but not all sixty of them: against a function that filtered the lot the list is
+  // this machine's whole environment block, and the first few say it just as well.
+  const named = missing.length > 6
+    ? `${missing.slice(0, 6).join(', ')} and ${missing.length - 6} more`
+    : missing.join(', ');
   check('the rest of the environment is still the process\'s',
         missing.length === 0,
         `agentEnv corrects keys, it does not filter the environment — ${named} did not arrive`);
