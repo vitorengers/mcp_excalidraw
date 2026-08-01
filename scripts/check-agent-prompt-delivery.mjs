@@ -308,9 +308,13 @@ for (const [one, { record }] of results) {
 console.log('\n4. the claude-code headless path is what it was, byte for byte');
 
 const [, claudeHeadless] = results[0];
-check('its argv is the four flags this backend spells, and no prompt among them',
-      JSON.stringify(claudeHeadless.record?.argv)
-      === JSON.stringify(['--print', '--output-format', 'stream-json', '--verbose']),
+// A run inside the argv rather than the whole of it: a named backend also writes a permission
+// posture, after these — `check-agent-permissions.mjs` is where that is held. What this case is
+// about is the four print flags still being there and the prompt still not being.
+check('its argv carries the four flags this backend spells, and no prompt among them',
+      (claudeHeadless.record?.argv ?? []).join(' ')
+        .includes('--print --output-format stream-json --verbose')
+      && !(claudeHeadless.record?.argv ?? []).includes(PROMPT),
       JSON.stringify(claudeHeadless.record?.argv));
 check('and stdin carried the whole prompt and nothing else',
       claudeHeadless.record?.stdin === PROMPT,
