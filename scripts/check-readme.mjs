@@ -21,6 +21,15 @@
  *     npm run canvas` is a parse error in PowerShell and in cmd, and `open <url>` is a macOS
  *     program; a quick start that cannot be typed is not a quick start. `docs/install.md` is
  *     held to the same rule, because it is the document that page now sends a stranger to.
+ *  6. The rules above are about identity; this one is about the first screen. The page was
+ *     644 lines with upstream's structure — a fork disclaimer, a paragraph about why there
+ *     are no badges, upstream's demo of an agent drawing an architecture diagram, and a
+ *     23-entry table of contents, before a word about what this tool is. The one image on it
+ *     showed a capability every competitor has, and the differentiator had none. So: a
+ *     ceiling on the length, an image of *this* tool that is tracked in this tree, the
+ *     upstream asset named only where the line says whose it is, and a table saying which
+ *     machines it runs on — a table, because the list of Claude Desktop config paths already
+ *     named three operating systems and answered a different question.
  *
  * `check-docs-index.mjs` separately holds it to naming only files that exist.
  *
@@ -31,6 +40,7 @@
  * Tier: repo
  */
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -291,6 +301,103 @@ for (const relative of ['README.md', 'docs/install.md']) {
                                                        : 'macOS-only `open <url>`'})`)
           .join('\n        '));
 }
+
+// ─── 6. The first screen is about this tool ───────────────────
+
+/** Longer than this and the front page is a manual again. */
+const MAX_LINES = 200;
+
+/** Where curated media lives, so a hero is a committed asset rather than somebody's paste. */
+const MEDIA_DIR = 'docs/media/';
+
+/** Upstream's, and the only image on the page that was allowed to be. */
+const UPSTREAM_ASSET = 'demo.gif';
+
+/**
+ * The machines a reader can be on. `WSL` is in the list for a reason beyond coverage: the
+ * Claude Desktop section already lists a config path for macOS, Windows and Linux, so those
+ * three alone are satisfied by a note about somebody else's application. Nothing about a
+ * client configuration mentions WSL.
+ */
+const PLATFORMS = ['Windows', 'macOS', 'Linux', 'WSL'];
+
+/** Every image the page embeds, in document order. */
+const imagesIn = (text) => [...text.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map(([, path]) => path);
+
+/**
+ * Whether some markdown table in `text` names every platform.
+ *
+ * A table rather than a mention anywhere, because the question is whether the page *answers*
+ * it — a support matrix answers it, and an operating system named in passing in a config path
+ * or a troubleshooting bullet does not. Contiguous rows are one table; a blank line, prose or
+ * a heading ends it.
+ */
+function platformTable(text) {
+  let fenced = false;
+  let rows = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (/^(?:```|~~~)/.test(line)) { fenced = !fenced; rows = []; continue; }
+    if (fenced) continue;
+    if (line.startsWith('|') && line.endsWith('|')) { rows.push(line); continue; }
+    if (rows.length) {
+      const table = rows.join('\n');
+      if (PLATFORMS.every((platform) => table.includes(platform))) return rows;
+    }
+    rows = [];
+  }
+  const table = rows.join('\n');
+  return PLATFORMS.every((platform) => table.includes(platform)) ? rows : null;
+}
+
+console.log('\n6. the first screen is about this tool, and says where it runs');
+
+const TABLE_FIXTURES = [
+  ['a support matrix naming all four is a table', true,
+   '| Platform | Canvas |\n|---|---|\n| Windows | yes |\n| Windows + WSL | yes |\n'
+   + '| macOS | yes |\n| Linux | yes |\n'],
+  ['the Claude Desktop config paths are not', false,
+   '- macOS: `~/Library/Application Support/Claude/`\n- Windows: `%APPDATA%\\Claude\\`\n'
+   + '- Linux: `~/.config/Claude/`\n'],
+  ['nor is a table that leaves one out', false,
+   '| Platform | Canvas |\n|---|---|\n| Windows | yes |\n| macOS | yes |\n| Linux | yes |\n'],
+  ['two tables between them do not add up to one', false,
+   '| Platform |\n|---|\n| Windows |\n| macOS |\n\nProse.\n\n| Platform |\n|---|\n| Linux |\n| WSL |\n'],
+  ['a fenced block that happens to look like one is not a table', false,
+   '```\n| Windows | macOS | Linux | WSL |\n```\n'],
+];
+
+for (const [name, expected, text] of TABLE_FIXTURES) {
+  check(`the rule: ${name}`, Boolean(platformTable(text)) === expected);
+}
+
+const length = readme.replace(/\r?\n$/, '').split(/\r?\n/).length;
+check(`README.md is under ${MAX_LINES} lines (${length})`, length < MAX_LINES,
+      'the front page was a manual with the product buried in the middle of it');
+
+const images = imagesIn(readme);
+const own = images.filter((path) => path.startsWith(MEDIA_DIR));
+check(`it shows this tool — an image under ${MEDIA_DIR}`, own.length > 0,
+      `${images.length} image(s), none of them this fork's: ${images.join(', ') || 'none'}`);
+
+const tracked = new Set(
+  execFileSync('git', ['ls-files', '-z'], { cwd: repoRoot, encoding: 'utf8' })
+    .split('\0').filter(Boolean).map((file) => file.split('\\').join('/'))
+);
+const untracked = own.filter((path) => !tracked.has(path) && !existsSync(join(repoRoot, path)));
+check('and that image is in the tree rather than linked from somewhere', untracked.length === 0,
+      `${untracked.join(', ')} — a front page whose hero 404s is worse than one with no hero`);
+
+// It may stay, and it may not be presented as this fork's work.
+const unmarked = readme.split(/\r?\n/)
+  .map((line, index) => ({ line, at: index + 1 }))
+  .filter(({ line }) => line.includes(UPSTREAM_ASSET) && !/upstream/i.test(line));
+check(`${UPSTREAM_ASSET} is named only where the line says whose it is`, unmarked.length === 0,
+      unmarked.map(({ line, at }) => `${at}: ${line.trim().slice(0, 80)}`).join('\n        '));
+
+const support = platformTable(readme);
+check(`a table says it runs on ${PLATFORMS.join(', ')}`, support !== null,
+      'a reader on a Mac, on Linux or in WSL had to infer it from a Claude Desktop config path');
 
 if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
 console.log('\nall cases passed');
