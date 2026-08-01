@@ -49,6 +49,13 @@
  * `BOARD_IMAGE_BUDGET_BYTES` and the rest are named in a warning rather than silently
  * halved. Without them the save was a scene that referred to pictures nobody could produce:
  * every reload of every board, not the restart-only limit this comment used to claim.
+ *
+ * ## What is kept when a board is emptied
+ *
+ * The same scene, written once, beside the saved board and named after it — because a clear is
+ * the one write that is not a change to a board but the end of one, and since #225 it reaches
+ * the file (#345). It carries the images too, on the same budget: they are exactly what a
+ * clear would otherwise take with no way back.
  */
 import fs from 'fs/promises';
 import { renameSync, writeFileSync, mkdirSync } from 'fs';
@@ -200,18 +207,92 @@ function filesFor(workspaceId: string, elements: ServerElement[]): Record<string
   return scoped;
 }
 
-/** What goes in the file: a scene, readable by anything that reads a `.excalidraw`. */
-function sceneFor(workspaceId: string): string {
-  const elements = persistableElements(elementsFor(workspaceId).values());
+/**
+ * What goes in a file: a scene, readable by anything that reads a `.excalidraw`.
+ *
+ * The elements are passed in rather than read here, because the two callers do not agree on
+ * what they are: the save writes the board as it stands, and the copy taken before a clear
+ * writes the same board one moment before it stops standing. The files follow whichever set
+ * of elements it is handed, so a copy carries the pictures its own shapes point at — the
+ * board's images are exactly what a clear would otherwise take with no way back.
+ */
+function sceneOf(workspaceId: string, elements: ServerElement[], source: string): string {
   return `${JSON.stringify({
     type: 'excalidraw',
     version: 2,
-    source: 'excalidraw-canvas-board-state',
+    source,
     savedAt: new Date().toISOString(),
     elements,
     appState: {},
     files: filesFor(workspaceId, elements),
   }, null, 0)}\n`;
+}
+
+/** The board as it is now, for the file it is saved in. */
+function sceneFor(workspaceId: string): string {
+  return sceneOf(workspaceId, persistableElements(elementsFor(workspaceId).values()),
+                 'excalidraw-canvas-board-state');
+}
+
+/**
+ * Where a board goes before something empties it.
+ *
+ * Beside its saved state and named after it, so a reader who knows where the board lives
+ * knows where its copies are without being told a second directory. `.cleared-<when>` rather
+ * than a single `.backup`, because the interesting clear is rarely the last one: an agent
+ * that clears and restores badly does it repeatedly, and one file would be overwritten by the
+ * clear that came after the one worth reading.
+ *
+ * The stamp has its colons and dot beaten out of it — an ISO timestamp is not a filename on
+ * Windows — and it stays sortable either way, which is what makes "the newest one" a `sort()`.
+ *
+ * It does *not* collide with what `readBoardState` reads: that opens `<id>.excalidraw` by
+ * name, so a copy sitting beside it is never mistaken for the board itself.
+ */
+export function boardBackupFile(workspaceId: string, at: Date): string | null {
+  const directory = boardStateDir();
+  if (!directory) return null;
+  const stamp = at.toISOString().replace(/[:.]/g, '-');
+  return path.join(directory, `${normalizeWorkspaceId(workspaceId)}.cleared-${stamp}.excalidraw`);
+}
+
+/**
+ * Keep what is about to be destroyed, and say where it was put.
+ *
+ * `DELETE /api/elements/clear` is the one write on this server that is not a change to a
+ * board but the end of one, and since #225 it reaches the file: the store empties, the save
+ * listener fires, and a second later the board's saved `.excalidraw` holds an empty element
+ * list. Nothing in the product could get that back — snapshots were in memory and died with
+ * the process — so the copy is taken here, in the route, rather than in the one caller that
+ * happens to have a person in front of it (#345).
+ *
+ * Not gated on `persistBoardFor`. That gate exists so a request naming a workspace nobody
+ * registered cannot create a file per typo, and it cannot here either: a store nobody has
+ * written to has no elements, and a board with no elements is not copied. What the gate would
+ * cost instead is the case this is for — an unregistered board holding somebody's only copy
+ * of something, emptied by a tool call.
+ *
+ * Written through a temporary file and a rename for the same reason the board is: a copy that
+ * is half a file is not a copy, and this one exists precisely for the moment somebody needs it.
+ */
+export async function backupBoardBefore(workspaceId: string): Promise<string | null> {
+  const id = normalizeWorkspaceId(workspaceId);
+  const elements = persistableElements(elementsFor(id).values());
+  if (!elements.length) return null;
+
+  const file = boardBackupFile(id, new Date());
+  if (!file) return null;
+
+  const temporary = `${file}.${process.pid}.tmp`;
+  try {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(temporary, sceneOf(id, elements, 'excalidraw-canvas-board-cleared'), 'utf-8');
+    await fs.rename(temporary, file);
+    return file;
+  } catch (error) {
+    logger.warn(`Could not copy the board for "${id}" to ${file} before clearing it: ${(error as Error).message}`);
+    return null;
+  }
 }
 
 /**
