@@ -58,6 +58,31 @@ somebody else started, and do not read its target out of the environment.
 `scripts/check-no-external-server.mjs` is what holds the rule. Declare a `Tier:` in the banner —
 `fast`, `browser`, `windows`, `wsl` or `repo` — and pick the narrowest one that is true.
 
+Half of this rule is a gate. `scripts/check-change-has-check.mjs` runs on every pull request and
+is red if the range changes anything under `src/` or `frontend/src/` and adds or modifies no
+`scripts/check-*.mjs`. Run it before you open one:
+
+```
+node scripts/check-change-has-check.mjs --base origin/main
+```
+
+The other half is not a gate and cannot be. Nothing in a squashed pull request records which
+file was written first, so the **ordering** is verified by a person reading the failing output
+you pasted — which is why the pull request template asks for the check's name, the command, and
+what it printed when it was red. Paste the real output; do not describe it.
+
+Where the change genuinely has no check to bring — a rename, a formatting sweep, a dependency
+bump — put a line in the pull request body and the gate stands down:
+
+```
+No-behaviour-change: renamed the module, no call site changed
+```
+
+A trailer rather than a label, because the squash merge carries the body into the commit and
+drops the labels. The reason is the whole of it: an empty trailer or an unreplaced placeholder
+is refused. Reaching for it on a change that does alter behaviour is the rule working, not an
+obstacle to route around.
+
 ## Every change updates the board and the log
 
 `docs/board.excalidraw` is this repository's own board, cut into two marked sections
