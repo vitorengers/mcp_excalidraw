@@ -115,3 +115,10 @@ fails with "not recognized"; use the full path, or prepend the directory first.
 And `gh` resolves the repository from the git remotes, where `upstream` wins — so
 `gh issue list` in this checkout lists **yctimlin/mcp_excalidraw's** issues, not this fork's.
 Pass `--repo vitorengers/vibemaxxing` to mean this one.
+
+The issue agent is told the same thing rather than left to find out (#335). `issueTargetSection`
+in `src/core/issue-agent.ts` puts the workspace's `repo` into the research and revise prompts as
+a `--repo owner/name` the agent is instructed to pass, and its `githubProject` beside it, so a
+board that knows which repository it is for does not let a remote decide. A board that has
+configured neither sends the prompt it sent before that existed, byte for byte —
+`scripts/check-issue-agent-target.mjs` holds both halves.
