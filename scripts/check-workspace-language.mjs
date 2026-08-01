@@ -117,6 +117,9 @@ import { writeFileSync } from 'node:fs';
 let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', () => {
+  // Since #329 the prompt travels down whichever channel the backend declared, and this
+  // command line carries no \`-p\`, so \`raw\` delivers it as the last argument.
+  if (!input) input = process.argv[process.argv.length - 1] ?? '';
   writeFileSync(process.env.CAPTURE_TO, input, 'utf8');
   process.stdout.write('https://github.com/vitorengers/farol/issues/6\\n');
 });

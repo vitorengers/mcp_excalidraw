@@ -83,6 +83,9 @@ import { appendFileSync, statSync } from 'node:fs';
 let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', () => {
+  // Since #329 the prompt travels down whichever channel the backend declared, and this
+  // command line carries no \`-p\`, so \`raw\` delivers it as the last argument.
+  if (!input) input = process.argv[process.argv.length - 1] ?? '';
   const paths = [];
   const marker = input.indexOf('Reference images');
   if (marker !== -1) {
