@@ -1,6 +1,6 @@
 <!--
-The two boxes below are not ceremony: they are the rules CLAUDE.md holds every change to, and
-each of them exists because something shipped without it once. Tick what is true and say so
+The two boxes below are not ceremony: they are the rules CONTRIBUTING.md binds every change to,
+and each of them exists because something shipped without it once. Tick what is true and say so
 where it is not — a pull request that explains why a rule does not apply is fine, one that
 leaves the box blank is a question somebody has to ask.
 -->
@@ -30,7 +30,8 @@ Name it here, and say what it printed when it was red.
 The board is cut into two halves and both have to keep describing what is there:
 `docs/development-log.md` gets its entry before the merge, and the structure map gets a card
 when a file, a route, a block kind or a feature appears or disappears. A new tracked
-`docs/*.md` gets a card too. `node scripts/check-board-map.mjs` enforces all three.
+`docs/*.md` gets a card too. `node scripts/check-board-map.mjs` enforces all three, and
+CONTRIBUTING.md is where all of it is argued out.
 -->
 
 - [ ] `docs/development-log.md` has this change's entry, at the top of the table

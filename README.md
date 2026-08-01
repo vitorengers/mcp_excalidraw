@@ -596,7 +596,7 @@ Yes — that's the recommended path for coding agents: `npx -y @vitorengers/vibe
 - [ ] **Image export requires a browser**: screenshots and image export rely on the frontend doing the actual rendering. A headless rendering mode is planned.
 
 Contributions welcome! How work is done here is written down rather than implied:
-[CLAUDE.md](CLAUDE.md) is the workflow — an issue first, then a branch, then a pull request,
+[CONTRIBUTING.md](CONTRIBUTING.md) is the working agreement — an issue first, then a branch,
 and every behaviour change ships with a `scripts/check-*.mjs` run against the old code first —
 and `.github/pull_request_template.md` is the same rules as a checklist. This project also has
 a [code of conduct](CODE_OF_CONDUCT.md) and a [security policy](docs/SECURITY.md); a
