@@ -184,7 +184,14 @@ const CLAUDE_STREAM = [
   }),
 ];
 
-/** Codex's JSONL, as its own non-interactive documentation describes it. */
+/**
+ * Codex's JSONL, in the shape a real `codex exec --json` capture has — see
+ * `scripts/lib/codex-capture.mjs` for the capture itself and the version it came from.
+ *
+ * `cached_input_tokens` is a **share of** `input_tokens` rather than a figure beside it, which is
+ * the opposite of Claude Code's disjoint `cache_read_input_tokens` above, so both streams below
+ * report a run that processed 3000 input tokens and each spells that its own way.
+ */
 const CODEX_STREAM = [
   JSON.stringify({ type: 'thread.started', thread_id: 'th_1' }),
   JSON.stringify({ type: 'turn.started' }),
@@ -194,7 +201,7 @@ const CODEX_STREAM = [
     item: { id: 'item_1', type: 'command_execution', command: 'npm test', aggregated_output: 'all cases passed\n', exit_code: 0, status: 'completed' },
   }),
   JSON.stringify({ type: 'item.completed', item: { id: 'item_2', type: 'agent_message', text: `Merged and landed: ${PULL_URL}` } }),
-  JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1500, cached_input_tokens: 1500, output_tokens: 222 } }),
+  JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 3000, cached_input_tokens: 1500, output_tokens: 222 } }),
 ];
 
 const claudeStub = writeStub('claude-stub', CLAUDE_STREAM);

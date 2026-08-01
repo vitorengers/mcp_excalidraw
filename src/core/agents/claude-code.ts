@@ -28,6 +28,7 @@ import {
   withoutFullAccess, withoutPrintArguments,
   type AgentAdapter, type AgentInvocation, type AgentInvokeSpec,
 } from '../agent-adapter.js';
+import { readAgentLimits } from '../agent-limits.js';
 import { readClaudeUsage } from '../agent-usage.js';
 import { CLAUDE_CLAIMED_TYPES, renderClaudeEvent } from '../agent-stream-render.js';
 import { agentAction } from '../terminal-palette.js';
@@ -104,4 +105,15 @@ export const claudeCodeAdapter: AgentAdapter = {
   renderEvent: renderClaudeEvent,
   claimedTypes: CLAUDE_CLAIMED_TYPES,
   actionOf: agentAction,
+
+  /**
+   * The one backend that can answer what it has spent, and it answers it from a directory.
+   *
+   * Not a probe of the CLI: there is nothing to probe. The figures are handed to a status line
+   * command and nowhere else — `agent-limits.ts` carries the whole of that argument — so what
+   * this backend knows how to do is read the document that command was given. The parsing lives
+   * next door because it is a schema rather than an invocation, and the rest of the board asks
+   * for it through here so that it never has to name a vendor to get an answer.
+   */
+  readLimits: readAgentLimits,
 };

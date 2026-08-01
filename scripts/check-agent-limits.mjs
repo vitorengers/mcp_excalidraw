@@ -1,21 +1,26 @@
 #!/usr/bin/env node
 /**
- * Checks `GET /api/claude-status` — what each Claude Code environment on this machine has
+ * Checks `GET /api/agent-limits` — what each coding-agent environment on this machine has
  * spent against its 5-hour and 7-day windows, and which account spent it.
  *
- * Nothing in this repository had ever read Claude Code's account or its limits, and there is
- * no supported way to pull them: the figures are *pushed*, once, into a live session's status
- * line command as `rate_limits.five_hour` and `rate_limits.seven_day`
- * (https://code.claude.com/docs/en/statusline). `/status` and `/usage` are interactive slash
- * commands, the OpenTelemetry export carries no quota, and the OAuth token in
- * `.credentials.json` is authentication material this repository has never touched.
+ * Nothing in this repository had ever read a coding agent's account or its limits, and for the
+ * one backend that can answer there is no supported way to *pull* them: the figures are
+ * *pushed*, once, into a live session's status line command as `rate_limits.five_hour` and
+ * `rate_limits.seven_day` (https://code.claude.com/docs/en/statusline). `/status` and `/usage`
+ * are interactive slash commands, the OpenTelemetry export carries no quota, and the OAuth
+ * token in `.credentials.json` is authentication material this repository has never touched.
  *
- * So the status line writes them down and the board reads them. `EXCALIDRAW_CLAUDE_STATUS`
+ * So the status line writes them down and the board reads them. `VIBEMAXXING_AGENT_LIMITS`
  * names a **directory** the operator's status line command drops one small JSON file into,
  * per environment: `native.json` for the host, `wsl-<distro>.json` for a session inside a
  * distro (which reaches that directory through `/mnt/c/...`). A directory rather than each
  * home's own file is what lets one board see two machines without guessing at another
  * environment's `$HOME` or spawning a `wsl.exe` per poll.
+ *
+ * **Reading is a backend's, not the board's.** `AgentAdapter.readLimits` is optional, and it is
+ * absent on every backend that cannot answer — so the question "what has this machine spent"
+ * is asked of the agent rather than of one vendor's file layout, and a second reader can be
+ * added without renaming a route, a component or a variable a second time (#334).
  *
  * The cases below are the ones the shape has to get right, and every one of them is a way of
  * being wrong that reads as an answer:
@@ -36,20 +41,23 @@
  *
  * Self-contained: it starts its own canvas servers on free ports of their own and kills them.
  * Nothing here talks to the board, to GitHub, to WSL or to the network. Run
- * `./node_modules/.bin/tsc` first.
+ * `./node_modules/.bin/tsc` first — sections 11 and 12 import the compiled adapters and read
+ * the sources beside them.
  *
- * Usage: node scripts/check-claude-status.mjs
+ * Usage: node scripts/check-agent-limits.mjs
  *
  * Tier: fast
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas } from './lib/spawn-canvas.mjs';
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 let failures = 0;
 
@@ -61,10 +69,10 @@ function check(name, condition, detail = '') {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const slash = (value) => value.replace(/\\/g, '/');
 
-const workDir = mkdtempSync(join(tmpdir(), 'check-claude-status-'));
-const statusDir = join(workDir, 'claude-status');
+const workDir = mkdtempSync(join(tmpdir(), 'check-agent-limits-'));
+const limitsDir = join(workDir, 'agent-limits');
 const nativeProject = join(workDir, 'native-project');
-mkdirSync(statusDir, { recursive: true });
+mkdirSync(limitsDir, { recursive: true });
 mkdirSync(nativeProject, { recursive: true });
 writeFileSync(join(nativeProject, 'board.config.json'), JSON.stringify({ name: 'Native' }), 'utf8');
 
@@ -96,7 +104,7 @@ const NOW = Math.floor(Date.now() / 1000);
  * unauthenticated local route.
  */
 const DECOY = 'sk-ant-oat01-NEVER-LEAK-THIS';
-writeFileSync(join(statusDir, 'native.json'), JSON.stringify({
+writeFileSync(join(limitsDir, 'native.json'), JSON.stringify({
   account: 'windows-user@example.com',
   fiveHour: { usedPercent: 23.5, resetsAt: NOW + 3600 },
   sevenDay: { usedPercent: 41.2, resetsAt: NOW + 3 * 86400 },
@@ -112,7 +120,7 @@ writeFileSync(join(statusDir, 'native.json'), JSON.stringify({
  * the object it was handed straight through. `five_hour` is absent, which is exactly what a
  * session that has not had one reported looks like.
  */
-writeFileSync(join(statusDir, 'wsl-Ubuntu-22.04.json'), JSON.stringify({
+writeFileSync(join(limitsDir, 'wsl-Ubuntu-22.04.json'), JSON.stringify({
   account: 'wsl-user@example.com',
   rate_limits: { seven_day: { used_percentage: 12, resets_at: NOW + 5 * 86400 } },
   observedAt: NOW - 3600,
@@ -123,7 +131,7 @@ writeFileSync(join(statusDir, 'wsl-Ubuntu-22.04.json'), JSON.stringify({
 // And one that is not JSON. A half-written file is the normal failure of a status line
 // command that was killed mid-write, and it must cost that one environment its reading
 // rather than the whole route.
-writeFileSync(join(statusDir, 'wsl-Malformed.json'), '{ "account": "half-writ', 'utf8');
+writeFileSync(join(limitsDir, 'wsl-Malformed.json'), '{ "account": "half-writ', 'utf8');
 
 /**
  * A distro with a file and no project registered.
@@ -133,7 +141,7 @@ writeFileSync(join(statusDir, 'wsl-Malformed.json'), '{ "account": "half-writ', 
  * directory is a declaration too, and the operator writing one is a clearer signal of intent
  * than a project they happen to have registered.
  */
-writeFileSync(join(statusDir, 'wsl-Unregistered.json'), JSON.stringify({
+writeFileSync(join(limitsDir, 'wsl-Unregistered.json'), JSON.stringify({
   account: 'other@example.com',
   fiveHour: { usedPercent: 7, resetsAt: NOW + 900 },
   observedAt: NOW - 30,
@@ -178,10 +186,10 @@ try {
 
   const board = await canvasWith({
     EXCALIDRAW_WORKSPACES: registryPath,
-    EXCALIDRAW_CLAUDE_STATUS: statusDir,
+    EXCALIDRAW_AGENT_LIMITS: limitsDir,
   });
 
-  const read = await get(board, '/api/claude-status');
+  const read = await get(board, '/api/agent-limits');
   check('200 for the read', read.status === 200, `got ${read.status} — ${read.text.slice(0, 200)}`);
   check('and it carries a list of environments',
     Array.isArray(read.body?.environments), JSON.stringify(read.body).slice(0, 300));
@@ -288,7 +296,7 @@ try {
   check('nor the key it was written under',
     !/oauthAccessToken/i.test(read.text), 'an unknown key was echoed back');
   check('and no absolute path to the directory either',
-    !read.text.includes(slash(statusDir)) && !read.text.includes(statusDir),
+    !read.text.includes(slash(limitsDir)) && !read.text.includes(limitsDir),
     'the status directory leaked into the response');
 
   // ─── Off unless configured, loopback only ───────────────────
@@ -296,24 +304,109 @@ try {
   console.log('\n9. off unless configured');
 
   const unconfigured = await canvasWith({ EXCALIDRAW_WORKSPACES: registryPath });
-  const missing = await get(unconfigured, '/api/claude-status');
+  const missing = await get(unconfigured, '/api/agent-limits');
   check('404 with no directory configured', missing.status === 404,
     `got ${missing.status} — ${missing.text.slice(0, 200)}`);
   check('and the refusal names the variable that would turn it on',
-    /VIBEMAXXING_CLAUDE_STATUS/.test(missing.text), missing.text.slice(0, 200));
+    /VIBEMAXXING_AGENT_LIMITS/.test(missing.text), missing.text.slice(0, 200));
 
   console.log('\n10. and never off loopback, because it carries an email');
 
   const open = await canvasWith({
     EXCALIDRAW_WORKSPACES: registryPath,
-    EXCALIDRAW_CLAUDE_STATUS: statusDir,
+    EXCALIDRAW_AGENT_LIMITS: limitsDir,
   }, '0.0.0.0');
-  const refused = await get(open, '/api/claude-status');
+  const refused = await get(open, '/api/agent-limits');
   check('403 for a board that is not bound to loopback', refused.status === 403,
     `got ${refused.status} — ${refused.text.slice(0, 200)}`);
   check('the refusal names loopback', /loopback/i.test(refused.text), refused.text.slice(0, 200));
   check('and no account came back with it',
     !refused.text.includes('@example.com'), 'an email was served off loopback');
+
+  // ─── Reading is a capability, not a fact about the board ─────
+
+  console.log('\n11. a backend answers this, or declares that it cannot');
+
+  const adaptersPath = join(repoRoot, 'dist', 'core', 'agents', 'index.js');
+  if (!existsSync(adaptersPath)) {
+    failures++;
+    console.error('  FAIL  the adapters are compiled — dist/core/agents/index.js not found (run tsc)');
+  } else {
+    const { adapterFor } = await import(pathToFileURL(adaptersPath).href);
+
+    // Optional, and the one backend whose file layout this reads is the one that has it. A
+    // reader added for another backend joins here rather than renaming any of this again.
+    check('the backend that can answer offers readLimits',
+      typeof adapterFor('claude-code').readLimits === 'function',
+      typeof adapterFor('claude-code').readLimits);
+
+    // Absent rather than a stub that answers nothing: a method that exists and returns an empty
+    // list is a backend claiming to have looked, which is the one answer worse than silence.
+    for (const id of ['codex-cli', 'raw']) {
+      check(`${id} declares that it cannot, by not having the method`,
+        adapterFor(id).readLimits === undefined, typeof adapterFor(id).readLimits);
+    }
+  }
+
+  // ─── One vendor's name is off every public surface ───────────
+
+  console.log('\n12. nothing in this feature is named after one vendor');
+
+  const source = (relative) => {
+    const file = join(repoRoot, relative);
+    return existsSync(file) ? readFileSync(file, 'utf8') : null;
+  };
+
+  // The file names first: a route can be renamed and the module behind it left where it was.
+  for (const gone of [
+    'src/core/claude-status.ts',
+    'frontend/src/components/ClaudeStatusHud.tsx',
+    'frontend/src/components/ClaudeStatusHud.css',
+    'scripts/check-claude-status.mjs',
+    'scripts/check-claude-status-browser.mjs',
+  ]) {
+    check(`${gone} is gone`, !existsSync(join(repoRoot, gone)), 'still tracked under the old name');
+  }
+
+  for (const there of [
+    'src/core/agent-limits.ts',
+    'frontend/src/components/AgentLimitsHud.tsx',
+    'frontend/src/components/AgentLimitsHud.css',
+  ]) {
+    check(`${there} is where it went`, existsSync(join(repoRoot, there)), 'not found');
+  }
+
+  // Then the names inside them. Only the surfaces the issue names — a file, a route, an
+  // exported symbol, a CSS class, an environment variable — because the *prose* still has to be
+  // free to say which backend writes the files, and it does: the schema is Claude Code's.
+  const named = [
+    ['src/server.ts', /['"`]\/api\/claude-status['"`]|CLAUDE_STATUS|readClaudeStatus|ClaudeEnvironmentStatus/],
+    ['src/core/settings.ts', /'CLAUDE_STATUS'/],
+    ['src/core/agent-limits.ts', /export (?:interface|function|const|type) \w*Claude/],
+    ['frontend/src/App.tsx', /claudeStatus|ClaudeStatusHud|ClaudeEnvironmentStatus|\/api\/claude-status/],
+    ['frontend/src/components/AgentLimitsHud.tsx', /claude-status|Claude(?:RateWindow|EnvironmentStatus|StatusHud)/],
+    ['frontend/src/components/AgentLimitsHud.css', /claude/i],
+  ];
+  for (const [relative, forbidden] of named) {
+    const text = source(relative);
+    const hit = text === null ? null : text.match(forbidden);
+    check(`${relative} names no vendor in this feature`, text !== null && hit === null,
+      text === null ? 'the file is not there' : `still says ${JSON.stringify(hit?.[0])}`);
+  }
+
+  check('the route is served under its new name',
+    (source('src/server.ts') ?? '').includes(`app.get('/api/agent-limits'`),
+    'src/server.ts does not register GET /api/agent-limits');
+  check('and the variable that turns it on is the neutral one',
+    (source('src/core/settings.ts') ?? '').includes(`name: 'AGENT_LIMITS'`),
+    'src/core/settings.ts does not declare AGENT_LIMITS');
+
+  // The old route is not a second door onto the same reading. Whatever an unknown /api path
+  // answers on this build, it must not be a list of environments.
+  const old = await get(board, '/api/claude-status');
+  check('the old route no longer answers a reading',
+    !(old.status === 200 && Array.isArray(old.body?.environments)),
+    `got ${old.status} — ${old.text.slice(0, 120)}`);
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);

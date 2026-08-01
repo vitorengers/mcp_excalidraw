@@ -152,7 +152,7 @@ loopback only, and capped per board.
 | `GET /health` | Liveness, plus the `pid` of whatever is actually answering, the `version` it was built from, the `platform` it is answering from, how many issues it is `implementing`, and what the startup preflights found: `agents` per role and environment, and `gh` (`resolved` plus a version number — never the login, the scopes or stderr, which this route is not authenticated enough for) |
 | `POST /api/restart` | Replace this server with a new one on the same port (loopback only) |
 | `GET /api/sync/status` | What the store and the connected browsers currently hold |
-| `GET /api/claude-status` | What each Claude Code environment on this machine has spent (loopback only) — [claude-status.md](claude-status.md) |
+| `GET /api/agent-limits` | What each coding-agent environment on this machine has spent (loopback only) — [agent-limits.md](agent-limits.md) |
 
 Snapshots are **in memory and per workspace**, and both halves of that matter. They die with the
 process, so they are not the thing that makes a board recoverable — the copy
