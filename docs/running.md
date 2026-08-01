@@ -300,6 +300,7 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_CANVAS_PORT` | `3737` | The port the launch path tries first. A preference, not a pin: with `PORT` unset the search walks past it to the next free port |
 | `EXCALIDRAW_STATE_HOME` | per-OS state directory | The parent of the directory holding `config.json`, the pidfile, the restart log and the running board's state file. For a check that needs a throwaway one |
 | `EXCALIDRAW_WORKSPACES` | `workspaces.json` in the state directory | Path to the registry JSON. Unset resolves the per-user default, which is created when the first project is added — see [workspaces.md](workspaces.md) |
+| `EXCALIDRAW_WORKSPACE` | the one registered project, else `default` | Which registered project the CLI and the MCP tools draw on when nothing else names one. The singular of `WORKSPACES`, which is the list. `--workspace <id>` and an MCP tool's own `workspace` argument both beat it; unset, a board with one project resolves to that project, a board with none to the `default` scratch canvas, and a board with several refuses and names them — see [workspaces.md](workspaces.md) |
 | `EXCALIDRAW_BOARD_STATE` | beside the registry | Where each registered board is saved between processes. Unset puts them in a directory named after the registry file, default registry included — [element-store.md](element-store.md) |
 | `EXCALIDRAW_DOCS_DIR` | the shipped `docs/` | Where `GET /api/docs/:key` reads from for a board with no `docsDir` of its own. Set it **empty** for a setup that wants per-project documents and no fallback — [docs-block.md](docs-block.md) |
 | `EXCALIDRAW_LIBRARY` | the shipped `docs/blocks.excalidrawlib` | An `.excalidrawlib` served to every board, alongside each project's own. Set it **empty** for a board that wants no shared shapes at all — [shared-library.md](shared-library.md) |
@@ -513,7 +514,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 134 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 135 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 76 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
