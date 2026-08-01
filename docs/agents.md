@@ -148,15 +148,26 @@ you wrote, which is the same assumption from the other end.
 
 | Read or written | What it decides | Where |
 |---|---|---|
-| `-p` / `--print` | Whether the run gets a pseudoterminal, and whether the prompt travels on stdin or as the last argument | `runsHeadless`, `src/core/issue-agent.ts` |
-| `--output-format stream-json` | Whether a token meter runs, and whether the tab renders a transcript instead of raw NDJSON | `streamsUsage`, `src/core/agent-usage.ts` |
-| `--model`, `--effort` | Appended, per project, from `board.config.json` — the last flag is the one the CLI keeps | `agentCommandFor`, `src/core/issue-agent.ts` |
+| `-p` / `--print` | Whether the run gets a pseudoterminal, and whether the prompt travels on stdin or as the last argument | `src/core/agents/raw.ts` |
+| `--output-format stream-json` | Whether a token meter runs, and whether the tab renders a transcript instead of raw NDJSON | the same |
+| `--model`, `--effort` | Appended, per project, from `board.config.json` — the last flag is the one the CLI keeps | the same |
 
-**Every one of them is Claude Code's spelling**, and that is the honest state of it: a Codex run has
-`--json` available and the board does not read it, so a Codex board gets a clock and no token
-figures. Widening the sniffing so that another agent's flags are understood is a change to the
-agent runtime, not to this document — it belongs with the backend adapter that
-`agent-preflight.ts` describes as *"where a command stops being an opaque string"*.
+**Every one of them is Claude Code's spelling**, and that is the honest state of it: a Codex run
+has `--json` available and none of these readings would find it, so a board that reaches Codex
+through a command line gets a clock and no token figures.
+
+**All three now live in one file, and that file is a backend.** They used to be exported helpers
+that any module could ask about any string — `runsHeadless` in the agent runner, `streamsUsage`
+in the token meter — which is how three unrelated features came to be gated on one regular
+expression written in one CLI's spelling. Since #330 they are private to `raw`, the backend
+whose whole contract is *an arbitrary command line, spawned as given, which streams if and only
+if it says `--output-format stream-json`*. That is what every board configured today resolves
+to, so nothing in this table has changed for an operator. What changed is that a *named* backend
+answers the same questions about the argv it wrote itself: `codex-cli` knows `codex exec --json`
+is non-interactive and streaming without anything looking for a flag, and asking for an
+interactive run there swaps a subcommand rather than removing options — which no amount of
+widening the sniffing could have done. Naming a backend from configuration is still to come: the
+agent variables select a command, and every command resolves to `raw`.
 
 The `--model` and `--effort` line is the one to watch when a project overrides them: those two
 are appended in Claude Code's spelling, so a project-level model or effort on a board running
