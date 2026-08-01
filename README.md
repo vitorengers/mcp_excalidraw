@@ -25,7 +25,7 @@ One canvas, three ways to drive it:
 
 Core drawing runs fully local (Node ≥ 20, MIT licensed) — no API keys. Mermaid conversion runs in the local browser canvas; `share` is optional and uploads an encrypted scene to excalidraw.com.
 
-**Start here:** [docs/install.md](docs/install.md) gets a board up on Windows, macOS or Linux; [docs/index.md](docs/index.md) indexes every document; [docs/running.md](docs/running.md) is the operator and development procedure; [CLAUDE.md](CLAUDE.md) is how work is done in this repository.
+**Start here:** [docs/install.md](docs/install.md) gets a board up on Windows, macOS or Linux; [docs/index.md](docs/index.md) indexes every document; [docs/running.md](docs/running.md) is the operator and development procedure; [CONTRIBUTING.md](CONTRIBUTING.md) is how work is done in this repository, and [AGENTS.md](AGENTS.md) is the same agreement for a coding agent.
 
 ## Demo
 
@@ -87,18 +87,27 @@ The keys are not constants in the frontend. A section is a shape carrying
 `customData.kind = "board-section"` with its own title and `hotkeyCode`, so a board declares its
 own navigation. See [docs/board-sections.md](docs/board-sections.md).
 
-### Four kinds of block
+### Blocks, and the marks a key aims at
 
 A shape's `customData.kind` decides what it is. A `docKey` instead of a `kind` makes it a
 documentation card, which opens the matching markdown in a panel
 ([docs/docs-block.md](docs/docs-block.md)).
+
+**Blocks** — a shape that does something:
 
 | `customData.kind` | What it is |
 |---|---|
 | `issue` | Write an observation into the shape; an agent investigates the repository, opens the issue with `gh`, and the URL lands back on the block — [docs/issue-block.md](docs/issue-block.md) |
 | `project-board` | Your GitHub project, mirrored on the canvas and redrawn from GitHub on every read, with two-way moves and a queue that implements issues — [docs/project-board.md](docs/project-board.md) |
 | `terminal` | Real shells on the canvas, as tabs, up to eight per board — [docs/terminal.md](docs/terminal.md) |
-| `board-section` | The mark a hotkey aims at — [docs/board-sections.md](docs/board-sections.md) |
+
+**Marks** — a shape drawn *around* part of the board, which does nothing but say where a key
+lands:
+
+| `customData.kind` | What it is |
+|---|---|
+| `board-section` | A half of the board, carrying the key that reaches it — [docs/board-sections.md](docs/board-sections.md) |
+| `board-subsection` | A part of a section, with no key of its own: `Alt+Left` / `Alt+Right` step between the parts of the section being read — [docs/board-sections.md](docs/board-sections.md) |
 
 ### Issues become implementations, each in its own checkout
 
@@ -605,7 +614,8 @@ npm run sync:skills        # after editing skills/vibemaxxing-canvas, sync the r
 
 Every behaviour change in this fork ships with a `scripts/check-*.mjs` run against the old code
 first, and every change updates both halves of `docs/board.excalidraw`. The workflow — issue,
-branch, pull request, self-merge — is in [CLAUDE.md](CLAUDE.md), and
+branch, pull request, review — is in [CONTRIBUTING.md](CONTRIBUTING.md), with
+[AGENTS.md](AGENTS.md) as the copy a coding agent loads, and
 [docs/development-log.md](docs/development-log.md) is one dated entry per merged pull request.
 
 Bug reports and pull requests for **this fork** belong on

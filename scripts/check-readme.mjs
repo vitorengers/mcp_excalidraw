@@ -31,7 +31,7 @@
  * Tier: repo
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -108,24 +108,50 @@ check('bug reports are pointed at this fork\'s issue tracker',
 console.log('\n3. it names what this fork actually is');
 
 /**
- * The block kinds a shape can carry. Three are exported constants; `issue` predates the
- * convention and is written inline. The assertion below keeps the list honest: an exported
- * kind that is not in it fails here rather than quietly missing from the README.
+ * The kinds a shape's `customData.kind` can carry. Four are exported constants; `issue`
+ * predates the convention and is written inline. The assertion below keeps the list honest: an
+ * exported kind that is not in it fails here rather than quietly missing from the README.
+ *
+ * This list is a hardcoded expectation on purpose — it is what the README is checked against —
+ * but the *code's* side of the comparison is read off the tree. It used to be three filenames
+ * spelled out here, and `board-subsection` shipped straight through the guard on #191 because
+ * `board-subsections.ts` was not one of them: a guard that has to be told where to look fails
+ * silently in exactly the case it exists for (#338).
  */
-const BLOCK_KINDS = ['issue', 'project-board', 'terminal', 'board-section'];
+const BLOCK_KINDS = ['issue', 'project-board', 'terminal', 'board-section', 'board-subsection'];
 
-const declared = [...read('src/core/board-sections.ts').matchAll(/_KIND = '([a-z-]+)'/g),
-                  ...read('src/core/project-board-layout.ts').matchAll(/_KIND = '([a-z-]+)'/g),
-                  ...read('src/core/terminal-block.ts').matchAll(/_KIND = '([a-z-]+)'/g)]
-  .map(([, kind]) => kind);
-const unknown = declared.filter((kind) => !BLOCK_KINDS.includes(kind));
+/**
+ * Every `*_KIND` constant `src/core/` exports, and the string it carries.
+ *
+ * Two narrowings, because the name alone is a convention rather than a type. The constant must
+ * be **exported** — a module-private `_KIND` is not a value that reaches `customData` — and a
+ * name may be excused explicitly below. Nothing is excused today; the list exists so that a
+ * future `SOMETHING_KIND` which is not a `customData.kind` is turned off in one named line
+ * rather than by narrowing the scan until it stops seeing things.
+ */
+const NOT_A_CUSTOMDATA_KIND = new Set([]);
+
+const coreFiles = readdirSync(join(repoRoot, 'src', 'core'))
+  .filter((file) => file.endsWith('.ts'))
+  .sort();
+check('there are src/core modules to read the kinds from', coreFiles.length > 0,
+      'the scan below would find nothing and pass for the wrong reason');
+
+const declared = coreFiles
+  .flatMap((file) => [...read(join('src', 'core', file))
+    .matchAll(/^export const ([A-Za-z0-9_]*_KIND) = '([a-z-]+)'/gm)]
+    .map(([, constant, kind]) => ({ file, constant, kind })))
+  .filter(({ constant }) => !NOT_A_CUSTOMDATA_KIND.has(constant));
+
+const unknown = declared.filter(({ kind }) => !BLOCK_KINDS.includes(kind));
 check('the list of block kinds below still covers every kind the code exports',
       unknown.length === 0 && declared.length > 0,
-      `${unknown.join(', ')} — add it here and to the README`);
+      unknown.map(({ file, constant, kind }) => `${constant} = '${kind}' (src/core/${file})`)
+        .join(', ') + ' — add it here and to the README');
 
 for (const kind of BLOCK_KINDS) {
   check(`it names the "${kind}" block`, mentions(`\`${kind}\``) || mentions(`"${kind}"`),
-        `customData.kind = "${kind}" is one of the four things a shape on this board can be`);
+        `customData.kind = "${kind}" is one of the things a shape on this board can be`);
 }
 
 check('it names the workspace registry', mentions('EXCALIDRAW_WORKSPACES'),
