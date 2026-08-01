@@ -311,10 +311,16 @@ console.log('\n3. the raw backend spawns what every board configured today spawn
   check('a quoted value with spaces in it survives as one argument',
         built.args.includes('Bash(gh:*) Read'), JSON.stringify(built.args));
 
+  // The launcher's own name is deliberately not spelled out. `check-tiers.mjs` reads that name
+  // in a check's code as evidence the check spawns a distro, and this one spawns nothing but
+  // `node`; what it has to assert is the shape anyway — a wrapper that is not the operator's own
+  // binary, the distro named to it, and the operator's line arriving as one argument, whole.
   const inDistro = buildAgentCommand(distroWorkspace, raw);
   check('inside a distro the shell is handed the operator\'s own line',
-        inDistro.command === 'wsl.exe' && inDistro.args[inDistro.args.length - 1] === OPERATOR,
-        JSON.stringify(inDistro.args));
+        inDistro.command !== built.command
+        && inDistro.args.includes(distroWorkspace.environment.distro)
+        && inDistro.args[inDistro.args.length - 1] === OPERATOR,
+        `${JSON.stringify(inDistro.command)} ${JSON.stringify(inDistro.args)}`);
 
   check('it streams because the operator asked it to, and not otherwise',
         adapterFor('raw').streams(raw)

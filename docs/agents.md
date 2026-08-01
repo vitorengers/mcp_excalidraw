@@ -1,10 +1,17 @@
 # Choosing the agent
 
 `EXCALIDRAW_ISSUE_AGENT` and `EXCALIDRAW_IMPLEMENT_AGENT` are **command lines**, not a vendor.
-The board spawns what they say, hands it a prompt and reads a URL back out of what it printed;
-nothing in `src/` knows Claude Code from anything else. `src/core/agent-preflight.ts` already
-names nine binaries it recognises at startup, and the only reason it holds a list at all is that
-`/health` must not echo somebody's command line back over an unauthenticated socket.
+The board spawns what they say, hands it a prompt and reads a URL back out of what it printed.
+`src/core/agent-preflight.ts` already names nine binaries it recognises at startup, and the only
+reason it holds a list at all is that `/health` must not echo somebody's command line back over
+an unauthenticated socket.
+
+Since #326 `src/` *can* name a backend — `src/core/agent-adapter.ts` and `src/core/agents/`,
+where a backend builds the argv, says whether the run streams and reads its own events — but
+the two variables above are still read as a command line and nothing more. Every board is the
+`raw` backend: an arbitrary command line, spawned byte for byte, which streams if and only if it
+says `--output-format stream-json`. So the recipes below are what an operator writes, and they
+are unchanged by that seam existing.
 
 The documentation was the part that assumed. The command was specified once, in the
 configuration section of [issue-block.md](issue-block.md#configuration), with the binary
