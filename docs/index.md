@@ -46,7 +46,7 @@ The board itself is cut into two halves, each with a key that scrolls onto it �
 ## The blocks on the canvas
 
 A shape's `customData` decides what it is: a `docKey` makes it a documentation card, and a
-`kind` makes it one of the four functional blocks.
+`kind` makes it either a functional block or one of the marks a key aims at.
 
 | Document | What it covers |
 |---|---|
@@ -57,8 +57,9 @@ A shape's `customData` decides what it is: a `docKey` makes it a documentation c
 | [terminal.md](terminal.md) | `customData.kind = "terminal"` — real shells, as tabs, on the board |
 | [shared-library.md](shared-library.md) | The `.excalidrawlib` shapes every board gets |
 
-`customData.kind = "board-section"` is the fourth kind; it is a mark rather than a block, and
-[board-sections.md](board-sections.md) covers it.
+`customData.kind = "board-section"` and `customData.kind = "board-subsection"` are marks rather
+than blocks — a half of the board and a part of that half — and
+[board-sections.md](board-sections.md) covers both.
 
 ## Traps already paid for
 
