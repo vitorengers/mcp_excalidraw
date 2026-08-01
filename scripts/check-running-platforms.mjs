@@ -215,7 +215,8 @@ const MARKERS = [
   /this machine|this board|this repository's own board/i,
 ];
 
-/** Every paragraph of prose — a run of non-blank lines outside a fence and outside a table. */
+/** Every paragraph of prose — a run of non-blank lines outside a fence and outside a
+ *  generated region. */
 function prosePorts(source) {
   const rows = classify(source);
   const offences = [];
