@@ -24,9 +24,9 @@
  * handed out. `EXCALIDRAW_STATE_HOME` is a throwaway too, so the pidfiles and the saved boards are
  * this check's and never the board the maintainer is looking at.
  *
- * **The CLI is deliberately given no registry of its own.** It is handed `EXPRESS_SERVER_URL` and
- * nothing else, because the client has to learn what is registered from the *server* — an agent
- * driving a board from another directory has no registry path and never will.
+ * **The CLI is deliberately given no registry of its own.** It is pointed at this run's canvas
+ * with `--url` and told nothing else, because the client has to learn what is registered from the
+ * *server* — an agent driving a board from another directory has no registry path and never will.
  *
  * Run `./node_modules/.bin/tsc` first — it runs `dist/bin.js` and reads `dist/`.
  *
@@ -36,7 +36,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -136,13 +136,14 @@ async function stop(server) {
 
 /**
  * The environment a client process gets: this one's, stripped of every configuration variable
- * the machine could smuggle in, plus the canvas to talk to and whatever the case is about.
+ * the machine could smuggle in, plus whatever the case is about.
  *
- * No registry path, on purpose — see the note at the top.
+ * No registry path, on purpose — see the note at the top — and no canvas either: which canvas
+ * is said on the command line, with `--url`, so that nothing a check talks to is decided by a
+ * variable. `scripts/check-no-external-server.mjs` holds every check to that.
  */
-function clientEnvironment(base, overrides = {}) {
+function clientEnvironment(overrides = {}) {
   return canvasEnvironment({
-    EXPRESS_SERVER_URL: base,
     EXCALIDRAW_NO_AUTOSTART: '1',
     ...overrides,
   });
@@ -151,9 +152,9 @@ function clientEnvironment(base, overrides = {}) {
 /** Run the built CLI and answer what it printed and how it left. */
 function runCli(base, args, overrides = {}) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [binPath, ...args], {
+    const child = spawn(process.execPath, [binPath, '--url', base, ...args], {
       cwd: repoRoot,
-      env: clientEnvironment(base, overrides),
+      env: clientEnvironment(overrides),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -184,9 +185,9 @@ async function elementsOn(base, workspaceId) {
  * process an MCP client actually starts.
  */
 async function callTool(base, name, args, timeoutMs = 25_000) {
-  const child = spawn(process.execPath, [binPath, 'mcp'], {
+  const child = spawn(process.execPath, [binPath, '--url', base, 'mcp'], {
     cwd: repoRoot,
-    env: clientEnvironment(base),
+    env: clientEnvironment(),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let out = '';
@@ -229,9 +230,9 @@ async function callTool(base, name, args, timeoutMs = 25_000) {
 
 /** The tools a client is offered, so that a new argument can be asserted on the schema itself. */
 async function listTools(base, timeoutMs = 25_000) {
-  const child = spawn(process.execPath, [binPath, 'mcp'], {
+  const child = spawn(process.execPath, [binPath, '--url', base, 'mcp'], {
     cwd: repoRoot,
-    env: clientEnvironment(base),
+    env: clientEnvironment(),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let out = '';
@@ -380,11 +381,22 @@ try {
         `${defaultAfterMcp.length} element(s) in default`);
 
   // The save is debounced with a five-second ceiling, so this waits for the file rather than
-  // for a fixed sleep.
+  // sleeping. It waits for the file to *hold both elements* rather than merely to exist: the
+  // file was created back in section 1, so `existsSync` alone returns at once and the kill
+  // below then races the debounce — which is what failed inside a loaded suite run while
+  // passing standalone every time.
   const savedFile = join(workDir, 'two-state', 'alpha.excalidraw');
-  const appeared = await waitFor(async () => existsSync(savedFile), 15_000);
-  check('alpha is saved beside its registry', Boolean(appeared),
-        `nothing at ${savedFile}\n${board.read().slice(-1500)}`);
+  const saved = await waitFor(async () => {
+    try {
+      const ids = new Set((JSON.parse(readFileSync(savedFile, 'utf-8')).elements ?? [])
+        .map((element) => element.id));
+      return ids.has(mcpId) && ids.has(namedId) ? ids : null;
+    } catch {
+      return null;
+    }
+  }, 20_000);
+  check('alpha is saved beside its registry, with both elements in the file', Boolean(saved),
+        `${savedFile}\n${board.read().slice(-1500)}`);
 
   await stop(board);
 
