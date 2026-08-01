@@ -310,7 +310,8 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_WELCOME_BOARD` | the shipped `docs/welcome.excalidraw` | The board a project that names none of its own is seeded from, once, the first time this canvas starts with it registered. Set it **empty** for projects that should come up blank — [workspaces.md](workspaces.md) |
 | `EXCALIDRAW_LIBRARY` | the shipped `docs/blocks.excalidrawlib` | An `.excalidrawlib` served to every board, alongside each project's own. Set it **empty** for a board that wants no shared shapes at all — [shared-library.md](shared-library.md) |
 | `EXCALIDRAW_ISSUE_AGENT` | unset | The command line that researches an observation and opens the issue. Unset means issue blocks do nothing |
-| `EXCALIDRAW_IMPLEMENT_AGENT` | unset | The command line that implements one. Unset means the button is not offered |
+| `EXCALIDRAW_IMPLEMENT_AGENT` | unset | The command line that implements one. Unset means the button is not offered. The shipped default grants an enumerated list — `Write`, `Edit`, reading, the web, and `git`, `gh`, `npm`, `npx` and `node` — and **not** `--dangerously-skip-permissions`: the prompt it is handed is built from issue text anybody can write ([trap-allowed-tools.md](trap-allowed-tools.md)) |
+| `EXCALIDRAW_IMPLEMENT_FULL_ACCESS` | unset | `1` gives the implement agent every permission there is — `--dangerously-skip-permissions` for Claude Code, `--sandbox danger-full-access` for Codex CLI. A named backend writes a bounded grant without it; this is how a board asks for the unbounded one **on purpose**, and it never reaches the issue agent |
 | `EXCALIDRAW_ISSUE_AGENT_TIMEOUT` | none | Seconds. Unset means no ceiling; a wedged run is handled by the block's reset instead |
 | `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` | none | The same, for implementing |
 | `EXCALIDRAW_IMPLEMENT_CONCURRENCY` | `4` | Runs at once. `0` is no cap, `1` serialises. Each one is a whole coding agent building on this machine |
@@ -551,7 +552,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 148 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 151 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 79 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |

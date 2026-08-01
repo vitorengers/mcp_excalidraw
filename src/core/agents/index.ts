@@ -35,10 +35,24 @@ export function adapterFor(id: AgentBackendId): AgentAdapter {
 }
 
 /**
+ * The reasoning-effort levels one backend accepts.
+ *
+ * A function of its own rather than a field read off `adapterFor`, because the caller is
+ * `workspaces.ts`, which validates a project's settings and has no business holding a thing that
+ * builds argv and parses streams. This is the whole of what the config layer needs to know about
+ * a backend, and asking for it by name keeps it that way.
+ */
+export function agentEfforts(id: AgentBackendId): readonly string[] {
+  return ADAPTERS[id].efforts;
+}
+
+/**
  * The backends that can say what this machine has spent, in the order they are declared.
  *
  * `readLimits` is optional, so this is the whole of the capability lookup: a backend that
- * cannot answer is not in the list rather than in it answering nothing.
+ * cannot answer is not in the list rather than in it answering nothing. `agentEfforts` above
+ * asks a *named* backend what it accepts; this asks the set of them which can answer at all,
+ * because its caller has no backend in hand — see below.
  *
  * **Not the board's configured backend, deliberately.** Every board that exists runs `raw` — an
  * arbitrary command line — and a `raw` command line is very often Claude Code, so gating the

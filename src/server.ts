@@ -49,6 +49,8 @@ import {
   reorderWorkspaces,
   readWorkspaceConfig,
   writeWorkspaceConfig,
+  AgentBackends,
+  DEFAULT_AGENT_BACKENDS,
   Workspace
 } from './core/workspaces.js';
 import { BoardScene, parseBoardScene } from './core/board-seed.js';
@@ -1693,10 +1695,18 @@ app.put('/api/workspaces/:id/config', async (req: Request, res: Response) => {
   if (offLoopback(res, 'Project settings are saved')) return;
 
   try {
+    const id = req.params.id ?? '';
+    // Resolved before the write, because an `effort` is refused against the backend this
+    // project's agent runs under and not against one global list. A project the registry does
+    // not know is left to `writeWorkspaceConfig` to report by name; the default it is judged
+    // against until then refuses exactly what the board refused before backends existed.
+    const workspace = (await loadWorkspaces(registryPath()).catch(() => []))
+      .find((candidate) => candidate.id === id);
     const result = await writeWorkspaceConfig(
       registryPath(),
-      req.params.id ?? '',
-      req.body?.config
+      id,
+      req.body?.config,
+      workspace ? agentBackendsFor(workspace) : DEFAULT_AGENT_BACKENDS
     );
     if (!result.ok) {
       return res.status(result.status).json({ success: false, error: result.error });
@@ -2362,6 +2372,26 @@ const IMPLEMENT_AGENT_COMMANDS: AgentCommands = {
 const IMPLEMENT_AGENT_CONFIGURED = Boolean(
   IMPLEMENT_AGENT_COMMANDS.native || IMPLEMENT_AGENT_COMMANDS.wsl
 );
+
+/**
+ * Which backend each of one project's two agents will actually be run under.
+ *
+ * Read per workspace rather than per server, for the reason `agentCommandFor` gives: a project
+ * inside a WSL distro may have been granted a different agent from a native one, so the pair is
+ * a fact about the project and not about the board. It is asked when a project's settings are
+ * saved, because a reasoning effort is the backend's own vocabulary and the write path has to
+ * refuse a level *this* project's agent could not be handed.
+ *
+ * Every board resolves both halves to the same passthrough today — nothing names a backend yet —
+ * so this returns the default for every setup that exists. It is the seam a named backend
+ * arrives through, not a change of behaviour.
+ */
+function agentBackendsFor(workspace: Workspace): AgentBackends {
+  return {
+    issue: agentCommandFor(workspace, ISSUE_AGENT_COMMANDS)?.backend ?? DEFAULT_AGENT_BACKEND,
+    implement: agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS)?.backend ?? DEFAULT_AGENT_BACKEND,
+  };
+}
 
 // ─── Do the agents actually run? ──────────────────────────────
 //
@@ -5148,20 +5178,25 @@ app.post('/api/terminal', async (req: Request, res: Response) => {
  * go on implementing exactly as it did. Everything past that point is `runAgent`'s to fall
  * back from, which is why this returns null rather than refusing.
  *
- * **Which of the two kinds of tab it is, the operator's own command line decides.** A command
- * that says `-p` prints an answer and exits, so its prompt goes to stdin and ends there, and
- * the session is opened on pipes — a pseudoterminal has no end of file to give, see
- * `TerminalSessionOptions.input`. That is the configured command on this board and it is
- * unchanged in every particular: the process inside the tab is the process that ran before,
- * in the same checkout, reading the same prompt, and the only thing this ever added is that
- * its output goes somewhere a reader can see it while it is still happening.
+ * **Which of the two kinds of tab it is, the invocation says.** A run whose prompt goes to
+ * stdin ends it there, so the session is opened on pipes — a pseudoterminal has no end of file
+ * to give, see `TerminalSessionOptions.input`. A run whose prompt travels as an argument keeps
+ * stdin for the reader, so it is given a terminal and the tab is something to answer rather
+ * than something to watch. With no PTY binding to be had there is no interface to draw either,
+ * so that run falls back to the first kind.
  *
- * A command that does not say `-p` would start an interface if it were given a terminal, so
- * it is given one: the prompt travels as the command's last argument, stdin stays the
- * reader's, and the tab is something to answer rather than something to watch. Nothing is
- * appended to the command line and no second variable exists — the shape is read, exactly as
- * `streamsUsage()` reads it for the token counts. With no PTY binding to be had there is no
- * interface to draw either, so that run falls back to the paragraph above.
+ * **That used to be read off the operator's command line, and the argument for reading it was
+ * a good one that has stopped applying.** It ran: the board must not append flags to a command
+ * it does not own, so the shape of what the operator wrote is the only honest signal, and a
+ * pattern looking for `-p` is exactly as legitimate as the one looking for
+ * `--output-format stream-json` that turns on the token counts. Both halves are still true of
+ * the `raw` backend, which is every board configured today, and `agents/raw.ts` is where those
+ * two patterns now live, private to it. Neither is true of
+ * a *named* backend: it builds the argv, so writing a flag into it is not rewriting anybody's
+ * command, and `codex exec --json` is non-interactive and streaming while saying neither flag —
+ * read the old way it would have been handed a pseudoterminal it cannot use and then, because
+ * a pty tab is taken for an interface, had its exit code thrown away. So the question is asked
+ * of `AgentInvocation.prompt.via`, which every backend answers about the argv it wrote itself.
  */
 function implementTerminalHost(workspace: Workspace, issueUrl: string): AgentHost | null {
   if (!terminalAvailable()) return null;

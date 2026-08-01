@@ -62,25 +62,34 @@ The board holds these of both agents. What differs between the two is power, and
 the issue agent gets reading, and the handful of `gh` and `git` sub-commands the prompt actually
 names, and nothing that writes, so that turning on issue blocks cannot quietly turn on
 repository writes. The implement agent has to write code, run the build and run the checks, so
-it gets everything.
+it gets writing, `git`, `gh` and the runners — wide, and still bounded rather than everything.
 
 ## Claude Code
 
 ```
 EXCALIDRAW_ISSUE_AGENT='claude -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh issue list:*) Bash(gh issue view:*) Bash(gh issue create:*) Bash(gh issue edit:*) Bash(gh issue comment:*) Bash(gh project item-add:*) Bash(git log:*) Bash(git show:*) Bash(git diff:*) Bash(git blame:*) Read Grep Glob WebFetch WebSearch"'
-EXCALIDRAW_IMPLEMENT_AGENT='claude -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
+EXCALIDRAW_IMPLEMENT_AGENT='claude -p --model claude-opus-5[1m] --effort high --allowedTools "Read Grep Glob Write Edit NotebookEdit Task TodoWrite WebFetch WebSearch Bash(git:*) Bash(gh:*) Bash(npm:*) Bash(npx:*) Bash(node:*)"'
 ```
 
 `-p` is what makes it answer and exit. `--allowedTools` is an enumerated list and therefore also
-a *deny* list, which is why the implement command does not use one: an agent stopped from
-reading a page of documentation would have been stopped by the configuration rather than by
-anything it did. The narrow list on the issue side is the point of the split, and `WebFetch` and
-`WebSearch` are in it because the prompt orders the agent to research what the repository does
-not settle — see [trap-allowed-tools.md](trap-allowed-tools.md) for both halves of that,
-observed rather than reasoned about.
+a *deny* list, so **both** lists cost something: a tool nobody predicted is refused with no
+prompt and the run exits 0 having quietly not done it. The issue list is narrow because that is
+the point of the split; the implement list is wide and bounded — everything a change needs, and
+no arbitrary shell — because since #327 the alternative it replaced was
+`--dangerously-skip-permissions` as a *default*, on an agent whose prompt is built from issue
+text anybody can write. `WebFetch` and `WebSearch` are in both because both prompts order the
+agent to research what the repository does not settle. See
+[trap-allowed-tools.md](trap-allowed-tools.md) for both halves, per backend, observed rather
+than reasoned about — and widen either list **by name**, never by dropping it.
 
-**Every `Bash` rule in it names a sub-command rather than a binary**, which is why the list is
-ten rules long instead of two. A rule naming `gh` or `git` with no verb after it grants every
+`VIBEMAXXING_IMPLEMENT_FULL_ACCESS=1` is how a board asks for `--dangerously-skip-permissions`
+on purpose. It reaches the implement agent only, and a board that has it — or writes the flag
+into the command line itself — says so in a warning at startup.
+
+**Every `Bash` rule in the issue list names a sub-command rather than a binary**, which is why
+it is ten rules long instead of two — the implement list names binaries because an agent that
+has to commit, push and open a pull request needs those two whole, and scoping them by verb
+there would be theatre. A rule naming `gh` or `git` with no verb after it grants every
 verb the binary has: `gh repo delete` and `gh api -X DELETE`, `git commit`, `git push --force`
 and `git config` — the whole write reach of the account behind `gh`, handed to an agent whose
 prompt sends it to read the open web and act on what it finds.
@@ -121,7 +130,11 @@ been plausible and wrong:
   implementation that cannot commit is an implementation that ends with nothing.
   `--dangerously-bypass-approvals-and-sandbox` is the counterpart of Claude Code's
   `--dangerously-skip-permissions`, and it is the same deliberate choice, made by whoever runs
-  the board: the implement agent is given the machine.
+  the board: the implement agent is given the machine. It is the one recipe here that is
+  full access, and it is written out rather than assumed for that reason — a named `codex-cli`
+  backend writes `--sandbox workspace-write` for the implement role and reaches this row only
+  through `VIBEMAXXING_IMPLEMENT_FULL_ACCESS=1`, which is the same choice made where a board can
+  see it. Both spellings warn at startup.
 - **Effort is a config override, not a flag.** `-c model_reasoning_effort="high"`; `-c` is
   repeatable and its value is parsed as TOML, falling back to the raw string. The quotes are
   consumed by `tokenizeCommand` in `src/core/issue-agent.ts`, which keeps a quoted run together
@@ -153,20 +166,45 @@ you wrote, which is the same assumption from the other end.
 
 | Read or written | What it decides | Where |
 |---|---|---|
-| `-p` / `--print` | Whether the run gets a pseudoterminal, and whether the prompt travels on stdin or as the last argument | `runsHeadless`, `src/core/issue-agent.ts` |
-| `--output-format stream-json` | Whether a token meter runs, and whether the tab renders a transcript instead of raw NDJSON | `streamsUsage`, `src/core/agent-usage.ts` |
-| `--model`, `--effort` | Appended, per project, from `board.config.json` — the last flag is the one the CLI keeps | `agentCommandFor`, `src/core/issue-agent.ts` |
+| `-p` / `--print` | Whether the run gets a pseudoterminal, and whether the prompt travels on stdin or as the last argument | `src/core/agents/raw.ts` |
+| `--output-format stream-json` | Whether a token meter runs, and whether the tab renders a transcript instead of raw NDJSON | the same |
+| a model and an effort | Written onto what you wrote, per project, from `board.config.json` — in the spelling of the backend that will run it | `AgentAdapter.invoke`, `src/core/agents/` |
 
-**Every one of them is Claude Code's spelling**, and that is the honest state of it: a Codex run has
-`--json` available and the board does not read it, so a Codex board gets a clock and no token
-figures. Widening the sniffing so that another agent's flags are understood is a change to the
-agent runtime, not to this document — it belongs with the backend adapter that
-`agent-preflight.ts` describes as *"where a command stops being an opaque string"*.
+**The first two are Claude Code's spelling**, and that is the honest state of the passthrough
+backend: a Codex run has `--json` available and neither of those readings would find it, so a
+Codex board configured as free text gets a clock and no token figures.
 
-The `--model` and `--effort` line is the one to watch when a project overrides them: those two
-are appended in Claude Code's spelling, so a project-level model or effort on a board running
-Codex would append a flag Codex does not have. Leave `agents.<kind>.model` and
-`agents.<kind>.effort` unset there and pin the model in the command line instead — see
+**And both of them are that one backend's now, in that one file.** They used to be exported
+helpers — `runsHeadless` in the agent runner, `streamsUsage` in the token meter — that any
+module could ask about any string, which is how three unrelated things (the pseudoterminal, the
+token meter, the transcript renderer) came to be gated on regular expressions written in one
+CLI's spelling. Since #330 they are private to `raw`, whose whole contract is *an arbitrary
+command line, spawned as given, which streams if and only if it says `--output-format
+stream-json`*. Every board resolves to `raw` today, so nothing in the first two rows has changed
+for an operator. What changed is that a *named* backend answers the same two questions about the
+argv it wrote itself: `codex-cli` knows `codex exec --json` is non-interactive and streaming
+with nothing looking for a flag, and asking it for an interactive run swaps a subcommand rather
+than removing options — which is a thing no widening of the sniffing could have done.
+
+**The third is no longer one spelling.** A project's `agents.<kind>.model` and
+`agents.<kind>.effort` arrive at a backend as *values*, and the backend writes them: `--model X
+--effort Y` for `claude-code`, `--model X -c model_reasoning_effort="Y"` for `codex-cli`, and the
+Claude Code spelling appended to your own line for the passthrough, which is what a board
+configured as free text has always had. A project on a Codex board may therefore pin both; it
+used to append `--effort` to a CLI with no such flag, which exits on an unknown argument before
+doing any work.
+
+The levels each backend takes are its own, and a project's settings are held to the one that will
+run them:
+
+| Backend | Reasoning-effort levels | Read from |
+|---|---|---|
+| `claude-code` | `low`, `medium`, `high`, `xhigh`, `max` | `claude --help` |
+| `codex-cli` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` | `ReasoningEffort::from_str`, `codex-rs/protocol/src/openai_models.rs` |
+| `raw` | Claude Code's, because it writes Claude Code's flag | — |
+
+A level outside that list is refused when the settings are saved, with the backend named — the
+message has to separate a typo from a level that belongs to the other backend. See
 [issue-block.md](issue-block.md#what-is-per-project-and-what-stays-global) for what a project
 may and may not say.
 

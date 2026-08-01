@@ -9,10 +9,13 @@
  * mode rather than a regular expression removing flags from somebody else's text.
  *
  * **It adds, it does not replace.** The operator's command line is still where the binary comes
- * from and still where their own arguments come from — `--dangerously-skip-permissions`,
- * `--allowedTools`, `--add-dir`, an absolute path to a build nobody here knows about. What this
- * adds is only what is missing, which is why every flag below is written under a `hasArgument`
- * guard: a board that already spells `--print` must not be handed a second one.
+ * from and still where their own arguments come from — `--allowedTools`, `--add-dir`, an
+ * absolute path to a build nobody here knows about. What this adds is only what is missing,
+ * which is why every flag below is written under a `hasArgument` guard: a board that already
+ * spells `--print` must not be handed a second one. The permission posture is the same rule —
+ * an operator who wrote `--allowedTools` keeps their list — with the one exception #327 is
+ * about: `--dangerously-skip-permissions` does not survive into an *issue* run. See
+ * `PermissionPosture`.
  *
  * The flags are the CLI's own, confirmed against `claude --help` rather than remembered:
  * `--output-format`, `--input-format` and `--include-partial-messages` are documented there as
@@ -21,13 +24,24 @@
  * `-p --output-format stream-json` requires to emit the stream this board reads.
  */
 import {
-  hasArgument, quotedLine, tokenizeCommand, withoutPrintArguments,
+  AGENT_PERMISSIONS, hasArgument, permissionArgs, postureFor, quotedLine, tokenizeCommand,
+  withoutFullAccess, withoutPrintArguments,
   type AgentAdapter, type AgentInvocation, type AgentInvokeSpec,
 } from '../agent-adapter.js';
 import { readAgentLimits } from '../agent-limits.js';
 import { readClaudeUsage } from '../agent-usage.js';
 import { CLAUDE_CLAIMED_TYPES, renderClaudeEvent } from '../agent-stream-render.js';
 import { agentAction } from '../terminal-palette.js';
+
+/**
+ * The levels `--effort` takes, read off `claude --help` rather than remembered:
+ *
+ *     --effort <level>   Effort level for the current session (low, medium, high, xhigh, max)
+ *
+ * Exported because the `raw` backend spells effort Claude Code's way — see `agents/raw.ts` — and
+ * two copies of a list read from one `--help` is how they come to disagree.
+ */
+export const CLAUDE_CODE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 /** What a headless run has to say to print an answer, exit, and speak while it works. */
 function headlessArguments(args: string[]): void {
@@ -47,9 +61,17 @@ export const claudeCodeAdapter: AgentAdapter = {
     const headless = spec.mode === 'headless';
     // Interactive is the mode with no print flags in it at all, whoever wrote them — an
     // interface that was handed `--print` would print an answer and exit instead of drawing one.
-    const args = headless ? [...rest] : withoutPrintArguments(rest);
+    const written = headless ? [...rest] : withoutPrintArguments(rest);
+    // The research agent never carries `--dangerously-skip-permissions`, whoever wrote it. See
+    // `PermissionPosture`: the flag is the one somebody types to get past a silent refusal, and
+    // typed on this variable it grants the whole machine to a run driven by page content.
+    const permissions = AGENT_PERMISSIONS['claude-code'];
+    const args = spec.role === 'issue' ? withoutFullAccess(permissions, written) : written;
 
     if (headless) headlessArguments(args);
+    // Before the model and the effort, and well before `extraArgs`, so that anything the
+    // operator pinned is still the last word on the line.
+    args.push(...permissionArgs(permissions, postureFor(spec.role, spec.fullAccess), args));
     if (spec.model && !hasArgument(args, '--model')) args.push('--model', spec.model);
     if (spec.effort && !hasArgument(args, '--effort')) args.push('--effort', spec.effort);
     args.push(...(spec.extraArgs ?? []));
@@ -76,6 +98,7 @@ export const claudeCodeAdapter: AgentAdapter = {
     (argument) => argument === 'stream-json' || argument === '--output-format=stream-json'
   ),
 
+  efforts: CLAUDE_CODE_EFFORTS,
   readUsage: readClaudeUsage,
   renderEvent: renderClaudeEvent,
   claimedTypes: CLAUDE_CLAIMED_TYPES,

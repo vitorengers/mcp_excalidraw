@@ -33,10 +33,21 @@
  * is derived from which. `raw` keeps the operator's line and derives argv; a named backend
  * builds argv and derives a quoted line from it.
  *
- * The pure command-line helpers below live here rather than in `issue-agent.ts` because
- * `agents/raw.ts` is the module that reads a command line now, and a helper it imported from
- * there would close a cycle. `issue-agent.ts` re-exports them, so every caller that had them
- * from there still does.
+ * ## Nothing here reads a command line for a *decision*
+ *
+ * The helpers below tokenise one, quote one and take named arguments off one, and every one of
+ * them is a transformation any backend may want. What is deliberately not here is the three
+ * predicates that used to be — "does this string say `-p`", "does it say
+ * `--output-format stream-json`", "take the print flags off it" — because those are not
+ * transformations, they are *answers*, and answering them from somebody else's text is the thing
+ * an adapter exists to stop. They are `agents/raw.ts`'s now, private to the one backend whose
+ * contract is a string it did not write. Every other caller asks the invocation:
+ * `prompt.via` for the first, `AgentAdapter.streams` for the second, `invoke({ mode })` for the
+ * third.
+ *
+ * They live below rather than in `issue-agent.ts` because `agents/` is what reads a command line
+ * now, and a helper an adapter imported from there would close a cycle. `issue-agent.ts`
+ * re-exports the two that had other callers, so the preflight and the terminal still have them.
  */
 import type { AgentAction } from './terminal-palette.js';
 import type { TranscriptState } from './agent-stream-render.js';
@@ -138,6 +149,216 @@ export interface AgentInvokeSpec {
   effort?: string | null;
   /** Anything the caller needs on the end of argv. Nothing in `src/` passes any today. */
   extraArgs?: readonly string[];
+  /**
+   * Whether the operator has explicitly asked for the guard to come off this run.
+   *
+   * Never a default and never derived from the role: it is one setting, read once in
+   * `agentRunFor`, and it reaches `implement` alone. See `PermissionPosture`.
+   */
+  fullAccess?: boolean;
+}
+
+// ─── The posture a run is given ───────────────────────────────
+
+/**
+ * How much of the machine a run is granted, as the three answers that exist.
+ *
+ * This was documentation prose until #327. The separation the whole board rests on — the issue
+ * agent reads, the implement agent writes — was a sentence telling an operator to type
+ * `--allowedTools "…"` into one variable and `--dangerously-skip-permissions` into the other,
+ * and a grep of `src/` found those names only inside comments. Nothing supplied them, nothing
+ * inspected them, and nothing could: they are Claude Code's spellings, and the CLI beside it
+ * has no textual equivalent of either.
+ *
+ * So posture is a per-backend fact, which is what an adapter is for. `invoke` is asked for a
+ * role and writes the flags that make that role true, and the operator's own `extraArgs` are
+ * appended after so that pinning something extra still works.
+ *
+ * **Two rules hold for every backend.** An operator who has already stated a posture keeps it —
+ * this repository's own board pins `--allowedTools` by hand, and for the `raw` backend, which is
+ * every board today, their command line is the *only* place a posture can live. And the issue
+ * role never carries a full-access marker, whoever wrote it: a `--yolo` typed to make a refused
+ * run work hands the research agent the machine, from an API with no authentication in front of
+ * it. That one is taken back off rather than merely not added.
+ */
+export type PermissionPosture = 'read-only' | 'write' | 'full-access';
+
+/**
+ * The issue agent's grant, and the list `docs/trap-allowed-tools.md` explains rule by rule.
+ *
+ * Every rule names a sub-command rather than a binary, which is where the narrowness lives:
+ * whole `git` is `git push --force` and whole `gh` is `gh repo delete`. It is here rather than
+ * only in that document because a document is not a boundary — but the document is still where
+ * the argument for each row is, and `check-agent-permissions.mjs` holds the two to being the
+ * same list.
+ */
+export const CLAUDE_ISSUE_ALLOWED_TOOLS = 'Bash(gh issue list:*) Bash(gh issue view:*) '
+  + 'Bash(gh issue create:*) Bash(gh issue edit:*) Bash(gh issue comment:*) '
+  + 'Bash(gh project item-add:*) Bash(git log:*) Bash(git show:*) Bash(git diff:*) '
+  + 'Bash(git blame:*) Read Grep Glob WebFetch WebSearch';
+
+/**
+ * The implement agent's grant: wide, and bounded anyway.
+ *
+ * **Wide**, because an enumerated list is also a deny list and a run refused in print mode is
+ * refused *silently* — the trap the other document is about. A minimal list would reinstate it
+ * on the agent that has the most to do.
+ *
+ * **Bounded anyway**, because the alternative shipped by default was
+ * `--dangerously-skip-permissions`, on an agent whose prompt is built from issue text anybody
+ * can write. What the bound excludes is arbitrary shell: no `curl`, no `ssh`, no installer, no
+ * command this list does not name.
+ *
+ * The `Bash` rules name binaries rather than verbs here, and that inversion is deliberate: an
+ * agent that must commit, push and open a pull request needs `git` and `gh` whole, so scoping
+ * them by verb would only be theatre. The cost lands where the trap document says it does — a
+ * project whose build is not `npm` gets a silent refusal until its runner is added, which is
+ * why the documented list is a starting point an operator widens **by name, never by removing
+ * the list**.
+ *
+ * The tool names are the CLI's own, from `claude --help`, whose `--allowedTools` example is
+ * `"Bash(git *) Edit"`. `MultiEdit` is deliberately absent: it is not in the current tool set,
+ * and a name that does not exist grants nothing while reading as though it did.
+ */
+export const CLAUDE_IMPLEMENT_ALLOWED_TOOLS = 'Read Grep Glob Write Edit NotebookEdit '
+  + 'Task TodoWrite WebFetch WebSearch Bash(git:*) Bash(gh:*) Bash(npm:*) Bash(npx:*) '
+  + 'Bash(node:*)';
+
+/** What one backend writes for each posture, and how it recognises one already written. */
+export interface BackendPermissions {
+  /** The arguments this backend appends for a posture. */
+  flags: Record<PermissionPosture, readonly string[]>;
+  /** Flags whose presence means the operator has already stated a posture. */
+  decided: readonly string[];
+  /** Whole arguments that grant everything on their own. */
+  fullAccessFlags: readonly string[];
+  /** A flag that grants everything through its *value*, in either spelling. */
+  fullAccessValues: { flags: readonly string[]; values: readonly string[] } | null;
+}
+
+/**
+ * The two named backends' spellings of the same three decisions.
+ *
+ * The Codex halves were read out of that CLI's own documentation rather than remembered, and
+ * two of the facts decide the shape rather than decorate it:
+ *
+ *  - `codex exec` is **read-only by default** and in that mode "cannot edit files or run
+ *    commands that require network access". So the read-only posture is one in which `gh`
+ *    cannot reach github.com — a fail-closed default, and the Codex half of the trap
+ *    `docs/trap-allowed-tools.md` is about. An operator whose Codex issue agent has to open
+ *    issues writes `--sandbox workspace-write` with `network_access` themselves, and keeps it,
+ *    because a posture the operator stated is not overwritten.
+ *  - under `workspace-write` the network is off unless `sandbox_workspace_write.network_access`
+ *    turns it on, and `.git` stays read-only whatever else is writable. So the write posture
+ *    turns the network on — without it the implement agent cannot reach `gh` at all — and it is
+ *    still a posture in which `git commit` is refused. That is deliberate: full access is the
+ *    opt-in, and a default that fails closed is the one to ship.
+ */
+export const AGENT_PERMISSIONS: Record<'claude-code' | 'codex-cli', BackendPermissions> = {
+  'claude-code': {
+    flags: {
+      'read-only': ['--allowedTools', CLAUDE_ISSUE_ALLOWED_TOOLS],
+      write: ['--allowedTools', CLAUDE_IMPLEMENT_ALLOWED_TOOLS],
+      'full-access': ['--dangerously-skip-permissions'],
+    },
+    decided: ['--allowedTools', '--allowed-tools', '--dangerously-skip-permissions',
+              '--permission-mode'],
+    fullAccessFlags: ['--dangerously-skip-permissions'],
+    fullAccessValues: null,
+  },
+  'codex-cli': {
+    flags: {
+      'read-only': ['--sandbox', 'read-only'],
+      write: ['--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true'],
+      'full-access': ['--sandbox', 'danger-full-access'],
+    },
+    // `--full-auto` is `workspace-write` with approvals on failure, which is a posture an
+    // operator stated; the two bypass flags are aliases of each other.
+    decided: ['--sandbox', '-s', '--full-auto', '--yolo',
+              '--dangerously-bypass-approvals-and-sandbox'],
+    fullAccessFlags: ['--yolo', '--dangerously-bypass-approvals-and-sandbox'],
+    fullAccessValues: { flags: ['--sandbox', '-s'], values: ['danger-full-access'] },
+  },
+};
+
+/** The posture a role gets: reading, writing, or what somebody asked for on purpose. */
+export function postureFor(role: AgentRole, fullAccess?: boolean): PermissionPosture {
+  if (role === 'issue') return 'read-only';
+  return fullAccess ? 'full-access' : 'write';
+}
+
+/**
+ * The posture flags to append, or nothing at all when the operator has already said.
+ *
+ * Nothing at all is the half that keeps a board working: a command line that already carries
+ * `--allowedTools` or a `--sandbox` is one whose author decided, and a second `--allowedTools`
+ * beside theirs would be this board overruling a grant it was handed rather than filling one in.
+ */
+export function permissionArgs(
+  permissions: BackendPermissions,
+  posture: PermissionPosture,
+  args: readonly string[]
+): string[] {
+  if (hasArgument(args, ...permissions.decided)) return [];
+  return [...permissions.flags[posture]];
+}
+
+/**
+ * The same argv with every full-access marker taken out of it.
+ *
+ * Only ever called for the issue role, and that asymmetry is the point: the implement agent's
+ * own flag is a decision its operator is entitled to make, and is warned about at startup
+ * instead. The research agent's is a decision nobody makes on purpose — it is what somebody
+ * types to get past a silent refusal, on the variable next to the one they meant.
+ */
+export function withoutFullAccess(
+  permissions: BackendPermissions,
+  args: readonly string[]
+): string[] {
+  const kept: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] ?? '';
+    if (permissions.fullAccessFlags.includes(argument)) continue;
+    const valued = permissions.fullAccessValues;
+    if (valued) {
+      if (valued.flags.includes(argument)) {
+        // The value travels with the flag: a `danger-full-access` left behind would become the
+        // prompt, and a `--sandbox` left behind would swallow whatever came next.
+        if (valued.values.includes(args[index + 1] ?? '')) { index += 1; continue; }
+      } else if (valued.flags.some((flag) => valued.values.some(
+        (value) => argument === `${flag}=${value}`
+      ))) continue;
+    }
+    kept.push(argument);
+  }
+  return kept;
+}
+
+/**
+ * The full-access flag a command line carries, or null — whichever backend spells it.
+ *
+ * Read off the operator's own string rather than off an invocation, because the caller is the
+ * preflight: what it holds at startup is a command line, and for the `raw` backend that string
+ * is the whole grant. Every spelling of both named backends, because a board names a backend
+ * for a command and the preflight has not resolved one.
+ */
+export function fullAccessFlag(command: string): string | null {
+  const argv = tokenizeCommand(command);
+  for (const permissions of Object.values(AGENT_PERMISSIONS)) {
+    for (const flag of permissions.fullAccessFlags) if (argv.includes(flag)) return flag;
+    const valued = permissions.fullAccessValues;
+    if (!valued) continue;
+    for (let index = 0; index < argv.length; index += 1) {
+      const argument = argv[index] ?? '';
+      for (const flag of valued.flags) {
+        for (const value of valued.values) {
+          if (argument === flag && argv[index + 1] === value) return `${flag} ${value}`;
+          if (argument === `${flag}=${value}`) return argument;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 /** Input, output and the reasoning share of the output, as one report says them. */
@@ -179,6 +400,21 @@ export interface AgentAdapter {
 
   /** The argv this run is spawned with, and where its prompt goes. */
   invoke(spec: AgentInvokeSpec): AgentInvocation;
+
+  /**
+   * The reasoning-effort levels this backend accepts, in its own spelling.
+   *
+   * Per backend rather than one list, because a level is not a portable word. It used to be one
+   * — `AGENT_EFFORTS` in `workspaces.ts`, documented as *"as `claude --help` states them"* — and
+   * that list is wrong for any backend that is not Claude Code in both directions at once: it
+   * refuses `minimal`, `none` and `ultra`, which Codex takes, while a board pointed at Codex
+   * that wrote one of them had it silently dropped on the way in and refused with a message
+   * naming no backend on the way out. The operator could not tell a typo from a mismatch.
+   *
+   * Empty is a legitimate answer and means "this backend has no effort to set", which is not
+   * the same as "any word will do": a value offered to a backend that names none is refused.
+   */
+  readonly efforts: readonly string[];
 
   /**
    * Whether this invocation speaks while it works, rather than printing prose at exit.
@@ -295,57 +531,18 @@ export function quotedLine(command: string, args: readonly string[]): string {
 }
 
 /**
- * Whether a command line asks its agent to print an answer and exit.
+ * The print flags, removed from an argv a backend built.
  *
- * The flag is Claude Code's, and it is read rather than required because an operator who
- * already asks for a non-interactive run gets the run they have always had without changing
- * anything. A command that says neither `-p` nor `--print` is one that would start an interface
- * if it were given a terminal, and that is the whole of the signal. This is the `raw` backend's
- * reading of somebody else's string; a named backend knows the answer without looking.
+ * `-p` does not travel alone: `--output-format`, `--input-format` and
+ * `--include-partial-messages` are documented by `claude --help` as *"only works with --print"*,
+ * so an argv left carrying one of them after the print flag went would be refused by the CLI
+ * rather than started. Nothing else is touched — a `--model`, an `--add-dir` or anything else
+ * the operator wrote survives.
  *
- * Matched as a whole argument. `--print-mode` is not `--print`, and a path with `-p` inside
- * it is not a flag.
+ * Matched as whole arguments. An option's value goes with it in either spelling,
+ * `--output-format json` and `--output-format=json`, because a value left behind would become
+ * the prompt.
  */
-export function runsHeadless(agentCommand: string): boolean {
-  return /(?:^|\s)(?:-p|--print)(?:\s|$)/.test(agentCommand);
-}
-
-/**
- * The same command line with the flags that make it headless taken off it.
- *
- * This is how the board offers an interactive tab for one run without the operator editing
- * `EXCALIDRAW_IMPLEMENT_AGENT` and restarting the server. The shape of the command still
- * decides the *default*; what changes is that the reader can say "not this one" at the moment
- * they start it.
- *
- * **It only ever removes**, and that asymmetry is deliberate. Adding `-p` to a command that
- * does not have it would leave the run with no `--output-format stream-json` to read token
- * counts from and no way to invent one — a board writing flags into a command line it does
- * not own is a decision, not a lookup. So a command that is already interactive comes back
- * unchanged.
- *
- * **More than `-p` comes off, because `-p` does not travel alone.** `--output-format`,
- * `--input-format` and `--include-partial-messages` are documented by `claude --help` as
- * *"only works with --print"*, so a command left carrying one of them after `--print` went
- * would be refused by the CLI rather than started. Nothing else is touched: a `--model`, an
- * `--add-dir` or anything else the operator wrote survives untouched, and a command that is
- * not Claude Code loses nothing it did not spell that way.
- *
- * Matched as whole arguments, like `runsHeadless`. An option's value goes with it in either
- * spelling, `--output-format json` and `--output-format=json`, because a value left behind
- * would become the prompt.
- */
-export function withoutPrintFlags(agentCommand: string): string {
-  // Each pattern eats the whitespace in front of the flag it removes, so what is left needs
-  // no tidying up — which matters, because tidying up a command line means touching the parts
-  // that were not the point. A quoted path with two spaces in it comes back with two spaces.
-  return agentCommand
-    .replace(/(?:^|\s)(?:--output-format|--input-format)(?:=\S+|\s+\S+)(?=\s|$)/g, '')
-    .replace(/(?:^|\s)(?:-p|--print|--include-partial-messages)(?=\s|$)/g, '')
-    .trim();
-}
-
-/** The same removal against an argv rather than a line, for a backend that builds one. */
 export function withoutPrintArguments(args: readonly string[]): string[] {
   const kept: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -382,23 +579,6 @@ export function commandLineValue(raw: string): string {
 /** A command line with flags appended, or the line unchanged when there are none. */
 export function withCommandLineFlags(line: string, flags: readonly string[]): string {
   return flags.length ? `${line} ${flags.join(' ')}` : line;
-}
-
-/**
- * A command line as an invocation, spawned exactly as it reads.
- *
- * The `raw` backend is built on it, and so is every caller that holds a command line rather
- * than an agent — the preflight's `--version` probe, and a shell somebody typed into a terminal
- * block. It is deliberately not a backend of its own: what it does is what `raw` does.
- */
-export function commandLineInvocation(line: string): AgentInvocation {
-  const [command, ...args] = tokenizeCommand(line);
-  return {
-    command: command ?? line,
-    args,
-    prompt: { via: runsHeadless(line) ? 'stdin' : 'argv' },
-    line,
-  };
 }
 
 /**

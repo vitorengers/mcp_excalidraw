@@ -41,6 +41,7 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import type { AgentRole } from './agent-adapter.js';
+import { fullAccessFlag } from './agent-adapter.js';
 import { AgentCommands, buildAgentCommand, singleQuoted, tokenizeCommand } from './issue-agent.js';
 import { Workspace } from './workspaces.js';
 import { wslUnsupportedHere } from './workspace-paths.js';
@@ -428,10 +429,63 @@ function variableFor(role: AgentRoleCommands, kind: AgentEnvironmentKind): strin
  * "something is not on PATH" without saying what sends them to look for it. Rule 2 is about
  * `/health` and `doctor`, which answer a socket; nothing here goes over one.
  *
- * `warn` for exactly one case, because `warn` is the only level the console shows and a level
- * that fires on every board is a level nobody reads. A missing binary is a board whose buttons
- * do nothing. Everything else — found, unconfigured, no distro to look in — is `info`.
+ * `warn` for two cases only, because `warn` is the only level the console shows and a level that
+ * fires on every board is a level nobody reads. A missing binary is a board whose buttons do
+ * nothing; a command line that grants every permission there is (`postureLines`) is a board
+ * doing something nobody may have meant to allow. Everything else — found, unconfigured, no
+ * distro to look in — is `info`.
  */
+/**
+ * What to say when a configured command grants everything there is.
+ *
+ * The flag names itself in the line, which rule 2 permits and rule 2 is about `/health`: this
+ * goes to the operator's own console and log, where a warning that will not say which flag it
+ * means is a warning nobody can act on.
+ *
+ * **Warned rather than refused**, on the implement side. It is a decision an operator is
+ * entitled to make — a board in a throwaway VM, an agent with no other way to build — and a
+ * server that refused to start would be answering it for them. What it is not is a *default*,
+ * which is what #327 changed: the documented command carries an enumerated grant now, and
+ * `VIBEMAXXING_IMPLEMENT_FULL_ACCESS=1` is how a named backend is asked for the other one.
+ *
+ * On the issue side it is not a decision anybody makes on purpose. A named backend takes the
+ * flag back off; the `raw` backend cannot — the operator's line is spawned byte for byte — so
+ * the line says what was granted rather than pretending it was removed.
+ *
+ * Once per role rather than once per environment: the same command usually serves both, and a
+ * warning printed twice is a warning read once.
+ */
+function postureLines(
+  role: AgentRoleCommands
+): Array<{ level: 'info' | 'warn'; message: string }> {
+  const seen = new Set<string>();
+  const lines: Array<{ level: 'info' | 'warn'; message: string }> = [];
+
+  for (const kind of AGENT_ENVIRONMENT_KINDS) {
+    const command = commandForEnvironment(kind, role.commands);
+    if (!command) continue;
+    const flag = fullAccessFlag(command);
+    if (!flag || seen.has(flag)) continue;
+    seen.add(flag);
+
+    lines.push({
+      level: 'warn',
+      message: role.role === 'issue'
+        ? `Agent permissions: the issue agent's command line carries "${flag}", which grants it `
+          + 'every permission there is. That agent is sent to read this repository and the open '
+          + 'web and to act on what it finds, so page content decides what an unrestricted run '
+          + `does. Take it off ${role.variable} and grant the verbs instead — `
+          + 'docs/trap-allowed-tools.md has the list.'
+        : `Agent permissions: the implement agent's command line carries "${flag}", so the run `
+          + 'has no permission checks at all — on a prompt built from issue and comment text '
+          + `anybody can write. docs/trap-allowed-tools.md has the enumerated grant ${role.variable} `
+          + `ships instead, and ${settingName('IMPLEMENT_FULL_ACCESS')}=1 is how a named backend `
+          + 'is asked for this one on purpose.',
+    });
+  }
+  return lines;
+}
+
 export function preflightLines(
   agents: AgentsHealth,
   roles: readonly AgentRoleCommands[]
@@ -451,6 +505,8 @@ export function preflightLines(
       });
       continue;
     }
+
+    for (const line of postureLines(role)) lines.push(line);
 
     for (const kind of AGENT_ENVIRONMENT_KINDS) {
       const environment = health.environments[kind];

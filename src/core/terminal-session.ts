@@ -27,8 +27,12 @@ import { Workspace } from './workspaces.js';
 // `resolveExecutable` moved to `issue-agent.ts` — `agentPath()` asks it the same question
 // there, and one PATH lookup shared is one that cannot drift from the terminal's.
 import { AgentDirectory, agentEnv, buildAgentCommand, resolveExecutable } from './issue-agent.js';
-import { commandLineInvocation, type AgentAdapter, type AgentInvocation } from './agent-adapter.js';
+import { type AgentAdapter, type AgentInvocation } from './agent-adapter.js';
 import { adapterFor } from './agents/index.js';
+// Named rather than taken from the adapter module: a shell somebody typed into a tab is a
+// command line and nothing else, so reading it is a request for the `raw` backend's reading,
+// and this import is where that is said out loud.
+import { commandLineInvocation } from './agents/raw.js';
 import { AgentStreamRenderer } from './agent-stream-render.js';
 import { env as settingValue, settingName } from './settings.js';
 
@@ -559,12 +563,14 @@ export class TerminalSession {
   private buffer = '';
   private sequenceNumber = 0;
   /**
-   * Set only when the command asks its agent for a machine-readable stream.
+   * Set only when the invocation this session is running speaks while it works.
    *
-   * `streamsUsage` is the same predicate that already decides whether the token meter runs, and
-   * reusing it is deliberate: one flag in the operator's command line turns on the counts and
-   * the readable transcript together, and a session whose command does not stream keeps the
-   * old path byte for byte. The server still never appends the flag itself.
+   * `AgentAdapter.streams` is the same question that decides whether the token meter runs, and
+   * asking it once is deliberate: the counts and the readable transcript are the two halves of
+   * a run a reader can follow, and a session whose agent does not stream keeps the old path
+   * byte for byte. What it is *not* any more is a regular expression over the command line this
+   * session displays — `codex exec --json` streams and says none of Claude Code's flags, so the
+   * old reading left that tab full of raw JSON Lines.
    */
   private render: AgentStreamRenderer | null = null;
   private cols = DEFAULT_GRID.cols;

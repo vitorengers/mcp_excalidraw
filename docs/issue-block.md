@@ -579,27 +579,40 @@ A created block carries an **Implement / Fix** button above the description.
 issue, and the pull request URL comes back onto the block the way the issue URL did.
 
 **It is a different agent with different powers, and that is the whole point.** The issue
-agent is deliberately powerless — `gh`, `git` and reading, nothing that writes. An agent
-that implements must write code, run the build and run the checks, so it needs `Write`,
-`Edit` and an unrestricted `Bash`. Sharing a command between the two would mean that
+agent is deliberately powerless — a handful of `gh` and `git` verbs and reading, nothing that
+writes. An agent that implements must write code, run the build and run the checks, so it needs
+`Write`, `Edit` and enough of `Bash` to build. Sharing a command between the two would mean that
 turning on issue blocks quietly turned on repository writes, which is not a decision
 anyone would have made on purpose. So it has its own variable and is **off until it is
 set**:
 
 ```
-EXCALIDRAW_IMPLEMENT_AGENT='claude -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
+EXCALIDRAW_IMPLEMENT_AGENT='claude -p --model claude-opus-5[1m] --effort high --allowedTools "Read Grep Glob Write Edit NotebookEdit Task TodoWrite WebFetch WebSearch Bash(git:*) Bash(gh:*) Bash(npm:*) Bash(npx:*) Bash(node:*)"'
 ```
 
-Claude Code's spelling of it; [agents.md](agents.md) has Codex CLI's, which is
-`--dangerously-bypass-approvals-and-sandbox`, and what makes the grant the same decision either
-way.
+Claude Code's spelling of it; [agents.md](agents.md) has Codex CLI's, which is a sandbox mode
+rather than a list, and what makes the grant the same decision either way.
 
-`--dangerously-skip-permissions` rather than a list of tools, because an enumerated list is
-also a *deny* list: in `-p` mode there is no prompt to answer, so a tool outside the list is
-simply refused, and an agent stopped from reading a page of documentation has been stopped
-by the configuration rather than by anything it did. The flag's own help says it is
-recommended only for sandboxes with no internet access; using it here is a deliberate
-choice, made by whoever runs the board, to let the agent do the work.
+**A list rather than `--dangerously-skip-permissions`, since #327**, and the change is worth the
+sentence it costs. That flag was the documented default here, and the flag's own help recommends
+it only for sandboxes with no internet access — while this agent runs in a worktree of the
+operator's own checkout, with their `gh` on the PATH the server assembles, on a prompt built
+from an issue URL and *its comments*, which on a public repository anybody can write. The list
+above is what a run needs and the bound is what it excludes: no `curl`, no installer, no command
+it does not name.
+
+The cost is real and is the trap one document along: an enumerated list is also a *deny* list,
+and in `-p` mode a tool outside it is refused with no prompt, so the run exits 0 having quietly
+not done the thing. **Widen it by name** — a project whose build is not `npm` adds its runner —
+rather than by dropping the list. [trap-allowed-tools.md](trap-allowed-tools.md) has both halves
+of that, per backend, and `VIBEMAXXING_IMPLEMENT_FULL_ACCESS=1` is how a board asks for the
+unbounded grant on purpose, which is then said out loud in a warning at startup.
+
+The flags are not only documentation any more: since #327 a board that names a backend
+(`claude-code`, `codex-cli`) has this posture written for it by the adapter, per role, and the
+issue role cannot carry a full-access flag even if one is configured. The default backend is
+still `raw` — an arbitrary command line, spawned byte for byte — so for a board configured as
+every board is today, the line above *is* the boundary.
 
 The other guards carry over — loopback only, one run at a time per element — and one is
 added: a block with no issue has nothing to implement, and a block that already produced a
@@ -1158,13 +1171,17 @@ a plain `claude -p` prints prose at exit and no figures at all. Usage can only c
 agent reporting it in a machine-readable stream, which the operator's command line has to ask
 for.
 
-So the server looks for `--output-format stream-json` in the configured command
-(`streamsUsage`, `src/core/agent-usage.ts`). Without it nothing is parsed, nothing is
-recorded, no figures appear, and the spawn path is byte for byte what it was — the same
+So the meter runs only when the backend says its invocation streams (`AgentAdapter.streams`).
+For `raw` — every board configured today — that answer is `--output-format stream-json` in the
+operator's own command, read in `src/core/agents/raw.ts`. Without it nothing is parsed, nothing
+is recorded, no figures appear, and the spawn path is byte for byte what it was — the same
 "nothing at all" half that `worktreeSection` and `imageReferenceSection` are careful about.
-The prompt is not touched either: whether an agent reports usage is a property of the command
-line, so there is nothing worth telling the agent. **The server never appends the flag
-itself** — silently rewriting somebody's command line is a decision, not a lookup.
+The prompt is not touched either: whether an agent reports usage is a property of the run, so
+there is nothing worth telling the agent. **The server never appends the flag to a command line
+it does not own** — silently rewriting somebody's command is a decision, not a lookup. A named
+backend is the other case and not an exception to it: it *builds* the argv, so writing
+`--output-format stream-json` or `--json` into it is spelling its own flags rather than editing
+anybody's.
 
 With it, stdout is read line by line as it arrives and the totals go onto the record, not onto
 the elements: they change throughout a run, so writing them to shapes would churn the board
@@ -1291,8 +1308,9 @@ already had a panel polling it every four seconds and discarding both. One `RunP
 all three runs — a second copy of it would be a second answer to *what is worth saying about a
 run in flight*, and the first one to drift would be the one nobody was looking at.
 
-Opt-in works out the same way it does above and for the same reason: the figures come from
-`streamsUsage` reading the operator's own command line, so a board configured with a plain
+Opt-in works out the same way it does above and for the same reason: the figures come from the
+backend saying its invocation streams, which for `raw` is the operator's own command line, so a
+board configured with a plain
 `claude -p` gets a clock, no token figures, and the prompt and spawn it had before — asserted
 rather than assumed, in `scripts/check-issue-progress.mjs`.
 `scripts/check-issue-progress-browser.mjs` does the half only a browser can answer.
@@ -1392,8 +1410,8 @@ A project's own `board.config.json` can now say four things per agent, under
 
 | Setting | Per-project | Global |
 | --- | --- | --- |
-| `model` | `agents.<kind>.model` → appended as `--model` | `--model` in the command line |
-| `effort` | `agents.<kind>.effort` → appended as `--effort` | `--effort` in the command line |
+| `model` | `agents.<kind>.model` → written in the backend's own spelling | `--model` in the command line |
+| `effort` | `agents.<kind>.effort` → written in the backend's own spelling, from the levels that backend takes | `--effort` in the command line |
 | time limit | `agents.<kind>.timeoutSeconds` | `EXCALIDRAW_ISSUE_AGENT_TIMEOUT`, `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` |
 | how the agent works | `agents.<kind>.workflow` → the text of `agent-workflows/<slug>.md`, last section of the prompt | the base prompt, which holds no project's conventions |
 | the command itself | **never** | `EXCALIDRAW_ISSUE_AGENT`, `EXCALIDRAW_IMPLEMENT_AGENT` |
@@ -1407,11 +1425,20 @@ supply one would mean editing a JSON file to start an unattended agent with
 `--dangerously-skip-permissions` on a board where nobody allowed one. The config surface refuses
 an `agents.<kind>.command` by name rather than ignoring it.
 
-The model and the effort are **appended** to the operator's command rather than substituted into
-it, which works because the last flag is the one the CLI keeps — checked against the CLI rather
-than assumed: `claude --model sonnet --model definitely-not-a-model -p hi` complains about the
-second one. Nothing else in that command line is rewritten, which is the line `agent-usage.ts`
+The model and the effort reach a run as **values**, and the backend that will run it decides how
+they are spelled — `--model X --effort Y` for `claude-code`, `--model X -c
+model_reasoning_effort="Y"` for `codex-cli`, and both appended to the operator's own line, in
+Claude Code's spelling, for the passthrough every board uses today. Appended rather than
+substituted, which works because the last flag is the one the CLI keeps — checked against the CLI
+rather than assumed: `claude --model sonnet --model definitely-not-a-model -p hi` complains about
+the second one. Nothing else in that command line is rewritten, which is the line `agent-usage.ts`
 already draws about `--output-format`.
+
+**The levels `effort` may take are the backend's own**, and a level outside them is refused when
+the settings are saved, with the backend named: `minimal` is Codex's and not Claude Code's, and a
+message that named neither would leave a typo and a backend mismatch reading identically.
+[agents.md](agents.md#what-the-board-reads-out-of-your-command-line) has the lists and where each
+was read from.
 
 **A project that configures nothing spawns the command line it spawned before any of this
 existed, byte for byte — and sends the same prompt, byte for byte.**  That is the same rule
@@ -1454,8 +1481,8 @@ no way to say so.
   as many words. `scripts/check-agent-workflow.mjs` asserts the mechanical form of it: selecting
   a workflow changes the prompt and leaves the command line byte-identical to the one a project
   selecting nothing spawns. Nothing new has to be granted for a pipeline, either — the implement
-  agent already runs with `--dangerously-skip-permissions` rather than an allowlist, and its
-  prompt has always said "You may put helpers to work — sub-agents".
+  agent's documented list carries `Task`, and its prompt has always said "You may put helpers to
+  work — sub-agents".
 
 **On the issue side the field is shipped but inert**, and that is the operator's call rather than
 this one's. The documented `EXCALIDRAW_ISSUE_AGENT` allowlist above has no sub-agent tool in it —
