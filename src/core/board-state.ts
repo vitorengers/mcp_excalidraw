@@ -142,6 +142,65 @@ export function persistBoardFor(workspaceId: string): void {
   persisted.add(id);
 }
 
+/** Where a board's saved scene was, and whether it was deleted with the project. */
+export interface DroppedBoard {
+  file: string | null;
+  deleted: boolean;
+}
+
+/**
+ * Forget a board this canvas no longer lists, and optionally take its file with it.
+ *
+ * `DELETE /api/workspaces/:id` is the only caller. Two things have to stop before the entry
+ * is gone, and neither of them is the file: the debounced save this board may already owe,
+ * which would otherwise fire a second later and write out a project nothing lists any more,
+ * and the standing permission `persistBoardFor` granted at startup, which would let the next
+ * store write arm another one.
+ *
+ * **The file is kept by default, and that is the whole point of the flag.** It is the only
+ * copy of that drawing anywhere — the tracked board file is written by `export-board.mjs` and
+ * by nothing else — so a project removed by mistake and added back comes back drawn. Deleting
+ * it is somebody saying so on the request, never a side effect of tidying a registry.
+ *
+ * When it *is* asked for, the store goes too. Half a delete — the drawing gone from disk and
+ * still in memory — comes back the moment anything re-registers this id, which would make
+ * `?board=delete` a promise the next few seconds break.
+ */
+export async function dropBoardState(
+  workspaceId: string,
+  { deleteFile = false } = {}
+): Promise<DroppedBoard> {
+  const id = normalizeWorkspaceId(workspaceId);
+
+  const owed = pending.get(id);
+  if (owed) {
+    clearTimeout(owed.timer);
+    pending.delete(id);
+  }
+  persisted.delete(id);
+
+  const file = boardStateFile(id);
+  if (!deleteFile) return { file, deleted: false };
+
+  // Whatever `saveBoardState` still owes, before the unlink and not after it: a save ends in
+  // a rename, and a rename that landed afterwards would put the file straight back.
+  try { await (writing.get(id) ?? Promise.resolve()); } catch { /* it logged its own failure */ }
+  writing.delete(id);
+
+  elementsFor(id).clear();
+
+  if (!file) return { file, deleted: false };
+  try {
+    await fs.unlink(file);
+    return { file, deleted: true };
+  } catch (error) {
+    // Nothing to delete is not a failure: a project nobody ever drew on has no file.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { file, deleted: false };
+    logger.warn(`Could not delete the saved board for "${id}" at ${file}: ${(error as Error).message}`);
+    return { file, deleted: false };
+  }
+}
+
 /** Elements as they are saved: no tombstones, and nothing derived. */
 export function persistableElements(elements: Iterable<ServerElement>): ServerElement[] {
   const all = [...elements];
