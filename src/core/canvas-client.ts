@@ -16,6 +16,14 @@ export interface ApiResponse {
   message?: string;
   error?: string;
   count?: number;
+  /**
+   * Where the board was copied before it was emptied, from `DELETE /api/elements/clear`.
+   *
+   * Null when there was nothing to copy or nowhere to put it. Worth carrying this far: the
+   * caller is the one that can say it, and a clear whose copy nobody names is a copy nobody
+   * restores (#345).
+   */
+  backup?: string | null;
 }
 
 export interface SyncResponse {

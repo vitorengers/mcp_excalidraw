@@ -107,6 +107,28 @@ warning and said on the canvas; what they lose is surviving the process.
 `scripts/export-board.mjs` is still the only path into the tracked board file, and still run by hand,
 and it still writes no files — so a *tracked* board carries none.
 
+## What is kept when a board is emptied
+
+`DELETE /api/elements/clear` writes the store out first, to
+`<workspace>.cleared-<when>.excalidraw` in the same directory as the saved board, and answers with
+that path in `backup`. Nothing reads it back automatically — `readBoardState` opens
+`<workspace>.excalidraw` by name, so a copy beside it is never mistaken for the board — and
+nothing deletes it either. It is a file for a person, or for the agent that has just been told
+where it is.
+
+The copy is taken **in the route** rather than in the callers. Everything that empties a board
+comes through there, and only one of those callers has a person in front of it: the header's
+`Clear Canvas` confirms first, but the MCP `clear_canvas` tool, the CLI's `clear --yes` and
+`restore_snapshot` — which clears *before* it restores — do not, and must not start to. A
+confirmation in front of the route would break an agent-facing contract; a copy behind it breaks
+nothing.
+
+It is not gated on whether the board is one of the saved ones. That gate is there so a request
+naming a workspace nobody registered cannot create a file per typo, and it cannot here either: a
+store nobody has written to has no elements, and a board with no elements is not copied. What
+the gate would cost instead is the case the copy exists for — an unregistered board holding the
+only copy of something, emptied by a tool call (#345).
+
 ## Which of the two a board comes back from
 
 The saved state, normally: it is written a second after every change, so it is the newer of the two
