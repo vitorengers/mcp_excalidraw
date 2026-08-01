@@ -66,6 +66,7 @@ import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
 import { ClaudeStatusHud } from './components/ClaudeStatusHud'
 import { RestartButton } from './components/RestartButton'
+import { ClearCanvasButton } from './components/ClearCanvasButton'
 import type { ClaudeEnvironmentStatus } from './components/ClaudeStatusHud'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
@@ -142,6 +143,8 @@ interface ApiResponse {
   count?: number;
   error?: string;
   message?: string;
+  /** Where `DELETE /api/elements/clear` put the board before emptying it, or null (#345). */
+  backup?: string | null;
 }
 
 /**
@@ -6439,33 +6442,58 @@ function App(): JSX.Element {
     })
   }
 
+  /**
+   * What the tab in front says this board is called.
+   *
+   * The id is the fallback, and it is a real state rather than padding: before
+   * `/api/workspaces` has answered there is no list to look the name up in, and a canvas
+   * nobody has registered a project on has no name but `default`. A dialog that has to name
+   * the board it is about would rather say `default` than say nothing.
+   */
+  const activeBoardName = workspaces.find((workspace) => workspace.id === activeWorkspace)?.name?.trim()
+    || activeWorkspace
+
+  /** What the confirmation counts: the store, which is the half that gets emptied and saved. */
+  const countOnBoard = async (): Promise<number> => {
+    const result: ApiResponse = await (await fetch(apiUrl('/api/elements'))).json()
+    if (!result.success) throw new Error(result.error ?? 'the board did not answer')
+    return result.elements?.length ?? 0
+  }
+
+  /**
+   * Empty this board, having asked.
+   *
+   * One request rather than one `DELETE` per element. That is not only fewer round trips: the
+   * copy that makes this recoverable is taken by `DELETE /api/elements/clear` itself, and a
+   * loop of per-id deletes walks straight past it — as well as leaving the board half emptied
+   * if it fails in the middle, which is the worst of the three outcomes.
+   *
+   * A failure leaves the canvas alone now. It used to clear the scene anyway, on the reasoning
+   * that the reader asked for an empty board; with boards that are saved, that shows an empty
+   * canvas over a full store and invites the next sync to make the lie true.
+   */
   const clearCanvas = async (): Promise<void> => {
-    if (excalidrawAPI) {
-      try {
-        // Get all current elements and delete them from backend
-        const response = await fetch(apiUrl('/api/elements'))
-        const result: ApiResponse = await response.json()
+    if (!excalidrawAPI) return
+    try {
+      const response = await fetch(apiUrl('/api/elements/clear'), { method: 'DELETE' })
+      const result: ApiResponse = await response.json()
 
-        if (result.success && result.elements) {
-          const deletePromises = result.elements.map(element =>
-            fetch(apiUrl(`/api/elements/${element.id}`), { method: 'DELETE' })
-          )
-          await Promise.all(deletePromises)
-        }
-
-        // Clear the frontend canvas
-        applySceneUpdateWithoutAutoSync(excalidrawAPI, {
-          elements: [],
-          captureUpdate: CaptureUpdateAction.IMMEDIATELY
-        })
-      } catch (error) {
-        console.error('Error clearing canvas:', error)
-        // Still clear frontend even if backend fails
-        applySceneUpdateWithoutAutoSync(excalidrawAPI, {
-          elements: [],
-          captureUpdate: CaptureUpdateAction.IMMEDIATELY
-        })
+      if (!response.ok || !result.success) {
+        sayOnCanvas(excalidrawAPI, `The board was not cleared: ${result.error ?? `the server answered ${response.status}`}. Nothing was deleted.`)
+        return
       }
+
+      applySceneUpdateWithoutAutoSync(excalidrawAPI, {
+        elements: [],
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY
+      })
+
+      sayOnCanvas(excalidrawAPI, result.backup
+        ? `Cleared ${result.count ?? 0} elements. The board as it was is in ${result.backup}.`
+        : `Cleared ${result.count ?? 0} elements. No copy was kept: this board has nowhere to save.`)
+    } catch (error) {
+      console.error('Error clearing canvas:', error)
+      sayOnCanvas(excalidrawAPI, `The board was not cleared: ${(error as Error).message}. Nothing was deleted.`)
     }
   }
 
@@ -6576,7 +6604,22 @@ function App(): JSX.Element {
             {chromeHidden ? 'Show Menus' : 'Hide Menus'}
           </button>
 
-          <button className="btn-secondary" onClick={clearCanvas}>Clear Canvas</button>
+          {/*
+            Beside the restart button, which is the other one whose press cannot be taken
+            back, and behind a confirmation for the same reason. The board it names is the
+            one whose tab is in front, because on a bar that carries every project the
+            question "which board is this" is the one a reader most needs answered before
+            they answer this one.
+          */}
+          <ClearCanvasButton
+            boardName={activeBoardName}
+            readCount={countOnBoard}
+            onClear={clearCanvas}
+            onNothingToClear={(board) => {
+              if (excalidrawAPI) sayOnCanvas(excalidrawAPI, `There is nothing on ${board} to clear.`)
+            }}
+            disabled={!excalidrawAPI}
+          />
 
           {/*
             The one control here that acts on the server rather than on the canvas, so it sits

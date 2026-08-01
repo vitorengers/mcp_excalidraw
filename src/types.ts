@@ -358,8 +358,36 @@ export interface Snapshot {
 // second `Map` that merely looks like the store is a silent, empty canvas for whoever imports
 // it next.
 
-// In-memory storage for snapshots
-export const snapshots = new Map<string, Snapshot>();
+/**
+ * In-memory storage for snapshots, one set of names per workspace.
+ *
+ * It was a single Map keyed by name alone, across every board this server serves — so a
+ * snapshot called `before` taken on one project was read, and silently overwritten, from
+ * another. That is the same class of failure `elementsFor` exists to prevent, and it was
+ * worse here than for elements: the caller most likely to take one is an agent about to
+ * clear a canvas, and the copy it thought it had was another board's (#345).
+ *
+ * Still memory only, and still lost with the process. What survives a restart is the board
+ * itself — written beside the registry by `core/board-state.ts` — and the copy that same
+ * module takes before anything empties one.
+ */
+export const snapshots = new Map<string, Map<string, Snapshot>>();
+
+/**
+ * One board's snapshots, created empty on first use.
+ *
+ * The id is expected to be normalized already: every caller reaches this through
+ * `workspaceIdFrom`, which normalizes, and doing it again here would mean importing the
+ * element store into the type module for the sake of a second opinion.
+ */
+export function snapshotsFor(workspaceId: string): Map<string, Snapshot> {
+  let byName = snapshots.get(workspaceId);
+  if (!byName) {
+    byName = new Map<string, Snapshot>();
+    snapshots.set(workspaceId, byName);
+  }
+  return byName;
+}
 
 // In-memory file storage for image elements (Excalidraw BinaryFiles)
 export interface ExcalidrawFile {

@@ -1,0 +1,62 @@
+/*
+ * The clear control, in the merged bar.
+ *
+ * The same shape as `RestartButton.css` and for the same reasons: the button itself is styled
+ * by `.controls button`, because it is one of the controls and should be the size of the ones
+ * beside it, and everything here is about the card that hangs off it. It hangs rather than
+ * pushing — a confirmation that widened the row as it opened would move the buttons the reader
+ * is aiming at, on the row where the two destructive ones sit next to each other.
+ *
+ * Coloured from the tokens `frontend/index.html` declares on `.app[data-theme=…]`, so the card
+ * follows the board into dark mode instead of being a light card over a dark one.
+ */
+.clear-canvas {
+  position: relative;
+  display: inline-flex;
+}
+
+.clear-canvas__confirm {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: var(--board-z-dialog, 50);
+  width: 26rem;
+  max-width: 90vw;
+  padding: 14px 16px;
+  border: 1px solid var(--color-gray-30, #d6d6d6);
+  border-radius: 8px;
+  background: var(--island-bg-color, #fff);
+  color: var(--text-primary-color, #1b1b1f);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.clear-canvas__lede {
+  margin: 0 0 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.clear-canvas__detail {
+  margin: 0 0 6px;
+}
+
+.clear-canvas__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/*
+ * The two buttons in the card are the card's size, not the bar's. `.controls button` reaches
+ * in here — this is inside `.controls` — and a 21px `Cancel` in a 13px card reads as the card
+ * belonging to something else.
+ */
+.clear-canvas__actions button {
+  font-size: 13px;
+  padding: 7px 14px;
+  border-radius: 4px;
+}

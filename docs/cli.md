@@ -78,10 +78,10 @@ Labels and arrow bindings take the agent-friendly spelling everywhere: `"text"` 
 | `screenshot` | `--out`, `--format` (png or svg), `--no-background` — needs a browser tab |
 | `export` / `import` | Scene file I/O; a `.md` out path writes Obsidian's `.excalidraw.md` format and `import` reads it back |
 | `mermaid` | Mermaid to canvas, from a file or stdin — needs a browser tab |
-| `snapshot` | Named snapshots, in memory: `save`, `list`, `restore` |
+| `snapshot` | Named snapshots, in memory and per board: `save`, `list`, `restore` |
 | `arrange` | Layout operations: `align`, `distribute`, `group`, `ungroup`, `lock`, `unlock`, `duplicate` |
 | `share` | Encrypted upload, returning a shareable excalidraw.com URL |
-| `clear` | Wipe the canvas — `--yes` to mean it |
+| `clear` | Wipe the canvas — `--yes` to mean it. Prints `backup`: the file the board was copied into first, beside its saved state |
 | `install-skill` | Install the portable agent skill, into `--dir <skills-root>` |
 
 `apply` is the one worth knowing: it takes a single `{create, update, delete}` patch and

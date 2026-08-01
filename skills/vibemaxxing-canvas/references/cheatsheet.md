@@ -155,7 +155,7 @@ Every endpoint below takes `?workspace=<id>` (or an `x-workspace-id` header) nam
 | `POST` | `/api/elements` | Create element |
 | `PUT` | `/api/elements/:id` | Update element |
 | `DELETE` | `/api/elements/:id` | Delete element |
-| `DELETE` | `/api/elements/clear` | Clear all elements |
+| `DELETE` | `/api/elements/clear` | Clear all elements. Copies them beside the board's saved state first and answers with the path in `backup` |
 | `GET` | `/api/elements/search?type=...` | Search with filters (exact string match + bbox) |
 | `POST` | `/api/elements/batch` | Batch create |
 | `POST` | `/api/elements/sync` | Overwrite import (clear + write) |

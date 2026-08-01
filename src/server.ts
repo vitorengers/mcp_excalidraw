@@ -15,7 +15,7 @@ import { createRequire } from 'module';
 import logger from './utils/logger.js';
 import {
   files,
-  snapshots,
+  snapshotsFor,
   generateId,
   EXCALIDRAW_ELEMENT_TYPES,
   ServerElement,
@@ -141,6 +141,7 @@ import {
 } from './core/element-store.js';
 import { allowedAuthorities, verifyOrigin } from './core/origin-gate.js';
 import {
+  backupBoardBefore,
   boardStateFile,
   dropBoardState,
   flushBoardStateSaves,
@@ -783,12 +784,26 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
   }
 });
 
-// Clear all elements (must be before /:id route)
-app.delete('/api/elements/clear', (req: Request, res: Response) => {
+/**
+ * Empty one board's store (must be before the `/:id` route, or `clear` reads as an id).
+ *
+ * The copy is taken here rather than in whoever asked, because everything that empties a
+ * board comes through this one route and only one of those callers has a person in front of
+ * it: the header's `Clear Canvas` confirms first, but the MCP `clear_canvas` tool, the CLI's
+ * `clear --yes` and `restore_snapshot` — which clears *before* it restores, and says
+ * `canvas was cleared` when the restore then fails — do not, and must not start to. A
+ * confirmation in front of this route would break an agent-facing contract; a copy behind it
+ * breaks nothing and is what makes any of them recoverable (#345).
+ *
+ * The path it went to is in the response, so the caller can say it. A backup nobody is told
+ * about is a backup nobody restores.
+ */
+app.delete('/api/elements/clear', async (req: Request, res: Response) => {
   try {
     const workspaceId = workspaceIdFrom(req);
     const store = elementsFor(workspaceId);
     const count = store.size;
+    const backup = await backupBoardBefore(workspaceId);
     store.clear();
 
     broadcast({
@@ -796,12 +811,14 @@ app.delete('/api/elements/clear', (req: Request, res: Response) => {
       timestamp: new Date().toISOString()
     }, workspaceId);
 
-    logger.info(`Canvas cleared: ${count} elements removed`);
+    logger.info(`Canvas cleared: ${count} elements removed`
+      + (backup ? `; the board as it was is in ${backup}` : ''));
 
     res.json({
       success: true,
       message: `Cleared ${count} elements`,
-      count
+      count,
+      backup
     });
   } catch (error) {
     logger.error('Error clearing canvas:', error);
@@ -5170,14 +5187,15 @@ app.post('/api/snapshots', (req: Request, res: Response) => {
       });
     }
 
+    const workspaceId = workspaceIdFrom(req);
     const snapshot: Snapshot = {
       name,
-      elements: Array.from(elementsFor(workspaceIdFrom(req)).values()),
+      elements: Array.from(elementsFor(workspaceId).values()),
       createdAt: new Date().toISOString()
     };
 
-    snapshots.set(name, snapshot);
-    logger.info(`Snapshot saved: "${name}" with ${snapshot.elements.length} elements`);
+    snapshotsFor(workspaceId).set(name, snapshot);
+    logger.info(`Snapshot saved: "${name}" on "${workspaceId}" with ${snapshot.elements.length} elements`);
 
     res.json({
       success: true,
@@ -5197,7 +5215,7 @@ app.post('/api/snapshots', (req: Request, res: Response) => {
 // Snapshots: list
 app.get('/api/snapshots', (req: Request, res: Response) => {
   try {
-    const list = Array.from(snapshots.values()).map(s => ({
+    const list = Array.from(snapshotsFor(workspaceIdFrom(req)).values()).map(s => ({
       name: s.name,
       elementCount: s.elements.length,
       createdAt: s.createdAt
@@ -5221,12 +5239,13 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
 app.get('/api/snapshots/:name', (req: Request, res: Response) => {
   try {
     const { name } = req.params;
-    const snapshot = snapshots.get(name!);
+    const workspaceId = workspaceIdFrom(req);
+    const snapshot = snapshotsFor(workspaceId).get(name!);
 
     if (!snapshot) {
       return res.status(404).json({
         success: false,
-        error: `Snapshot "${name}" not found`
+        error: `Snapshot "${name}" not found on "${workspaceId}"`
       });
     }
 
