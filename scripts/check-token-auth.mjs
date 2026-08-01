@@ -428,21 +428,27 @@ try {
 
   console.log('\n5. the CLI reads the token off disk, so nothing there needs a flag');
   /** A `vibemaxxing` run against this board, with `home` as the only place it may look. */
-  const runCli = (home) => spawnSync(process.execPath, [join(repoRoot, 'dist', 'bin.js'), 'describe'], {
-    encoding: 'utf8',
-    cwd: repoRoot,
-    env: canvasEnvironment({
-      // Explicit, so the resolution in `core/port.ts` cannot walk off and find a real board on
-      // this machine — see docs/trap-check-environment.md.
-      EXPRESS_SERVER_URL: board.base,
-      LOG_LEVEL: 'error',
-      LOG_FILE_PATH: join(workDir, 'cli.log'),
-      HOME: home,
-      USERPROFILE: home,
-      LOCALAPPDATA: home,
-      XDG_STATE_HOME: home,
-    }),
-  });
+  const runCli = (home) => spawnSync(
+    process.execPath,
+    // `--url`, and not the variable that would also work: `check-no-external-server.mjs` forbids a
+    // check from naming that variable at all, because a check whose target is decided by
+    // something somebody exported months ago is a check that asserts an unknown server. The flag
+    // is the explicit spelling of the same thing, and it is what points this run at the board
+    // three lines up rather than at whatever is on 3737.
+    [join(repoRoot, 'dist', 'bin.js'), '--url', board.base, 'describe'],
+    {
+      encoding: 'utf8',
+      cwd: repoRoot,
+      env: canvasEnvironment({
+        LOG_LEVEL: 'error',
+        LOG_FILE_PATH: join(workDir, 'cli.log'),
+        HOME: home,
+        USERPROFILE: home,
+        LOCALAPPDATA: home,
+        XDG_STATE_HOME: home,
+      }),
+    },
+  );
 
   const reading = runCli(fakeHome);
   check('`describe` against a board behind a token succeeds', reading.status === 0,

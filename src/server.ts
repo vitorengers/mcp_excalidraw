@@ -5654,8 +5654,14 @@ async function startServer(): Promise<void> {
   // resolved at the bottom of this file. A restart left its secret for this start (see
   // `core/auth-token.ts`); any other start makes one, and the handover — if a restart wrote one
   // and never came back — is taken and deleted either way.
-  const inherited = AUTH_REQUIRED ? consumeTokenHandover(PORT) : (removeTokenHandover(PORT), null);
-  AUTH_TOKEN = AUTH_REQUIRED ? (inherited ?? newToken()) : null;
+  if (AUTH_REQUIRED) {
+    AUTH_TOKEN = consumeTokenHandover(PORT) ?? newToken();
+  } else {
+    AUTH_TOKEN = null;
+    // Cleared even here: a board that wants no token must not leave one lying in the directory
+    // for the next start on this port to adopt.
+    removeTokenHandover(PORT);
+  }
 
   if (LOOPBACK_GUARD_HOSTS.has(HOST)) {
     const existingHost = await findExistingLoopbackListener(PORT);

@@ -60,7 +60,7 @@ export function newToken(): string {
  * server it just spawned wrote — around a hundred and fifty `fetch` call sites and
  * twenty-seven browser navigations — and the cost of *that* is a hundred and fifty chances to
  * write a check that passes because it forgot the header. This is one switch, in one file, and
- * a server that has it says so on the way up.
+ * a server that has it writes a line saying so into its log.
  */
 export function authRequired(): boolean {
   return env('NO_AUTH') !== '1';
@@ -79,11 +79,11 @@ export function tokenFilePaths(port: number): string[] {
 /**
  * Put the token where this account, and only this account, can read it.
  *
- * Replaced rather than overwritten: the `mode` on `writeFileSync` applies at *creation*, so a
- * file left behind by an earlier start would keep whatever permissions it had. And chmodded
- * afterwards as well, because the creation mode is masked by the process umask — a umask of
- * `0o077` would be no problem and a umask of `0` would have written `0o600` as `0o600`, but
- * nothing here gets to assume which one the operator has.
+ * **Unlinked first, and that is the load-bearing part.** The `mode` on `writeFileSync` applies
+ * only when the file is *created*, so writing over one an earlier start left behind would keep
+ * whatever permissions that one had — including permissions somebody widened by hand. The
+ * `chmod` afterwards is the second belt, for a filesystem that took the creation mode and did
+ * something else with it.
  *
  * Throws rather than warning. A board whose token nobody can read is a board nothing can drive,
  * answering `status: healthy` the whole time, which is the shape of failure this repository
