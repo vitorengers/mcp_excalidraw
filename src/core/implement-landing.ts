@@ -66,18 +66,24 @@ export interface LandingInput {
 /**
  * Decide the record from the run and from what GitHub says about its pull request.
  *
- * Four rules, and the third is the one that keeps this from being worse than no verification
+ * Five rules, and the fourth is the one that keeps this from being worse than no verification
  * at all.
  *
  * 1. **No pull request** — unchanged in every particular. This path never asks GitHub anything
  *    and never did; a run that produced nothing is exactly as failed as it was before.
  * 2. **A non-zero exit** — failed, as before, but the URL now survives. The old branch wrote
  *    `url: null`, so a board that had just been told where the pull request was threw it away.
- * 3. **`pull` is null** — the outcome stands. A `gh` blip, an expired login and a machine with
+ * 3. **There is no such pull request** — failed, and the only rule that reads a `gh` that
+ *    exited non-zero as bad news rather than as silence. That is safe here precisely because
+ *    it is not silence: the repository was asked and it answered. It sits above rule 4 because
+ *    without it the answer arrives as `null` and is believed — which is exactly what recorded
+ *    issue #326's run `done` for a pull request that had never been opened, kept it from its
+ *    one automatic recovery, and left seven cards waiting on it for good.
+ * 4. **`pull` is null** — the outcome stands. A `gh` blip, an expired login and a machine with
  *    no CLI all arrive here, and a verification that turned any of them into a failure would
  *    invent defeats for runs that won. Believing the run is the conservative answer because it
  *    is the answer this code gave before it could ask.
- * 4. **Merged, or not** — the fact the whole change exists for.
+ * 5. **Merged, or not** — the fact the whole change exists for.
  */
 export function landingFor(input: LandingInput): Landing {
   if (!input.url) {
@@ -85,6 +91,15 @@ export function landingFor(input: LandingInput): Landing {
   }
   if (!input.ok) {
     return { state: 'failed', url: input.url, error: input.error };
+  }
+  if (input.pull === 'absent') {
+    return {
+      state: 'failed',
+      url: input.url,
+      error: `${input.url} does not exist — GitHub was asked and answered that there is no `
+        + 'such pull request. The agent printed a URL it never opened, so nothing landed and '
+        + 'the issue is still open.',
+    };
   }
   if (input.pull === null || input.pull === 'merged') {
     return { state: 'done', url: input.url, error: null };
