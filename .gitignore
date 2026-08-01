@@ -23,9 +23,12 @@ board.config.local.json
 .agents/
 
 # Development artifacts. Scratch exports stay out; this project's own board is the
-# documentation, so it and the docs it points at are tracked.
+# documentation, so it and the docs it points at are tracked. `docs/welcome.excalidraw` is
+# tracked for a different reason: it is not documentation about this repository at all, it
+# is the board a project with nothing of its own is seeded from, and it ships in the package.
 *.excalidraw
 !docs/board.excalidraw
+!docs/welcome.excalidraw
 
 # Screenshots taken while debugging. They land wherever the tool that took them puts them,
 # which is here, and eighteen of them had piled up by #337 — one `git add .` from being a
