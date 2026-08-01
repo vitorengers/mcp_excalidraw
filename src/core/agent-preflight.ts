@@ -18,8 +18,10 @@
  * every boot. `tokenizeCommand` gives the binary; `--version` is the one argument a CLI can be
  * asked for without doing anything. What that cannot see is a wrapper — `node ./agent.mjs`
  * probes `node` — and that is written down as the known limit of a preflight built against
- * today's command strings rather than pretended away. A backend adapter is where a command
- * stops being an opaque string.
+ * today's command strings rather than pretended away. `core/agent-adapter.ts` is where a
+ * command stopped being an opaque string; this module still probes the string, because what it
+ * is asking is whether the *binary* an operator named is on the machine, and for the `raw`
+ * backend — which is every board today — argv[0] of their command line is that binary.
  *
  * **Three rules the shape of this module comes from:**
  *

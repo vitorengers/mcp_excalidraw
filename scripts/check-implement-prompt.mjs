@@ -80,7 +80,11 @@ process.env.CAPTURE_TO = captured;
 async function promptFor(worktree) {
   rmSync(captured, { force: true });
   await runImplementAgent(workspace, 'https://github.com/vitorengers/vibemaxxing/issues/54', {
-    agentCommand: `node "${stub.replace(/\\/g, '/')}"`,
+    // A backend beside the command, `raw` being the passthrough one: an arbitrary command line
+    // spawned byte for byte, which is what this stub is and what every board configured today
+    // names. The nineteen other implement checks configure it through the environment instead
+    // and are untouched; this one calls the function directly.
+    agent: { backend: 'raw', command: `node "${stub.replace(/\\/g, '/')}"` },
     timeoutMs: 60_000,
     worktree,
   });

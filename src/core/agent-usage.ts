@@ -7,10 +7,17 @@
  * requires it to say anything about what it is spending. A plain `claude -p` prints prose
  * at exit and no figures at all.
  *
- * So this is opt-in and stays out of the way otherwise: unless the configured command
- * already asks for a machine-readable stream, nothing here runs, nothing is recorded and
- * the spawn path is byte for byte what it was. The server never appends the flag itself —
+ * So this is opt-in and stays out of the way otherwise: unless the run already asks for a
+ * machine-readable stream, nothing here runs, nothing is recorded and the spawn path is byte
+ * for byte what it was. For the `raw` backend the server never appends the flag itself —
  * silently rewriting somebody's command line is a decision, not a lookup.
+ *
+ * **What an event *means* is the backend's answer, and what it does to the totals is this
+ * file's.** `AgentAdapter.readUsage` turns one event into a `UsagePatch` — a running figure for
+ * one message, the run's own settled accounting, or a reasoning delta — and the meter below
+ * knows only those three shapes. That is what lets a second CLI with an entirely different
+ * stream be counted by this code rather than beside it; `readClaudeUsage` is Claude Code's
+ * reading, and the `raw` backend's, and the fallback when nobody named a backend.
  */
 
 import type { AgentAdapter, UsageCounts, UsagePatch } from './agent-adapter.js';
@@ -44,12 +51,15 @@ export interface AgentUsage {
 }
 
 /**
- * Whether the configured command asks its agent for a machine-readable stream.
+ * Whether a command line asks its agent for a machine-readable stream.
  *
  * The flag is Claude Code's, and it is named here because the repository already names it:
  * it is what makes the timeout salvage work, and its absence is why a killed run has
  * nothing to salvage. Detecting it rather than requiring a second variable means an
  * operator who already streams gets the figures without changing anything.
+ *
+ * This is the `raw` backend's answer, and `raw` is what asks it — see `agents/raw.ts`. A named
+ * backend knows whether it streams without reading a string, which is the point of naming one.
  */
 export function streamsUsage(agentCommand: string): boolean {
   return /--output-format[\s=]+["']?stream-json/i.test(agentCommand);

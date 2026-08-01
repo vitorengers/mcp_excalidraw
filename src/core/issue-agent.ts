@@ -9,6 +9,15 @@
  *  - it refuses to run unless the server is bound to loopback;
  *  - one run at a time per element, tracked by the caller, so a double click cannot
  *    open two issues.
+ *
+ * **What it does not decide any more is which agent it is running.** `runAgent` takes an
+ * `AgentAdapter` and the `AgentInvocation` that adapter built, and spawns exactly that: it never
+ * reads a command line for a flag. Everything it used to work out by regular expression — does
+ * the run print and exit, does it stream token counts, how does a project's model reach it, how
+ * are the print flags taken off for one interactive run — belongs to a named backend now, in
+ * `core/agent-adapter.ts` and `core/agents/`. What stays here is what is the same whichever agent
+ * is running: where a run happens, how long it may take, what its exit code and its transcript
+ * mean, and which URL counts.
  */
 import { spawn } from 'child_process';
 import fs from 'fs';

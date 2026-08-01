@@ -33,6 +33,16 @@
  * `assistant` carrying `text`, `thinking` or `tool_use`, `user` carrying `tool_result`,
  * `rate_limit_event`, and a final `result`.
  *
+ * ## One picture, more than one grammar
+ *
+ * That vocabulary is Claude Code's, and it is no longer the only one: Codex speaks in items with
+ * a type rather than in content blocks inside an assistant message. Those are two grammars for
+ * one picture — the agent said something, it took a step, the step answered, the run ended — and
+ * the picture is the board's rather than either CLI's. So `TranscriptState` below is that
+ * picture, exported for the backends to write into, and each backend's `renderEvent` is the
+ * small piece that reads its own grammar. `renderClaudeEvent` is one of them, and it stays here
+ * because it is also what the `raw` backend draws and what a caller with no backend to name gets.
+ *
  * ## Colour, and why it is spelled as slot numbers
  *
  * Until #242 this file wrote no SGR sequence at all, so a `Write`, a `Bash`, a thinking marker,
