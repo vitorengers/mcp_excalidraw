@@ -315,6 +315,7 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` | none | The same, for implementing |
 | `EXCALIDRAW_IMPLEMENT_CONCURRENCY` | `4` | Runs at once. `0` is no cap, `1` serialises. Each one is a whole coding agent building on this machine |
 | `EXCALIDRAW_IMPLEMENT_QUEUE_MS` | `30000` | How often a workspace with its queue on looks for a free slot. The timer does not exist until a queue is turned on |
+| `EXCALIDRAW_IMPLEMENT_RECLAIM_MS` | `30000` | How long a run whose agent process has gone must sit before its slot is given back. The wait is there because a run's process ending is not the run ending — the server still has GitHub to ask and a checkout to release. `0` gives the slot back on the first sighting |
 | `EXCALIDRAW_ISSUE_MEMO_MS` | `30000` | How long one `gh` read of an issue is reused. `0` turns the memo off |
 | `EXCALIDRAW_GH_STATUS_MEMO_MS` | `30000` | How long one answer about `gh` *itself* — installed, logged in, which scopes — is reused before `GET /api/github-status` asks again. `0` turns the memo off. The canvas asks on a failing poll, so without it a board whose `gh` is broken would spawn two processes every twenty seconds to be told the same thing |
 | `EXCALIDRAW_GH_COMMAND` | `gh` | The GitHub CLI on **this machine**, when it is not on `PATH` — [trap-gh-path.md](trap-gh-path.md) |
@@ -543,7 +544,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 142 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 143 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 79 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |

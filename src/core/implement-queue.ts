@@ -59,6 +59,16 @@ export type QueuePassReason =
   | 'nothing-startable'
   /** Every slot is taken. The detail names the runs holding them. */
   | 'cap-full'
+  /**
+   * It gave slots back from runs that were over and never said so. Not a stall.
+   *
+   * Its own reason rather than a step inside another one, and reported *instead of* starting
+   * anything, which costs a freed slot one interval. That is the price of the last thing #357
+   * asks for: the board showed `cap-full` and went on showing it, and a reclaim folded into a
+   * pass that reports `started` would leave the reader with a queue that mysteriously
+   * unstuck itself. `implement-reclaim.ts` composes the sentence.
+   */
+  | 'reclaimed'
   /** The project has no column by the configured name, so there is nothing to drain. */
   | 'no-column'
   /** The workspace is gone, unusable, or has no GitHub project on it. */
@@ -95,7 +105,8 @@ const passes = new Map<string, QueuePass>();
 
 /** Whether a reason means the queue wanted to start something and could not. */
 export function reasonStalls(reason: QueuePassReason): boolean {
-  return reason !== 'started' && reason !== 'nothing-startable' && reason !== 'blocked';
+  return reason !== 'started' && reason !== 'nothing-startable' && reason !== 'blocked'
+    && reason !== 'reclaimed';
 }
 
 export function recordQueuePass(
