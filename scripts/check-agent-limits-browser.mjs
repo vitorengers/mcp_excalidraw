@@ -25,6 +25,13 @@
  *  - **Both themes, judged on rendered pixels.** Dark mode on this board is a canvas filter,
  *    so a declared colour proves nothing in general — and reading the screen is the method
  *    that stays correct whether the rule that painted it was the one anybody expected.
+ *  - **One account is one quota.** Two machines signed in as the same person are drawing the
+ *    same two windows twice, differing only in how stale each copy is, so they collapse to one
+ *    row naming both — with the figures from the fresher reading. A missing account joins
+ *    nobody, and an account that changes splits the row on the next poll, because the merge is
+ *    decided at render time and has no state of its own to go wrong.
+ *  - **Off says so.** An unset directory makes the route a 404, and a header corner that then
+ *    draws nothing is indistinguishable from a board that does not have the feature.
  *
  * Self-contained: it writes its own limits directory, starts its own canvas server on a free
  * port and drives its own headless Chrome. Nothing here talks to the board, to GitHub, to
@@ -170,19 +177,26 @@ const HOST_ACCOUNT = 'windows-user@example.com';
 const WSL_ACCOUNT = 'ubuntu-user@example.com';
 
 // The host: fresh, both windows, and a five-hour window with just over an hour on it.
-writeFileSync(join(limitsDir, 'native.json'), JSON.stringify({
-  account: HOST_ACCOUNT,
+// Whose account it says is a parameter, because half of what is under test below is what the
+// HUD does when the two files name the same one — and that is a rewrite of these two files
+// and a poll, with nothing else moving.
+const writeHost = (account) => writeFileSync(join(limitsDir, 'native.json'), JSON.stringify({
+  ...(account === null ? {} : { account }),
   fiveHour: { usedPercent: 23.5, resetsAt: NOW + 3600 + 4 * 60 + 30 },
   sevenDay: { usedPercent: 41.2, resetsAt: NOW + 5 * 86400 + 23 * 3600 },
   observedAt: NOW,
 }), 'utf8');
 
-// The distro: a different account, ninety minutes old, and no five-hour window at all.
-writeFileSync(join(limitsDir, 'wsl-Ubuntu-22.04.json'), JSON.stringify({
-  account: WSL_ACCOUNT,
+// The distro: ninety minutes old, and no five-hour window at all.
+const writeDistro = (account) => writeFileSync(join(limitsDir, 'wsl-Ubuntu-22.04.json'), JSON.stringify({
+  ...(account === null ? {} : { account }),
   rate_limits: { seven_day: { used_percentage: 12, resets_at: NOW + 2 * 86400 + 5 * 3600 } },
   observedAt: NOW - 90 * 60,
 }), 'utf8');
+
+// Two accounts to start with, which is the case the HUD was built for.
+writeHost(HOST_ACCOUNT);
+writeDistro(WSL_ACCOUNT);
 
 const PORT = await freePort();
 const CDP_PORT = await freePort();
@@ -356,12 +370,17 @@ const PROBE = `(() => {
     box: boxOf(row),
     env: boxOf(row.querySelector('.agent-limits__env')),
     account: boxOf(row.querySelector('.agent-limits__account')),
+    // The count matters as much as the box: one row carrying an account twice is two
+    // readings drawn on one line rather than the one quota they share.
+    accounts: Array.from(row.querySelectorAll('.agent-limits__account')).map(boxOf),
     windows: Array.from(row.querySelectorAll('.agent-limits__window')).map(boxOf),
     silent: Array.from(row.querySelectorAll('.agent-limits__silent')).map(boxOf),
     age: boxOf(row.querySelector('.agent-limits__age')),
   }));
   return {
     hud: boxOf(hud),
+    hudTitle: hud ? hud.title : null,
+    off: boxOf(document.querySelector('.agent-limits__off')),
     pollMs: hud ? hud.dataset.pollMs : null,
     rows,
     header: boxOf(document.querySelector('.header')),
@@ -414,6 +433,26 @@ const setTheme = (theme) => `(() => {
 })()`;
 
 const rowNamed = (seen, label) => seen.rows.find((row) => row.label === label) ?? null;
+
+/**
+ * The page's own view once it has had a chance to catch up — whether or not it did.
+ *
+ * `waitFor` throws, which is right for a precondition: with no HUD on screen nothing below it
+ * can be asserted at all. The sections about merging are different. Each is an independent
+ * claim about the same rendered rows, so a section that gives up must not take the ones after
+ * it down with it — a run that stops at the first disagreement says nothing about the other
+ * three, which is exactly what a check written against the old code is for. So this hands
+ * back the last thing it saw and lets the cases below name what was wrong with it.
+ */
+async function probeUntil(predicate, tries = 40) {
+  let last = null;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    last = await evaluate(PROBE);
+    if (predicate(last)) return last;
+    await sleep(250);
+  }
+  return last;
+}
 
 /** Both themes have to clear this, and the numbers are the same numbers in both. */
 async function assertLegible(theme, seen) {
@@ -599,6 +638,135 @@ try {
   const afterHide = (await evaluate(PROBE)).polls;
   check('a hidden tab sends nothing, however long its timer has been running',
     afterHide === atHide, `${atHide} → ${afterHide} while hidden`);
+
+  // ─── One account is one quota, however many machines spent it ───
+
+  console.log('\n10. two environments on the same account are one row');
+
+  // The same address in both files, spelled differently on purpose: an email is not
+  // case-sensitive and a status line's stray space is not a second subscription.
+  writeHost(`  ${HOST_ACCOUNT.toUpperCase()} `);
+  writeDistro(HOST_ACCOUNT);
+
+  // The tab above was told it was hidden; a fresh document is one that is really visible.
+  await send('Page.navigate', { url: `${BASE}/?workspace=${WORKSPACE}&agentLimitsPollMs=400` });
+  await waitFor(() => evaluate(GRAB_API), 'the Excalidraw API handle after the accounts met');
+  seen = await probeUntil((now) => now.rows.length === 1);
+  await shot('04-merged');
+
+  const merged = seen.rows[0];
+  check('one row, not one per machine', seen.rows.length === 1,
+    JSON.stringify(seen.rows.map((row) => row.label)));
+  check('and it names the host', /Windows|Host/.test(merged?.label ?? ''), merged?.label);
+  check('and the distro, in the same label', /Ubuntu-22\.04/.test(merged?.label ?? ''), merged?.label);
+  check('the account is written once, not once per machine',
+    merged?.accounts.length === 1, `${merged?.accounts.length} account spans`);
+  check('and it is the account they share',
+    new RegExp(HOST_ACCOUNT, 'i').test(merged?.box.text ?? ''), merged?.box.text);
+  check('the figures are the fresher reading’s five-hour window',
+    /5h 24% \(1h \d\dm\)/.test(merged?.box.text ?? ''), merged?.box.text);
+  check('and its seven-day window',
+    /7d 41% \(5d \d\dh\)/.test(merged?.box.text ?? ''), merged?.box.text);
+  check('never the ninety-minute-old reading’s figures, which are the same quota gone stale',
+    !/7d 12%/.test(merged?.box.text ?? ''), merged?.box.text);
+  check('so the row is not marked stale, because what it is showing is not',
+    merged?.stale === false, JSON.stringify(merged?.stale));
+
+  console.log('\n11. and an account that changes splits it again, on the next poll');
+
+  // Nothing reloads and nothing is clicked: one file is rewritten, and the poll that was
+  // already running is what has to notice. An account can change mid-session, and the merge
+  // is decided per render precisely so that costs no machinery.
+  writeDistro(WSL_ACCOUNT);
+  seen = await probeUntil((now) => now.rows.length === 2);
+  await shot('05-split');
+
+  const splitHost = rowNamed(seen, 'Windows') ?? rowNamed(seen, 'Host');
+  const splitWsl = rowNamed(seen, 'Ubuntu-22.04');
+  check('two rows again', seen.rows.length === 2,
+    JSON.stringify(seen.rows.map((row) => row.label)));
+  check('the host is back under its own name alone', splitHost !== null,
+    JSON.stringify(seen.rows.map((row) => row.label)));
+  check('and the distro under its own', splitWsl !== null,
+    JSON.stringify(seen.rows.map((row) => row.label)));
+  // The host's file still carries the shouted spelling section 10 wrote into it: folding case
+  // is what decides whether two readings are one quota, and it is not licence to rewrite what
+  // the operator's own script said.
+  check('each naming its own account again, as its own file spells it',
+    new RegExp(HOST_ACCOUNT, 'i').test(splitHost?.box.text ?? '')
+    && splitWsl?.box.text.includes(WSL_ACCOUNT),
+    `${splitHost?.box.text} / ${splitWsl?.box.text}`);
+  check('and the distro’s own figures are back with it',
+    /7d 12% \(2d 0\dh\)/.test(splitWsl?.box.text ?? ''), splitWsl?.box.text);
+
+  console.log('\n12. a reading with no account joins nobody, not even another silence');
+
+  writeHost(null);
+  writeDistro(null);
+  seen = await probeUntil((now) => now.rows.length === 2 && now.rows.every((row) => row.account === null));
+  await shot('06-anonymous');
+
+  check('two rows, because "not said" is not an account two machines have in common',
+    seen.rows.length === 2, JSON.stringify(seen.rows.map((row) => row.label)));
+  check('the host is still under its own name',
+    (rowNamed(seen, 'Windows') ?? rowNamed(seen, 'Host')) !== null,
+    JSON.stringify(seen.rows.map((row) => row.label)));
+  check('and the distro under its own',
+    rowNamed(seen, 'Ubuntu-22.04') !== null, JSON.stringify(seen.rows.map((row) => row.label)));
+  check('and each still shows what it did report',
+    /5h 24%/.test((rowNamed(seen, 'Windows') ?? rowNamed(seen, 'Host'))?.box.text ?? '')
+    && /7d 12%/.test(rowNamed(seen, 'Ubuntu-22.04')?.box.text ?? ''),
+    JSON.stringify(seen.rows.map((row) => row.box.text)));
+
+  // ─── Off, and legibly so ────────────────────────────────────
+
+  console.log('\n13. a board nobody configured says so, rather than showing nothing');
+
+  // A second canvas, started without the setting. It has to be a second server: the
+  // directory is read once, when the server starts, so "unset" is not something the running
+  // one can be asked about.
+  const OFF_PORT = await freePort();
+  const offServer = startCanvas({
+    env: {
+      PORT: String(OFF_PORT),
+      HOST: '127.0.0.1',
+      LOG_LEVEL: 'error',
+      EXCALIDRAW_WORKSPACES: registryPath,
+    },
+  }).child;
+  children.push(offServer);
+  offServer.stdout.on('data', (chunk) => { serverLog += chunk; });
+  offServer.stderr.on('data', (chunk) => { serverLog += chunk; });
+  const OFF_BASE = `http://127.0.0.1:${OFF_PORT}`;
+  await waitFor(async () => (await fetch(`${OFF_BASE}/health`)).ok, 'the unconfigured canvas server');
+
+  const refused = await fetch(`${OFF_BASE}/api/agent-limits`);
+  check('the route really is a 404 there', refused.status === 404, `status ${refused.status}`);
+
+  await send('Page.navigate', { url: `${OFF_BASE}/?workspace=${WORKSPACE}` });
+  await waitFor(() => evaluate(GRAB_API), 'the Excalidraw API handle on the unconfigured board');
+  const quiet = await probeUntil((now) => now.off !== null);
+  await shot('07-off');
+
+  check('the header says the HUD is off rather than leaving an empty corner',
+    quiet.off?.visible === true, JSON.stringify(quiet.off));
+  check('and points at the document that explains how to turn it on',
+    /docs\/agent-limits\.md/.test(quiet.off?.text ?? ''), quiet.off?.text);
+  check('no row is drawn, because there is nothing to draw',
+    quiet.rows.length === 0, JSON.stringify(quiet.rows.map((row) => row.label)));
+  check('the server’s own sentence is there for a reader who hovers',
+    /AGENT_LIMITS/.test(quiet.hudTitle ?? ''), JSON.stringify(quiet.hudTitle));
+  check('and it is still in the header’s controls, where the rows were',
+    quiet.hud !== null && quiet.hud.x >= quiet.controls.x - 1
+    && quiet.hud.right <= quiet.controls.right + 1,
+    `hud ${JSON.stringify(quiet.hud)} controls ${JSON.stringify(quiet.controls)}`);
+
+  const offLine = quiet.off ? await readBox(quiet.off) : null;
+  check('legible where it is painted, like everything else in this corner',
+    offLine !== null && offLine.ratio >= 4.5,
+    offLine
+      ? `${hex(offLine.text)} on ${hex(offLine.background)} is ${offLine.ratio.toFixed(2)}:1`
+      : 'there was no line to read');
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);

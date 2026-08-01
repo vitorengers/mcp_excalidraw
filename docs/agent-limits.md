@@ -12,8 +12,60 @@ Windows and WSL are separate homes, so they are separate credential stores and f
 separate subscriptions. That is the reason there is a row each rather than one figure: a
 percentage attributed to the wrong account is worse than no percentage at all.
 
-Off unless configured. Unset `VIBEMAXXING_AGENT_LIMITS` and `GET /api/agent-limits` answers
-404 and nothing renders.
+## One account is one quota
+
+Where the accounts *match*, the rows merge:
+
+```
+Windows + Ubuntu-22.04   me@example.com   5h 24% (1h 04m)   7d 41% (5d 23h)
+```
+
+The windows are per account — per Claude.ai subscription, for the one backend that can report
+them today — so two environments signed in as the same person are not two quotas. They are one
+quota reported twice, differing only in how stale each copy is, and drawn as two rows that is
+two percentages for the same number, where a reader has to know which reading is the later one
+to know which of them is true. So a merged row draws the figures from the **freshest** reading
+in the group and names every environment behind it.
+
+The argument above still holds and is what bounds this: merging is safe **only** when the
+account matches, because that is the only thing that makes the two readings claims about the
+same subscription. Nothing else is a key.
+
+**A `null` account joins nobody**, including another `null`. "Not said" is not something two
+machines can have in common, and a board that merged two silent environments would be claiming
+they are the same person on no evidence at all.
+
+`GET /api/agent-limits` is untouched by this: it still answers one record per environment,
+because that is what it knows. The merge is presentation, decided at each render out of the
+response the page already has — so an account that changes mid-session splits or joins a row on
+the next poll, with no state to keep in step and nothing to go stale.
+
+The one cost is width. A merged label is two machine names and a `+`, which can push a row past
+the 420px the HUD is held to and wrap it onto a second line. The label itself is one span and
+cannot be split, so the second line begins with a window rather than with a machine name — but
+a group of three or more environments will wrap, and it is worth knowing that is what has
+happened.
+
+## Off unless configured
+
+Unset `VIBEMAXXING_AGENT_LIMITS` and `GET /api/agent-limits` answers 404, as does a build whose
+backends cannot read limits at all. The header then shows one muted line and nothing else:
+
+```
+Agent usage off · docs/agent-limits.md
+```
+
+It used to show nothing, and that was the one state this HUD could not tell anybody about: an
+empty header corner is exactly what a board without the feature looks like, so an operator whose
+figures never appeared had no way from there to this page. The route's own sentence — which says
+*which* of the two refusals it is, the unset setting or the missing reader — is the line's
+`title`, for a reader who hovers.
+
+The 404 also ends the polling loop rather than retrying every minute for the life of the page:
+both halves of that answer are settled when the server starts, so nothing short of a restart
+changes it. A **403** is a different refusal and is not drawn — that is the loopback guard on a
+board bound to a LAN address, where whether this is configured is itself not something to
+answer.
 
 ## Which agent can answer this
 
@@ -185,7 +237,7 @@ for it would mean nothing.
 | Script | What it pins down |
 |---|---|
 | `scripts/check-agent-limits.mjs` | Two environments kept apart, an absent window staying `null`, a stale reading flagged, malformed input skipped, the 404 and the 403, and that nothing else from the file comes back |
-| `scripts/check-agent-limits-browser.mjs` | The HUD in a real browser: both rows top right, clear of Excalidraw's island, surviving `Hide Menus`, one poll a minute and none while hidden, and both themes judged on rendered pixels |
+| `scripts/check-agent-limits-browser.mjs` | The HUD in a real browser: both rows top right, clear of Excalidraw's island, surviving `Hide Menus`, one poll a minute and none while hidden, both themes judged on rendered pixels, one row where the account matches and two where it does not, a `null` account merged with nobody, a changed account splitting the row on the next poll, and the off line on a board nothing configured |
 
 Related: [running.md](running.md) for the variable, [rest-api.md](rest-api.md) for the route,
 [workspaces.md](workspaces.md) for where a distro is declared.

@@ -73,6 +73,21 @@
   color: var(--color-gray-60, #7a7a7a);
 }
 
+/*
+ * The board was never asked to look.
+ *
+ * Quieter than anything in a row that has figures in it — it is not a reading, and a reader
+ * scanning the corner for percentages should not stop on it twice. But it is there, because
+ * an empty corner and a board without this feature are the same picture, and the operator
+ * whose HUD never appeared has no way from there to the document that would explain it.
+ */
+.agent-limits__off {
+  color: var(--color-gray-70, #5c5c5c);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Nothing said. Not `0%`, which would be a claim that nothing has been spent. */
 .agent-limits__unknown,
 .agent-limits__silent {
