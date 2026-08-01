@@ -80,6 +80,9 @@ const workspace = {
 
 process.env.CAPTURE_TO = captured;
 const agentCommand = `node "${stub.replace(/\\/g, '/')}"`;
+// The board holds a backend beside every command; `raw` is the passthrough one, which is
+// what a free-text command line has always been and what every board configured today is.
+const agent = { backend: 'raw', command: agentCommand };
 
 async function capture(run) {
   rmSync(captured, { force: true });
@@ -123,10 +126,10 @@ function assertDelegationRules(label, prompt, artifact) {
 
 try {
   const issuePrompt = await capture(() =>
-    runIssueAgent(workspace, 'An observation.', { agentCommand, timeoutMs: 60_000 }));
+    runIssueAgent(workspace, 'An observation.', { agent, timeoutMs: 60_000 }));
   const implementPrompt = await capture(() =>
     runImplementAgent(workspace, 'https://github.com/vitorengers/vibemaxxing/issues/54',
-                      { agentCommand, timeoutMs: 60_000 }));
+                      { agent, timeoutMs: 60_000 }));
 
   console.log('1. both prompts reached their agent');
   check('the issue prompt was captured', issuePrompt.includes('observation') || issuePrompt.length > 0);

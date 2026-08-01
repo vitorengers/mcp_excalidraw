@@ -33,8 +33,18 @@
  * `assistant` carrying `text`, `thinking` or `tool_use`, `user` carrying `tool_result`,
  * `rate_limit_event`, and a final `result`. It is a capture of one program, so an envelope of
  * some *other* type gets the same treatment as a line that is not an envelope at all — see
- * `CLAIMED_TYPES`, which is what keeps that from also un-silencing the two that say nothing on
- * purpose.
+ * `AgentAdapter.claimedTypes`, which is what keeps that from also un-silencing the two that say
+ * nothing on purpose.
+ *
+ * ## One picture, more than one grammar
+ *
+ * That vocabulary is Claude Code's, and it is no longer the only one: Codex speaks in items with
+ * a type rather than in content blocks inside an assistant message. Those are two grammars for
+ * one picture — the agent said something, it took a step, the step answered, the run ended — and
+ * the picture is the board's rather than either CLI's. So `TranscriptState` below is that
+ * picture, exported for the backends to write into, and each backend's `renderEvent` is the
+ * small piece that reads its own grammar. `renderClaudeEvent` is one of them, and it stays here
+ * because it is also what the `raw` backend draws and what a caller with no backend to name gets.
  *
  * ## Colour, and why it is spelled as slot numbers
  *
@@ -52,9 +62,10 @@
  */
 
 import {
-  AGENT_INK, agentToolSlot, ANSI_RESET, inSlot,
-  type TerminalDocumentInk, type TerminalInk, type TerminalSlot,
+  AGENT_ACTION_SLOT, AGENT_INK, agentAction, ANSI_RESET, inSlot,
+  type AgentAction, type TerminalDocumentInk, type TerminalInk, type TerminalSlot,
 } from './terminal-palette.js';
+import type { AgentAdapter } from './agent-adapter.js';
 
 /** How much of a tool's output is worth putting in a block somebody is watching. */
 const RESULT_LINES = 6;
@@ -635,125 +646,282 @@ const foldData = (record: Partial<FoldDetail> & { id: string }): string =>
   `${FOLD_OSC}d=${JSON.stringify(record)}${FOLD_END}`;
 
 /**
- * Which tool call each row belongs to, across one stream.
+ * Which step each row belongs to, across one stream.
  *
  * A `tool_use` block carries its own `id` and the `tool_result` that answers it names that id
  * in `tool_use_id`, so pairing is the agent's own and not a guess. Neither field is *required*
  * to be there — nothing here assumes the command is Claude Code, and the captures this file was
- * written against predate them — so an unnamed call gets a number and an unnamed result is
- * paired with the oldest call still waiting for one. Tool calls are answered in order in every
+ * written against predate them — so an unnamed step gets a number and an unnamed answer is
+ * paired with the oldest step still waiting for one. Steps are answered in order in every
  * capture seen, and a wrong pairing costs the reader a fold rather than a line of transcript.
  */
 class FoldIds {
   private next = 0;
   private waiting: string[] = [];
 
-  open(block: ContentBlock): string {
-    const id = block.id ? safeId(block.id) : `t${(this.next += 1)}`;
-    this.waiting.push(id);
-    return id;
+  open(id: string | null | undefined): string {
+    const opened = id ? safeId(id) : `t${(this.next += 1)}`;
+    this.waiting.push(opened);
+    return opened;
   }
 
-  close(block: ContentBlock): string | null {
-    if (block.tool_use_id) {
-      const id = safeId(block.tool_use_id);
-      this.waiting = this.waiting.filter((candidate) => candidate !== id);
-      return id;
+  close(id: string | null | undefined): string | null {
+    if (id) {
+      const closed = safeId(id);
+      this.waiting = this.waiting.filter((candidate) => candidate !== closed);
+      return closed;
     }
     return this.waiting.shift() ?? null;
   }
 }
 
-function renderEvent(event: StreamEvent, ids: FoldIds, spacing: Spacing): string {
+/** One step of a run, as any backend can describe it. */
+export interface TranscriptStep {
+  /** What the backend calls it: a tool name, an item type. */
+  name: string;
+  /** The one thing worth showing beside the name — the command, the path, the query. */
+  summary: string;
+  /** The step's own id, when the backend gives one, so its answer can be paired with it. */
+  id?: string | null;
+  /** Everything the step was given, whole, for the row a click opens. */
+  detail: string;
+  /** What kind of thing this is, which is the colour the name is drawn in. */
+  action: AgentAction;
+}
+
+/**
+ * The vocabulary a transcript is written in, and the state that makes it readable.
+ *
+ * It exists because there is more than one agent now. Claude Code speaks in `assistant`
+ * messages carrying `tool_use` blocks; Codex speaks in `item.completed` events carrying an item
+ * type. Those are two grammars for one picture — the agent said something, it took a step, the
+ * step answered, the run ended — and the picture is the board's rather than either CLI's. So the
+ * grammars live in the adapters and the picture lives here, once: the fold marks, the colours,
+ * the clipping, and the spacing between a sentence and the row under it.
+ *
+ * Every method returns what to append and updates whatever state it has to. One instance per
+ * session: it holds the ids that pair a step with the answer arriving several chunks later, and
+ * the two characters of spacing that decide whether the next block needs a blank line above it.
+ */
+export class TranscriptState {
+  private readonly ids = new FoldIds();
+  /**
+   * What the transcript already ends with, so a blank line is written once rather than per block.
+   *
+   * #258 asked for room either side of the agent's prose, and "either side" is two decisions
+   * that meet: the block after a sentence wants a blank line above it and the sentence wants one
+   * below. Written twice they accumulate — three sentences in a row would open a growing gap —
+   * so the one below is written and the one above is asked for, and it is only supplied when the
+   * transcript does not already end in one.
+   *
+   * Two characters is the whole of the state a question like that needs, and it is deliberately
+   * *not* the transcript: this class sees only what this renderer wrote, so a run of blank lines
+   * inside a tool's own output is none of its business and is passed through untouched.
+   */
+  private tail = '\n\n';
+
+  /** Record what was appended, whoever appended it, so the spacing above stays true. */
+  wrote(piece: string): string {
+    if (piece) this.tail = (this.tail + piece).slice(-2);
+    return piece;
+  }
+
+  /** Nothing, or the newline that opens a blank line above whatever comes next. */
+  private gap(): string {
+    return this.tail.endsWith('\n\n') ? '' : '\n';
+  }
+
+  /**
+   * The agent talking to whoever is watching, rather than a record of what it did.
+   *
+   * So it is given the room a paragraph has and not the no room a log row has. #258: it used to
+   * land hard against the tool call above it.
+   */
+  prose(text: string): string {
+    const said = text.trim();
+    if (!said) return '';
+    return this.wrote(`${this.gap()}${said}\n\n`);
+  }
+
+  /**
+   * Marked, never printed.
+   *
+   * It is the agent's private reasoning, it is long, and a block somebody is watching to see
+   * what the run is *doing* is the wrong place for it — but silence would read as a stall.
+   *
+   * It was dim until #258, on the argument that it says the run is alive rather than what it is
+   * doing. What that ask answers is that this line is the *agent itself* — the starburst its own
+   * interface draws — where every other line is the agent's work, and that is worth a colour of
+   * its own rather than the ink of a file path. The seventeenth ink, which exists only in the
+   * fold view: see `TerminalDocumentInk`.
+   */
+  thinking(): string {
+    return this.wrote(`${inInk(AGENT_INK.presence, '✻ thinking…')}\n`);
+  }
+
+  /**
+   * One step, opened: the row that stands for it, and the record behind the fold.
+   *
+   * Two runs, not one: the name says what kind of thing is happening and carries the category's
+   * colour, the argument says which file or command and steps back into the dim ink so a column
+   * of steps reads as a column of verbs.
+   *
+   * The fold marks go in **front of the colour**, and the order is not arbitrary: the mark is
+   * the row's identity and has to be the first thing on the line whichever sequences follow it.
+   * The detail goes out with the *step* rather than being held until the answer, so a step that
+   * is still running can already be opened.
+   */
+  step(step: TranscriptStep): string {
+    const id = this.ids.open(step.id ?? null);
+    return this.wrote(
+      foldData({ id, name: step.name, input: capped(step.detail) })
+      + foldLine(id, 'f')
+      + `${inSlot(AGENT_ACTION_SLOT[step.action], `⏺ ${step.name}`)}`
+      // Clipped here rather than by each backend: a multi-line command must not break the shape
+      // of the transcript, and that is one rule about the picture rather than one per grammar.
+      + `${inSlot(AGENT_INK.argument, `(${oneLine(step.summary)})`)}\n`
+    );
+  }
+
+  /**
+   * What a step answered, clipped to what a watcher can take in.
+   *
+   * Every line of the clipped preview is marked, because folding shut has to take the whole
+   * answer with it and not only its first row. Marked in front of whatever colour the line
+   * starts in — including the tool's own, which `renderResult` passes through.
+   */
+  answer(answer: { id?: string | null; content: unknown; failed: boolean }): string {
+    const rendered = renderResult(answer.content, answer.failed);
+    const id = this.ids.close(answer.id ?? null);
+    if (!id) return this.wrote(rendered);
+    const marked = rendered.replace(/\n$/, '').split('\n')
+      .map((line) => foldLine(id, 'c') + line)
+      .join('\n');
+    return this.wrote(
+      foldData({ id, result: capped(resultText(answer.content).trim()) }) + marked + '\n'
+    );
+  }
+
+  /**
+   * The last line: whether the run finished or reported an error.
+   *
+   * Until #242 these two differed only in their wording, at the end of a transcript somebody is
+   * scrolled away from. The blank line above it is asked for rather than written, for the same
+   * reason prose's is: a run whose last word was a sentence already has one, and two would be a
+   * gap.
+   */
+  ending(ending: { failed: boolean; turns?: number | null }): string {
+    const count = typeof ending.turns === 'number'
+      ? `, ${ending.turns} turn${ending.turns === 1 ? '' : 's'}`
+      : '';
+    const slot = ending.failed ? AGENT_INK.failure : AGENT_INK.success;
+    const said = ending.failed ? 'the run reported an error' : 'the run finished';
+    return this.wrote(`${this.gap()}${inSlot(slot, `⏺ ${said}${count}`)}\n`);
+  }
+
+  /** A line that is not an envelope, so it is somebody talking. Verbatim. */
+  passthrough(line: string): string {
+    return this.wrote(`${line}\n`);
+  }
+}
+
+interface ContentBlock {
+  type?: string;
+  text?: string;
+  thinking?: string;
+  name?: string;
+  /** The call's own id, which is what a result names when it answers. */
+  id?: string;
+  tool_use_id?: string;
+  input?: Record<string, unknown>;
+  content?: unknown;
+  /**
+   * Whether the tool answered with a failure.
+   *
+   * Declared here since #242. It was always on the wire — the API puts it on a `tool_result`
+   * and Claude Code streams the block through unchanged — and dropping it meant a tool that
+   * failed was drawn exactly like one that worked, which is the single most useful thing colour
+   * can say in a block somebody is watching to see whether a run is going wrong.
+   */
+  is_error?: boolean;
+}
+
+interface StreamEvent {
+  type?: string;
+  subtype?: string;
+  message?: { content?: ContentBlock[] | string };
+  num_turns?: number;
+  is_error?: boolean;
+}
+
+/**
+ * Claude Code's stream, drawn.
+ *
+ * The event vocabulary was read off a real capture rather than assumed: `system`, `assistant`
+ * carrying `text`, `thinking` or `tool_use`, `user` carrying `tool_result`, `rate_limit_event`,
+ * and a final `result`.
+ *
+ * It lives here rather than in `agents/claude-code.ts` because it is also what the `raw` backend
+ * draws — an arbitrary command line that streams is a command line streaming *this* — and
+ * because it is what `new AgentStreamRenderer()` falls back to when nobody named a backend.
+ */
+export function renderClaudeEvent(event: Record<string, unknown>, state: TranscriptState): string {
+  const stream = event as StreamEvent;
   let out = '';
-  // Everything this function appends goes through here, so the spacing above knows what the
-  // transcript ends with even part-way through an event carrying several blocks.
-  const write = (piece: string): void => { out += piece; spacing.wrote(piece); };
-  switch (event.type) {
+  switch (stream.type) {
     case 'assistant': {
-      const content = event.message?.content;
-      if (typeof content === 'string') { write(`${content}\n`); return out; }
+      const content = stream.message?.content;
+      if (typeof content === 'string') return state.passthrough(content);
       if (!Array.isArray(content)) return '';
       for (const block of content) {
         if (block?.type === 'text' && block.text?.trim()) {
-          // The one thing in the transcript addressed to whoever is watching, rather than a
-          // record of what the agent did — so it is given the room a paragraph has and not the
-          // no room a log row has. #258: it used to land hard against the tool call above it.
-          write(`${spacing.gap()}${block.text.trim()}\n\n`);
+          out += state.prose(block.text);
         } else if (block?.type === 'thinking') {
-          // Marked, never printed. It is the agent's private reasoning, it is long, and a
-          // block somebody is watching to see what the run is *doing* is the wrong place
-          // for it — but silence would read as a stall.
-          //
-          // It was dim until #258, on the argument that it says the run is alive rather than
-          // what it is doing. What the ask answers is that this line is the *agent itself* —
-          // the `✻` is the starburst its own interface draws — where every other line is the
-          // agent's work, and that is worth a colour of its own rather than the ink of a file
-          // path. The seventeenth ink, which exists only in the fold view: see
-          // `TerminalDocumentInk`.
-          write(`${inInk(AGENT_INK.presence, '✻ thinking…')}\n`);
+          out += state.thinking();
         } else if (block?.type === 'tool_use') {
           const name = block.name ?? 'tool';
-          const summary = summariseInput(block.input);
-          const id = ids.open(block);
-          // Two runs, not one: the name says what kind of thing is happening and carries the
-          // category's colour, the argument says which file or command and steps back into the
-          // dim ink so a column of tool calls reads as a column of verbs.
-          //
-          // The fold marks go in **front of the colour**, and the order is not arbitrary: the
-          // mark is the row's identity and has to be the first thing on the line whichever
-          // sequences follow it. The detail goes out with the *call* rather than being held
-          // until the result, so a tool that is still running can already be opened, and it
-          // carries the input as plain text — colour is for the row, and the record is what a
-          // reader opens to read. Since #260 a tool that changes a file has that record written
-          // as a *diff* rather than as a field list — see `detailInput` — which is also why the
-          // record has colour in it at all.
-          write(foldData({ id, name, input: capped(detailInput(name, block.input)) })
-            + foldLine(id, 'f')
-            + `${inSlot(agentToolSlot(name), `⏺ ${name}`)}${inSlot(AGENT_INK.argument, `(${summary})`)}\n`);
+          out += state.step({
+            name,
+            summary: summariseInput(block.input),
+            id: block.id ?? null,
+            // Since #260 a tool that changes a file has its record written as a *diff* rather
+            // than as a field list — see `detailInput` — which is also why the record has
+            // colour in it at all.
+            detail: detailInput(name, block.input),
+            action: agentAction(name),
+          });
         }
       }
       return out;
     }
     case 'user': {
-      const content = event.message?.content;
+      const content = stream.message?.content;
       if (!Array.isArray(content)) return '';
       for (const block of content) {
         if (block?.type !== 'tool_result') continue;
-        const rendered = renderResult(block.content, block.is_error === true);
-        const id = ids.close(block);
-        if (!id) { write(rendered); continue; }
-        // Every line of the clipped preview is marked, because folding shut has to take the
-        // whole answer with it and not only its first row. Marked in front of whatever colour
-        // the line starts in — including the tool's own, which `renderResult` passes through.
-        const marked = rendered.replace(/\n$/, '').split('\n')
-          .map((line) => foldLine(id, 'c') + line)
-          .join('\n');
-        write(foldData({ id, result: capped(resultText(block.content).trim()) }) + marked + '\n');
+        out += state.answer({
+          id: block.tool_use_id ?? null,
+          content: block.content,
+          failed: block.is_error === true,
+        });
       }
       return out;
     }
-    case 'result': {
-      const turns = typeof event.num_turns === 'number' ? `, ${event.num_turns} turn${event.num_turns === 1 ? '' : 's'}` : '';
-      // Until #242 these two differed only in their wording, at the end of a transcript
-      // somebody is scrolled away from.
-      const slot = event.is_error ? AGENT_INK.failure : AGENT_INK.success;
-      const said = event.is_error ? 'the run reported an error' : 'the run finished';
-      // The blank line above it is asked for rather than written, for the same reason prose's
-      // is: a run whose last word was a sentence already has one, and two would be a gap.
-      write(`${spacing.gap()}${inSlot(slot, `⏺ ${said}${turns}`)}\n`);
-      return out;
-    }
-    // Everything else, including the two below that are claimed and deliberately silent.
-    // What happens to a type that is *not* claimed is `feed`'s decision rather than this
-    // one's, because the empty string cannot tell the two apart.
+    case 'result':
+      return state.ending({
+        failed: stream.is_error === true,
+        turns: typeof stream.num_turns === 'number' ? stream.num_turns : null,
+      });
+    // Everything else, including `system` and `rate_limit_event`, which are claimed by the set
+    // below and deliberately silent. What happens to a type that is *not* claimed is `feed`'s
+    // decision rather than this one's, because the empty string cannot tell the two apart.
     default:
       return '';
   }
 }
 
 /**
- * The event types this renderer has an opinion about, including the ones it says nothing for.
+ * The event types Claude Code's grammar has an opinion about, including the silent ones.
  *
  * The `default` arm above answers an unknown type and a known-boring one with the same empty
  * string, and until #325 `feed` read both as "nothing to show". So a line of valid JSON of a
@@ -770,23 +938,30 @@ function renderEvent(event: StreamEvent, ids: FoldIds, spacing: Spacing): string
  *
  * It is drawn as tightly as it can honestly be drawn, and that direction is deliberate: a type
  * wrongly left out costs a reader an envelope beside the prose, and a type wrongly put in costs
- * them the line entirely. When a second backend gets an adapter of its own, this is the set it
- * brings with it.
+ * them the line entirely. It is *this grammar's* set rather than the renderer's, which is what
+ * #326 changed about it: a backend brings its own — see `AgentAdapter.claimedTypes` — and this
+ * one belongs to `renderClaudeEvent`, so it is also `raw`'s and also the fallback's.
  */
-const CLAIMED_TYPES: ReadonlySet<string> = new Set([
+export const CLAUDE_CLAIMED_TYPES: ReadonlySet<string> = new Set([
   'assistant', 'user', 'result', 'system', 'rate_limit_event',
 ]);
 
 /**
  * One agent stream, turned into a transcript.
  *
- * One instance per session: it holds the half line the last chunk ended in, and the ids that
- * pair a tool call with the answer that arrives several chunks later.
+ * One instance per session: it holds the half line the last chunk ended in, and the state that
+ * pairs a step with the answer that arrives several chunks later.
+ *
+ * The adapter is what knows the grammar. It is optional, and the fallback is Claude Code's —
+ * which is also the `raw` backend's — so a caller holding a stream and no backend to name
+ * renders exactly what this file rendered before backends existed. The import is type-only, so
+ * this module stays a leaf and the adapters are the ones that import it.
  */
 export class AgentStreamRenderer {
   private pending = '';
-  private readonly ids = new FoldIds();
-  private readonly spacing = new Spacing();
+  private readonly state = new TranscriptState();
+
+  constructor(private readonly adapter: AgentAdapter | null = null) {}
 
   /** What this chunk adds to the transcript. Empty means "nothing complete yet". */
   feed(chunk: string): string {
@@ -797,34 +972,47 @@ export class AgentStreamRenderer {
     this.pending = lines.pop() ?? '';
 
     let out = '';
-    const write = (piece: string): void => { out += piece; this.spacing.wrote(piece); };
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      if (!trimmed.startsWith('{')) {
+      let event: unknown = null;
+      if (trimmed.startsWith('{')) {
+        try {
+          event = JSON.parse(trimmed);
+        } catch {
+          // A line that opens like JSON and is not JSON is still a line somebody wrote.
+          event = null;
+        }
+      }
+      if (!event || typeof event !== 'object' || Array.isArray(event)) {
         // Not an envelope, so it is somebody talking. Verbatim.
-        write(`${line}\n`);
+        out += this.state.passthrough(line);
         continue;
       }
-      let event: StreamEvent;
+      const record = event as Record<string, unknown>;
+      let rendered = '';
       try {
-        event = JSON.parse(trimmed) as StreamEvent;
+        rendered = this.adapter
+          ? this.adapter.renderEvent(record, this.state)
+          : renderClaudeEvent(record, this.state);
       } catch {
-        // A line that opens like JSON and is not JSON is still a line somebody wrote.
-        write(`${line}\n`);
+        // An envelope this backend cannot draw is still a line somebody wrote, and losing it
+        // would take with it the one line that explains why a run went wrong.
+        out += this.state.passthrough(line);
         continue;
       }
-      // `renderEvent` writes through the spacing itself, so its output is appended rather
-      // than written.
-      const rendered = renderEvent(event, this.ids, this.spacing);
       if (rendered) { out += rendered; continue; }
-      // Nothing came out, and there are two reasons that happens. A claimed type saying
-      // nothing is the transcript working as intended; a type this renderer has never heard
-      // of saying nothing is a line going missing, so it is printed as it arrived. An
-      // unrenderable stream degrades to a readable one and never to a blank one.
-      if (typeof event.type === 'string' && CLAIMED_TYPES.has(event.type)) continue;
-      write(`${line}\n`);
+      // Nothing came out, and since #325 there are two reasons that happens. A claimed type
+      // saying nothing is the transcript working as intended; a type this backend has never
+      // heard of saying nothing is a line going missing, so it is printed as it arrived. An
+      // unrenderable stream degrades to a readable one and never to a blank one. Which set is
+      // consulted is the backend's — Codex's silent types are not Claude Code's — and the
+      // fallback is Claude Code's, like the renderer above it.
+      const claimed = this.adapter?.claimedTypes ?? CLAUDE_CLAIMED_TYPES;
+      if (typeof record.type === 'string' && claimed.has(record.type)) continue;
+      out += this.state.passthrough(line);
     }
     return out;
   }
 }
+

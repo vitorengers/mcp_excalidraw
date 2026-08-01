@@ -18,8 +18,10 @@
  * every boot. `tokenizeCommand` gives the binary; `--version` is the one argument a CLI can be
  * asked for without doing anything. What that cannot see is a wrapper — `node ./agent.mjs`
  * probes `node` — and that is written down as the known limit of a preflight built against
- * today's command strings rather than pretended away. A backend adapter is where a command
- * stops being an opaque string.
+ * today's command strings rather than pretended away. `core/agent-adapter.ts` is where a
+ * command stopped being an opaque string; this module still probes the string, because what it
+ * is asking is whether the *binary* an operator named is on the machine, and for the `raw`
+ * backend — which is every board today — argv[0] of their command line is that binary.
  *
  * **Three rules the shape of this module comes from:**
  *
@@ -38,13 +40,17 @@
  */
 import { spawn } from 'child_process';
 import path from 'path';
+import type { AgentRole } from './agent-adapter.js';
 import { AgentCommands, buildAgentCommand, singleQuoted, tokenizeCommand } from './issue-agent.js';
 import { Workspace } from './workspaces.js';
 import { wslUnsupportedHere } from './workspace-paths.js';
 import { settingName } from './settings.js';
 
-/** The two agents, which are two because granting research must not grant repository writes. */
-export type AgentRole = 'issue' | 'implement';
+/**
+ * The two agents, declared in `agent-adapter.ts` because an adapter is asked which role it is
+ * invoking, and re-exported here where every caller already had it.
+ */
+export type { AgentRole };
 
 /** The environments a command may have to run in — the halves of `AgentCommands`. */
 export type AgentEnvironmentKind = 'native' | 'wsl';
@@ -188,9 +194,8 @@ export function commandForEnvironment(
   kind: AgentEnvironmentKind,
   commands: AgentCommands
 ): string | null {
-  const native = commands.native?.trim() || null;
-  if (kind !== 'wsl') return native;
-  return (commands.wsl?.trim() || null) ?? native;
+  const spec = kind === 'wsl' ? commands.wsl ?? commands.native : commands.native;
+  return spec?.command ?? null;
 }
 
 /**
@@ -347,7 +352,7 @@ export function initialAgents(
       environments[kind] = environmentHealth(command, withoutProbing(kind, command, platform) ?? 'probing');
     }
     agents[role.role] = {
-      configured: Boolean(role.commands.native?.trim() || role.commands.wsl?.trim()),
+      configured: Boolean(role.commands.native || role.commands.wsl),
       environments,
     };
   }
@@ -398,7 +403,7 @@ export async function preflightAgents(options: PreflightOptions): Promise<Agents
       );
     }
     agents[role.role] = {
-      configured: Boolean(role.commands.native?.trim() || role.commands.wsl?.trim()),
+      configured: Boolean(role.commands.native || role.commands.wsl),
       environments,
     };
   }
