@@ -664,7 +664,11 @@ const CANVAS_FREE_TOOLS = new Set(['read_diagram_guide']);
 
 for (const tool of tools) {
   if (CANVAS_FREE_TOOLS.has(tool.name)) continue;
-  const properties = (tool.inputSchema.properties ?? {}) as Record<string, unknown>;
+  // `Record<string, object>` rather than `unknown`: the SDK types a JSON Schema property bag as
+  // a record of objects, which every entry here is. It typed the value `unknown` up to 1.15.x,
+  // so an `unknown` cast compiled then and does not now — the one place the 1.15 → 1.30 bump of
+  // #349 was visible at all.
+  const properties = (tool.inputSchema.properties ?? {}) as Record<string, object>;
   properties.workspace = {
     type: 'string',
     description: 'Id of the registered project board to act on (the tab it appears under). '
