@@ -99,7 +99,7 @@ if (!ready) {
 
 const { runAgent } = agentModule;
 const { adapterFor } = registry;
-const { invocationArgs } = adapterModule;
+const { deliverStdin, invocationArgs } = adapterModule;
 const { TerminalSession } = sessionModule;
 
 const PULL_URL = 'https://github.com/vitorengers/vibemaxxing/pull/330';
@@ -181,10 +181,15 @@ for (const backend of BACKENDS) {
   invocations.set(backend.id, { adapter, headless, interactive });
 
   console.log(`\n   ${backend.id}`);
-  check('a headless run reads its prompt from stdin, which a pseudoterminal cannot end',
-        headless.prompt.via === 'stdin', JSON.stringify(headless.prompt));
+  // Asked of `prompt.stdin` rather than of `prompt.via` since #329, because those became two
+  // questions: `codex exec <prompt>` is a headless run whose prompt goes on **argv**, and what
+  // makes it un-hostable in a pseudoterminal is that it keeps stdin for nobody. That is the
+  // property this case was always about — a run with no reader has no interface to draw.
+  check('a headless run keeps stdin for nobody, so a pseudoterminal would have no reader',
+        headless.prompt.stdin !== 'reader', JSON.stringify(headless.prompt));
   check('an interactive run takes it as an argument, leaving stdin for the reader',
-        interactive.prompt.via === 'argv', JSON.stringify(interactive.prompt));
+        interactive.prompt.via === 'argv' && interactive.prompt.stdin === 'reader',
+        JSON.stringify(interactive.prompt));
   check('and the two are not the same argv',
         JSON.stringify(headless.args) !== JSON.stringify(interactive.args),
         JSON.stringify(headless.args));
@@ -200,9 +205,11 @@ for (const backend of BACKENDS) {
   // The case a flag-stripping function structurally cannot express: what makes a Codex run
   // headless is a subcommand and a positional, not an option anything could remove.
   const { headless, interactive } = invocations.get('codex-cli');
+  // The `-` this used to assert beside `exec` is gone with #329: the prompt is the positional
+  // now, and the dash is honoured only where an operator pinned it. The subcommand is the whole
+  // of the difference, which is the claim this case was making.
   check('\n   and for codex-cli the difference is a subcommand, not a flag that came off',
-        headless.args[0] === 'exec' && headless.args[headless.args.length - 1] === '-'
-        && headless.prompt.marker === '-'
+        headless.args[0] === 'exec' && headless.prompt.marker === undefined
         && !interactive.args.includes('exec') && !interactive.args.includes('-'),
         `${JSON.stringify(headless.args)} vs ${JSON.stringify(interactive.args)}`);
 }
@@ -261,9 +268,13 @@ const CODEX_STREAM = [
     type: 'item.completed',
     item: { id: 'item_2', type: 'agent_message', text: `Merged and landed: ${PULL_URL}` },
   }),
+  // `cached_input_tokens` is a **share of** `input_tokens` on this backend rather than a figure
+  // beside it — the opposite of Claude Code's disjoint `cache_read_input_tokens` — so this is a
+  // run that processed 3000 input tokens, half of them off the cache. See
+  // `scripts/lib/codex-capture.mjs` for the capture that measures it.
   JSON.stringify({
     type: 'turn.completed',
-    usage: { input_tokens: 1500, cached_input_tokens: 1500, output_tokens: 222 },
+    usage: { input_tokens: 3000, cached_input_tokens: 1500, output_tokens: 222 },
   }),
 ];
 
@@ -301,8 +312,8 @@ const codexInvocation = (stub) => codexAdapter.invoke({
  * A host that spawns the invocation and reports an ending, the way a terminal tab does.
  *
  * `interactive` is the one thing that varies, and it is what a real session answers from its
- * own mode: a run whose prompt went to stdin is on pipes and says false, and a run the reader
- * can type into says true. What is being checked is what `runHostedAgent` does with each.
+ * own mode: a run whose stdin was spent or closed is on pipes and says false, and a run the
+ * reader can type into says true. What is being checked is what `runHostedAgent` does with each.
  */
 function hostReporting(interactive) {
   return async ({ invocation, prompt, onOutput }) => {
@@ -314,7 +325,12 @@ function hostReporting(interactive) {
     child.stdout?.on('data', (chunk) => onOutput(chunk));
     child.stderr?.on('data', (chunk) => onOutput(chunk));
     child.stdin?.on('error', () => { /* the stub may exit before reading stdin */ });
-    if (invocation.prompt.via === 'stdin') child.stdin?.end(prompt);
+    // `deliverStdin` rather than the `if` that stood here, and the difference is not cosmetic:
+    // this host used to leave the pipe open for an argv-delivering run, so the stub below — which
+    // reads stdin, as a real CLI does — sat on it until the ceiling fired and the case reported a
+    // timeout instead of the exit code it was asking about. That is openai/codex#20919 in a
+    // fixture, and the shared helper is what closes an empty pipe rather than leaving one.
+    deliverStdin(child.stdin, invocation, prompt);
     return {
       id: 'session-1',
       exited: new Promise((resolve) => child.on('close', (code) => resolve(code))),
@@ -361,9 +377,13 @@ try {
   // what runs is what was built.
   {
     const server = readDist('server.js');
+    // `prompt.stdin` rather than `prompt.via` since #329, and it is the same decision made on
+    // the field that answers it: a binding is worth loading exactly where stdin is being kept
+    // for a reader. `codex exec --json` puts its prompt on argv and still wants pipes, which
+    // the old reading of `via` would have got wrong in the other direction.
     check('the implement host loads a pseudoterminal from the invocation, not from a flag',
-          /invocation\.prompt\.via === 'stdin' \? null : await loadPty\(\)/.test(server),
-          'dist/server.js does not decide the binding from prompt.via');
+          /invocation\.prompt\.stdin === 'reader' \? await loadPty\(\) : null/.test(server),
+          'dist/server.js does not decide the binding from prompt.stdin');
     // Neither called nor still explained that way. The second half is the risk this change
     // carries: the spawn site used to carry a long argument that reading the operator's command
     // shape was deliberate, and leaving it beside the code that no longer does would be two
@@ -373,7 +393,7 @@ try {
     check('and nothing in the built server asks a command line whether it prints and exits',
           naming.length === 0, naming.map((line) => line.trim()).join(' | '));
     check('so a codex-cli headless run is spawned on pipes',
-          invocations.get('codex-cli').headless.prompt.via === 'stdin');
+          invocations.get('codex-cli').headless.prompt.stdin !== 'reader');
   }
 
   // ─── 5. a codex-cli run gets a meter and a renderer ─────────

@@ -82,7 +82,9 @@ export const claudeCodeAdapter: AgentAdapter = {
       // A headless run reads its prompt from stdin and needs the end of file that closes it,
       // which a pseudoterminal cannot give. An interface takes the prompt as its last argument
       // — `claude [options] [prompt]` — and keeps stdin for the reader.
-      prompt: { via: headless ? 'stdin' : 'argv' },
+      prompt: headless
+        ? { via: 'stdin', stdin: 'prompt' }
+        : { via: 'argv', stdin: 'reader' },
       line: quotedLine(command, args),
     };
   },

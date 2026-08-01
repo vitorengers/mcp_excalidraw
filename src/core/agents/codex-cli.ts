@@ -1,8 +1,8 @@
 /**
  * OpenAI's Codex CLI, named — the second backend, and the one that proves the seam is real.
  *
- * Nothing about it is a variation on Claude Code. It takes its prompt with a `-` rather than by
- * closing stdin on an argument-less run, it spells "speak while you work" `--json` rather than
+ * Nothing about it is a variation on Claude Code. It takes its prompt as an argument rather than
+ * by closing stdin on an argument-less run, it spells "speak while you work" `--json` rather than
  * `--output-format stream-json --verbose`, its reasoning effort is a config override rather than
  * a flag, and its stream is a different grammar entirely: items with a type, rather than content
  * blocks inside an assistant message. Every one of those was a thing `issue-agent.ts` used to
@@ -12,8 +12,10 @@
  * The facts below were confirmed against the CLI's own non-interactive documentation rather than
  * remembered:
  *
- *  - the prompt is an argument, and `-` is what says "read it from stdin instead" — without it a
- *    piped prompt is read as *context* beside an instruction that is not there;
+ *  - the prompt is an argument — *"Pass a task prompt as a single argument"* — and `-` is what
+ *    says "read it from stdin instead"; *"If stdin is piped and you also provide a prompt
+ *    argument, Codex treats the prompt as the instruction and the piped content as additional
+ *    context"*, so a prompt sent down stdin with no `-` is an agent with no orders;
  *  - `--json` turns stdout into a JSON Lines stream of every event;
  *  - `-m` / `--model` selects the model, and `-c key=value` overrides one config key, which is
  *    where `model_reasoning_effort` lives;
@@ -26,6 +28,14 @@
  *    `error`, and `item.started` / `item.updated` / `item.completed` whose `item.type` is one of
  *    `agent_message`, `reasoning`, `command_execution`, `file_change`, `mcp_tool_call`,
  *    `web_search`, `todo_list` or `error`.
+ *
+ * **The argument is the default, and the dash is never written for the operator.** Both forms
+ * work, and the difference is what happens when the reading is wrong: a prompt handed to `codex
+ * exec` on stdin with no `-` in front of it is read as context beside an instruction that does
+ * not exist, and the run does something nobody asked for rather than failing. Writing `-` for
+ * the operator would also spend stdin, and `codex exec -` in a tab the reader was meant to
+ * answer waits on a pipe nobody is going to close. So the dash is honoured where they wrote it,
+ * in the position they wrote it in, and added nowhere.
  *
  * **Everything is drawn on `item.completed`.** `item.started` exists for some kinds and would
  * make a long command appear the moment it began, which is worth something to a reader — but the
@@ -75,6 +85,11 @@ export const codexCliAdapter: AgentAdapter = {
     // The research agent never carries `--yolo`, whoever wrote it — see `PermissionPosture`.
     const permissions = AGENT_PERMISSIONS['codex-cli'];
     const args = spec.role === 'issue' ? withoutFullAccess(permissions, rest) : [...rest];
+    // Read off the operator's own tokens, not off `args`, so that nothing this adapter appends
+    // below could ever be mistaken for something they asked for. `rest` rather than `args` for
+    // the other direction too: `withoutFullAccess` takes a sandbox flag off a research run, and
+    // a `-` they wrote is not one of those and must survive it.
+    const pinned = rest.includes(STDIN_MARKER);
 
     // First, because it is a subcommand and not a flag. An operator who already wrote it — as
     // they would to reach `--full-auto` — keeps their own spelling and their own position.
@@ -88,15 +103,19 @@ export const codexCliAdapter: AgentAdapter = {
     // word, so a project's effort placed after the operator's own overrides wins.
     if (spec.effort) args.push('-c', `model_reasoning_effort=${spec.effort}`);
     args.push(...(spec.extraArgs ?? []));
-    // Last of all, because it is the positional the prompt would otherwise have been.
-    if (headless) args.push(STDIN_MARKER);
 
     return {
       command,
       args,
-      prompt: headless
-        ? { via: 'stdin', marker: STDIN_MARKER }
-        : { via: 'argv' },
+      // The prompt is a positional argument, and stdin beside one is *context*. The dash is
+      // honoured where the operator wrote it and never written for them — see `pinned` above.
+      prompt: headless && pinned
+        ? { via: 'stdin', stdin: 'prompt', marker: STDIN_MARKER }
+        // Closed rather than left alone, both ways round. `codex exec <prompt>` handed an
+        // inherited pipe with no writer blocks in `read()` for ever (openai/codex#20919), and
+        // an interactive run reaching this has already been given pipes instead of the
+        // terminal it wanted, so there is no reader to keep stdin for either.
+        : { via: 'argv', stdin: headless ? 'closed' : 'reader' },
       line: quotedLine(command, args),
     };
   },
@@ -113,13 +132,27 @@ export const codexCliAdapter: AgentAdapter = {
    * not — a `usage` that turned out to be cumulative across turns would be added to itself by
    * an accumulating meter and merely restated by this one.
    *
-   * `cached_input_tokens` is counted into the input for the reason `AgentUsage.inputTokens`
-   * gives: what is worth watching is what the model processed, and a run with caching on would
-   * otherwise read as having consumed almost nothing.
+   * **`cached_input_tokens` is not added**, and that is the opposite of what the same field is
+   * worth beside Claude Code. `AgentUsage.inputTokens` is everything the model processed, cache
+   * included, and Claude Code reaches that by *addition* because its `cache_read_input_tokens`
+   * is disjoint from its `input_tokens` — see `countsFrom` in `agent-usage.ts`. Codex reaches it
+   * for free, because its `input_tokens` already contains the cached share, so adding the two
+   * would count that share twice and show a plausible wrong figure rather than none.
    *
-   * Reasoning is not on the wire yet — it is an open request against the CLI — so it is read
-   * where it would arrive and reported as silence when it is not there, which is not the same
-   * answer as zero.
+   * Measured rather than assumed, against `codex exec --json` 0.146.0 driven through a stub
+   * Responses endpoint: six turns each reporting `input_tokens: 12345` with
+   * `input_tokens_details.cached_tokens: 11008` closed the run with `input_tokens: 74070` — six
+   * times 12345 exactly, the cached share neither added nor taken off. So the two fields are the
+   * API's own, and OpenAI's prompt-caching guide is what says which contains which: `cached_tokens`
+   * is the share of the input read from cache, its worked example pairing `prompt_tokens: 2006`
+   * with `cached_tokens: 1920`. `cache_write_input_tokens` is a share of the same figure and is
+   * left alone for the same reason. The capture is kept in `scripts/lib/codex-capture.mjs` and
+   * `scripts/check-agent-usage-codex.mjs` holds this to it.
+   *
+   * Reasoning **is** on the wire, which corrects the issue this came from: it expected
+   * `reasoning_output_tokens` to be absent, on the strength of an open request against the CLI to
+   * add it, and the capture has it. It is read where it arrives and reported as silence when it
+   * is not there, which is not the same answer as zero.
    */
   readUsage(event: Record<string, unknown>): UsagePatch | null {
     if (event.type !== 'turn.completed') return null;
@@ -130,7 +163,7 @@ export const codexCliAdapter: AgentAdapter = {
     return {
       kind: 'settled',
       counts: {
-        input: countAt(source, 'input_tokens') + countAt(source, 'cached_input_tokens'),
+        input: countAt(source, 'input_tokens'),
         output: countAt(source, 'output_tokens'),
         thinking: optionalCountAt(source, 'reasoning_output_tokens'),
       },

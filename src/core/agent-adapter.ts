@@ -116,6 +116,15 @@ export interface AgentCommandSpec {
  * that run goes on pipes. A command that would draw an interface takes its prompt as an
  * argument and keeps stdin for the reader. Everything downstream that used to ask "does this
  * command line say `-p`" asks this instead.
+ *
+ * **And `prompt.stdin` is the other half of the same answer**, because "where the prompt goes"
+ * does not settle what becomes of the channel it did not go down. A pipe nobody ever writes to
+ * and nobody ever closes is not an absence: `read()` on it blocks for ever, which is
+ * openai/codex#20919 — *"the writer side is open but no bytes ever arrive and no EOF is
+ * delivered"* — and the workaround that issue gives is `< /dev/null`, which is a closed empty
+ * pipe. So an invocation says what to do with stdin as well as where the prompt goes, and the
+ * two are not the same question: Codex's headless and interactive runs both take the prompt on
+ * argv and want opposite things done with stdin.
  */
 export interface AgentInvocation {
   /** argv[0], as this backend spells it. */
@@ -123,6 +132,17 @@ export interface AgentInvocation {
   args: string[];
   prompt: {
     via: 'stdin' | 'argv';
+    /**
+     * What is to become of stdin, which is not answered by `via` alone.
+     *
+     *  - `prompt` — the prompt goes there, and it is closed behind it. `via` is `stdin`.
+     *  - `closed` — nothing goes there and it is closed at once, because this CLI would sit on
+     *    an open pipe rather than start. `codex exec <prompt>` is the case.
+     *  - `reader` — it belongs to whoever is watching, which is what makes a run like this
+     *    worth a pseudoterminal. Where there is nobody watching — a private child, a session
+     *    that got pipes — there is no reader to keep it for and it is closed like `closed`.
+     */
+    stdin: 'prompt' | 'closed' | 'reader';
     /**
      * The argv token that stands in for a prompt arriving on stdin, when the CLI wants one.
      *
@@ -663,4 +683,30 @@ export function invocationArgs(invocation: AgentInvocation, prompt?: string | nu
   const args = [...invocation.args];
   if (prompt && invocation.prompt.via === 'argv') args.push(prompt);
   return args;
+}
+
+/**
+ * The other end of the same decision: what goes down the process's stdin, and then its close.
+ *
+ * Beside `invocationArgs` and for the same reason — a private child and a piped terminal
+ * session both have to make this call, and two copies of it is how one of them comes to write
+ * the prompt to a backend that is looking for it on argv.
+ *
+ * **It always ends the pipe.** For a stdin-delivering backend that is the end of file the run
+ * has always needed; for the other two it is the `< /dev/null` openai/codex#20919 asks for,
+ * because a pipe left open with no writer is a `read()` that never returns. `reader` is closed
+ * here too, and that is not an oversight: this is the pipe case, so there is by construction no
+ * reader — a session that has one gave the run a pseudoterminal and never reaches this.
+ *
+ * A `null` stream is a spawn that failed, which is settled by the error the caller is already
+ * waiting on rather than by anything here.
+ */
+export function deliverStdin(
+  stdin: { end(chunk: string): void; end(): void } | null | undefined,
+  invocation: AgentInvocation,
+  prompt?: string | null
+): void {
+  if (!stdin) return;
+  if (invocation.prompt.stdin === 'prompt' && prompt) stdin.end(prompt);
+  else stdin.end();
 }

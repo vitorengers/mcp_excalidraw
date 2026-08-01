@@ -280,35 +280,6 @@ export function parseFoldedTranscript(text: string): FoldedTranscript {
   return { rows, details };
 }
 
-interface ContentBlock {
-  type?: string;
-  text?: string;
-  thinking?: string;
-  name?: string;
-  /** The call's own id, which is what a result names when it answers. */
-  id?: string;
-  tool_use_id?: string;
-  input?: Record<string, unknown>;
-  content?: unknown;
-  /**
-   * Whether the tool answered with a failure.
-   *
-   * Declared here since #242. It was always on the wire — the API puts it on a `tool_result`
-   * and Claude Code streams the block through unchanged — and dropping it meant a tool that
-   * failed was drawn exactly like one that worked, which is the single most useful thing colour
-   * can say in a block somebody is watching to see whether a run is going wrong.
-   */
-  is_error?: boolean;
-}
-
-interface StreamEvent {
-  type?: string;
-  subtype?: string;
-  message?: { content?: ContentBlock[] | string };
-  num_turns?: number;
-  is_error?: boolean;
-}
-
 /** The first field of a tool's input that is worth showing beside its name. */
 function summariseInput(input: Record<string, unknown> | undefined): string {
   if (!input) return '';

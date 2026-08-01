@@ -193,6 +193,9 @@ writeFileSync(stubAgentPath, `#!/usr/bin/env node
 let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', () => {
+  // Since #329 the prompt travels down whichever channel the backend declared, and this
+  // command line carries no \`-p\`, so \`raw\` delivers it as the last argument.
+  if (!input) input = process.argv[process.argv.length - 1] ?? '';
   const number = Number(/CASE-(\\d+)/.exec(input)?.[1] ?? 0);
   process.stdout.write('investigated\\n');
   if (number) process.stdout.write('https://github.com/${REPO}/issues/' + number + '\\n');
