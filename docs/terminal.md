@@ -830,7 +830,7 @@ puts it at the live shell, and a full-screen program — `claude` included — r
 smaller screen than it was left at, so *the sizes come back exactly as they were* was true of
 the server and undone a moment later by the viewer that reconnected.
 
-It lives in `localStorage`, under `excalidraw-terminal-geometry`, keyed by workspace id, and it
+It lives in `localStorage`, under `vibemaxxing-terminal-geometry`, keyed by workspace id, and it
 is written by `syncTerminalBlocks` — the one place that sees a finished resize — and read in the
 last branch of `newTerminalBlock`. **Per board**, unlike the font size below: how big the
 terminal is and where it sits is a fact about a project, while the size of the text is a fact

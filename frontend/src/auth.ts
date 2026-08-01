@@ -16,7 +16,10 @@
  *
  * `sessionStorage` rather than `localStorage`: the token is good for this start of this server,
  * and a tab is the right lifetime for it. A reload keeps working, a new tab opened by hand does
- * not, and neither does tomorrow.
+ * not, and neither does tomorrow. That is also why this key is not in `./storage.ts`, which is
+ * the one door for the eight things the browser *remembers* — a setting a reader chose, kept
+ * across upgrades and migrated by name. This is a secret with the lifetime of a tab, and putting
+ * it in that map would invite the one change nobody should make to it.
  *
  * **This module must be evaluated before anything that fetches.** `main.tsx` imports it first,
  * and ES modules evaluate in import order, so the wrapper is in place before `App.tsx`'s own

@@ -135,6 +135,11 @@ export const SETTINGS = [
     description: 'Where `GET /api/docs/:key` reads from for a board with no `docsDir` of its own. Set it **empty** for a setup that wants per-project documents and no fallback — [docs-block.md](docs-block.md)'
   },
   {
+    name: 'WELCOME_BOARD',
+    fallback: 'the shipped `docs/welcome.excalidraw`',
+    description: 'The board a project that names none of its own is seeded from, once, the first time this canvas starts with it registered. Set it **empty** for projects that should come up blank — [workspaces.md](workspaces.md)'
+  },
+  {
     name: 'LIBRARY',
     fallback: 'the shipped `docs/blocks.excalidrawlib`',
     description: 'An `.excalidrawlib` served to every board, alongside each project\'s own. Set it **empty** for a board that wants no shared shapes at all — [shared-library.md](shared-library.md)'

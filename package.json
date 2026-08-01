@@ -94,6 +94,7 @@
     "skills/**/*",
     "docs/*.md",
     "docs/blocks.excalidrawlib",
+    "docs/welcome.excalidraw",
     "config.example.json",
     "*.d.ts",
     "README.md",

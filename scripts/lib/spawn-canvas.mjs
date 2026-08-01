@@ -84,6 +84,16 @@ export function canvasEnvironment(overrides = {}) {
   // fixtures with this. Written under the old one, both spellings beat it: the new prefix by
   // precedence, the old by overwriting this very key below.
   env.EXCALIDRAW_GH_COMMAND = `node "${unstubbedGh.replace(/\\/g, '/')}"`;
+  // And the welcome board, for the same reason and one door further in: a check's throwaway
+  // project declares no `board`, so since #351 it comes up holding the board this tool ships to
+  // a first-time reader — 32 elements a check never asked for, on a canvas whose element counts
+  // and click coordinates it is asserting. `check-agent-transcript-fold.mjs` was the proof: five
+  // cases red on a click that landed nowhere, in a check about a transcript.
+  //
+  // Empty rather than deleted, because unset is the *default* and the default is on.
+  // `check-welcome-board.mjs` overrides it back to `undefined`, which is how the shipped
+  // behaviour is still covered by something.
+  env.EXCALIDRAW_WELCOME_BOARD = '';
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete env[key];
     else env[key] = String(value);
