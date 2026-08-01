@@ -1236,6 +1236,64 @@ you write may point at these paths.`;
 }
 
 /**
+ * Which repository and which project this run is for — or nothing at all.
+ *
+ * Nothing at all is the important half again: a board that has configured neither must send
+ * the prompt it sent before this existed, byte for byte, the way `issueAgentPrompt(null)`
+ * already preserves the no-language case. Each half stands alone, because a board really can
+ * have one and not the other — registration writes `repo` from the project's own `origin` and
+ * deliberately never guesses a `githubProject`.
+ *
+ * This is not workflow, which stays out of the base prompts on purpose. It is a fact about the
+ * run, exactly as `worktreeSection` is for the implement agent: two answers the board already
+ * holds and the agent would otherwise have to work out — and would work out wrongly.
+ *
+ * **The repository is stated as `--repo`, not left to `gh`.** `gh` resolves the repository
+ * from the checkout's git remotes, where an `upstream` remote wins over `origin`; this
+ * repository's own trap document records what that costs, and it is a fork with such a remote
+ * — `gh issue list` here lists the *upstream* project's issues (`docs/trap-gh-path.md`). So a
+ * board that says which repository it is for has said something `gh` will not otherwise
+ * conclude, and the alternative — leaving resolution to `gh` — files a fork's issues on
+ * whatever it was forked from. Where the two disagree the configured value wins, because it is
+ * the answer somebody wrote down rather than one a remote implies.
+ *
+ * **And the project is what the board watches for.** With none named the agent cannot add the
+ * issue to one, so no card appears, `moveIssueToColumn` finds the issue "not on this project",
+ * and `reconcileDrafts` — which retires an observation only once its issue shows up among the
+ * mirror's cards — leaves the block in My Notes forever, looking like a run that half-worked.
+ *
+ * It grants nothing. Both values reach the prompt and nothing else: no argv, no environment,
+ * no permission. The prompt still arrives on the child's stdin.
+ */
+export function issueTargetSection(
+  workspace: Pick<Workspace, 'repo' | 'githubProject'>
+): string {
+  const repo = workspace.repo?.trim() || null;
+  const project = workspace.githubProject?.trim() || null;
+  if (!repo && !project) return '';
+
+  const facts = [
+    repo
+      ? `The repository is ${repo}. Pass \`--repo ${repo}\` to every \`gh\` call you make, `
+        + `\`gh issue list\` and \`gh issue view\` included. Without it \`gh\` resolves the `
+        + `repository from this checkout's git remotes, where an \`upstream\` remote wins over `
+        + `\`origin\` — on a fork that reads and files against whatever it was forked from. `
+        + `Where the remotes disagree with the name above, the name above is the right one.`
+      : null,
+    project
+      ? `The GitHub project is ${project}. That is the project this work is tracked on, and a `
+        + `card there is how the board knows the run finished: until the issue appears on it, `
+        + `the note this run started from stays on the canvas as an unfinished draft.`
+      : null,
+  ].filter(Boolean);
+
+  return `\n\n---\n\nWhere this issue belongs. These are facts about this run, already settled
+by the board that started it — not something to work out from the checkout:
+
+${facts.map((fact) => `- ${fact}`).join('\n\n')}`;
+}
+
+/**
  * The section carrying the project's own workflow — or nothing at all.
  *
  * Nothing at all is the important half a third time: a project that selects no workflow must
@@ -1307,7 +1365,11 @@ export async function runIssueAgent(
   // The project's language, per run, for the reason the model and the effort are per run:
   // one board runs several projects, and what language a project's issues are written in is
   // that project's to say.
+  // The target goes before the images, not after: the image section ends in a bullet list of
+  // paths, and a second bullet list immediately under it reads as more of the same. The
+  // images stay the last thing said about the observation, which is what they are material for.
   const prompt = `${issueAgentPrompt(workspace.language)}\n\n---\n\nObservation:\n\n${observation}`
+    + issueTargetSection(workspace)
     + imageReferenceSection(options.imagePaths ?? [])
     + workflowSection(workflow.text);
   const timeoutMs = options.timeoutMs !== undefined
@@ -1362,6 +1424,7 @@ export async function runReviseAgent(
 
   const prompt = `${issueRevisePrompt(workspace.language)}\n\n---\n\nThe issue to rewrite: ${issueUrl}`
     + `\n\n---\n\nNew observations:\n\n${observations}`
+    + issueTargetSection(workspace)
     + workflowSection(workflow.text);
   const timeoutMs = options.timeoutMs !== undefined
     ? options.timeoutMs
