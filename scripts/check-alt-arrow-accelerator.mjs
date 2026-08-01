@@ -31,6 +31,39 @@
  * feature that does not work. It is deliberately not part of the automated set for the same
  * reason; it is run by hand, on Windows, when the chord is in question.
  *
+ * ### Why this went red, and why the flag below is not optional (#425)
+ *
+ * The control failed on the maintainer's machine with `sessionStorage` empty and the page still
+ * at `/second`: the chord had reached nothing. It read like a keypress lost on the way to
+ * Chrome, and it was not. **Chrome was dropping every key before the page saw it, and it was
+ * dropping the ones dispatched over CDP too** — an `Input.dispatchKeyEvent` never touches the
+ * operating system, so it cannot be explained by anything about `SendInput`, the foreground
+ * window or the accelerator table. A listener installed over CDP saw nothing either, while a
+ * `KeyboardEvent` dispatched *inside* the page was recorded normally. The recorder worked; the
+ * input path did not.
+ *
+ * What both halves had in common was `document.visibilityState`, which stayed `hidden` —
+ * through `Page.bringToFront`, and through `SetForegroundWindow` with the window confirmed in
+ * front by handle and by process id. That is Chromium's Windows native window occlusion
+ * detection: when it decides a window is completely covered it treats the foreground tab as a
+ * background tab, stops rendering it and throttles it, and the renderer then answers no input.
+ * The maintainer's browser sat over this check's 900x700 window at 40,40, and that was the
+ * whole of it. `--disable-features=CalculateNativeWinOcclusion` — what Chromium's own
+ * documentation names, and what `chrome-launcher` lists for tools — makes both halves arrive:
+ * with the flag the page is `visible` and records the CDP key *and* the real one; without it,
+ * on a covered desktop, neither.
+ *
+ * It is also why this check was intermittent rather than simply broken, which is what made it
+ * expensive to read. Occlusion is a fact about whatever else is on the operator's screen, so
+ * the same code passes on a clear desktop and fails behind a maximised window — the shape of a
+ * check people learn to re-run instead of believe.
+ *
+ * The flag alone would leave the next Chrome free to change its mind, so the control no longer
+ * takes it on trust: it asks whether the renderer considers itself visible *before* it claims
+ * anything, and SKIPS if it does not. A renderer that is dropping input cannot report on an
+ * accelerator either way, and saying so is worth more than a red line whose real content is
+ * that the window was covered.
+ *
  * Usage: node scripts/check-alt-arrow-accelerator.mjs [--chrome <path>] [--keep]
  *
  * Tier: windows
@@ -64,6 +97,18 @@ const check = (name, condition, detail = '') => {
   else { failures++; console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`); }
 };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A skip is neither a pass nor a failure, and it still has a Chrome to close.
+ *
+ * Thrown rather than exited on: `process.exit()` walks straight past `finally`, so the older
+ * skip below left a visible browser window on the operator's desktop and a temporary profile
+ * behind it. This unwinds through the same cleanup as everything else and prints its reason
+ * last.
+ */
+const SKIP = Symbol('nothing could be measured');
+let skipped = null;
+const skip = (...lines) => { skipped = lines; throw SKIP; };
 
 // ─── Pages, so that there are history entries to move between ───
 //
@@ -130,6 +175,20 @@ async function evaluate(expression) {
 
 /** What this tab has seen pressed, gathered by whichever document was on screen at the time. */
 const seenHere = () => evaluate(`sessionStorage.getItem('seen') || '[]'`);
+
+/**
+ * Does the renderer believe it is on screen? Asked of the page rather than of Windows, because
+ * the page is where the answer has consequences: an occluded renderer is throttled and drops
+ * every key, whether it arrived through the operating system or straight down the debugging
+ * socket, and a check that pressed one anyway would be measuring the desktop's arrangement.
+ */
+async function rendererIsAwake(tries = 8) {
+  for (let attempt = 0; attempt < tries; attempt++) {
+    if ((await evaluate('document.visibilityState')) === 'visible') return true;
+    await sleep(250);
+  }
+  return false;
+}
 
 /** One more entry in this window's history, put there by the browser rather than by a script. */
 async function goTo(path) {
@@ -270,6 +329,10 @@ try {
     '--no-default-browser-check',
     '--window-size=900,700',
     '--window-position=40,40',
+    // A window Chromium thinks is covered has its renderer throttled and answers no input at
+    // all — see the note at the top. This check's window is small, in the corner, and on a
+    // desktop somebody is using, so being covered is the ordinary case rather than the odd one.
+    '--disable-features=CalculateNativeWinOcclusion',
     `${BASE}/start`,
   ], { stdio: 'ignore' });
   children.push(browser);
@@ -299,12 +362,22 @@ try {
   // over it, and the control then fails for a reason that has nothing to do with the chord.
   await goTo('/second');
 
+  // Before the control, the control's own precondition. A renderer Chromium has decided is
+  // covered answers no input at all, so a chord pressed into one proves nothing about the
+  // accelerator — and the failure it leaves behind reads exactly like the browser eating the
+  // key, which is the claim being measured. #425 was that, and only that.
+  if (!(await rendererIsAwake())) {
+    skip('SKIPPED — Chrome reports this window hidden, so its renderer is dropping every key',
+         '        before the page can see it, and nothing about the accelerator is measurable',
+         '        from here. Uncover the window, or check that Chrome still honours',
+         '        --disable-features=CalculateNativeWinOcclusion.');
+  }
+
   const historyBefore = await evaluate('history.length');
   let sent = raiseAndPressAlt(browser.pid, '/second', VK_LEFT);
   if (sent !== 'SENT') {
-    console.log(`SKIPPED — could not put this check's own Chrome in the foreground (${sent}).`);
-    console.log('        This needs a desktop session; it is not a CI check.');
-    process.exit(0);
+    skip(`SKIPPED — could not put this check's own Chrome in the foreground (${sent}).`,
+         '        This needs a desktop session; it is not a CI check.');
   }
   await sleep(1500);
   const afterBack = await evaluate('location.pathname');
@@ -347,8 +420,10 @@ try {
           where === '/first-listening', `navigated to ${where}`);
   }
 } catch (error) {
-  failures++;
-  console.error(`\n  FAIL  ${error.message}`);
+  if (error !== SKIP) {
+    failures++;
+    console.error(`\n  FAIL  ${error.message}`);
+  }
 } finally {
   try { socket?.close(); } catch { /* already gone */ }
   for (const child of children) {
@@ -361,5 +436,7 @@ try {
   }
 }
 
+// Failures are read before the skip: a check must not launder one into a pass on its way out.
 if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
+if (skipped) { for (const line of skipped) console.log(line); process.exit(0); }
 console.log('\nall cases passed');
