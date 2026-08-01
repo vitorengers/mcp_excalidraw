@@ -3236,23 +3236,36 @@ function chooseSeed(
 }
 
 /**
- * The board a project that has never had one comes up on.
+ * The board a project that has never had one comes up on, or nothing.
  *
- * `__dirname` is `dist/` once compiled, so this is this build's own `docs/`, the way
+ * `__dirname` is `dist/` once compiled, so the default is this build's own `docs/`, the way
  * `TOOL_DOCS_DIR` is — the repository's in a checkout and the package's in an installed copy,
  * where `files` ships it beside the documents its cards point at. A project registered through
  * the `+` gets a config with a name and possibly a `docsDir` and no `board` at all, which used
  * to mean a blank canvas: nothing explaining the section keys, the blocks or the tabs, and
  * `Alt+P` and `Alt+G` doing nothing at all, because those keys are declared by board data and
  * there was none.
+ *
+ * `undefined`, not falsy, exactly as `DOCS_DIR` and `LIBRARY` are read: an **explicitly empty**
+ * setting is how a board says it wants new projects to come up blank, which is a thing somebody
+ * has to be able to say now that unset no longer means none. Every self-contained check sets it
+ * empty (`scripts/lib/spawn-canvas.mjs`) for the reason that helper deletes the rest of the
+ * machine's configuration — a throwaway project growing a board it never asked for decides
+ * assertions about element counts and about where a click lands, in checks that are about
+ * neither. `scripts/check-welcome-board.mjs` is the one that unsets it again.
  */
-const WELCOME_BOARD_FILE = path.resolve(__dirname, '../docs/welcome.excalidraw');
+const WELCOME_BOARD_SETTING = env('WELCOME_BOARD');
+const WELCOME_BOARD_FILE = WELCOME_BOARD_SETTING === undefined
+  ? path.resolve(__dirname, '../docs/welcome.excalidraw')
+  : (WELCOME_BOARD_SETTING ? path.resolve(WELCOME_BOARD_SETTING) : null);
 
 /**
  * The welcome board, for a project that has nothing else to come up as — or nothing.
  *
  * Three conditions, and each of them is a way of saying *nobody has been here yet*:
  *
+ * - there is a welcome board to seed from at all: `WELCOME_BOARD` set empty is a board saying
+ *   its projects come up blank, and that answer is honoured before anything else is read.
  * - the project declares no `board`. One that declares a file it cannot read is a project with
  *   a board and a problem, and it stays empty and says so — putting a welcome board over that
  *   would answer a broken path with a board the reader never asked for.
@@ -3271,7 +3284,7 @@ async function welcomeSeed(
   workspaceId: string,
   boardFile: string | null
 ): Promise<{ scene: BoardScene; from: string } | null> {
-  if (boardFile) return null;
+  if (!WELCOME_BOARD_FILE || boardFile) return null;
   if (await boardStateExists(workspaceId)) return null;
 
   const welcome = await readBoardFile(workspaceId, WELCOME_BOARD_FILE);

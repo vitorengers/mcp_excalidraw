@@ -63,6 +63,41 @@ than to this repository:
   elsewhere gets the blank and fills it in the settings dialog; a project already registered is
   never rewritten to repair it.
 
+## The board a new project comes up on
+
+A project registered that way names no `board`, because nothing on disk implies one — so until
+#351 it came up on a blank Excalidraw canvas. Blank is a poor first answer here: nothing on it
+explains the tabs, the blocks or the documentation cards, and `Alt+P` and `Alt+G` did nothing at
+all, because the section keys are declared by board data ([board-sections.md](board-sections.md))
+and there was none.
+
+So the tool ships **`docs/welcome.excalidraw`** and seeds a project from it when three things are
+true at once: the project names no `board`, this canvas has never saved a board for it, and its
+store is empty. It carries two sections — `Alt+P` and `Alt+G` — a draft issue block, and cards
+whose `docKey`s are the tool's own ([docs-block.md](docs-block.md)), so they answer on a board
+belonging to somebody else's project.
+
+Four things follow from those three conditions, and each is a decision:
+
+- **It is a startup path.** The seed runs when the server starts, so a project added through the
+  `+` mid-session gets its welcome board at the *next* start rather than the moment the tab
+  appears.
+- **It happens once.** The seeded elements land in a store that is already marked as worth
+  saving, so the board's own saved scene exists a second later and every later start reads that
+  instead. The test is the *existence* of that saved file rather than what is in it: a board
+  somebody emptied on purpose has a saved scene with nothing in it, and the looser reading would
+  put the welcome board back over that clear on every start, forever.
+- **A project that names a board it cannot read is left alone.** That is a project with a board
+  and a problem; it comes up empty and the log says why, which is a more useful answer than
+  cards nobody asked for over a path that is wrong.
+- **`default` gets none.** It is nobody's project — no directory, no documents, no settings — so
+  a welcome board there would be a canvas somebody opened to draw on, filled with cards about
+  projects they have not added.
+
+Nothing is written into the project either way. The welcome board is read out of the install and
+saved beside the registry, like every other board ([element-store.md](element-store.md)).
+`scripts/check-welcome-board.mjs` covers all of it.
+
 ## The order of the tabs
 
 The strip renders the list exactly as `GET /api/workspaces` hands it over, and that route answers

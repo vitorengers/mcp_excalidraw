@@ -13,7 +13,11 @@
  * So `docs/welcome.excalidraw` ships with the tool and is seeded for exactly that project. The
  * cases here are the ways that can be wrong:
  *
- *  - **A fresh empty directory comes up holding it.** No config, no documents, nothing.
+ *  - **A fresh empty directory comes up holding it.** Registered through the route the `+`
+ *    uses, so the config it is judged on is the one `ensureWorkspaceConfig` writes rather than
+ *    one this check invented. The board arrives at the *next start*: seeding is a startup path,
+ *    and that is asserted here rather than assumed, because it is the one thing about this
+ *    feature a reader would otherwise take for granted.
  *  - **Its documentation cards answer.** Every `docKey` on the board is a key the tool owns
  *    (`TOOL_DOC_KEYS`), so it resolves against the *install* rather than against the project —
  *    which is the only reason a card on somebody else's board can say anything at all. The
@@ -32,6 +36,11 @@
  *  - **`default` gets none.** It is not a project somebody registered and has no directory, no
  *    documents and no settings behind it; a welcome board there would be a canvas somebody
  *    opened to draw on, filled with cards about projects they have not added.
+ *  - **A board can turn it off.** `EXCALIDRAW_WELCOME_BOARD` set empty is somebody saying their
+ *    projects come up blank, and it is read the way `DOCS_DIR` and `LIBRARY` are. It is not a
+ *    switch invented for the checks, but they do all set it: `canvasEnvironment` empties it so
+ *    that a throwaway project does not come up holding 32 shapes the check never asked for,
+ *    which is why the cases above are the only ones that unset it again.
  *
  * Section 0 is the artifact rather than the behaviour: the file is tracked (`.gitignore`
  * excludes `*.excalidraw` with one exception, and this needed a second), it is in the tarball
@@ -78,8 +87,16 @@ check(`${WELCOME} is in the repository`, existsSync(join(repoRoot, WELCOME)));
 // `git check-ignore` exits 1 when the path is *not* ignored, which is the answer this wants.
 const ignored = spawnSync('git', ['check-ignore', WELCOME],
                           { cwd: repoRoot, encoding: 'utf8' });
-check('git does not ignore it, despite the *.excalidraw rule', ignored.status !== 0,
+check('git does not ignore it', ignored.status !== 0,
       '.gitignore needs an exception of its own for it');
+
+// And the same question of the *rules* rather than of this checkout. `check-ignore` consults
+// the index, so a file already tracked answers "not ignored" whatever `.gitignore` says — which
+// would let the exception be deleted with nothing going red, right up until somebody's clone.
+const byRule = spawnSync('git', ['check-ignore', '--no-index', WELCOME],
+                         { cwd: repoRoot, encoding: 'utf8' });
+check('and the ignore rules do not either, despite *.excalidraw', byRule.status !== 0,
+      '`*.excalidraw` catches it; it needs a `!` line of its own beside docs/board.excalidraw');
 
 const tracked = spawnSync('git', ['ls-files', '--error-unmatch', WELCOME],
                           { cwd: repoRoot, encoding: 'utf8' });
@@ -138,7 +155,14 @@ const stateDir = join(workDir, 'registry-state');
 rmSync(workDir, { recursive: true, force: true });
 mkdirSync(workDir, { recursive: true });
 
-/** A directory with nothing in it at all: what the `+` is usually pointed at. */
+/**
+ * A directory with nothing in it at all: what the `+` is usually pointed at.
+ *
+ * It is deliberately *not* in the registry below. It is registered through the route the `+`
+ * uses, so its `board.config.json` is written by `ensureWorkspaceConfig` rather than by this
+ * check — which is the whole of what "a fresh empty directory" means here, and the file that
+ * check has to write with no `board` in it for any of this to be reached.
+ */
 const freshDir = join(workDir, 'fresh');
 mkdirSync(freshDir, { recursive: true });
 
@@ -153,6 +177,17 @@ mkdirSync(join(documentedDir, 'docs'), { recursive: true });
 writeFileSync(join(documentedDir, 'board.config.json'),
               JSON.stringify({ name: 'Documented', docsDir: 'docs' }, null, 1), 'utf8');
 
+/**
+ * A project for the opt-out, kept out of the registry until section 6.
+ *
+ * It has to be a project nothing has seeded yet when the setting is turned off, or the case
+ * would be reading a saved board rather than the decision not to make one.
+ */
+const optOutDir = join(workDir, 'optout');
+mkdirSync(optOutDir, { recursive: true });
+writeFileSync(join(optOutDir, 'board.config.json'),
+              JSON.stringify({ name: 'Opt Out' }, null, 1), 'utf8');
+
 /** A project that declares a board file which is not there. */
 const declaredDir = join(workDir, 'declared');
 mkdirSync(join(declaredDir, 'docs'), { recursive: true });
@@ -161,7 +196,6 @@ writeFileSync(join(declaredDir, 'board.config.json'),
 
 writeFileSync(registryPath, JSON.stringify({
   workspaces: [
-    { id: 'fresh', path: posix(freshDir) },
     { id: 'documented', path: posix(documentedDir) },
     { id: 'declared', path: posix(declaredDir) },
   ],
@@ -174,7 +208,7 @@ const BASE = `http://127.0.0.1:${port}`;
 
 let canvas = null;
 
-function startCanvas() {
+function startCanvas(welcome = undefined) {
   canvas = spawnCanvas({
     port,
     env: {
@@ -183,6 +217,11 @@ function startCanvas() {
       // This machine's shell exports it, and a terminal block would add a shape to a board
       // whose element count these cases read.
       EXCALIDRAW_TERMINAL: '',
+      // `canvasEnvironment` sets this **empty** for every check, so that a throwaway project
+      // does not come up holding a board it never asked for. This is the one check the setting
+      // exists for, so it puts it back: `undefined` means unset, and unset is the default —
+      // which is the behaviour a reader who installed the tool actually gets.
+      EXCALIDRAW_WELCOME_BOARD: welcome,
     },
   });
 }
@@ -214,6 +253,20 @@ async function waitForElements(workspace, attempts = 150) {
   return [];
 }
 
+async function waitForServer(attempts = 150) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (canvas.child.exitCode !== null) {
+      throw new Error(`the canvas server exited early:\n${canvas.read()}`);
+    }
+    try {
+      if ((await fetch(`${BASE}/health`)).ok) return;
+    } catch { /* not up yet */
+    }
+    await sleep(100);
+  }
+  throw new Error(`the canvas server never answered /health:\n${canvas.read()}`);
+}
+
 /** Wait until the board this canvas keeps of a workspace says what the caller is waiting for. */
 async function waitForSavedBoard(workspace, holds, attempts = 120) {
   const file = join(stateDir, `${workspace}.excalidraw`);
@@ -233,10 +286,34 @@ async function waitForSavedBoard(workspace, holds, attempts = 120) {
 startCanvas();
 
 try {
-  console.log('\n1. a project with nothing of its own comes up on the welcome board');
+  console.log('\n1. a fresh empty directory is registered, and comes up on the welcome board');
+
+  await waitForServer();
+  const added = await fetch(`${BASE}/api/workspaces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: posix(freshDir), id: 'fresh' }),
+  });
+  check('an empty directory can be registered through the route the + uses', added.status === 201,
+        `HTTP ${added.status} — ${(await added.text()).slice(0, 200)}`);
+
+  const written = JSON.parse(readFileSync(join(freshDir, 'board.config.json'), 'utf8'));
+  check('registering it wrote a config with no board in it',
+        typeof written.name === 'string' && written.board === undefined,
+        JSON.stringify(written));
+
+  // The seed runs at startup, so this is where the welcome board arrives — not at the moment
+  // the project is added. Said out loud because it is the one thing about this feature a
+  // reader could otherwise take for granted, and because the case below depends on it.
+  check('the board is still empty in the process that registered it',
+        (await elementsOf('fresh')).length === 0,
+        'seeding at registration is a change this check would have to be rewritten for');
+
+  await stopCanvas();
+  startCanvas();
 
   const fresh = await waitForElements('fresh');
-  check('a fresh empty directory has a board with elements on it', fresh.length > 0,
+  check('a fresh empty directory has a board with elements on it after a start', fresh.length > 0,
         `got ${fresh.length}:\n${canvas.read()}`);
   check('and it is the welcome board that shipped',
         fresh.length === shippedElements.length,
@@ -328,6 +405,27 @@ try {
   check('and nothing else was re-seeded either',
         again.length === shippedElements.length - 1,
         `${shippedElements.length - 1} expected, ${again.length} present`);
+
+  console.log('\n6. a board that wants its projects blank says so, and is obeyed');
+
+  const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
+  registry.workspaces.push({ id: 'optout', path: posix(optOutDir) });
+  writeFileSync(registryPath, JSON.stringify(registry, null, 1), 'utf8');
+
+  await stopCanvas();
+  startCanvas('');
+  await waitForServer();
+  check('an empty EXCALIDRAW_WELCOME_BOARD leaves a project with no board blank',
+        (await elementsOf('optout')).length === 0);
+  check('and it does not disturb a board that already has one',
+        (await waitForElements('fresh')).length === shippedElements.length - 1);
+
+  await stopCanvas();
+  startCanvas();
+  const optedIn = await waitForElements('optout');
+  check('unset seeds the same project, so the case above was the setting and not the fixture',
+        optedIn.length === shippedElements.length,
+        `${shippedElements.length} expected, ${optedIn.length} present`);
 } catch (error) {
   failures++;
   console.error(`  FAIL  ${error.message}`);
