@@ -1336,6 +1336,15 @@ function App(): JSX.Element {
    * row that says nothing is indistinguishable from a machine that has nothing to say.
    */
   const [claudeStatus, setClaudeStatus] = useState<ClaudeEnvironmentStatus[]>([])
+  /**
+   * Why the route said no, when it said no because nothing configured it.
+   *
+   * Kept rather than merely stopping the loop: "off" and "nothing to show" used to render the
+   * same empty corner, which is also what a board without the feature looks like — so the one
+   * question this HUD could not answer was the first one an operator asks of it. The server's
+   * own sentence names the setting, so it is the sentence that is kept.
+   */
+  const [claudeStatusOff, setClaudeStatusOff] = useState<string | null>(null)
   /** Settled once, at mount: the cadence cannot change without the URL changing. */
   const [claudeStatusPoll] = useState<number>(() => claudeStatusPollMs())
 
@@ -4667,7 +4676,8 @@ function App(): JSX.Element {
    * A 404 is the answer for a board that was never asked to look — `EXCALIDRAW_CLAUDE_STATUS`
    * unset — and it ends the loop rather than retrying every minute for the life of the page:
    * that is a decision made when the server started, and nothing short of a restart changes
-   * it. Visibility-gated for the same reason as the mirror above; a background tab reading
+   * it. What it does *not* do any more is end silently; the reason is kept and the HUD draws
+   * one line with it. Visibility-gated for the same reason as the mirror above; a background tab reading
    * files nobody is looking at is pure cost.
    */
   useEffect(() => {
@@ -4678,7 +4688,20 @@ function App(): JSX.Element {
     const read = async (): Promise<boolean> => {
       try {
         const response = await fetch('/api/claude-status')
-        if (response.status === 404) return false
+        if (response.status === 404) {
+          // The one refusal worth drawing. A 403 is the loopback guard on a board bound to a
+          // LAN address, where whether this is configured is itself not something to answer;
+          // a 500 is a directory that could not be read, which the next poll may fix. Only
+          // this one is a settled fact about the board, and the only one that stops the loop.
+          const refused = await response.json().catch(() => null)
+          if (!cancelled) {
+            setClaudeStatusOff(typeof refused?.error === 'string' && refused.error
+              ? refused.error
+              : 'Claude Code status is off. Set EXCALIDRAW_CLAUDE_STATUS to the directory your '
+                + 'status line command writes into.')
+          }
+          return false
+        }
         if (!response.ok) return true
         const body = await response.json()
         if (!cancelled && Array.isArray(body?.environments)) {
@@ -6690,7 +6713,11 @@ function App(): JSX.Element {
             fight that grid and would go with the rest of the chrome. Here it survives
             `Hide Menus`, which only ever touches Excalidraw's own.
           */}
-          <ClaudeStatusHud environments={claudeStatus} pollMs={claudeStatusPoll} />
+          <ClaudeStatusHud
+            environments={claudeStatus}
+            pollMs={claudeStatusPoll}
+            off={claudeStatusOff}
+          />
         </div>
       </div>
 

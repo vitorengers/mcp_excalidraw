@@ -1266,6 +1266,46 @@ spawns subagents under-reports all three until `result` lands — and `result` s
 output while leaving reasoning at whatever the main thread reported. Worth an issue of its
 own; `--forward-subagent-text` is where it would start.
 
+### How fast it is spending
+
+Last on the line, after the totals it is derived from:
+
+```
+0:18 · 7.8k in · 240 out (130 thinking) · 448 tok/s
+```
+
+**Input and output together, over the clock in front of them.** A total says what a run cost and
+says nothing about whether it is going: two runs at the same total are the same picture whether
+one spent it in a minute and the other in an hour. Output alone would be a different figure —
+generation speed rather than consumption — and with cache reads inside `in`, nearly everything
+this board spends is on the side that figure leaves out.
+
+**Nothing new is measured for it.** Both totals and both instants were already on the panel, so
+the average is arithmetic on what the line already carried; there is no sampling, no window and
+no second source to keep in step. That is also its honest limit: it is a **run-lifetime
+average**, so a run that spent everything in its first minute and then read files for an hour
+shows the average of the two and not what it is doing now.
+
+**Absent rather than `0`**, and for the same three reasons collapsed into one — the run has not
+said enough to divide. No usage reported at all, which is most runs, since the agent command has
+to stream it; nothing spent yet; or less than a second to average over, which is a sampling
+interval rather than an average. Below ten tokens a second it carries one decimal, because a
+slow run rounded to the nearest whole token is `0 tok/s`, which is the one thing this must not
+say about a run that has spent something.
+
+**It stops when the run does.** The average divides by `endedAt - startedAt` once that instant
+exists, so a finished run's figure is frozen with its clock. Dividing by a clock that kept
+running would walk the number towards zero for as long as the panel was left open, which reads
+as a run still going and getting slower.
+
+Not covered, and named as a decision: the **operator's own interactive sessions**. This measures
+runs the board started, which is what it has records of. A rate for the sessions a person is
+typing in has no credential-free cumulative token source in the status line document —
+`context_window.total_input_tokens` is a level, not a counter, and compaction and `/clear` send
+it down — so it would mean ingesting the [OpenTelemetry
+export](https://code.claude.com/docs/en/monitoring-usage), which is a listener, a port and a
+configuration surface of its own.
+
 ### The same two halves, for the run that writes the issue
 
 The paragraph above used to end *"Not covered: the research agent. It shares `runAgent` and
