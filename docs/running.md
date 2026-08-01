@@ -478,11 +478,18 @@ $ vibemaxxing status
 ## Verifying a change
 
 ```
-./node_modules/.bin/tsc          # the server
-./node_modules/.bin/vite build   # the frontend
+./node_modules/.bin/tsc             # the server
+./node_modules/.bin/tsc -p frontend # the canvas — vite builds it and checks nothing
+./node_modules/.bin/vite build      # the frontend
 node scripts/check-<name>.mjs
 node scripts/check-board-map.mjs
 ```
+
+The second line is the one that is easy to leave out, and `frontend/tsconfig.json` says why it
+has to be there: the root `tsconfig.json` excludes `frontend/`, and `vite build` strips types
+without reading them, so for a long time nothing type-checked the canvas half of this
+repository at all. `npm run type-check:frontend` is the same command, and
+`scripts/check-frontend-types.mjs` is what runs it in the suite.
 
 That is the singular form, and it is what you want while a change is being written: one check,
 its output on the terminal, run against the old code first. **`npm test` is the whole suite** —
@@ -543,7 +550,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 141 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 142 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 79 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |

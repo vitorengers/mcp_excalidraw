@@ -23,7 +23,8 @@
     "sync:skills": "node scripts/sync-skills.mjs",
     "test": "node scripts/run-checks.mjs",
     "test:bind": "npm run build:server && node scripts/check-local-bind.mjs",
-    "type-check": "npx tsc --noEmit"
+    "type-check": "npx tsc --noEmit",
+    "type-check:frontend": "npx tsc --noEmit -p frontend"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.0",
