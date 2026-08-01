@@ -31,7 +31,10 @@
  *
  * The event vocabulary below was read off a real capture rather than assumed: `system`,
  * `assistant` carrying `text`, `thinking` or `tool_use`, `user` carrying `tool_result`,
- * `rate_limit_event`, and a final `result`.
+ * `rate_limit_event`, and a final `result`. It is a capture of one program, so an envelope of
+ * some *other* type gets the same treatment as a line that is not an envelope at all — see
+ * `CLAIMED_TYPES`, which is what keeps that from also un-silencing the two that say nothing on
+ * purpose.
  *
  * ## Colour, and why it is spelled as slot numbers
  *
@@ -741,12 +744,38 @@ function renderEvent(event: StreamEvent, ids: FoldIds, spacing: Spacing): string
       write(`${spacing.gap()}${inSlot(slot, `⏺ ${said}${turns}`)}\n`);
       return out;
     }
-    // `system` is the startup banner and `rate_limit_event` is bookkeeping. Neither says
-    // anything about the work, and both would arrive before the first line of it.
+    // Everything else, including the two below that are claimed and deliberately silent.
+    // What happens to a type that is *not* claimed is `feed`'s decision rather than this
+    // one's, because the empty string cannot tell the two apart.
     default:
       return '';
   }
 }
+
+/**
+ * The event types this renderer has an opinion about, including the ones it says nothing for.
+ *
+ * The `default` arm above answers an unknown type and a known-boring one with the same empty
+ * string, and until #325 `feed` read both as "nothing to show". So a line of valid JSON of a
+ * type nobody here has heard of was dropped, and a stream made entirely of them — any future
+ * Claude Code event, or the first line of a second backend — rendered to nothing at all:
+ * `TerminalSession.emit` spends no sequence number on an empty render, so the block stayed
+ * blank for the whole run, which from outside is a hung agent.
+ *
+ * This set is what separates the two. `system` is the startup banner and `rate_limit_event` is
+ * bookkeeping: neither says anything about the work, both would arrive before the first line of
+ * it, and both are claimed here so they keep their silence. Anything not named falls through to
+ * the verbatim print the header at the top of this file already argues for — one case wider
+ * than a line that is not JSON at all, and for the same reason.
+ *
+ * It is drawn as tightly as it can honestly be drawn, and that direction is deliberate: a type
+ * wrongly left out costs a reader an envelope beside the prose, and a type wrongly put in costs
+ * them the line entirely. When a second backend gets an adapter of its own, this is the set it
+ * brings with it.
+ */
+const CLAIMED_TYPES: ReadonlySet<string> = new Set([
+  'assistant', 'user', 'result', 'system', 'rate_limit_event',
+]);
 
 /**
  * One agent stream, turned into a transcript.
@@ -777,12 +806,24 @@ export class AgentStreamRenderer {
         write(`${line}\n`);
         continue;
       }
+      let event: StreamEvent;
       try {
-        out += renderEvent(JSON.parse(trimmed) as StreamEvent, this.ids, this.spacing);
+        event = JSON.parse(trimmed) as StreamEvent;
       } catch {
         // A line that opens like JSON and is not JSON is still a line somebody wrote.
         write(`${line}\n`);
+        continue;
       }
+      // `renderEvent` writes through the spacing itself, so its output is appended rather
+      // than written.
+      const rendered = renderEvent(event, this.ids, this.spacing);
+      if (rendered) { out += rendered; continue; }
+      // Nothing came out, and there are two reasons that happens. A claimed type saying
+      // nothing is the transcript working as intended; a type this renderer has never heard
+      // of saying nothing is a line going missing, so it is printed as it arrived. An
+      // unrenderable stream degrades to a readable one and never to a blank one.
+      if (typeof event.type === 'string' && CLAIMED_TYPES.has(event.type)) continue;
+      write(`${line}\n`);
     }
     return out;
   }
