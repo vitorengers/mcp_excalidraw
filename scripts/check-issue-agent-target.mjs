@@ -75,7 +75,14 @@ mkdirSync(workDir, { recursive: true });
 const slash = (value) => String(value).replace(/\\/g, '/');
 
 const REPO = 'vitorengers/vibemaxxing';
-const PROJECT = 'https://github.com/users/vitorengers/projects/5';
+/**
+ * Somebody else's board, deliberately.
+ *
+ * `check-shipped-config-neutral.mjs` fails any tracked file that names a project owned by this
+ * repository's own owner — a fixture is indistinguishable from a shipped default to whoever
+ * clones the release — so the URL under test is one nobody here can reach.
+ */
+const PROJECT = 'https://github.com/users/a-stranger/projects/7';
 
 function makeProject(id, config) {
   const dir = join(workDir, id);
