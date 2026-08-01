@@ -34,8 +34,27 @@ export function isPullUrl(url: string): boolean {
  * treat it as "learned nothing" rather than as bad news. A verification that turned a failed
  * read into a failed run would be worse than no verification at all — it would invent defeats
  * for runs that won.
+ *
+ * `absent` is the one failed read that is not `null`, and it is here because reading them the
+ * same way cost a day. A run for issue #326 printed a pull request it had never opened; GitHub
+ * answered `Could not resolve to a PullRequest`, which arrived as `null`, which rule 3 of
+ * `landingFor` reads as "believe the run" — so the record said `done`, the automatic recovery
+ * from #415 was never considered, and the seven cards waiting on that issue waited for good.
+ * A repository denying that a pull request exists is not a failure to learn something; it is
+ * the strongest evidence available that nothing landed.
  */
-export type PullLanding = 'merged' | 'open' | 'closed' | null;
+export type PullLanding = 'merged' | 'open' | 'closed' | 'absent' | null;
+
+/**
+ * GitHub's own words for "there is no such pull request", which is the only thing separating
+ * this from a blip — both are a `gh` that exited non-zero.
+ *
+ * Matched against `runGh`'s error, which carries the tail of `gh`'s stderr verbatim
+ * (`gh.ts`). Deliberately narrow: anything this pattern does not recognise stays `null` and
+ * keeps the old, conservative reading, so a wording GitHub changes tomorrow costs a retry of
+ * the defect rather than a wave of invented failures.
+ */
+const NO_SUCH_PULL = /could not resolve to a pullrequest/i;
 
 /** What a run's own pull request is asked for. Two signals for one fact, see below. */
 const FIELDS = 'state,mergedAt';
@@ -46,6 +65,8 @@ const FIELDS = 'state,mergedAt';
  * Never throws. Every failure — a URL that is not a pull request, a `gh` that cannot run, a
  * body that will not parse — is `null`, because the caller's answer to all of them is the same
  * and a caller that had to catch would be one `try` away from the failure this is guarding.
+ * The single exception is a `gh` that failed *because GitHub said there is no such pull
+ * request*, which is an answer rather than a silence and is reported as `absent`.
  *
  * `state` and `mergedAt` are both read for one fact. `state` is the plain answer; `mergedAt`
  * corroborates it, so a `gh` old enough or odd enough to spell the state differently still
@@ -64,10 +85,10 @@ export async function fetchPullLanding(
       what: 'the pull request',
       timeoutMs: 30_000,
     });
-  } catch {
+  } catch (error) {
     // Logged by `runGh` already, once per attempt, with the reason. A second line here would
     // say the same thing in a place that cannot add to it.
-    return null;
+    return NO_SUCH_PULL.test((error as Error)?.message ?? '') ? 'absent' : null;
   }
 
   try {
