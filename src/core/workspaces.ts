@@ -22,6 +22,10 @@ import {
 // The shapes module rather than the reader: this is the write path, and `project-board.ts`
 // spawns `gh`. What is needed here is the pattern the reader will hold the value to.
 import { githubProjectRefusal, parseProjectUrl } from './project-board-types.js';
+// One question only — what levels does this backend take — and it is asked of the backend
+// registry rather than answered here, because an effort is the backend's own vocabulary.
+import { DEFAULT_AGENT_BACKEND, type AgentBackendId } from './agent-adapter.js';
+import { agentEfforts } from './agents/index.js';
 
 /** What the registry is called when nobody has named a file for it. */
 const REGISTRY_FILENAME = 'workspaces.json';
@@ -98,14 +102,68 @@ export function hasWorkspaceRegistry(): boolean {
   }
 }
 
+/** The two agents a project may retune, which are the two the board spawns. */
+export const AGENT_KINDS = ['issue', 'implement'] as const;
+export type AgentKind = (typeof AGENT_KINDS)[number];
+
 /**
- * Effort levels the agent CLI accepts, as `claude --help` states them.
+ * Which backend each of a project's two agents runs under.
  *
- * Kept as a list rather than a free string because a typo here is only discovered when a
- * run fails minutes later, in a process nobody is watching.
+ * Both halves, because they are two grants rather than one: an operator may have Claude Code
+ * researching and something else writing code, and a level one of them takes is not thereby a
+ * level the other does. Everything here that judges an effort is judged per kind for that reason.
  */
-export const AGENT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
-export type AgentEffort = (typeof AGENT_EFFORTS)[number];
+export type AgentBackends = Record<AgentKind, AgentBackendId>;
+
+/**
+ * What a caller that has not been told gets, and it is what every board resolves to today.
+ *
+ * `raw` — the passthrough — is the shipped default of the whole runtime, and it spells effort
+ * Claude Code's way, so this is exactly the one global list that used to live here. A caller
+ * that names no backend therefore validates against precisely what it validated against before
+ * backends existed. Naming a *different* backend comes from configuration that does not exist
+ * yet; what exists now is the seam it will arrive through.
+ */
+export const DEFAULT_AGENT_BACKENDS: AgentBackends = {
+  issue: DEFAULT_AGENT_BACKEND,
+  implement: DEFAULT_AGENT_BACKEND,
+};
+
+/**
+ * The effort levels a project may write, for the backend that will be handed them.
+ *
+ * Kept as a list rather than a free string because a typo here is only discovered when a run
+ * fails minutes later, in a process nobody is watching — and kept *per backend* because there is
+ * no such thing as a portable level. This used to be one constant documented as "as `claude
+ * --help` states them", which is one backend's answer given to all of them: a board pointed at
+ * Codex had `minimal` refused, though Codex takes it, and would have had `--effort` written onto
+ * a CLI with no such flag. `agents/` is where each backend states its own; see
+ * `AgentAdapter.efforts`.
+ */
+function effortsFor(backend: AgentBackendId): readonly string[] {
+  return agentEfforts(backend);
+}
+
+/**
+ * Why an effort was refused, in the words the settings dialog will show.
+ *
+ * The backend is named because without it the message cannot tell the two mistakes apart. A
+ * level that is a typo and a level that belongs to the *other* backend read identically as "not
+ * one of …", and the second one is the case where the operator was right about the word and
+ * wrong about which agent was going to be handed it.
+ */
+function refuseEffort(kind: string, backend: AgentBackendId, value: string): string {
+  const levels = effortsFor(backend);
+  if (!levels.length) {
+    return `"agents.${kind}.effort" cannot be set: this project's ${kind} agent runs under the `
+      + `"${backend}" backend, which has no reasoning effort to set. Clear it, or point the agent `
+      + 'at a backend that takes one.';
+  }
+  return `"agents.${kind}.effort" must be one of ${levels.join(', ')} — the levels the `
+    + `"${backend}" backend takes, which is what this project's ${kind} agent runs under. `
+    + `"${value}" is not one of them; another backend may spell it, and this one would hand it `
+    + 'to a CLI that refuses the run.';
+}
 
 /**
  * Where a project keeps the workflows its agents may be told to follow.
@@ -341,7 +399,12 @@ const NO_AGENT_SETTINGS: AgentSettings = {
  * bad field must not empty the whole strip. The write path is where a wrong type is
  * refused — see `validateWorkspaceConfigPatch`.
  */
-function readAgentSettings(kind: string, id: string, raw: unknown): AgentSettings {
+function readAgentSettings(
+  kind: string,
+  id: string,
+  raw: unknown,
+  backend: AgentBackendId
+): AgentSettings {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return NO_AGENT_SETTINGS;
   const config = raw as WorkspaceAgentConfig;
 
@@ -350,8 +413,16 @@ function readAgentSettings(kind: string, id: string, raw: unknown): AgentSetting
   let effort: string | null = null;
   if (typeof config.effort === 'string' && config.effort.trim()) {
     const candidate = config.effort.trim();
-    if ((AGENT_EFFORTS as readonly string[]).includes(candidate)) effort = candidate;
-    else logger.warn(`Workspace "${id}": ignoring agents.${kind}.effort "${candidate}" — not one of ${AGENT_EFFORTS.join(', ')}`);
+    const levels = effortsFor(backend);
+    if (levels.includes(candidate)) effort = candidate;
+    // The backend is named here for the same reason the refusal names it: dropped silently, a
+    // level meant for the other backend is indistinguishable from a typo, and this warning is
+    // the only record a run has that its project asked for something it did not get.
+    else if (levels.length) {
+      logger.warn(`Workspace "${id}": ignoring agents.${kind}.effort "${candidate}" — the "${backend}" backend takes ${levels.join(', ')}`);
+    } else {
+      logger.warn(`Workspace "${id}": ignoring agents.${kind}.effort "${candidate}" — the "${backend}" backend has no reasoning effort to set`);
+    }
   }
 
   const seconds = config.timeoutSeconds;
@@ -377,14 +448,18 @@ function readAgentSettings(kind: string, id: string, raw: unknown): AgentSetting
   return { model, effort, timeoutMs, workflow };
 }
 
-function readAgents(id: string, config: WorkspaceConfig): WorkspaceAgents {
+function readAgents(
+  id: string,
+  config: WorkspaceConfig,
+  backends: AgentBackends
+): WorkspaceAgents {
   const agents = config.agents;
   if (!agents || typeof agents !== 'object' || Array.isArray(agents)) {
     return { issue: NO_AGENT_SETTINGS, implement: NO_AGENT_SETTINGS };
   }
   return {
-    issue: readAgentSettings('issue', id, agents.issue),
-    implement: readAgentSettings('implement', id, agents.implement),
+    issue: readAgentSettings('issue', id, agents.issue, backends.issue),
+    implement: readAgentSettings('implement', id, agents.implement, backends.implement),
   };
 }
 
@@ -400,7 +475,10 @@ function idFromPath(resolved: ResolvedPath): string {
  * hide the others, and a workspace that silently disappears is harder to debug
  * than one that shows up broken.
  */
-async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
+async function loadWorkspace(
+  entry: RegistryEntry,
+  backends: AgentBackends
+): Promise<Workspace | null> {
   if (!entry?.path) {
     logger.warn('Workspace entry without a path, skipping', { entry });
     return null;
@@ -508,7 +586,7 @@ async function loadWorkspace(entry: RegistryEntry): Promise<Workspace | null> {
       : null,
     projectInProgressColumn: config.projectInProgressColumn?.trim() || null,
     projectTodoColumn: config.projectTodoColumn?.trim() || null,
-    agents: readAgents(id, config),
+    agents: readAgents(id, config, backends),
     error: escaped.length
       ? `Config field(s) outside the workspace, ignored: ${escaped.join(', ')}`
       : null,
@@ -600,8 +678,17 @@ export async function loadAgentWorkflow(
  * the ordinary state of a board nobody has added a project to yet — it says nothing and is
  * logged at debug, the same reading `readRegistry` takes on the write side. A file that is
  * there and cannot be read is a different thing and still an error.
+ *
+ * `backends` is which agent each project's two roles will be run under, and it is only ever
+ * read to decide which reasoning-effort levels a config may name. It has a default because the
+ * caller that knows the answer is the server, and the dozen other callers — the CLI, the checks,
+ * a health probe — are asking about paths and repositories rather than about agents; the default
+ * is what every board resolves to today, so those callers read what they have always read.
  */
-export async function loadWorkspaces(registryPath: string): Promise<Workspace[]> {
+export async function loadWorkspaces(
+  registryPath: string,
+  backends: AgentBackends = DEFAULT_AGENT_BACKENDS
+): Promise<Workspace[]> {
   if (!registryPath) return [];
 
   let registry: { workspaces?: RegistryEntry[] };
@@ -621,7 +708,9 @@ export async function loadWorkspaces(registryPath: string): Promise<Workspace[]>
     return [];
   }
 
-  const loaded = await Promise.all(registry.workspaces.map(loadWorkspace));
+  const loaded = await Promise.all(
+    registry.workspaces.map((entry) => loadWorkspace(entry, backends))
+  );
 
   // Two spellings of one project would otherwise register twice; the canonical path
   // is what makes the UNC and POSIX forms of a WSL project collapse together.
@@ -1078,7 +1167,6 @@ const STRING_FIELDS = [
   'githubProject', 'projectField', 'projectInProgressColumn', 'projectTodoColumn',
 ] as const;
 
-const AGENT_KINDS = ['issue', 'implement'] as const;
 const AGENT_FIELDS = ['model', 'effort', 'timeoutSeconds', 'workflow'] as const;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -1110,9 +1198,15 @@ function refuseGithubProject(value: string): string {
  * A field it has never heard of is refused rather than stored, so a typo says so instead
  * of quietly doing nothing — and so that "a project may never grant an agent" cannot be
  * worked around by inventing a `command` field.
+ *
+ * `backends` is which agent each of this project's two roles will actually be run under, and it
+ * is what an `effort` is judged against: the levels are the backend's own vocabulary, so a list
+ * that does not come from the backend can only refuse a level one CLI takes or accept one
+ * another would exit on. Defaulted for the callers that have no board around them.
  */
 export function validateWorkspaceConfigPatch(
-  patch: unknown
+  patch: unknown,
+  backends: AgentBackends = DEFAULT_AGENT_BACKENDS
 ): { ok: true; patch: Record<string, unknown> } | { ok: false; error: string } {
   if (!isPlainObject(patch)) return { ok: false, error: 'The config must be a JSON object.' };
 
@@ -1176,8 +1270,11 @@ export function validateWorkspaceConfigPatch(
           return { ok: false, error: `"agents.${kind}.${field}" must be text, or null to use the board default.` };
         }
         if (field === 'effort' && setting.trim()
-            && !(AGENT_EFFORTS as readonly string[]).includes(setting.trim())) {
-          return { ok: false, error: `"agents.${kind}.effort" must be one of ${AGENT_EFFORTS.join(', ')}.` };
+            && !effortsFor(backends[kind as AgentKind]).includes(setting.trim())) {
+          return {
+            ok: false,
+            error: refuseEffort(kind, backends[kind as AgentKind], setting.trim()),
+          };
         }
         // A name, not a path. Refused here as well as per run because this is the surface a
         // person types into, and "agent-workflows/x.md" is exactly what somebody would write.
@@ -1326,9 +1423,10 @@ function applySetting(config: Record<string, unknown>, key: string, value: unkno
 export async function writeWorkspaceConfig(
   registryPath: string,
   id: string,
-  patch: unknown
+  patch: unknown,
+  backends: AgentBackends = DEFAULT_AGENT_BACKENDS
 ): Promise<WorkspaceWriteResult> {
-  const valid = validateWorkspaceConfigPatch(patch);
+  const valid = validateWorkspaceConfigPatch(patch, backends);
   if (!valid.ok) return { ok: false, status: 400, error: valid.error };
 
   const found = await configFileOf(registryPath, id);
@@ -1358,7 +1456,9 @@ export async function writeWorkspaceConfig(
     }
   }
 
-  const workspaces = await loadWorkspaces(registryPath);
+  // The same backends the patch was judged against, so that what is written and what is read
+  // back cannot disagree about whether an effort survived.
+  const workspaces = await loadWorkspaces(registryPath, backends);
   const workspace = workspaces.find((candidate) => candidate.id === id);
   if (!workspace) {
     return { ok: false, status: 500, error: `"${id}" did not load back after its config was written.` };

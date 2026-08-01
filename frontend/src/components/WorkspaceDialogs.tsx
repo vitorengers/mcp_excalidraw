@@ -2,7 +2,15 @@ import React, { useEffect, useState } from 'react'
 import './WorkspaceDialogs.css'
 import { WorkspaceSummary } from './WorkspaceTabs'
 
-/** Effort levels the agent CLI accepts. Mirrors AGENT_EFFORTS in src/core/workspaces.ts. */
+/**
+ * Effort levels to offer, which are the ones the backend every board runs today accepts.
+ *
+ * Mirrors `CLAUDE_CODE_EFFORTS` in src/core/agents/claude-code.ts, which the `raw` passthrough
+ * shares because it writes Claude Code's flag. A board that names a different backend takes a
+ * different list — Codex has `minimal`, `none` and `ultra` besides — and the server refuses a
+ * level the selected backend does not take, naming it. Offering the right list per backend needs
+ * the server to say which backend a project is on, which nothing asks it yet.
+ */
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 
 interface DirectoryEntry {
