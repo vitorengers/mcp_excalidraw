@@ -333,7 +333,9 @@ const walk = (dir) => {
 };
 walk(join(repoRoot, 'src'));
 walk(join(repoRoot, 'docs'));
-documented.push(join(repoRoot, 'README.md'), join(repoRoot, 'CLAUDE.md'));
+documented.push(join(repoRoot, 'README.md'), join(repoRoot, 'CLAUDE.md'),
+                join(repoRoot, 'AGENTS.md'), join(repoRoot, 'CONTRIBUTING.md'),
+                join(repoRoot, 'MAINTAINERS.md'));
 
 // The development log is history: an entry describing what a merge said at the time is not a
 // claim the tree is making now, and rewriting it would be rewriting the record.
