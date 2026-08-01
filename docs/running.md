@@ -411,8 +411,8 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 121 | yes |
-| `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 73 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 126 | yes |
+| `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 75 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
 | `repo` | the full history, and this repository's own board | anywhere with a full clone | 7 | no |
@@ -424,7 +424,7 @@ of *this* fork — and `wsl` is off it because a hosted runner has no distro.
 A tier whose tool is not on the machine is reported as **EXPECTED-SKIP** and the run still
 exits 0, so `--tier wsl` on a Linux box is honest rather than green. `browser` is the one
 exception: with no Chrome it *fails*, because a runner that was meant to have one and does not
-would otherwise hide sixty-seven checks behind a green tick that never ran them.
+would otherwise hide seventy-five checks behind a green tick that never ran them.
 
 The tiers are held to the source by `node scripts/check-tiers.mjs`: a check added with no
 `Tier:` line fails it, as does one that spawns `wsl.exe` while calling itself `fast`.
