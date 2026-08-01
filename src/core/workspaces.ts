@@ -22,8 +22,12 @@ import {
 // The shapes module rather than the reader: this is the write path, and `project-board.ts`
 // spawns `gh`. What is needed here is the pattern the reader will hold the value to.
 import { githubProjectRefusal, parseProjectUrl } from './project-board-types.js';
-// One question only — what levels does this backend take — and it is asked of the backend
-// registry rather than answered here, because an effort is the backend's own vocabulary.
+// One question only — what reasoning-effort levels does this backend take — and it is asked of
+// the backend rather than answered here, because a level is the backend's own vocabulary. It was
+// answered here, once, by a constant documented as "as `claude --help` states them", which is one
+// backend's answer given to all of them: a board pointed at Codex had `minimal` refused, though
+// Codex takes it. Kept as a list rather than free text because a level nothing checks is only
+// discovered when a run fails minutes later, in a process nobody is watching.
 import { DEFAULT_AGENT_BACKEND, type AgentBackendId } from './agent-adapter.js';
 import { agentEfforts } from './agents/index.js';
 
@@ -130,21 +134,6 @@ export const DEFAULT_AGENT_BACKENDS: AgentBackends = {
 };
 
 /**
- * The effort levels a project may write, for the backend that will be handed them.
- *
- * Kept as a list rather than a free string because a typo here is only discovered when a run
- * fails minutes later, in a process nobody is watching — and kept *per backend* because there is
- * no such thing as a portable level. This used to be one constant documented as "as `claude
- * --help` states them", which is one backend's answer given to all of them: a board pointed at
- * Codex had `minimal` refused, though Codex takes it, and would have had `--effort` written onto
- * a CLI with no such flag. `agents/` is where each backend states its own; see
- * `AgentAdapter.efforts`.
- */
-function effortsFor(backend: AgentBackendId): readonly string[] {
-  return agentEfforts(backend);
-}
-
-/**
  * Why an effort was refused, in the words the settings dialog will show.
  *
  * The backend is named because without it the message cannot tell the two mistakes apart. A
@@ -153,7 +142,7 @@ function effortsFor(backend: AgentBackendId): readonly string[] {
  * wrong about which agent was going to be handed it.
  */
 function refuseEffort(kind: string, backend: AgentBackendId, value: string): string {
-  const levels = effortsFor(backend);
+  const levels = agentEfforts(backend);
   if (!levels.length) {
     return `"agents.${kind}.effort" cannot be set: this project's ${kind} agent runs under the `
       + `"${backend}" backend, which has no reasoning effort to set. Clear it, or point the agent `
@@ -413,7 +402,7 @@ function readAgentSettings(
   let effort: string | null = null;
   if (typeof config.effort === 'string' && config.effort.trim()) {
     const candidate = config.effort.trim();
-    const levels = effortsFor(backend);
+    const levels = agentEfforts(backend);
     if (levels.includes(candidate)) effort = candidate;
     // The backend is named here for the same reason the refusal names it: dropped silently, a
     // level meant for the other backend is indistinguishable from a typo, and this warning is
@@ -1270,7 +1259,7 @@ export function validateWorkspaceConfigPatch(
           return { ok: false, error: `"agents.${kind}.${field}" must be text, or null to use the board default.` };
         }
         if (field === 'effort' && setting.trim()
-            && !effortsFor(backends[kind as AgentKind]).includes(setting.trim())) {
+            && !agentEfforts(backends[kind as AgentKind]).includes(setting.trim())) {
           return {
             ok: false,
             error: refuseEffort(kind, backends[kind as AgentKind], setting.trim()),
