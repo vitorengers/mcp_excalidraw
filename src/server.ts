@@ -49,6 +49,8 @@ import {
   reorderWorkspaces,
   readWorkspaceConfig,
   writeWorkspaceConfig,
+  AgentBackends,
+  DEFAULT_AGENT_BACKENDS,
   Workspace
 } from './core/workspaces.js';
 import { BoardScene, parseBoardScene } from './core/board-seed.js';
@@ -1692,10 +1694,18 @@ app.put('/api/workspaces/:id/config', async (req: Request, res: Response) => {
   if (offLoopback(res, 'Project settings are saved')) return;
 
   try {
+    const id = req.params.id ?? '';
+    // Resolved before the write, because an `effort` is refused against the backend this
+    // project's agent runs under and not against one global list. A project the registry does
+    // not know is left to `writeWorkspaceConfig` to report by name; the default it is judged
+    // against until then refuses exactly what the board refused before backends existed.
+    const workspace = (await loadWorkspaces(registryPath()).catch(() => []))
+      .find((candidate) => candidate.id === id);
     const result = await writeWorkspaceConfig(
       registryPath(),
-      req.params.id ?? '',
-      req.body?.config
+      id,
+      req.body?.config,
+      workspace ? agentBackendsFor(workspace) : DEFAULT_AGENT_BACKENDS
     );
     if (!result.ok) {
       return res.status(result.status).json({ success: false, error: result.error });
@@ -2361,6 +2371,26 @@ const IMPLEMENT_AGENT_COMMANDS: AgentCommands = {
 const IMPLEMENT_AGENT_CONFIGURED = Boolean(
   IMPLEMENT_AGENT_COMMANDS.native || IMPLEMENT_AGENT_COMMANDS.wsl
 );
+
+/**
+ * Which backend each of one project's two agents will actually be run under.
+ *
+ * Read per workspace rather than per server, for the reason `agentCommandFor` gives: a project
+ * inside a WSL distro may have been granted a different agent from a native one, so the pair is
+ * a fact about the project and not about the board. It is asked when a project's settings are
+ * saved, because a reasoning effort is the backend's own vocabulary and the write path has to
+ * refuse a level *this* project's agent could not be handed.
+ *
+ * Every board resolves both halves to the same passthrough today — nothing names a backend yet —
+ * so this returns the default for every setup that exists. It is the seam a named backend
+ * arrives through, not a change of behaviour.
+ */
+function agentBackendsFor(workspace: Workspace): AgentBackends {
+  return {
+    issue: agentCommandFor(workspace, ISSUE_AGENT_COMMANDS)?.backend ?? DEFAULT_AGENT_BACKEND,
+    implement: agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS)?.backend ?? DEFAULT_AGENT_BACKEND,
+  };
+}
 
 // ─── Do the agents actually run? ──────────────────────────────
 //

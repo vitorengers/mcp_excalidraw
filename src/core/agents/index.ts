@@ -34,4 +34,16 @@ export function adapterFor(id: AgentBackendId): AgentAdapter {
   return ADAPTERS[id];
 }
 
+/**
+ * The reasoning-effort levels one backend accepts.
+ *
+ * A function of its own rather than a field read off `adapterFor`, because the caller is
+ * `workspaces.ts`, which validates a project's settings and has no business holding a thing that
+ * builds argv and parses streams. This is the whole of what the config layer needs to know about
+ * a backend, and asking for it by name keeps it that way.
+ */
+export function agentEfforts(id: AgentBackendId): readonly string[] {
+  return ADAPTERS[id].efforts;
+}
+
 export { claudeCodeAdapter, codexCliAdapter, rawAdapter };
