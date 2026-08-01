@@ -1,9 +1,14 @@
 import { parseMermaidToExcalidraw, MermaidConfig } from '@excalidraw/mermaid-to-excalidraw';
-import type { ExcalidrawElement } from '@excalidraw/excalidraw/types/element/types';
-import type { BinaryFiles } from '@excalidraw/excalidraw/types/types';
+import type { MermaidToExcalidrawResult } from '@excalidraw/mermaid-to-excalidraw/dist/interfaces';
+import type { BinaryFiles } from '@excalidraw/excalidraw/types';
 
 export interface MermaidConversionResult {
-  elements: readonly ExcalidrawElement[];
+  /**
+   * Skeletons, not elements. `parseMermaidToExcalidraw` hands back what
+   * `convertToExcalidrawElements` takes, and the only caller passes it straight there; saying
+   * `ExcalidrawElement` here claimed a conversion that never happened.
+   */
+  elements: MermaidToExcalidrawResult['elements'];
   files?: BinaryFiles;
   error?: string;
 }

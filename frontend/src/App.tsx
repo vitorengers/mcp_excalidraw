@@ -3,13 +3,13 @@ import {
   Excalidraw,
   convertToExcalidrawElements,
   CaptureUpdateAction,
-  ExcalidrawImperativeAPI,
   exportToBlob,
   exportToSvg,
   getCommonBounds,
   sceneCoordsToViewportCoords
 } from '@excalidraw/excalidraw'
-import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
+import type { BinaryFileData, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
+import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/mermaidConverter'
 import { canvasFontsReady } from './canvas-fonts'
 import { withBoardToken } from './auth'
@@ -47,7 +47,7 @@ import {
   MIRROR_KIND,
   NOTES_OPTION_ID
 } from '../../src/core/project-board-layout'
-import type { CardImplementState, DraftBlock, MirrorColumn } from '../../src/core/project-board-layout'
+import type { CardImplementState, DraftBlock, MirrorAnchor, MirrorColumn } from '../../src/core/project-board-layout'
 import type { ProjectBoard } from '../../src/core/project-board-types'
 import { TerminalPanel } from './components/TerminalPanel'
 import {
@@ -128,6 +128,11 @@ interface WebSocketMessage {
   mermaidDiagram?: string;
   config?: MermaidConfig;
   requestId?: string;
+  /** `initial_elements` sends a map keyed by file id; `files_added` sends a list. */
+  files?: Record<string, unknown> | unknown[];
+  /** `export_image_request` only: what to render, and whether to paint the background. */
+  format?: string;
+  background?: boolean;
   scrollToContent?: boolean;
   scrollToElementId?: string;
   scrollToElementIds?: string[];
@@ -141,7 +146,8 @@ interface ApiResponse {
   success: boolean;
   elements?: ServerElement[];
   element?: ServerElement;
-  files?: Record<string, unknown>;
+  /** `GET /api/files` answers with Excalidraw's own file records, keyed by file id. */
+  files?: Record<string, BinaryFileData>;
   count?: number;
   error?: string;
   message?: string;
@@ -482,6 +488,17 @@ type CustomData = Record<string, unknown> | null | undefined;
 
 const customDataOf = (element: { customData?: CustomData } | undefined): Record<string, unknown> =>
   (element?.customData ?? {}) as Record<string, unknown>;
+
+/**
+ * The block a label is bound to, off a scene element of any kind, or null.
+ *
+ * `ExcalidrawElement` is a union of twelve exact element types and only the text member
+ * declares `containerId`, so a scene read as the union does not offer it — but every caller
+ * here is asking the same question of an element it has deliberately not narrowed: *is this
+ * a label, and whose?* The sibling of `customDataOf`, and there for the same reason.
+ */
+const containerIdOf = (element: unknown): string | null =>
+  (element as { containerId?: string | null } | null | undefined)?.containerId ?? null;
 
 /** Elements the mirror owns. Everything else on the canvas is the board's own drawing. */
 const isMirrorElement = (element: { customData?: CustomData }): boolean =>
@@ -824,7 +841,11 @@ const cleanElementForExcalidraw = (element: ServerElement): Partial<ExcalidrawEl
     syncTimestamp,
     ...cleanElement
   } = element;
-  return cleanElement;
+  // `ServerElement` is the wire shape and `ExcalidrawElement` is a union of twelve exact
+  // element types; nothing structural connects them, which is why every call site in this
+  // file already crosses that gap with a cast. See `validateAndFixBindings` for the other
+  // half of it.
+  return cleanElement as unknown as Partial<ExcalidrawElement>;
 }
 
 // Helper function to validate and fix element binding data
@@ -832,7 +853,14 @@ const validateAndFixBindings = (elements: Partial<ExcalidrawElement>[]): Partial
   const elementMap = new Map(elements.map(el => [el.id!, el]));
 
   return elements.map(element => {
-    const fixedElement = { ...element };
+    // `Partial<ExcalidrawElement>` distributes over Excalidraw's element union, so
+    // `containerId` — which only the bound-text member carries — is not readable off it, and
+    // `boundElements` is declared read-only on the members that do. The elements here came off
+    // the wire and are this function's own copies: repairing them in place is the point.
+    const fixedElement = { ...element } as Partial<ExcalidrawElement> & {
+      containerId?: string | null;
+      boundElements?: { id: string; type: string }[] | null;
+    };
 
     // Validate and fix boundElements
     if (fixedElement.boundElements) {
@@ -2423,7 +2451,7 @@ function App(): JSX.Element {
    * board's content still cannot decide this one's placement, which is what the reset was
    * actually for. A reload is still what re-measures, the way it is for the terminal.
    */
-  const mirrorOriginsRef = useRef<Map<string, { x: number; y: number }>>(new Map())
+  const mirrorOriginsRef = useRef<Map<string, MirrorAnchor>>(new Map())
 
   const clearMirror = (): void => {
     projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, signature: '' }
@@ -2668,12 +2696,12 @@ function App(): JSX.Element {
     // reader's.
     const nextOwn = own.map((element) => {
       if (isTerminalElement(element)) return element
-      if (frozen && (element.id === frozen || element.containerId === frozen)) return element
-      const slot = placed.get(element.containerId ?? '') ?? placed.get(element.id)
+      if (frozen && (element.id === frozen || containerIdOf(element) === frozen)) return element
+      const slot = placed.get(containerIdOf(element) ?? '') ?? placed.get(element.id)
       if (!slot) return element
       // A label moves with its container, and keeps its own centring.
-      const isLabel = Boolean(element.containerId)
-      const container = isLabel ? drafts.find((draft) => draft.id === element.containerId) : element
+      const isLabel = Boolean(containerIdOf(element))
+      const container = isLabel ? drafts.find((draft) => draft.id === containerIdOf(element)) : element
       if (!container) return element
       return {
         ...element,
@@ -2751,7 +2779,7 @@ function App(): JSX.Element {
     const untouched = new Map(
       frozen
         ? own
-          .filter((element) => element.id === frozen || element.containerId === frozen)
+          .filter((element) => element.id === frozen || containerIdOf(element) === frozen)
           .map((element) => [element.id, element] as const)
         : []
     )
@@ -2820,7 +2848,8 @@ function App(): JSX.Element {
 
     const doomed = new Set(done.map((element) => element.id))
     for (const element of scene) {
-      if (element.containerId && doomed.has(element.containerId)) doomed.add(element.id)
+      const container = containerIdOf(element)
+      if (container && doomed.has(container)) doomed.add(element.id)
     }
 
     // Deleted on the server too: the sync never treats absence as a deletion, so a block
@@ -3615,7 +3644,8 @@ function App(): JSX.Element {
     // reads the container off the scene, so an orphan label would stop looking derived and
     // start being stored.
     for (const element of scene) {
-      if (element.containerId && dropped.has(element.containerId)) dropped.add(element.id)
+      const container = containerIdOf(element)
+      if (container && dropped.has(container)) dropped.add(element.id)
     }
 
     let changed = added.length > 0 || dropped.size > 0
@@ -5462,7 +5492,7 @@ function App(): JSX.Element {
         const convertedElements = convertElementsPreservingImageProps(cleanedElements)
         if (excalidrawAPI) {
           applySceneUpdateWithoutAutoSync(excalidrawAPI, {
-            elements: convertedElements,
+            elements: convertedElements as ExcalidrawElement[],
             captureUpdate: CaptureUpdateAction.NEVER
           })
           // The store holds no terminal block — they are derived and never synced — and this
@@ -5708,7 +5738,7 @@ function App(): JSX.Element {
 
         const convertedElements = convertElementsPreservingImageProps(mergedElements)
         applySceneUpdateWithoutAutoSync(excalidrawAPI, {
-          elements: convertedElements,
+          elements: convertedElements as ExcalidrawElement[],
           captureUpdate: CaptureUpdateAction.NEVER
         })
       }
@@ -5735,7 +5765,7 @@ function App(): JSX.Element {
             } else {
               const convertedElements = convertElementsPreservingImageProps(cleanedElements)
               applySceneUpdateWithoutAutoSync(excalidrawAPI, {
-                elements: convertedElements,
+                elements: convertedElements as ExcalidrawElement[],
                 captureUpdate: CaptureUpdateAction.NEVER
               })
             }
@@ -6313,8 +6343,11 @@ function App(): JSX.Element {
       // would be a text element whose container the store has never heard of.
       const scene = api.getSceneElementsIncludingDeleted()
       const derivedIds = new Set(scene.filter(isDerivedElement).map((element) => element.id))
-      const currentElements = scene.filter((element) => !isDerivedElement(element)
-        && !(element.containerId && derivedIds.has(element.containerId)))
+      const currentElements = scene.filter((element) => {
+        if (isDerivedElement(element)) return false
+        const container = containerIdOf(element)
+        return !(container && derivedIds.has(container))
+      })
       console.log(`Syncing ${currentElements.length} elements to backend`)
 
       // 2. The bytes behind this board's images, before the elements that name them — so the
@@ -6583,7 +6616,7 @@ function App(): JSX.Element {
           <div className="sync-controls">
             <button
               className={`btn-primary ${syncStatus === 'syncing' ? 'btn-loading' : ''}`}
-              onClick={syncToBackend}
+              onClick={() => { void syncToBackend() }}
               disabled={syncStatus === 'syncing' || !excalidrawAPI}
             >
               {syncStatus === 'syncing' && <span className="spinner"></span>}
