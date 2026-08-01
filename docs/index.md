@@ -15,7 +15,8 @@ The board itself is cut into two halves, each with a key that scrolls onto it �
 
 | Document | What it covers |
 |---|---|
-| [running.md](running.md) | How to start the board: the build, the port, and what every `EXCALIDRAW_*` variable means |
+| [install.md](install.md) | Getting a board up on Windows, macOS or Linux — the one command, the launchers, and from source |
+| [running.md](running.md) | The operator and development procedure: the build, the port, and what every `EXCALIDRAW_*` variable means |
 | [launchers.md](launchers.md) | The three double-click launchers, and why not a SEA, an Electron shell or a signed app |
 | [configuration.md](configuration.md) | Where those values are read from: `config.json` in the state directory, a `<cwd>/.env`, the environment |
 | [workspaces.md](workspaces.md) | One project per board — the registry, `board.config.json`, and the settings dialog |

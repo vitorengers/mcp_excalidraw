@@ -95,9 +95,17 @@ const section = running.slice(heading.index + heading[0].length).split(/^##[ \t]
 const steps = [...section.matchAll(/^\d+\.[ \t]+\S/gm)];
 check('the section is numbered steps', steps.length >= 2, `${steps.length} step(s)`);
 
-const readme = readFileSync(join(repoRoot, 'README.md'), 'utf8');
-const anchor = `docs/running.md#${anchorOf(heading[1])}`;
-check('README.md links it', readme.includes(anchor), `no "${anchor}" in README.md`);
+// Both places a reader arrives from, because since #309 they are two different documents:
+// `README.md` is the front page, and `docs/install.md` is where a first-time reader is sent —
+// and its "when it does not come up" list attributed the blank canvas to a stale server, which
+// is the wrong repair for a clone that simply has no project yet. A link relative to the
+// document it is written in, so `docs/install.md` spells it without the `docs/`.
+const anchor = `#${anchorOf(heading[1])}`;
+for (const [file, prefix] of [['README.md', 'docs/running.md'], [join('docs', 'install.md'), 'running.md']]) {
+  const text = readFileSync(join(repoRoot, file), 'utf8');
+  check(`${slash(file)} links it`, text.includes(`${prefix}${anchor}`),
+        `no "${prefix}${anchor}" in ${slash(file)}`);
+}
 
 // ─── 2. What the section says to do, read out of the section ──
 

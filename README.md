@@ -23,9 +23,9 @@ One canvas, three ways to drive it:
 - **MCP Server** — 26 tools over stdio for any Model Context Protocol client (Claude Desktop, Cursor, Codex CLI, Antigravity, ...).
 - **REST API** — 57 routes over plain HTTP; the only workspace-aware surface, and what the board itself is built on.
 
-Core drawing runs fully local (Node ≥ 18, MIT licensed) — no API keys. Mermaid conversion runs in the local browser canvas; `share` is optional and uploads an encrypted scene to excalidraw.com.
+Core drawing runs fully local (Node ≥ 20, MIT licensed) — no API keys. Mermaid conversion runs in the local browser canvas; `share` is optional and uploads an encrypted scene to excalidraw.com.
 
-**Start here:** [docs/index.md](docs/index.md) indexes every document; [docs/running.md](docs/running.md) is how to start the board; [CLAUDE.md](CLAUDE.md) is how work is done in this repository.
+**Start here:** [docs/install.md](docs/install.md) gets a board up on Windows, macOS or Linux; [docs/index.md](docs/index.md) indexes every document; [docs/running.md](docs/running.md) is the operator and development procedure; [CLAUDE.md](CLAUDE.md) is how work is done in this repository.
 
 ## Demo
 
@@ -179,7 +179,9 @@ own. The release line below is what that version contains.
 
 ## Installation
 
-The only prerequisite is **Node.js ≥ 18**.
+The only prerequisite is **Node.js ≥ 20**, which is what `engines.node` declares and what CI
+measures against. [docs/install.md](docs/install.md) is the same ground at more length, with
+every command spelled for Windows, macOS and Linux; the short version follows here.
 
 ### Easiest: let your agent install it
 
@@ -484,15 +486,20 @@ Viewport group focus can tune framing with `viewportZoomFactor`:
 
 ## Quick Start (From Source)
 
-From source (Node >= 18):
+From source (Node >= 20) — [docs/install.md](docs/install.md#from-source) is the fuller version:
 
 ```bash
 npm ci
 npm run build
-PORT=3737 npm run canvas          # canvas server (terminal 1)
+npm run canvas                    # canvas server (terminal 1) — http://127.0.0.1:3737
 node dist/index.js                # MCP server over stdio (terminal 2, usually launched by your MCP client)
 node dist/bin.js status           # or drive the CLI straight from the build
 ```
+
+Nothing there is spelled for one shell: 3737 is the default port, so there is no `VAR=value`
+prefix to write. To pin a different one, or to set any other variable,
+[docs/install.md](docs/install.md#setting-a-variable-in-three-shells) has the line for
+PowerShell, for cmd and for a POSIX shell.
 
 There is no container path. It was deleted rather than repaired ([#300](https://github.com/vitorengers/vibemaxxing/issues/300)): the image bound every interface on a server whose API has no authentication, and carried neither `gh` nor `git`, so the issue blocks, the project-board mirror and the terminal — most of what this fork is — could not have run inside it. Run it on the host, from `npx` or from a clone.
 
