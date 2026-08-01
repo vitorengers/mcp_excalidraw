@@ -28,9 +28,11 @@
  *   Making the board come up late instead of the read wait is the other way this could have
  *   been "fixed", and it is the one this case rules out.
  * - The writes are not, and that is not an oversight: a write that lands before the seed is a
- *   worse failure than a read that does (the store is no longer empty, so `seedBoard` declines
- *   to load over it and the whole saved board is lost), and it is a different one. It is
- *   written down as its own issue rather than folded in here.
+ *   worse failure than a read that does — the store is no longer empty, so `seedBoard` declines
+ *   to load over it and returns *before* `persistBoardFor`, which costs the board its saved
+ *   scene and its permission to save for the rest of the process. That is a different decision,
+ *   over `PUT`, `DELETE` and the per-second autosync as well, and it is **#468** rather than
+ *   something folded in here.
  *
  * The cases:
  *
