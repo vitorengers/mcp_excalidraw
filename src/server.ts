@@ -5205,17 +5205,18 @@ function implementTerminalHost(workspace: Workspace, issueUrl: string): AgentHos
     let announce: (code: number | null) => void = () => { /* replaced below */ };
     const exited = new Promise<number | null>((resolve) => { announce = resolve; });
 
-    // Loaded only for a run that could use one. A run whose prompt goes on stdin took `null`
-    // here from the day this existed — a pseudoterminal has no end of file to close the prompt
-    // with — and asking for a binding it would then have to ignore would be a new import on the
-    // path that must not change. The invocation is what says which kind this is, rather than a
-    // regular expression over the command line a second time.
-    const pty = invocation.prompt.via === 'stdin' ? null : await loadPty();
+    // Loaded only for a run that could use one, and `prompt.stdin` is what says so: a binding is
+    // worth having exactly where stdin is being kept for a reader. A run whose prompt goes on
+    // stdin took `null` here from the day this existed — a pseudoterminal has no end of file to
+    // close the prompt with — and a headless run that merely takes its prompt on argv, which is
+    // `codex exec --json`, wants pipes for a different reason: a pseudoterminal wraps its output
+    // at `cols`, and a wrapped JSON envelope is no longer JSON. Neither is a regular expression
+    // over the command line a second time.
+    const pty = invocation.prompt.stdin === 'reader' ? await loadPty() : null;
     const started = await startTerminalSession(workspace, invocation.line, pty, {
       directory,
       owner: { agent: 'implement', issueUrl, label: issueTabLabel(issueUrl) },
       input: prompt,
-      interactive: Boolean(pty),
       agent: { adapter, invocation }
     }, { onOutput, onExit: (code) => announce(code) });
 

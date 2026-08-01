@@ -126,7 +126,14 @@ export function commandLineInvocation(line: string): AgentInvocation {
   return {
     command: command ?? line,
     args,
-    prompt: { via: runsHeadless(line) ? 'stdin' : 'argv' },
+    // A command line that says neither `-p` nor `--print` is one that would draw an interface
+    // given a terminal, so its prompt goes beside it and stdin stays the reader's — which is the
+    // reading this backend has always made of somebody else's string, now acted on rather than
+    // only recorded. Where the prompt does go to stdin it is closed behind it, which is the end
+    // of file such a run is waiting for.
+    prompt: runsHeadless(line)
+      ? { via: 'stdin', stdin: 'prompt' }
+      : { via: 'argv', stdin: 'reader' },
     line,
   };
 }

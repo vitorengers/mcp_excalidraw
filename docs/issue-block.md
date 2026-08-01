@@ -227,7 +227,8 @@ the same board still is.
 
 ### How they reach the agent
 
-The prompt is one string on stdin and there is no second channel — base64 pasted into it
+The prompt is one string of text — on stdin or as one argument, whichever the backend reads
+([agents.md](agents.md)) — and there is no second channel either way: base64 pasted into it
 would be megabytes the agent cannot decode. What it does have is `Read`, which renders an
 image. So each attached dataURL is decoded to a file **inside the project**, under
 `.excalidraw-issue-images/<element id>/`, and the prompt names the paths.

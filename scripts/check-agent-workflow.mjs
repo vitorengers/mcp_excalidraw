@@ -15,10 +15,12 @@
  *  - A project that selects **no** workflow sends the prompt it sent before this existed,
  *    byte for byte. That is the same rule `worktreeSection` and `imageReferenceSection`
  *    already keep, and it is asserted against the composed baseline rather than eyeballed.
- *  - A project that selects one changes **the prompt and only the prompt**: argv is identical
- *    to the argv of a project that selects nothing. That is the mechanical form of "a workflow
- *    is not a capability" — nothing from the file reaches a command line, so it cannot widen
- *    what the operator granted.
+ *  - A project that selects one changes **the prompt and only the prompt**: set the prompt
+ *    itself aside — since #329 it travels down whichever channel the backend declares, and for
+ *    this command line that is the end of argv — and the argv is identical to that of a project
+ *    that selects nothing. That is the mechanical form of "a workflow is not a capability":
+ *    nothing from the file reaches the command line by any other route, so it cannot widen what
+ *    the operator granted.
  *  - A name that does not resolve **refuses the run before the spawn**, naming the file it
  *    looked for. Deliberately unlike the rest of the config, where a field pointing outside
  *    its project is ignored and the workspace still loads: a workflow silently not applied is
@@ -135,14 +137,20 @@ writeFileSync(registryPath, JSON.stringify({
 
 /** Writes down the two things every case here turns on, then ends the way a real run ends. */
 const stub = join(workDir, 'agent-stub.mjs');
+// Since #329 the channel is the backend's to declare rather than always stdin, and this command
+// line carries no `-p`, so `raw` reads it as one that would draw an interface and the prompt
+// travels as the last argument. The stub takes it from wherever it arrived and reports the argv
+// with it removed, because what the cases below assert is that nothing *other than* the prompt
+// reaches the command line — which is the same property, said about the same argv.
 writeFileSync(stub, `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
+const argv = process.argv.slice(2);
 let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', () => {
-  writeFileSync(process.env.CAPTURE_TO, input, 'utf8');
+  writeFileSync(process.env.CAPTURE_TO, input || argv[argv.length - 1] || '', 'utf8');
   writeFileSync(process.env.CAPTURE_TO + '.argv.json',
-    JSON.stringify(process.argv.slice(2)), 'utf8');
+    JSON.stringify(input ? argv : argv.slice(0, -1)), 'utf8');
   process.stdout.write(process.env.CAPTURE_URL + '\\n');
 });
 `, 'utf8');

@@ -21,9 +21,10 @@
  *  - A project that names **neither** sends the prompt it sent before this existed, byte for
  *    byte — the same rule `workflowSection` and `worktreeSection` already keep. Each half is
  *    independent: naming only one adds only that one.
- *  - It changes **the prompt and only the prompt**. argv is identical to the argv of a project
- *    that names nothing, and no observation and no configured value reaches a command line.
- *    The prompt still arrives on the child's stdin.
+ *  - It changes **the prompt and only the prompt**. Set the prompt itself aside — since #329 it
+ *    travels down whichever channel the backend declares, and for this command line that is the
+ *    end of argv — and the argv is identical to that of a project that names nothing: no
+ *    observation and no configured value reaches the command line by any other route.
  *
  * **This is a lint over instructions, not a test of behaviour.** No check here can show that an
  * agent obeys `--repo`; what it can do is fail when the strings are dropped or reworded into
@@ -109,14 +110,20 @@ writeFileSync(registryPath, JSON.stringify({
 
 /** Writes down the two things every case here turns on, then ends the way a real run ends. */
 const stub = join(workDir, 'agent-stub.mjs');
+// Since #329 the channel is the backend's to declare rather than always stdin, and this command
+// line carries no `-p`, so `raw` reads it as one that would draw an interface and the prompt
+// travels as the last argument. The stub takes it from wherever it arrived and reports the argv
+// with it removed, because what the cases below assert is that nothing *other than* the prompt
+// reaches the command line — which is the same property, said about the same argv.
 writeFileSync(stub, `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
+const argv = process.argv.slice(2);
 let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', () => {
-  writeFileSync(process.env.CAPTURE_TO, input, 'utf8');
+  writeFileSync(process.env.CAPTURE_TO, input || argv[argv.length - 1] || '', 'utf8');
   writeFileSync(process.env.CAPTURE_TO + '.argv.json',
-    JSON.stringify(process.argv.slice(2)), 'utf8');
+    JSON.stringify(input ? argv : argv.slice(0, -1)), 'utf8');
   process.stdout.write(process.env.CAPTURE_URL + '\\n');
 });
 `, 'utf8');
@@ -264,9 +271,9 @@ try {
   check('and neither did the observation',
         !bothArgv.some((argument) => argument.includes(OBSERVATION)),
         JSON.stringify(bothArgv));
-  check('the prompt reached the agent on stdin, which is where it was read from',
+  check('the prompt reached the agent whole, on the channel its backend declared',
         promptSeen().includes(OBSERVATION) && promptSeen().includes(REPO),
-        'the stub only ever writes down what it read off stdin');
+        'the stub writes down whichever of the two channels it arrived on');
 } finally {
   rmSync(workDir, { recursive: true, force: true });
 }

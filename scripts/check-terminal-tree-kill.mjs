@@ -136,6 +136,12 @@ setTimeout(() => process.exit(0), 120_000);
  * kind of change that can quietly cost a process its stdin. So this reads the prompt back out
  * and reports the end of file separately from the prompt itself — the two are what
  * `options.input` and `stdin.end()` are for, and either could break without the other.
+ *
+ * It is started with `-p` on its command line, because since #329 that is what makes it the
+ * shape this case is about: a prompt goes down whichever channel the backend declares, and a
+ * command line with no print flag in it declares argv. The sentence above — *"every
+ * non-interactive agent run is exactly this shape"* — is a claim about a **headless** run, and
+ * this is now how the fixture says so.
  */
 const promptShell = join(workDir, 'stub-prompt-shell.mjs');
 writeFileSync(promptShell, `#!/usr/bin/env node
@@ -303,7 +309,7 @@ try {
       let transcript = '';
       let code = 'never exited';
       const done = new Promise((resolve) => {
-        const session = new TerminalSession('prompt', workspace, ${JSON.stringify(shellCommandFor(promptShell))}, {
+        const session = new TerminalSession('prompt', workspace, ${JSON.stringify(`${shellCommandFor(promptShell)} -p`)}, {
           onOutput: (data) => { transcript += data; },
           onExit: (exitCode) => { code = exitCode; resolve(session); },
         }, null, { input: 'THE-PROMPT' });

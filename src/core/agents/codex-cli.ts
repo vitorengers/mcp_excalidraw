@@ -1,8 +1,8 @@
 /**
  * OpenAI's Codex CLI, named — the second backend, and the one that proves the seam is real.
  *
- * Nothing about it is a variation on Claude Code. It takes its prompt with a `-` rather than by
- * closing stdin on an argument-less run, it spells "speak while you work" `--json` rather than
+ * Nothing about it is a variation on Claude Code. It takes its prompt as an argument rather than
+ * by closing stdin on an argument-less run, it spells "speak while you work" `--json` rather than
  * `--output-format stream-json --verbose`, its reasoning effort is a config override rather than
  * a flag, and its stream is a different grammar entirely: items with a type, rather than content
  * blocks inside an assistant message. Every one of those was a thing `issue-agent.ts` used to
@@ -12,8 +12,10 @@
  * The facts below were confirmed against the CLI's own non-interactive documentation rather than
  * remembered:
  *
- *  - the prompt is an argument, and `-` is what says "read it from stdin instead" — without it a
- *    piped prompt is read as *context* beside an instruction that is not there;
+ *  - the prompt is an argument — *"Pass a task prompt as a single argument"* — and `-` is what
+ *    says "read it from stdin instead"; *"If stdin is piped and you also provide a prompt
+ *    argument, Codex treats the prompt as the instruction and the piped content as additional
+ *    context"*, so a prompt sent down stdin with no `-` is an agent with no orders;
  *  - `--json` turns stdout into a JSON Lines stream of every event;
  *  - `-m` / `--model` selects the model, and `-c key=value` overrides one config key, which is
  *    where `model_reasoning_effort` lives;
@@ -26,6 +28,14 @@
  *    `error`, and `item.started` / `item.updated` / `item.completed` whose `item.type` is one of
  *    `agent_message`, `reasoning`, `command_execution`, `file_change`, `mcp_tool_call`,
  *    `web_search`, `todo_list` or `error`.
+ *
+ * **The argument is the default, and the dash is never written for the operator.** Both forms
+ * work, and the difference is what happens when the reading is wrong: a prompt handed to `codex
+ * exec` on stdin with no `-` in front of it is read as context beside an instruction that does
+ * not exist, and the run does something nobody asked for rather than failing. Writing `-` for
+ * the operator would also spend stdin, and `codex exec -` in a tab the reader was meant to
+ * answer waits on a pipe nobody is going to close. So the dash is honoured where they wrote it,
+ * in the position they wrote it in, and added nowhere.
  *
  * **Everything is drawn on `item.completed`.** `item.started` exists for some kinds and would
  * make a long command appear the moment it began, which is worth something to a reader — but the
@@ -75,6 +85,11 @@ export const codexCliAdapter: AgentAdapter = {
     // The research agent never carries `--yolo`, whoever wrote it — see `PermissionPosture`.
     const permissions = AGENT_PERMISSIONS['codex-cli'];
     const args = spec.role === 'issue' ? withoutFullAccess(permissions, rest) : [...rest];
+    // Read off the operator's own tokens, not off `args`, so that nothing this adapter appends
+    // below could ever be mistaken for something they asked for. `rest` rather than `args` for
+    // the other direction too: `withoutFullAccess` takes a sandbox flag off a research run, and
+    // a `-` they wrote is not one of those and must survive it.
+    const pinned = rest.includes(STDIN_MARKER);
 
     // First, because it is a subcommand and not a flag. An operator who already wrote it — as
     // they would to reach `--full-auto` — keeps their own spelling and their own position.
@@ -88,15 +103,19 @@ export const codexCliAdapter: AgentAdapter = {
     // word, so a project's effort placed after the operator's own overrides wins.
     if (spec.effort) args.push('-c', `model_reasoning_effort=${spec.effort}`);
     args.push(...(spec.extraArgs ?? []));
-    // Last of all, because it is the positional the prompt would otherwise have been.
-    if (headless) args.push(STDIN_MARKER);
 
     return {
       command,
       args,
-      prompt: headless
-        ? { via: 'stdin', marker: STDIN_MARKER }
-        : { via: 'argv' },
+      // The prompt is a positional argument, and stdin beside one is *context*. The dash is
+      // honoured where the operator wrote it and never written for them — see `pinned` above.
+      prompt: headless && pinned
+        ? { via: 'stdin', stdin: 'prompt', marker: STDIN_MARKER }
+        // Closed rather than left alone, both ways round. `codex exec <prompt>` handed an
+        // inherited pipe with no writer blocks in `read()` for ever (openai/codex#20919), and
+        // an interactive run reaching this has already been given pipes instead of the
+        // terminal it wanted, so there is no reader to keep stdin for either.
+        : { via: 'argv', stdin: headless ? 'closed' : 'reader' },
       line: quotedLine(command, args),
     };
   },

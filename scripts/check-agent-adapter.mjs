@@ -30,8 +30,10 @@
  *
  * The three stubs are read back for their own argv, so what each backend *spelled* is asserted
  * rather than assumed: the `raw` one is handed the operator's flags untouched, and the named
- * ones write their own — `--print --output-format stream-json --verbose` for one, `exec --json
- * -` for the other, including the `-` that says the prompt is arriving on stdin.
+ * ones write their own — `--print --output-format stream-json --verbose` for one, `exec --json`
+ * for the other. Which channel the prompt then travels down is
+ * `scripts/check-agent-prompt-delivery.mjs`'s subject, and these cases take it from the
+ * invocation rather than assuming stdin the way they once did.
  *
  * Self-contained and offline: three stub agents in a throwaway directory, `runAgent` in this
  * process, no canvas server, no browser, no GitHub. Run `./node_modules/.bin/tsc` first.
@@ -298,10 +300,17 @@ console.log('\n2. a named backend writes its own flags; the passthrough writes n
         codex.args.includes('--json')
         && codex.args.join(' ').includes('-c model_reasoning_effort=high'),
         JSON.stringify(codex.args));
-  check('and it ends with the argument that says the prompt is on stdin',
-        codex.args[codex.args.length - 1] === '-' && codex.prompt.marker === '-'
-        && codex.prompt.via === 'stdin',
+  check('and it takes its prompt as an argument, with no dash written for the operator',
+        !codex.args.includes('-') && codex.prompt.marker === undefined
+        && codex.prompt.via === 'argv' && codex.prompt.stdin === 'closed',
         JSON.stringify(codex));
+
+  const codexPinned = adapterFor('codex-cli')
+    .invoke({ mode: 'headless', role: 'implement', command: 'codex exec -' });
+  check('an operator who pinned the dash form gets it, and stdin with it',
+        codexPinned.args.includes('-') && codexPinned.prompt.marker === '-'
+        && codexPinned.prompt.via === 'stdin',
+        JSON.stringify(codexPinned));
 }
 
 // ─── 3. the raw backend is byte for byte what a board runs today ──
@@ -399,30 +408,35 @@ for (const [name, backend, command, spelled, step] of [
   ['claude-stub', 'claude-code', `node "${slash(claudeStub)}"`,
    ['--print', '--output-format', 'stream-json', '--verbose'], 'Bash'],
   ['codex-stub', 'codex-cli', `node "${slash(codexStub)}" exec`,
-   ['exec', '--json', '-'], 'command_execution'],
+   ['exec', '--json'], 'command_execution'],
   ['raw-stub', 'raw', `node "${slash(rawStub)}" -p --output-format stream-json --verbose`,
    ['-p', '--output-format', 'stream-json', '--verbose'], 'Bash'],
 ]) {
   console.log(`\n   ${backend}`);
-  const { run, usage, rendered, record } = await runThrough(name, backend, command);
+  const { invocation, run, usage, rendered, record } = await runThrough(name, backend, command);
 
   check('the run reaches the pull request URL', run.ok === true && run.url === PULL_URL,
         `${JSON.stringify(run.url)} ${JSON.stringify(run.error)}`);
 
+  // The prompt travels in argv for a backend that reads it there, so it comes off before the
+  // flags are compared — what this case is about is what the backend *spelled*, and
+  // `check-agent-prompt-delivery.mjs` is where the channel itself is asserted.
+  const onArgv = invocation.prompt.via === 'argv';
+  const argv = onArgv ? record.argv.slice(0, -1) : record.argv;
+  const delivered = onArgv ? record.argv[record.argv.length - 1] : record.prompt;
+
   // The flags after the stub's own path, which is what this backend decided to write. Asserted
-  // as a run rather than as the tail, because a named backend also writes a permission posture
-  // now and the `-` that says "prompt on stdin" stays last of all — see
-  // `check-agent-permissions.mjs`, which is where the posture itself is held.
+  // as a run *inside* the argv rather than as its tail, because a named backend also writes a
+  // permission posture now, after these — see `check-agent-permissions.mjs`, which is where the
+  // posture itself is held. The `-` clause that stood here went with the dash: `codex-cli`
+  // spells one only where the operator pinned it, and none of these commands does.
   check('the binary was given exactly the arguments this backend spells',
-        record.argv.join(' ').includes(spelled.join(' '))
-        || (spelled.includes('-') && record.argv[record.argv.length - 1] === '-'
-            && spelled.filter((flag) => flag !== '-')
-              .every((flag) => record.argv.includes(flag))),
+        argv.join(' ').includes(spelled.join(' ')),
         JSON.stringify(record.argv));
 
-  check('and the prompt arrived on stdin, byte for byte',
-        record.prompt === PROMPT,
-        `${JSON.stringify(record.prompt.slice(0, 40))} vs ${JSON.stringify(PROMPT.slice(0, 40))}`);
+  check(`and the prompt arrived on ${onArgv ? 'argv' : 'stdin'}, byte for byte`,
+        delivered === PROMPT,
+        `${JSON.stringify((delivered ?? '').slice(0, 40))} vs ${JSON.stringify(PROMPT.slice(0, 40))}`);
 
   const last = usage[usage.length - 1] ?? null;
   check('the token counts were read out of its own stream',

@@ -26,7 +26,7 @@ import os from 'os';
 import path from 'path';
 import logger from '../utils/logger.js';
 import {
-  invocationArgs, singleQuoted,
+  deliverStdin, invocationArgs, singleQuoted,
   type AgentAdapter, type AgentCommandSpec, type AgentInvocation, type AgentRole,
 } from './agent-adapter.js';
 import { adapterFor } from './agents/index.js';
@@ -1032,11 +1032,14 @@ async function runAgentProcess(
   prompt: string,
   options: RunAgentOptions
 ): Promise<AgentRun> {
-  // A private child always gets the prompt on stdin: it has no interface to draw and no reader
-  // to type into it, so the end of file that closes the prompt is free. What the invocation's
-  // `prompt.via` decides is whether a *hosted* run gets a pseudoterminal — and the marker a
-  // backend needs for stdin is already in its argv.
-  const { command, args, cwd } = buildAgentCommand(workspace, options.invocation, options.directory);
+  // The prompt goes where the backend reads it, here as everywhere else. A private child used
+  // to write it to stdin whatever was running, which is `claude -p`'s contract and nothing
+  // else's — and this is the path *every* research run takes, because `runIssueAgent` and
+  // `runReviseAgent` pass no host at all. `buildAgentCommand` puts it on argv where the
+  // invocation says so, and `deliverStdin` below settles the other end.
+  const { command, args, cwd } = buildAgentCommand(
+    workspace, options.invocation, options.directory, prompt
+  );
   // The article travels with the noun. A fixed one reads as "a issue URL".
   //
   // The host travels with it too, and that is the whole of #322 at this end: a run that
@@ -1068,9 +1071,10 @@ async function runAgentProcess(
     const child = spawn(command, args, {
       cwd,
       env: agentEnv(),
-      // No shell: the prompt arrives over stdin, so nothing has to survive quoting.
-      // Passing multi-line text as an argument breaks on cmd.exe long before the
-      // agent ever sees it.
+      // No shell, which is what makes a prompt on argv safe to pass at all: `spawn` hands the
+      // elements to the process as they are, so several hundred words with quotes, backticks
+      // and a `$` in them survive. With `shell: true` cmd.exe would take them apart long
+      // before the agent saw them.
       windowsHide: true,
     });
 
@@ -1079,7 +1083,10 @@ async function runAgentProcess(
     options.onPid?.(child.pid ?? null);
 
     child.stdin?.on('error', () => { /* the agent may exit before reading stdin */ });
-    child.stdin?.end(prompt);
+    // The prompt and its end of file, or just the end of file — the invocation's to say. Either
+    // way the pipe is closed: a child left holding one nobody will write to blocks in `read()`
+    // rather than starting, and this process is the only writer it could have had.
+    deliverStdin(child.stdin, options.invocation, prompt);
 
     let stdout = '';
     let stderr = '';
