@@ -126,7 +126,7 @@ What a non-loopback bind actually leaves, now that the reads are behind the same
 
 - **Refused with 403 off loopback** — the issue block and the implement run, the terminal, the
   workspace registry and project settings, the directory picker, the GitHub project mirror and
-  card moves, `/api/github-status`, `/api/claude-status`, the restart route, and the board's own
+  card moves, `/api/github-status`, `/api/agent-limits`, the restart route, and the board's own
   contents: `GET /api/elements`, `/api/elements/search`, `/api/elements/:id`, `/api/files`,
   `/api/files/:id`, `/api/docs/:key`, `/api/library` and both snapshot reads. The **WebSocket
   upgrade** is refused there too, because it sends the whole scene on connect and an HTTP guard

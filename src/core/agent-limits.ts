@@ -1,5 +1,13 @@
 /**
- * What each Claude Code environment on this machine has spent, and which account spent it.
+ * What each coding-agent environment on this machine has spent, and which account spent it.
+ *
+ * **This module is the reading, not the policy about who may do it.** The board asks the
+ * backend it is running — `AgentAdapter.readLimits`, optional, absent on every backend that
+ * cannot answer — and today exactly one can, so `agents/claude-code.ts` is what calls in here.
+ * The parsing below is that one backend's document schema and says so; what is deliberately
+ * *not* here is its name, on a file, a route, a class or a variable. Renaming a public route
+ * after the first tag is a breaking change rather than an edit, and a second reader is a
+ * second `readLimits` rather than a third rename of the same symbols (#334).
  *
  * **The data has no supported pull interface. It is pushed, once, into a live session.**
  * Claude Code hands its status line command a JSON document carrying
@@ -15,7 +23,7 @@
  * token in `.credentials.json` is authentication material this repository has never touched
  * and does not start touching here.
  *
- * **A directory, not each home's own file.** `EXCALIDRAW_CLAUDE_STATUS` names one directory
+ * **A directory, not each home's own file.** `VIBEMAXXING_AGENT_LIMITS` names one directory
  * on the host holding one file per environment — `native.json`, `wsl-<distro>.json`. The
  * alternative was to read `<that home>/.claude/…`, which for a distro means either guessing
  * at its `$HOME` through the UNC share or spawning a `wsl.exe` on every poll. A session
@@ -56,7 +64,7 @@ export interface RateWindow {
  * the session", each of the two independently, so an absent one is the normal case and not a
  * failure. Reporting it as `0%` would be a claim that nothing has been spent.
  */
-export interface ClaudeEnvironmentStatus {
+export interface AgentLimitsReading {
   /** What a reader calls this machine: `Windows`, `Host`, or the distro's own name. */
   label: string;
   environment: WorkspaceEnvironment;
@@ -72,7 +80,7 @@ export interface ClaudeEnvironmentStatus {
 }
 
 /** `native.json`, or `wsl-Ubuntu-22.04.json`. */
-export function statusFileFor(environment: WorkspaceEnvironment): string {
+export function limitsFileFor(environment: WorkspaceEnvironment): string {
   return environment.kind === 'wsl' ? `wsl-${environment.distro}.json` : 'native.json';
 }
 
@@ -166,7 +174,7 @@ function windowFrom(source: unknown): RateWindow | null {
 }
 
 /** Nothing said, for an environment nobody has run a session in. */
-function unknown(environment: WorkspaceEnvironment): ClaudeEnvironmentStatus {
+function unknown(environment: WorkspaceEnvironment): AgentLimitsReading {
   return {
     label: labelFor(environment),
     environment,
@@ -193,8 +201,8 @@ async function readOne(
   directory: string,
   environment: WorkspaceEnvironment,
   nowSeconds: number
-): Promise<ClaudeEnvironmentStatus> {
-  const file = path.join(directory, statusFileFor(environment));
+): Promise<AgentLimitsReading> {
+  const file = path.join(directory, limitsFileFor(environment));
 
   let raw: string;
   let modifiedAt: number | null = null;
@@ -239,11 +247,11 @@ async function readOne(
  * The host comes first and the distros follow in name order, so the rows do not move about
  * between polls.
  */
-export async function readClaudeStatus(
+export async function readAgentLimits(
   directory: string,
   registryDistros: readonly string[],
   now: () => number = Date.now
-): Promise<ClaudeEnvironmentStatus[]> {
+): Promise<AgentLimitsReading[]> {
   let fromFiles: WorkspaceEnvironment[] = [];
   try {
     const entries = await fs.readdir(directory);

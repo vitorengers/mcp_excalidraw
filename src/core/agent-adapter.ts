@@ -40,6 +40,7 @@
  */
 import type { AgentAction } from './terminal-palette.js';
 import type { TranscriptState } from './agent-stream-render.js';
+import type { AgentLimitsReading } from './agent-limits.js';
 
 /** The two agents, which are two because granting research must not grant repository writes. */
 export type AgentRole = 'issue' | 'implement';
@@ -217,6 +218,25 @@ export interface AgentAdapter {
    * has heard of.
    */
   actionOf(stepName: string): AgentAction;
+
+  /**
+   * What this backend has spent on each environment of this machine, or absent when it cannot say.
+   *
+   * **Optional, and absence is the answer.** A backend that has no way to report its own rate
+   * limits does not carry this method at all, and the board draws nothing rather than a row of
+   * dashes — `?.()` at the call site is the whole of the branch. A stub returning an empty list
+   * would be a backend claiming to have looked, which is the one answer worse than silence.
+   *
+   * The reading is not a *pull* for the one backend that has it — see `agent-limits.ts` — so the
+   * argument is a directory an operator's own script writes into rather than a session to
+   * interrogate. A future backend that can be asked directly is free to ignore it; what a
+   * backend may not do is make the board learn a second question (#334).
+   */
+  readLimits?(
+    directory: string,
+    registryDistros: readonly string[],
+    now?: () => number
+  ): Promise<AgentLimitsReading[]>;
 }
 
 // ─── Reading and writing a command line ───────────────────────

@@ -195,9 +195,9 @@ export const SETTINGS = [
     description: 'The GitHub CLI on **this machine**, when it is not on `PATH` — [trap-gh-path.md](trap-gh-path.md)'
   },
   {
-    name: 'CLAUDE_STATUS',
+    name: 'AGENT_LIMITS',
     fallback: 'unset',
-    description: 'The directory your Claude Code status line command writes its usage files into. Unset means `GET /api/claude-status` answers 404 and the header shows nothing — [claude-status.md](claude-status.md)'
+    description: 'The directory your coding agent writes its usage files into — today only Claude Code can write them, from its status line command. Unset means `GET /api/agent-limits` answers 404 and the header shows nothing — [agent-limits.md](agent-limits.md)'
   },
   {
     name: 'TERMINAL',

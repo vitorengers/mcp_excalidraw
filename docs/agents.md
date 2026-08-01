@@ -14,6 +14,11 @@ nothing more. Every board is the
 says `--output-format stream-json`. So the recipes below are what an operator writes, and they
 are unchanged by that seam existing.
 
+One thing a backend may decline to do at all: `AgentAdapter.readLimits` is **optional**, and a
+backend that has no way to report what it has spent simply does not carry it. Claude Code does;
+`codex-cli` and `raw` do not, so on those the usage HUD draws nothing rather than a row of
+dashes — [agent-limits.md](agent-limits.md).
+
 The documentation was the part that assumed. The command was specified once, in the
 configuration section of [issue-block.md](issue-block.md#configuration), with the binary
 genericised to `<agent-binary>` and Claude Code's flags left around it — `-p`, `--model`,

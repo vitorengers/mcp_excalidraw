@@ -1,19 +1,19 @@
-import './ClaudeStatusHud.css'
+import './AgentLimitsHud.css'
 
-/** One rate-limit window, exactly as `GET /api/claude-status` reports it. */
-export interface ClaudeRateWindow {
+/** One rate-limit window, exactly as `GET /api/agent-limits` reports it. */
+export interface AgentRateWindow {
   usedPercent: number
   /** Unix epoch seconds, or null when the reading did not say. */
   resetsAt: number | null
 }
 
 /** One machine's reading. Every field is independently nullable, and null is "not said". */
-export interface ClaudeEnvironmentStatus {
+export interface AgentLimitsReading {
   label: string
   environment: { kind: string; distro?: string }
   account: string | null
-  fiveHour: ClaudeRateWindow | null
-  sevenDay: ClaudeRateWindow | null
+  fiveHour: AgentRateWindow | null
+  sevenDay: AgentRateWindow | null
   observedAt: number | null
   ageSeconds: number | null
   stale: boolean
@@ -47,38 +47,38 @@ function ageLabel(ageSeconds: number): string {
   return `${Math.max(1, Math.floor(ageSeconds / 60))}m old`
 }
 
-function windowText(name: string, window: ClaudeRateWindow | null, nowSeconds: number): JSX.Element {
+function windowText(name: string, window: AgentRateWindow | null, nowSeconds: number): JSX.Element {
   // An em dash, not `0%`. A window "appears only for Claude.ai subscribers (Pro/Max) after
   // the first API response in the session", each of the two independently — so absent is the
   // ordinary case, and reporting it as zero would be a claim that nothing has been spent.
   if (!window) {
-    return <span className="claude-status__silent">{name} —</span>
+    return <span className="agent-limits__silent">{name} —</span>
   }
   const resets = untilReset(window.resetsAt, nowSeconds)
   return (
-    <span className="claude-status__window">
+    <span className="agent-limits__window">
       {name} {Math.round(window.usedPercent)}%
-      {resets && <span className="claude-status__resets"> ({resets})</span>}
+      {resets && <span className="agent-limits__resets"> ({resets})</span>}
     </span>
   )
 }
 
 /**
- * One row per Claude Code environment on this machine: what it has spent and who spent it.
+ * One row per coding-agent environment on this machine: what it has spent and who spent it.
  *
- * Rendered only when the board is configured to look — `EXCALIDRAW_CLAUDE_STATUS` unset
+ * Rendered only when the board is configured to look — `VIBEMAXXING_AGENT_LIMITS` unset
  * makes the route a 404 and this component is never given anything to draw.
  *
  * `data-poll-ms` is the interval the page is actually using, reflected onto the element so
  * that "one poll a minute" is something a reader — and
- * `scripts/check-claude-status-browser.mjs` — can see rather than take on trust.
+ * `scripts/check-agent-limits-browser.mjs` — can see rather than take on trust.
  */
-export function ClaudeStatusHud({
+export function AgentLimitsHud({
   environments,
   pollMs,
   now = Date.now(),
 }: {
-  environments: ClaudeEnvironmentStatus[]
+  environments: AgentLimitsReading[]
   pollMs: number
   /** Injected so a check can put a countdown at a known point rather than race the clock. */
   now?: number
@@ -88,9 +88,9 @@ export function ClaudeStatusHud({
 
   return (
     <div
-      className="claude-status"
+      className="agent-limits"
       data-poll-ms={pollMs}
-      title="Claude Code usage, as each environment's status line last reported it"
+      title="Coding agent usage, as each environment last reported it"
     >
       {environments.map((environment) => {
         // "Nobody has run a session here" is a different answer from "this machine is idle",
@@ -104,22 +104,22 @@ export function ClaudeStatusHud({
         return (
           <div
             key={environment.label}
-            className={`claude-status__row${environment.stale ? ' claude-status__row--stale' : ''}`}
+            className={`agent-limits__row${environment.stale ? ' agent-limits__row--stale' : ''}`}
           >
-            <span className="claude-status__env">{environment.label}</span>
+            <span className="agent-limits__env">{environment.label}</span>
             {environment.account && (
-              <span className="claude-status__account" title={environment.account}>
+              <span className="agent-limits__account" title={environment.account}>
                 {environment.account}
               </span>
             )}
             {silent ? (
-              <span className="claude-status__unknown">not seen</span>
+              <span className="agent-limits__unknown">not seen</span>
             ) : (
               <>
                 {windowText('5h', environment.fiveHour, nowSeconds)}
                 {windowText('7d', environment.sevenDay, nowSeconds)}
                 {environment.stale && environment.ageSeconds !== null && (
-                  <span className="claude-status__age">{ageLabel(environment.ageSeconds)}</span>
+                  <span className="agent-limits__age">{ageLabel(environment.ageSeconds)}</span>
                 )}
               </>
             )}
@@ -130,4 +130,4 @@ export function ClaudeStatusHud({
   )
 }
 
-export default ClaudeStatusHud
+export default AgentLimitsHud
