@@ -78,6 +78,19 @@ mkdirSync(workDir, { recursive: true });
 /** The POSIX home this check invents, so no case depends on where the host keeps its own. */
 const HOME = '/home/checker';
 
+/** The variable this check puts into its own environment to watch it reach a child. */
+const WITNESS = 'AGENT_PATH_CHECK_WITNESS';
+
+/**
+ * The two names `agentEnv` removes on purpose, which the environment case therefore exempts.
+ *
+ * `CLAUDE_CODE_CHILD_SESSION` unconditionally, `NO_COLOR` when `CLAUDECODE` is beside it —
+ * both are asserted by `check-child-session-env.mjs` and `check-no-color-env.mjs`, and both
+ * are listed here so that this file's "nothing else is filtered" case says nothing about
+ * whether they went.
+ */
+const DELIBERATELY_STRIPPED = ['CLAUDE_CODE_CHILD_SESSION', 'NO_COLOR'];
+
 /** A candidate directory as it lands under a planted root, drive letter and all. */
 function under(root, candidate) {
   return join(root, candidate.replace(/^[A-Za-z]:/, ''));
@@ -225,11 +238,22 @@ try {
 
   console.log('\n4. agentEnv carries the repair, on POSIX as on Windows');
 
+  // A key this check plants in its own environment, so that one case at least does not depend
+  // on what the invoking shell happens to have set, nor on how it spelled it — see `valueOf`
+  // for why a real Windows variable answers to two spellings. This one has a single spelling
+  // on all three platforms because nothing but this file ever sets it, and a value only this
+  // file could have written.
+  process.env[WITNESS] = 'planted by check-agent-path';
+
   const env = agentEnv({ platform: 'linux', path: minimalPath(posixRoot), home: HOME, root: posixRoot });
   check('the PATH it hands a child is not the one the server inherited',
         env.PATH !== process.env.PATH && env.PATH !== minimalPath(posixRoot), brief(env.PATH));
   check('and it holds the planted directory', entriesOf(env.PATH ?? '').includes(under(posixRoot, '/opt/homebrew/bin')),
         brief(env.PATH));
+  check('a variable this check planted reaches the child with its value',
+        valueOf(env, WITNESS) === valueOf(process.env, WITNESS),
+        `${WITNESS}=${String(valueOf(env, WITNESS))}`);
+
   // Named, then filtered by what this process actually has: a variable the host never set
   // would compare `undefined` to `undefined` and pass whatever `agentEnv()` did with it.
   // `SystemRoot` exists only on Windows and `HOME` only where something POSIX-shaped put it
@@ -238,11 +262,31 @@ try {
   const witnesses = ['SystemRoot', 'HOME', 'PATHEXT', 'USER', 'LANG']
     .filter((name) => valueOf(process.env, name) !== undefined);
   const dropped = witnesses.filter((name) => valueOf(env, name) !== valueOf(process.env, name));
-  check('the rest of the environment is still the process\'s',
+  check('the variables it names arrive with the values this process holds',
         witnesses.length > 0 && dropped.length === 0,
         witnesses.length === 0
           ? 'this check found none of its own process\'s variables to look for'
           : `agentEnv corrects keys, it does not filter the environment — ${dropped.join(', ')} did not survive it`);
+
+  // And then every key, by name, because a named list cannot notice a variable it does not
+  // name: the five above would all survive a function that dropped everything else. The
+  // comparison is the host's own rule again — case-insensitive where the environment block
+  // is, exact where it is not — so it agrees with `valueOf` above rather than loosening what
+  // that half asserts. Only the two names `agentEnv` strips on purpose are exempt, and those
+  // are asserted by `check-child-session-env.mjs` and `check-no-color-env.mjs`.
+  const keyOf = (name) => (process.platform === 'win32' ? name.toUpperCase() : name);
+  const arrived = new Set(Object.keys(env).map(keyOf));
+  const missing = Object.keys(process.env)
+    .filter((name) => !DELIBERATELY_STRIPPED.includes(name.toUpperCase()))
+    .filter((name) => !arrived.has(keyOf(name)));
+  // Named, but not all sixty of them: against a function that filtered the lot the list is
+  // this machine's whole environment block, and the first few say it just as well.
+  const named = missing.length > 6
+    ? `${missing.slice(0, 6).join(', ')} and ${missing.length - 6} more`
+    : missing.join(', ');
+  check('the rest of the environment is still the process\'s',
+        missing.length === 0,
+        `agentEnv corrects keys, it does not filter the environment — ${named} did not arrive`);
 
   // Called the way every caller in `src/` calls it: with nothing at all.
   const live = agentPath();
@@ -255,6 +299,7 @@ try {
     console.error(`  FAIL  the check itself threw — ${error?.stack ?? error}`);
   }
 } finally {
+  delete process.env[WITNESS];
   rmSync(workDir, { recursive: true, force: true, maxRetries: 5 });
 }
 
