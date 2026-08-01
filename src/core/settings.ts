@@ -175,6 +175,11 @@ export const SETTINGS = [
     description: 'How often a workspace with its queue on looks for a free slot. The timer does not exist until a queue is turned on'
   },
   {
+    name: 'IMPLEMENT_RECLAIM_MS',
+    fallback: '`30000`',
+    description: 'How long a run whose agent process has gone must sit before its slot is given back. The wait is there because a run\'s process ending is not the run ending — the server still has GitHub to ask and a checkout to release. `0` gives the slot back on the first sighting'
+  },
+  {
     name: 'ISSUE_MEMO_MS',
     fallback: '`30000`',
     description: 'How long one `gh` read of an issue is reused. `0` turns the memo off'

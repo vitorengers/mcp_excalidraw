@@ -7,7 +7,7 @@ it, a workbench for running a software project on that canvas: blocks that open 
 your GitHub project mirrored beside them, implementations that each get a git worktree of their
 own, and real shells.
 
-![This repository's own board: the GitHub project mirrored on the canvas, an issue block, and a terminal tab](docs/media/board.png)
+![This repository's own board: the GitHub project mirrored on the canvas, an issue block, and a terminal tab](docs/media/board-hero.png)
 
 ## Installation
 
@@ -49,6 +49,8 @@ catalogue and a configuration block for each MCP client.
    the repository, opens the issue with `gh`, and the URL lands back on the block. From the
    mirror's Todo column you can then have it implemented.
 
+![Two projects on the tab strip, and the board a project with none of its own comes up holding: two marked regions with their keys in their titles, cards that open this tool's documentation, and an issue block](docs/media/first-run-welcome-board.png)
+
 ## The blocks on the canvas
 
 A shape's `customData.kind` decides what it is; a `docKey` instead makes it a documentation card
@@ -61,6 +63,8 @@ that opens the matching markdown in a panel ([docs/docs-block.md](docs/docs-bloc
 | `issue` | Write an observation into the shape; an agent investigates the repository, opens the issue, and the URL lands back on the block — [docs/issue-block.md](docs/issue-block.md) |
 | `project-board` | Your GitHub project, mirrored on the canvas and redrawn from GitHub on every read, with two-way moves and a queue that implements issues — [docs/project-board.md](docs/project-board.md) |
 | `terminal` | Real shells on the canvas, as tabs — [docs/terminal.md](docs/terminal.md) |
+
+![An observation written into an issue block, with the block's panel open beside it and the button that sends an agent to research the repository and open the issue](docs/media/issue-block-panel.png)
 
 **Marks** — a shape drawn *around* part of the board, which does nothing but say where a key
 lands:
@@ -101,14 +105,15 @@ container path — it was deleted rather than half-supported
 on a server that at the time had no authentication, and carried neither `gh` nor `git`, so most
 of what this tool is could not have run inside it.
 
-**Security note:** the canvas server binds `127.0.0.1` only by default, and the GitHub half is
-bound to that — off loopback every GitHub-backed route answers `403`, so what you get on a
-network interface is a drawing canvas and nothing else, and the board says so on itself rather
-than showing you an empty region. Everything under `/api` is behind a secret the server writes
-to your state directory at startup and the launcher hands to your browser; you never type it,
-and nothing that cannot read that file can drive the board. If you expose it on a network
-interface (`HOST=0.0.0.0`) anyway, put network-level access controls in front: that secret is
-one shared token, not a login.
+**Security note:** the canvas server binds `127.0.0.1` only by default, and the whole tool is
+bound to that — off loopback every GitHub-backed route answers `403`, and so does every read of
+what the board holds, down to the WebSocket that would have streamed the scene, so a board on a
+network interface answers nothing worth having and says so on itself rather than showing you an
+empty region. Everything under `/api` is behind a secret the server writes to your state
+directory at startup and the launcher hands to your browser; you never type it, and nothing that
+cannot read that file can drive the board. If you expose it on a network interface
+(`HOST=0.0.0.0`) anyway, put network-level access controls in front: that secret is one shared
+token, not a login.
 **[docs/SECURITY.md](docs/SECURITY.md) is the whole of it** — what the tool runs as, which
 switches spawn a coding agent or a real shell and what each one grants, the origin gate in front
 of every route, and where to report a vulnerability.

@@ -1,5 +1,5 @@
 import { getCommonBounds } from '@excalidraw/excalidraw'
-import type { ExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
+import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 
 /**
  * The zoom a board is written at.
