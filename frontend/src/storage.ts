@@ -6,7 +6,7 @@
  * far the documentation has been pushed per board, each board's camera, and which rows of a
  * folded transcript the reader has opened. They accumulated one at a time, each spelled at
  * the point it was read — and the theme was not even spelled as a constant, but as the same
- * literal written out twice, one read and one write, six thousand lines apart.
+ * literal written out twice, one read and one write, five thousand lines apart.
  *
  * That is a set nobody could enumerate, which made it a set nobody could rename safely. A
  * pass that caught the six named constants missed the theme; a pass that caught all eight
