@@ -54,7 +54,8 @@ error.
 JSON results on stdout — except `describe`, which is plain text by design, and raw content when
 `--out` is omitted (`export` prints the scene JSON, `screenshot --format svg` prints SVG).
 Diagnostics go to stderr. Exit codes: `0` ok, `1` error, `2` usage, `3` canvas unreachable,
-`4` a browser tab is required. The canvas URL comes from `EXPRESS_SERVER_URL` or `--url`.
+`4` a browser tab is required. The canvas URL comes from `EXPRESS_SERVER_URL` or `--url`, and
+which project board is drawn on from `--workspace` — see below.
 
 Labels and arrow bindings take the agent-friendly spelling everywhere: `"text"` on any shape,
 `"startElementId"` and `"endElementId"` on arrows. Normalisation is automatic.
@@ -188,8 +189,24 @@ anyway.
 
 `scripts/check-canvas-version-skew.mjs` holds all of it, `restart` included.
 
-## Limitation
+## Which project board a command draws on
 
-Like the MCP tools, no command sends `?workspace=`, so the CLI always acts on the `default`
-store. Driving a registered project board from the CLI is not possible today; that needs a
-`--workspace` flag threaded through `src/core/canvas-client.ts`.
+`--workspace <id>` names one, on any command, and `--workspace=<id>` is the same thing:
+
+```bash
+vibemax add --workspace board-tool elements.json
+vibemax describe --workspace board-tool
+```
+
+It is global rather than per-command — the same question for all of them — so it is stripped
+from the arguments before the command parses them, exactly as `--url` is.
+`EXCALIDRAW_WORKSPACE` is the same answer for a whole session, and the flag beats it.
+
+Name none and a board with one registered project uses it, a board with none uses the `default`
+scratch canvas, and a board with **several refuses the command and lists the ids** — exit code
+`2`, because it is the caller having said too little rather than the canvas failing. An id
+nobody registered is refused the same way. [workspaces.md](workspaces.md) is where that rule and
+its reasoning live.
+
+Until #344 no command sent `?workspace=` at all, so the CLI always acted on `default` and
+driving a registered project board from it was not possible.
