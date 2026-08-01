@@ -825,6 +825,8 @@ Each pass now records how it ended, and `GET /api/implement` carries it as `queu
 | `nothing-startable` | The column held nothing this queue may start. The resting state of a drained board. | no |
 | `cap-full` | Every slot is taken. `detail` names the runs holding them. | **yes** |
 | `reclaimed` | It gave slots back from runs that were over and never said so. `detail` names them and what closed each. | no |
+| `blocked` | Every card it could have started declares a dependency that is still open, and nothing has run against it yet. `detail` names who waits on what. | no |
+| `deadlocked` | The same, except the dependency already holds a settled run. Nothing will start it a second time, so the wait cannot end. | **yes** |
 | `no-column` | The project has no column by the configured name. | **yes** |
 | `no-project` | The workspace is gone, unusable, or has no `githubProject`. | **yes** |
 | `unreadable` | The board read failed — `gh` unresolvable, an expired login, an outage. | **yes** |
@@ -838,6 +840,15 @@ the console.
 
 `lastPass` is `null` until a pass has run since the switch was last flipped, and flipping it
 clears whatever the last one found: a queue that is off is not stalled, it is off.
+
+**Waiting is quiet; a wait that cannot end is not.** A card whose foundation is open and has not
+run yet is the dependency rule working, and a queue that announced that would announce it on
+every pass — so `blocked` says nothing and the toggle stays whole. A foundation that is open and
+*already holds a settled record* is a different fact: `dispatchQueue` passes over any issue the
+implement registry answers for, so nothing will start it again and everything built on it waits
+for ever. That is `deadlocked`, it stalls, and the detail names the dependent, the dependency and
+the state of the record standing in the way. Observed on 2026-08-01 (#476): seven cards frozen
+behind #326 for over two hours while the board drew a queue nobody needed to look at.
 
 **The commonest stall is `cap-full` with nobody working.** Implementing has no timeout by design,
 so an agent that wedged — or an interactive run nobody ended (see "Interactive runs and `-p`") —
