@@ -261,9 +261,13 @@ const CODEX_STREAM = [
     type: 'item.completed',
     item: { id: 'item_2', type: 'agent_message', text: `Merged and landed: ${PULL_URL}` },
   }),
+  // `cached_input_tokens` is a **share of** `input_tokens` on this backend rather than a figure
+  // beside it — the opposite of Claude Code's disjoint `cache_read_input_tokens` — so this is a
+  // run that processed 3000 input tokens, half of them off the cache. See
+  // `scripts/lib/codex-capture.mjs` for the capture that measures it.
   JSON.stringify({
     type: 'turn.completed',
-    usage: { input_tokens: 1500, cached_input_tokens: 1500, output_tokens: 222 },
+    usage: { input_tokens: 3000, cached_input_tokens: 1500, output_tokens: 222 },
   }),
 ];
 

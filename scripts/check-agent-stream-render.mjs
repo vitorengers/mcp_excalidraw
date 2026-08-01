@@ -287,9 +287,10 @@ writeFileSync(codexStubFile,
 // Through the backend's own invocation rather than through a hand-written command line: what a
 // session renders in is decided by the adapter it was given, and building the invocation here is
 // what proves a board naming `codex-cli` gets this transcript rather than a wall of JSON.
-// The stub's own path carries the `exec` subcommand, the way `check-agent-adapter.mjs` spells it:
-// the backend puts `exec` first when a command line has not already got one, which for a stub
-// binary would be a subcommand `node` reads as the script to run.
+//
+// The command line carries the `exec` subcommand itself, the way `check-agent-adapter.mjs`
+// spells it: the backend puts `exec` first when a command line has not got one, and in front of
+// a stub that is a word `node` would read as the script to run.
 const codexCommand = `${node} ${JSON.stringify(codexStubFile)} exec`;
 const codex = await runSession(codexCommand, {
   adapter: codexAdapter,
@@ -305,7 +306,7 @@ check("the agent's prose is shown as prose, on a line of its own",
   JSON.stringify(codex.shown.slice(0, 200)));
 check('a command it ran is one readable line naming the command',
   codexLines.some((line) => /^.{0,4}command_execution\b/.test(line)
-    && line.includes('all cases passed') === false && line.includes('powershell')),
+    && line.includes('powershell') && !line.includes('all cases passed')),
   JSON.stringify(codexLines.filter((line) => line.includes('command_execution'))));
 check("that command's output is shown under it",
   codexLines.some((line) => line === 'all cases passed' || line.endsWith(' all cases passed')),
