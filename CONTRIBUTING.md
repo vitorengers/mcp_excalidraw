@@ -19,7 +19,7 @@ follow.
 5. Run `npm test` and read the output.
 6. Open a pull request whose body says `Closes #N`. A maintainer reviews it and merges it.
 
-The four rules below are the ones a review will hold you to.
+The rules below are the ones a review will hold you to.
 
 ## Everything written into the repository is English
 

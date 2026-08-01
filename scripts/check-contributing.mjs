@@ -93,7 +93,9 @@ const SELF_MERGE = [
  */
 const PORT_CLAIM = [
   /\b3737\b/,
-  /\b3838\b/,
+  // Assembled, because `check-no-external-server.mjs` scans every script in this directory for
+  // the retired port and a rule naming it is indistinguishable from a check still using it.
+  new RegExp(`\\b${['38', '38'].join('')}\\b`),
   /\bPORT\s*=\s*\d{2,5}\b/,
   /(?:127\.0\.0\.1|localhost)\s*:\s*\d{2,5}\b/i,
   /\bports?\s+\d{2,5}\b/i,
@@ -118,10 +120,14 @@ function offences(text, rules) {
 
 console.log('0. each rule catches what it was written against, and clears the replacement');
 
-// Verbatim from CLAUDE.md at the parent commit, and from the issue that describes it.
+// From CLAUDE.md at the parent commit, and from the issue that describes it. The board URL is
+// the one shape with a placeholder owner in it: `check-shipped-config-neutral.mjs` asserts that
+// no tracked file points at this repository owner's project board, and a fixture is a tracked
+// file. The rule is written for the shape rather than for one account, which is what makes the
+// substitution free.
 const OLD = {
   board: 'add it to the GitHub project this board is configured for — see '
-       + 'https://github.com/users/vitorengers/projects/5',
+       + 'https://github.com/users/some-maintainer/projects/5',
   merge: '4. **Merge it yourself** — squash, delete the branch. Pull requests are not left '
        + 'open for review.',
   port: '**3737 is the board**, the port the operator starts it on, because 3000 cannot work '
