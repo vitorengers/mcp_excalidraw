@@ -16,6 +16,10 @@ done in the maintainer's own checkout — is in [MAINTAINERS.md](MAINTAINERS.md)
 spawned by this project's own board**, into a worktree it created for an issue, that file is
 your authority and it is not the same workflow as the one below.
 
+Read [docs/architecture.md](docs/architecture.md) before you go looking for where something
+lives. It is one page: every directory, and one press on an issue block followed through the
+route, the workspace, the worktree and the prompt to the agent it spawns.
+
 ## The loop
 
 1. Open an issue, or work from one you were given.
