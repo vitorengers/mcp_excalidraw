@@ -113,7 +113,10 @@ if (!seam) {
 }
 
 const { adapterFor } = registry;
-const { commandLineInvocation, tokenizeCommand } = adapterModule;
+const { tokenizeCommand } = adapterModule;
+// Reading a command line for what it *means* belongs to the one backend whose contract is a
+// string it did not write (#330), so this comes from there rather than from the adapter module.
+const { commandLineInvocation } = (await loadDist(join('core', 'agents', 'raw.js'))) ?? {};
 
 const PULL_URL = 'https://github.com/vitorengers/vibemaxxing/pull/326';
 

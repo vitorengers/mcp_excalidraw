@@ -2,15 +2,23 @@
  * Token counts, read out of an agent's own output while it is still running.
  *
  * This is the half of "show the progress" that reaches something this repository does not
- * own. `EXCALIDRAW_IMPLEMENT_AGENT` is a full command line set by whoever starts the
- * board, tokenized and run as given — nothing requires it to be Claude Code, and nothing
- * requires it to say anything about what it is spending. A plain `claude -p` prints prose
- * at exit and no figures at all.
+ * own. A coding agent is a CLI nobody here wrote, and nothing requires it to say anything
+ * about what it is spending: a plain `claude -p` prints prose at exit and no figures at all.
  *
- * So this is opt-in and stays out of the way otherwise: unless the run already asks for a
- * machine-readable stream, nothing here runs, nothing is recorded and the spawn path is byte
- * for byte what it was. For the `raw` backend the server never appends the flag itself —
- * silently rewriting somebody's command line is a decision, not a lookup.
+ * So this is opt-in and stays out of the way otherwise: unless the run streams, nothing here
+ * runs, nothing is recorded and the spawn path is byte for byte what it was.
+ *
+ * **What decides that is `AgentAdapter.streams`, and it is asked of the invocation rather than
+ * of a command line.** This module used to hold the question — a `streamsUsage` regular
+ * expression over `EXCALIDRAW_IMPLEMENT_AGENT`, exported, and read by three unrelated features
+ * — and the argument beside it was that the server must never append the flag, because
+ * rewriting somebody's command line is a decision rather than a lookup. That argument is still
+ * right, and it is now the `raw` backend's alone: `raw` is the backend whose contract is a
+ * string it did not write, so it reads that string and appends nothing to it. A *named* backend
+ * builds the line, so writing `--output-format stream-json` into it is not rewriting anybody's
+ * command — it is spelling its own — and asking a regular expression about `codex exec --json`
+ * would only ever have answered no. The rule that replaces the old one: a backend declares
+ * whether its invocation streams, and nothing outside `agents/` reads a flag to find out.
  *
  * **What an event *means* is the backend's answer, and what it does to the totals is this
  * file's.** `AgentAdapter.readUsage` turns one event into a `UsagePatch` — a running figure for
@@ -48,21 +56,6 @@ export interface AgentUsage {
    * shapes below ever appears in a given run, so there is nothing to reconcile.
    */
   thinkingTokens: number | null;
-}
-
-/**
- * Whether a command line asks its agent for a machine-readable stream.
- *
- * The flag is Claude Code's, and it is named here because the repository already names it:
- * it is what makes the timeout salvage work, and its absence is why a killed run has
- * nothing to salvage. Detecting it rather than requiring a second variable means an
- * operator who already streams gets the figures without changing anything.
- *
- * This is the `raw` backend's answer, and `raw` is what asks it — see `agents/raw.ts`. A named
- * backend knows whether it streams without reading a string, which is the point of naming one.
- */
-export function streamsUsage(agentCommand: string): boolean {
-  return /--output-format[\s=]+["']?stream-json/i.test(agentCommand);
 }
 
 /** The same three figures the adapters report in. */

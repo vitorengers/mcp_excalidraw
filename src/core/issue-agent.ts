@@ -26,26 +26,33 @@ import os from 'os';
 import path from 'path';
 import logger from '../utils/logger.js';
 import {
-  commandLineInvocation, invocationArgs, singleQuoted,
+  invocationArgs, singleQuoted,
   type AgentAdapter, type AgentCommandSpec, type AgentInvocation, type AgentRole,
 } from './agent-adapter.js';
 import { adapterFor } from './agents/index.js';
+import { commandLineInvocation } from './agents/raw.js';
 import { AgentUsage, UsageMeter } from './agent-usage.js';
 import { GITHUB_HOST } from './github-host.js';
 import { AgentSettings, loadAgentWorkflow, Workspace } from './workspaces.js';
 import { env as settingValue } from './settings.js';
 
 /**
- * The command-line helpers, still reachable from here.
+ * The two command-line helpers that are still anybody's, still reachable from here.
  *
  * They moved to `agent-adapter.ts` when the `raw` backend became the thing that reads a command
  * line: an adapter that imported them from this module would close a cycle, since this module
  * imports the adapters. Re-exported rather than relocated silently, because every caller — the
  * preflight, the terminal, three check scripts — had them from here.
+ *
+ * **`runsHeadless` and `withoutPrintFlags` are no longer among them**, and that is the change
+ * rather than an omission. Tokenising a string and quoting one are transformations any caller
+ * may want; deciding from a string whether a run prints and exits, or taking Claude Code's
+ * flags off it, are *answers*, and answering them about somebody else's text is what an adapter
+ * exists to stop. They are private to `agents/raw.ts` now. A caller that wants the first asks
+ * `AgentInvocation.prompt.via`, and one that wants the second asks for
+ * `invoke({ mode: 'interactive' })`.
  */
-export {
-  runsHeadless, singleQuoted, tokenizeCommand, withoutPrintFlags,
-} from './agent-adapter.js';
+export { singleQuoted, tokenizeCommand } from './agent-adapter.js';
 
 /**
  * The language paragraph — the one thing in these prompts a project gets to set.

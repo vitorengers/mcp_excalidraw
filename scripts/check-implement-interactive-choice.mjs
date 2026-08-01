@@ -11,13 +11,20 @@
  * a server restart, and the same request has now been made twice (#174, #220). #220's comment
  * settled it: the board should offer it.
  *
- * So the offer is per run, and it only ever *removes*. `withoutPrintFlags` takes `-p` and
- * `--print` out, and with them the options Claude Code documents as working only with
- * `--print` — `--output-format`, `--input-format`, `--include-partial-messages` — because a
- * command left carrying those would be refused by the CLI the moment `-p` went. Nothing is
- * ever added: a board cannot invent `--output-format stream-json` for a command it does not
- * own, so a command that is already interactive stays interactive and the queue keeps the
- * headless one it is configured with. That asymmetry is the feature, not an omission.
+ * So the offer is per run, and for the `raw` backend it only ever *removes*: `-p` and `--print`
+ * come out, and with them the options Claude Code documents as working only with `--print` —
+ * `--output-format`, `--input-format`, `--include-partial-messages` — because a command left
+ * carrying those would be refused by the CLI the moment `-p` went. Nothing is ever added: a
+ * board cannot invent `--output-format stream-json` for a command it does not own, so a command
+ * that is already interactive stays interactive and the queue keeps the headless one it is
+ * configured with. That asymmetry is the feature, not an omission.
+ *
+ * Since #330 the removal is `raw`'s own implementation of a *mode* rather than a function
+ * anybody may import, so section 1 asks the backend for an interactive invocation instead of
+ * calling `withoutPrintFlags`. Every case it asserts is the one it asserted before — that is
+ * what `raw` being a backend rather than a bypass is for — and a `claude-code` case is beside
+ * them, where the same request is answered by not writing the flags rather than by taking them
+ * off somebody's text.
  *
  * And it refuses rather than degrades. A reader who asked for a tab they can type into and got
  * a private child with its print flags stripped would be worse off than before — no interface,
@@ -71,18 +78,31 @@ async function waitFor(predicate, what, attempts = 200) {
 
 // ─── The command line, on its own ─────────────────────────────
 
-const issueAgent = join(repoRoot, 'dist', 'core', 'issue-agent.js');
-if (!existsSync(issueAgent)) {
-  console.error('  FAIL  the built server exists — dist/core/issue-agent.js not found');
+const registryPathBuilt = join(repoRoot, 'dist', 'core', 'agents', 'index.js');
+if (!existsSync(registryPathBuilt)) {
+  console.error('  FAIL  the built server exists — dist/core/agents/index.js not found');
   console.error('        (run ./node_modules/.bin/tsc first)');
   process.exit(1);
 }
-const { withoutPrintFlags, runsHeadless } = await import(pathToFileURL(issueAgent).href);
+const { adapterFor } = await import(pathToFileURL(registryPathBuilt).href);
+
+/**
+ * The same request, asked the way it is asked now.
+ *
+ * It used to be a `withoutPrintFlags` anybody could import from `issue-agent.js`; since #330 it
+ * is a *mode* the backend is asked for, and the flag removal is the `raw` backend's private
+ * implementation of that mode. The cases below are unchanged in what they assert — the whole
+ * point of `raw` is that a board configured today spawns what it spawned yesterday — and what
+ * changed is who is asked.
+ */
+const interactiveLine = (backend, command) =>
+  adapterFor(backend).invoke({ mode: 'interactive', role: 'implement', command }).line;
 
 console.log('1. the print flags come off a command line, and nothing else does');
-check('`withoutPrintFlags` exists', typeof withoutPrintFlags === 'function',
-      typeof withoutPrintFlags);
-if (typeof withoutPrintFlags === 'function') {
+check('the raw backend answers for an interactive run',
+      typeof adapterFor === 'function' && typeof adapterFor('raw')?.invoke === 'function',
+      typeof adapterFor);
+if (typeof adapterFor === 'function') {
   const cases = [
     // The board's own command line, which is the one this exists for.
     ['claude -p --output-format stream-json --verbose', 'claude --verbose'],
@@ -101,11 +121,25 @@ if (typeof withoutPrintFlags === 'function') {
   ];
   for (const [given, expected] of cases) {
     check(`${JSON.stringify(given)} → ${JSON.stringify(expected)}`,
-          withoutPrintFlags(given) === expected, JSON.stringify(withoutPrintFlags(given)));
+          interactiveLine('raw', given) === expected,
+          JSON.stringify(interactiveLine('raw', given)));
   }
+  const BOARD_COMMAND = 'claude -p --output-format stream-json --verbose';
   check('and what comes out no longer reads as headless',
-        !runsHeadless(withoutPrintFlags('claude -p --output-format stream-json --verbose')),
-        withoutPrintFlags('claude -p --output-format stream-json --verbose'));
+        adapterFor('raw').invoke({ mode: 'interactive', role: 'implement', command: BOARD_COMMAND })
+          .prompt.via === 'argv',
+        interactiveLine('raw', BOARD_COMMAND));
+
+  // The same offer on a *named* backend, where it is a mode rather than a removal: a board that
+  // says `claude-code` and a bare binary gets the print flags written for the headless run and
+  // not written for this one, which is the same answer reached from the other end.
+  const named = adapterFor('claude-code')
+    .invoke({ mode: 'interactive', role: 'implement', command: 'claude --verbose' });
+  check('and a claude-code backend reaches it as a mode, not as a string edit',
+        named.prompt.via === 'argv'
+        && !named.args.some((argument) => ['-p', '--print', '--output-format'].includes(argument))
+        && named.args.includes('--verbose'),
+        JSON.stringify(named.args));
 }
 
 // ─── The throwaway world ──────────────────────────────────────

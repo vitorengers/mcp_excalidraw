@@ -33,10 +33,21 @@
  * is derived from which. `raw` keeps the operator's line and derives argv; a named backend
  * builds argv and derives a quoted line from it.
  *
- * The pure command-line helpers below live here rather than in `issue-agent.ts` because
- * `agents/raw.ts` is the module that reads a command line now, and a helper it imported from
- * there would close a cycle. `issue-agent.ts` re-exports them, so every caller that had them
- * from there still does.
+ * ## Nothing here reads a command line for a *decision*
+ *
+ * The helpers below tokenise one, quote one and take named arguments off one, and every one of
+ * them is a transformation any backend may want. What is deliberately not here is the three
+ * predicates that used to be — "does this string say `-p`", "does it say
+ * `--output-format stream-json`", "take the print flags off it" — because those are not
+ * transformations, they are *answers*, and answering them from somebody else's text is the thing
+ * an adapter exists to stop. They are `agents/raw.ts`'s now, private to the one backend whose
+ * contract is a string it did not write. Every other caller asks the invocation:
+ * `prompt.via` for the first, `AgentAdapter.streams` for the second, `invoke({ mode })` for the
+ * third.
+ *
+ * They live below rather than in `issue-agent.ts` because `agents/` is what reads a command line
+ * now, and a helper an adapter imported from there would close a cycle. `issue-agent.ts`
+ * re-exports the two that had other callers, so the preflight and the terminal still have them.
  */
 import type { AgentAction } from './terminal-palette.js';
 import type { TranscriptState } from './agent-stream-render.js';
@@ -500,57 +511,18 @@ export function quotedLine(command: string, args: readonly string[]): string {
 }
 
 /**
- * Whether a command line asks its agent to print an answer and exit.
+ * The print flags, removed from an argv a backend built.
  *
- * The flag is Claude Code's, and it is read rather than required because an operator who
- * already asks for a non-interactive run gets the run they have always had without changing
- * anything. A command that says neither `-p` nor `--print` is one that would start an interface
- * if it were given a terminal, and that is the whole of the signal. This is the `raw` backend's
- * reading of somebody else's string; a named backend knows the answer without looking.
+ * `-p` does not travel alone: `--output-format`, `--input-format` and
+ * `--include-partial-messages` are documented by `claude --help` as *"only works with --print"*,
+ * so an argv left carrying one of them after the print flag went would be refused by the CLI
+ * rather than started. Nothing else is touched — a `--model`, an `--add-dir` or anything else
+ * the operator wrote survives.
  *
- * Matched as a whole argument. `--print-mode` is not `--print`, and a path with `-p` inside
- * it is not a flag.
+ * Matched as whole arguments. An option's value goes with it in either spelling,
+ * `--output-format json` and `--output-format=json`, because a value left behind would become
+ * the prompt.
  */
-export function runsHeadless(agentCommand: string): boolean {
-  return /(?:^|\s)(?:-p|--print)(?:\s|$)/.test(agentCommand);
-}
-
-/**
- * The same command line with the flags that make it headless taken off it.
- *
- * This is how the board offers an interactive tab for one run without the operator editing
- * `EXCALIDRAW_IMPLEMENT_AGENT` and restarting the server. The shape of the command still
- * decides the *default*; what changes is that the reader can say "not this one" at the moment
- * they start it.
- *
- * **It only ever removes**, and that asymmetry is deliberate. Adding `-p` to a command that
- * does not have it would leave the run with no `--output-format stream-json` to read token
- * counts from and no way to invent one — a board writing flags into a command line it does
- * not own is a decision, not a lookup. So a command that is already interactive comes back
- * unchanged.
- *
- * **More than `-p` comes off, because `-p` does not travel alone.** `--output-format`,
- * `--input-format` and `--include-partial-messages` are documented by `claude --help` as
- * *"only works with --print"*, so a command left carrying one of them after `--print` went
- * would be refused by the CLI rather than started. Nothing else is touched: a `--model`, an
- * `--add-dir` or anything else the operator wrote survives untouched, and a command that is
- * not Claude Code loses nothing it did not spell that way.
- *
- * Matched as whole arguments, like `runsHeadless`. An option's value goes with it in either
- * spelling, `--output-format json` and `--output-format=json`, because a value left behind
- * would become the prompt.
- */
-export function withoutPrintFlags(agentCommand: string): string {
-  // Each pattern eats the whitespace in front of the flag it removes, so what is left needs
-  // no tidying up — which matters, because tidying up a command line means touching the parts
-  // that were not the point. A quoted path with two spaces in it comes back with two spaces.
-  return agentCommand
-    .replace(/(?:^|\s)(?:--output-format|--input-format)(?:=\S+|\s+\S+)(?=\s|$)/g, '')
-    .replace(/(?:^|\s)(?:-p|--print|--include-partial-messages)(?=\s|$)/g, '')
-    .trim();
-}
-
-/** The same removal against an argv rather than a line, for a backend that builds one. */
 export function withoutPrintArguments(args: readonly string[]): string[] {
   const kept: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -587,23 +559,6 @@ export function commandLineValue(raw: string): string {
 /** A command line with flags appended, or the line unchanged when there are none. */
 export function withCommandLineFlags(line: string, flags: readonly string[]): string {
   return flags.length ? `${line} ${flags.join(' ')}` : line;
-}
-
-/**
- * A command line as an invocation, spawned exactly as it reads.
- *
- * The `raw` backend is built on it, and so is every caller that holds a command line rather
- * than an agent — the preflight's `--version` probe, and a shell somebody typed into a terminal
- * block. It is deliberately not a backend of its own: what it does is what `raw` does.
- */
-export function commandLineInvocation(line: string): AgentInvocation {
-  const [command, ...args] = tokenizeCommand(line);
-  return {
-    command: command ?? line,
-    args,
-    prompt: { via: runsHeadless(line) ? 'stdin' : 'argv' },
-    line,
-  };
 }
 
 /**
