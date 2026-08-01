@@ -124,15 +124,20 @@ import { join } from 'node:path';
 
 const workDir = ${JSON.stringify(workDir)};
 const kind = process.argv.includes('--as-issue') ? 'issue' : 'implement';
+let argv = process.argv.slice(2);
 let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', async () => {
+  // Since #329 the prompt travels down whichever channel the backend declared, and this
+  // command line carries no \`-p\`, so \`raw\` delivers it as the last argument. Taken off argv
+  // again, because what the cases below compare is the command line the *settings* produced.
+  if (!input) { input = argv[argv.length - 1] ?? ''; argv = argv.slice(0, -1); }
   const workspace = (input.match(/WORKSPACE:([a-z]+)/) ?? input.match(/\\/ws-([a-z]+)\\//) ?? [])[1] ?? 'unknown';
   writeFileSync(join(workDir, 'prompt-' + kind + '-' + workspace + '.txt'), input, 'utf8');
   // Written last, because every waiter here polls for the argv file: with the prompt written
   // first, a case that reads both cannot find one of them half-written.
   writeFileSync(join(workDir, 'argv-' + kind + '-' + workspace + '.json'),
-    JSON.stringify({ argv: process.argv.slice(2) }), 'utf8');
+    JSON.stringify({ argv }), 'utf8');
 
   for (let attempt = 0; attempt < 1800; attempt++) {
     if (!existsSync(join(workDir, 'hold-' + workspace))) break;

@@ -124,6 +124,9 @@ writeFileSync(stubAgentPath, `#!/usr/bin/env node
 let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', () => {
+  // Since #329 the prompt travels down whichever channel the backend declared, and this
+  // command line carries no \`-p\`, so \`raw\` delivers it as the last argument.
+  if (!input) input = process.argv[process.argv.length - 1] ?? '';
   if (input.includes('FAROL-HANG')) { setTimeout(() => process.exit(1), 60000); return; }
   process.stdout.write('investigated\\n');
   process.stdout.write('https://github.com/${REPO}/issues/123\\n');

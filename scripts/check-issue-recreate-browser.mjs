@@ -199,6 +199,9 @@ let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => { input += chunk; });
 process.stdin.on('end', async () => {
+  // Since #329 the prompt travels down whichever channel the backend declared, and this
+  // command line carries no \`-p\`, so \`raw\` delivers it as the last argument.
+  if (!input) input = process.argv[process.argv.length - 1] ?? '';
   writeFileSync(process.env.STUB_AGENT_PROMPT, input, 'utf8');
   const number = /issues\\/(\\d+)/.exec(input)?.[1] ?? '';
   while (!existsSync(process.env.STUB_AGENT_RELEASE)) await sleep(100);
