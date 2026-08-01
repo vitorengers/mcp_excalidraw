@@ -22,6 +22,7 @@ The board itself is cut into two halves, each with a key that scrolls onto it �
 | [workspaces.md](workspaces.md) | One project per board — the registry, `board.config.json`, and the settings dialog |
 | [agents.md](agents.md) | Choosing the coding agent — a Claude Code recipe, a Codex CLI recipe, and the rules that hold for the third one |
 | [without-github.md](without-github.md) | The four levels of absent GitHub, and what each one keeps and loses |
+| [SECURITY.md](SECURITY.md) | The trust model: what the tool runs as, which switches spawn code, the bind and the origin gate, and where to report a vulnerability |
 | [board-sections.md](board-sections.md) | The two halves of the board and the keys that reach them |
 | [whats-next.md](whats-next.md) | What has not shipped |
 | [development-log.md](development-log.md) | One dated entry per merged pull request: the issue, the pull request, and what was decided |

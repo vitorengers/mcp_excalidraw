@@ -254,7 +254,7 @@ npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>
 npx -y @vitorengers/vibemaxxing install-skill --print-source  # inspect bundled source path
 ```
 
-> **Security note:** The canvas server binds `127.0.0.1` only by default, and the GitHub half of the board is bound to that: off loopback every GitHub-backed route answers `403` — the project mirror, a card move, the issue blocks, `/api/github-status` and the workspace registry — so what you get on a network interface is a drawing canvas and nothing else. The board says so on itself rather than showing you an empty region. If you expose it (`HOST=0.0.0.0`) anyway, put network-level access controls in front — the API has no built-in authentication.
+> **Security note:** The canvas server binds `127.0.0.1` only by default, and the GitHub half of the board is bound to that: off loopback every GitHub-backed route answers `403` — the project mirror, a card move, the issue blocks, `/api/github-status` and the workspace registry — so what you get on a network interface is a drawing canvas and nothing else. The board says so on itself rather than showing you an empty region. If you expose it (`HOST=0.0.0.0`) anyway, put network-level access controls in front — the API has no built-in authentication. **[docs/SECURITY.md](docs/SECURITY.md) is the whole of it**: what the tool runs as, which switches spawn a coding agent or a real shell and what each one grants, the origin gate in front of every route, and where to report a vulnerability.
 
 ## Agent Skill
 
@@ -586,7 +586,12 @@ Yes — that's the recommended path for coding agents: `npx -y @vitorengers/vibe
 - [ ] **Images and snapshots do not survive a restart**: elements do, but the files behind pasted images and named `snapshot`s are memory only, so a restored image is an element whose file has gone. Use `export` for anything you mean to keep.
 - [ ] **Image export requires a browser**: screenshots and image export rely on the frontend doing the actual rendering. A headless rendering mode is planned.
 
-Contributions welcome!
+Contributions welcome! How work is done here is written down rather than implied:
+[CLAUDE.md](CLAUDE.md) is the workflow — an issue first, then a branch, then a pull request,
+and every behaviour change ships with a `scripts/check-*.mjs` run against the old code first —
+and `.github/pull_request_template.md` is the same rules as a checklist. This project also has
+a [code of conduct](CODE_OF_CONDUCT.md) and a [security policy](docs/SECURITY.md); a
+vulnerability goes to the second of those rather than to the issue tracker.
 
 ## Development
 
