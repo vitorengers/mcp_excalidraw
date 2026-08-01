@@ -13,16 +13,22 @@ the restart log — `%LOCALAPPDATA%\Excalidraw-Canvas\` on Windows,
 `$XDG_STATE_HOME/excalidraw-canvas/` (or `~/.local/state/…`) on Linux. Nothing is written until
 the first project is added, so a board that has never had one has no file.
 
-Either way the shape is the same:
+Either way the shape is the same. One entry per project, and a path is written the way the
+platform the board runs on writes one — Windows, macOS and Linux in that order below:
 
 ```json
 {
   "workspaces": [
-    { "id": "fica-ai",    "path": "C:/Users/you/Documents/Projects/FicaAI" },
-    { "id": "board-tool", "path": "C:/Users/you/Documents/Projects/mcp_excalidraw" }
+    { "id": "board-tool", "path": "C:/Users/you/Documents/Projects/vibemaxxing" },
+    { "id": "notes",      "path": "/Users/you/Projects/notes" },
+    { "id": "api",        "path": "/home/you/projects/api" }
   ]
 }
 ```
+
+`you` is a placeholder for your own account name, and the three lines are three platforms
+rather than three projects one machine could have: a registry holds the paths of the machine
+it is on.
 
 `id` is optional — without it the id is derived from the last path segment. A `distro` field
 marks a WSL-backed project, and Windows and WSL spellings of the same path collapse onto one

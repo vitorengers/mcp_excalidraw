@@ -27,4 +27,16 @@ board.config.local.json
 *.excalidraw
 !docs/board.excalidraw
 
+# Screenshots taken while debugging. They land wherever the tool that took them puts them,
+# which is here, and eighteen of them had piled up by #337 — one `git add .` from being a
+# commit. Anchored to the root on purpose: an image the documentation points at lives under
+# `docs/media/` and an image the frontend imports lives under `frontend/`, and both are files
+# somebody chose. This is about the ones nobody did. `demo.gif` is upstream's, and tracked.
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
+/*.gif
+!/demo.gif
+
 .DS_Store
