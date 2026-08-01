@@ -34,7 +34,7 @@ import {
 import { z } from 'zod';
 import WebSocket from 'ws';
 import { isMainModule } from './core/entry.js';
-import { packageVersion } from './core/version.js';
+import { packageVersion, productName } from './core/version.js';
 import { writePidFile, removePidFile, restartLogPath, startupLogPath } from './core/pidfile.js';
 import {
   canvasUrlFor, explicitPort, preferredPort, removeCanvasState, writeCanvasState
@@ -5882,7 +5882,12 @@ async function startServer(): Promise<void> {
 
   server.listen(PORT, HOST, () => {
     const hostForUrl = formatHostForUrl(HOST);
-    logger.info(`POC server running on http://${hostForUrl}:${PORT}`);
+    // The product, not the proof of concept this line was named after three years ago, and read
+    // out of `core/version.ts` rather than written here — the same source the CLI's own launch
+    // line prints from, so the next rename lands in `package.json` alone. That old name was the
+    // last of its kind under `src/` and `frontend/`, and `check-startup-brand.mjs` reads the
+    // whole tracked set to keep it that way rather than pinning this one file.
+    logger.info(`${productName()} server running on http://${hostForUrl}:${PORT}`);
     logger.info(`WebSocket server running on ws://${hostForUrl}:${PORT}`);
 
     // Written only after listen succeeds so stale files can't shadow a
