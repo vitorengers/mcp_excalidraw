@@ -67,14 +67,53 @@ This is the trap that costs the most, because everything looks like it worked �
 [trap-stale-server.md](trap-stale-server.md). A second server fails to bind and exits; the first
 one keeps answering, silently, with the old code.
 
+**A launch mostly does this step for you.** `vibemaxxing` takes the default 3737, or the next
+free port above it if something already holds that one, and prints the port it got;
+`vibemaxxing stop` asks `/health` who is answering and signals that pid ([cli.md](cli.md)).
+What neither can do is the case this section is really about: `stop` refuses anything that does
+not answer as a canvas, so a service that is not this tool — or a canvas wedged past answering —
+is still killed by hand, and so is a `node dist/server.js` on a port the CLI was never told
+about.
+
+**The port in them is an example.** 3737 is the default the launch path tries first and the one
+this repository's own board is started on, for the reason
+[trap-port-3000.md](trap-port-3000.md) gives; put the port your board listens on in its place.
+
+### Windows
+
 ```powershell
-$busy = Get-NetTCPConnection -LocalPort $env:PORT -State Listen -ErrorAction SilentlyContinue
+$busy = Get-NetTCPConnection -LocalPort 3737 -State Listen -ErrorAction SilentlyContinue
 foreach ($processId in ($busy.OwningProcess | Select-Object -Unique)) {
   Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
 }
 ```
 
 `$processId`, never `$pid`: `$PID` is a read-only automatic variable and the loop throws on it.
+
+### macOS
+
+```bash
+pids=$(lsof -ti tcp:3737)
+if [ -n "$pids" ]; then kill $pids; fi
+```
+
+### Linux
+
+The same two lines, and `lsof` is the part of them a minimal install may not have — `fuser`,
+from `psmisc`, does the whole job in one word where it does:
+
+```bash
+pids=$(lsof -ti tcp:3737)
+if [ -n "$pids" ]; then kill $pids; fi
+
+fuser -k 3737/tcp                      # if lsof is not installed
+```
+
+**Not `lsof -ti tcp:<port> | xargs kill`.** With nothing listening `lsof` prints nothing and exits
+1, and GNU `xargs` runs `kill` with no arguments at all: the usage message and exit 123, from
+the step whose success case is finding nothing. `xargs -r` suppresses that on GNU systems and
+BSD `xargs` never had the behaviour, so it is a Linux-only noise — but the two lines above are
+the same sentence on both platforms, which is why they are what is written here.
 
 `GET /health` returns the `pid` of whatever is answering. When a change seems to have had no
 effect, compare that against the process you believe you started.
