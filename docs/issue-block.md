@@ -1460,11 +1460,12 @@ One board runs several projects, and until #82 every setting above applied to al
 two command lines were module constants read once at startup, so retuning one project meant
 editing the board's own environment and restarting it for every other project too.
 
-A project's own `board.config.json` can now say four things per agent, under
+A project's own `board.config.json` can now say five things per agent, under
 `agents.issue` and `agents.implement` — see [workspaces.md](workspaces.md) for the shape:
 
 | Setting | Per-project | Global |
 | --- | --- | --- |
+| which agent | `agents.<kind>.backend` → one of the backends the operator enabled, and no other | `EXCALIDRAW_AGENT_BACKEND`, which is the set that may be picked from |
 | `model` | `agents.<kind>.model` → written in the backend's own spelling | `--model` in the command line |
 | `effort` | `agents.<kind>.effort` → written in the backend's own spelling, from the levels that backend takes | `--effort` in the command line |
 | time limit | `agents.<kind>.timeoutSeconds` | `EXCALIDRAW_ISSUE_AGENT_TIMEOUT`, `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` |
@@ -1479,6 +1480,13 @@ set at all — `board.config.json` lives inside a registered project, so a proje
 supply one would mean editing a JSON file to start an unattended agent with
 `--dangerously-skip-permissions` on a board where nobody allowed one. The config surface refuses
 an `agents.<kind>.command` by name rather than ignoring it.
+
+`agents.<kind>.backend` is the one field that looks like an exception and is not. Choosing which
+binary runs *is* granting, so it is a choice among the backends
+`EXCALIDRAW_AGENT_BACKEND` already enabled — a board that named one backend has projects that
+can name that one and nothing else. A name outside that set is refused when the settings are
+saved, with the name and the enabled list in the message, and dropped with a warning if a
+hand-edited config reaches the loader with one. It cannot name a binary, a path or a flag.
 
 The model and the effort reach a run as **values**, and the backend that will run it decides how
 they are spelled — `--model X --effort Y` for `claude-code`, `--model X -c

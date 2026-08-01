@@ -309,8 +309,10 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_DOCS_DIR` | the shipped `docs/` | Where `GET /api/docs/:key` reads from for a board with no `docsDir` of its own. Set it **empty** for a setup that wants per-project documents and no fallback — [docs-block.md](docs-block.md) |
 | `EXCALIDRAW_WELCOME_BOARD` | the shipped `docs/welcome.excalidraw` | The board a project that names none of its own is seeded from, once, the first time this canvas starts with it registered. Set it **empty** for projects that should come up blank — [workspaces.md](workspaces.md) |
 | `EXCALIDRAW_LIBRARY` | the shipped `docs/blocks.excalidrawlib` | An `.excalidrawlib` served to every board, alongside each project's own. Set it **empty** for a board that wants no shared shapes at all — [shared-library.md](shared-library.md) |
-| `EXCALIDRAW_ISSUE_AGENT` | unset | The command line that researches an observation and opens the issue. Unset means issue blocks do nothing |
-| `EXCALIDRAW_IMPLEMENT_AGENT` | unset | The command line that implements one. Unset means the button is not offered. The shipped default grants an enumerated list — `Write`, `Edit`, reading, the web, and `git`, `gh`, `npm`, `npx` and `node` — and **not** `--dangerously-skip-permissions`: the prompt it is handed is built from issue text anybody can write ([trap-allowed-tools.md](trap-allowed-tools.md)) |
+| `EXCALIDRAW_AGENT_BACKEND` | unset | Which coding agent both agents run — `claude-code`, `codex-cli` or `raw`, the passthrough. The name alone is enough: the binary is looked up on `PATH`, and the backend writes the flags that make a run print, stream and stay inside its permission posture. Several names, comma-separated, enable a set a project may pick among with `agents.<kind>.backend`, and the first is what a project that picks none runs. Unset, a board is whatever its command lines say, under `raw` — [agents.md](agents.md) |
+| `EXCALIDRAW_AGENT_ARGS` | unset | Arguments pinned onto every agent run, appended after everything the backend and the project write. For an `--add-dir` or an `--mcp-config` no backend knows about. A full-access flag written here never reaches the issue agent |
+| `EXCALIDRAW_ISSUE_AGENT` | unset | The command line that researches an observation and opens the issue. Unset with no backend named means issue blocks do nothing; written beside `EXCALIDRAW_AGENT_BACKEND` it is where that backend's binary and the operator's own arguments come from |
+| `EXCALIDRAW_IMPLEMENT_AGENT` | unset | The command line that implements one. Unset with no backend named means the button is not offered. The shipped default grants an enumerated list — `Write`, `Edit`, reading, the web, and `git`, `gh`, `npm`, `npx` and `node` — and **not** `--dangerously-skip-permissions`: the prompt it is handed is built from issue text anybody can write ([trap-allowed-tools.md](trap-allowed-tools.md)) |
 | `EXCALIDRAW_IMPLEMENT_FULL_ACCESS` | unset | `1` gives the implement agent every permission there is — `--dangerously-skip-permissions` for Claude Code, `--sandbox danger-full-access` for Codex CLI. A named backend writes a bounded grant without it; this is how a board asks for the unbounded one **on purpose**, and it never reaches the issue agent |
 | `EXCALIDRAW_ISSUE_AGENT_TIMEOUT` | none | Seconds. Unset means no ceiling; a wedged run is handled by the block's reset instead |
 | `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` | none | The same, for implementing |
@@ -373,6 +375,7 @@ shape and neither the path translation nor the `--exec bash -lc` quoting.
 
 | Variable | Default | What it does |
 |---|---|---|
+| `EXCALIDRAW_AGENT_BACKEND_WSL` | `EXCALIDRAW_AGENT_BACKEND` | The backend a **WSL-backed** project runs, when the distro has a different agent installed from the machine. Unset is the machine's answer, which is right whenever the same agent is in both. Its binary is never a host path — the distro's own shell looks the bare name up |
 | `EXCALIDRAW_ISSUE_AGENT_WSL` | unset | The issue command, spelled as a **WSL-backed** project's distro spells it. Unset falls back to `EXCALIDRAW_ISSUE_AGENT`, which only resolves inside a distro if it was written without an absolute path |
 | `EXCALIDRAW_IMPLEMENT_AGENT_WSL` | unset | The same, for implementing. A pair rather than one variable for the reason `EXCALIDRAW_ISSUE_AGENT` and `EXCALIDRAW_IMPLEMENT_AGENT` are a pair: granting a distro research must not thereby grant it repository writes |
 | `EXCALIDRAW_GH_COMMAND_WSL` | `gh` | The GitHub CLI inside a **WSL-backed** project's distro. Unlike the agents' `_WSL` pair this does **not** fall back to the host value: a host path is exactly what cannot run there |
@@ -552,7 +555,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 153 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 154 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 80 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |

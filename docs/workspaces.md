@@ -203,6 +203,7 @@ two of the three platforms it runs on.
   "agents": {
     "issue":     { "model": "claude-fable-5", "effort": "high" },
     "implement": {
+      "backend": "claude-code",
       "model": "claude-opus-5",
       "effort": "max",
       "timeoutSeconds": 5400,
@@ -246,13 +247,19 @@ Portuguese was getting every card this tool opened for it written against its ow
 a collision rather than a preference. See
 [issue-block.md](issue-block.md#the-prompt) for the paragraph itself.
 
-`agents` is per-project agent tuning: a `model` and an `effort` appended to the command the
-operator configured, a `timeoutSeconds` that wins over the environment's ceiling, and a
-`workflow` naming the text this project's agents are to follow. Every field is optional and
-unset means *use the board default* — which is the only other value there is. A project
-**cannot** configure the command itself; see
+`agents` is per-project agent tuning: a `backend` picking among the agents the operator enabled,
+a `model` and an `effort` written in that backend's own spelling, a `timeoutSeconds` that wins
+over the environment's ceiling, and a `workflow` naming the text this project's agents are to
+follow. Every field is optional and unset means *use the board default* — which is the only
+other value there is. A project **cannot** configure the command itself; see
 [issue-block.md](issue-block.md#what-is-per-project-and-what-stays-global) for why that boundary
 is where it is.
+
+`backend` is a choice, never a grant: the names it may take are exactly those
+`EXCALIDRAW_AGENT_BACKEND` enabled on this board, and a project naming anything else is refused
+when the settings are saved — with the name it asked for and the list it could have picked
+from — and dropped with a warning if a hand-edited config carries one. [agents.md](agents.md)
+has the variable and what each backend supplies.
 
 ## board.config.local.json
 
