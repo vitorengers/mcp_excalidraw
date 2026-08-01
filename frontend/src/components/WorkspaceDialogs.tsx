@@ -232,12 +232,31 @@ function agentPatch(draft: AgentDraft): Record<string, unknown> {
  */
 export const WorkspaceConfigDialog: React.FC<{
   workspaceId: string
+  /**
+   * The folder on disk, for the confirmation to name.
+   *
+   * Named rather than described, because two projects can carry the same `name` and the tab
+   * strip already disambiguates them by exactly this: what is about to be taken off the board
+   * is a *path*, and a reader who has registered the wrong one recognises it by nothing else.
+   */
+  workspacePath: string
   onClose: () => void
   onSaved: (workspace: WorkspaceSummary, workspaces: WorkspaceSummary[]) => void
-}> = ({ workspaceId, onClose, onSaved }) => {
+  /** The project is off the registry; the list is what is left of the strip. */
+  onRemoved: (removedId: string, workspaces: WorkspaceSummary[]) => void
+}> = ({ workspaceId, workspacePath, onClose, onSaved, onRemoved }) => {
   const [draft, setDraft] = useState<ConfigDraft | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /**
+   * Whether the confirmation is showing, which is what the removal is behind.
+   *
+   * In the dialog rather than in `window.confirm`: the sentence has to name a path and say
+   * what is *not* deleted, and a native confirm truncates, cannot be styled and cannot be
+   * driven by a browser check. Two presses either way, which is what this is for.
+   */
+  const [confirming, setConfirming] = useState(false)
+  const [removing, setRemoving] = useState(false)
   /**
    * Whether the expert rows are on screen. Closed every time the dialog opens, because the
    * dialog is what a new user meets immediately after choosing a folder.
@@ -316,6 +335,34 @@ export const WorkspaceConfigDialog: React.FC<{
         onSaved(body.workspace as WorkspaceSummary, (body.workspaces ?? []) as WorkspaceSummary[])
       })
       .catch((problem: Error) => { setError(problem.message); setBusy(false) })
+  }
+
+  /**
+   * Take this project off the board.
+   *
+   * The saved drawing is kept — no `?board=delete` — because that is the friendlier default
+   * and because a control whose confirmation promises the folder is untouched should not be
+   * the one path that quietly destroys the one thing nobody else has a copy of. A reader who
+   * wants the scene gone has the query parameter and `docs/workspaces.md`.
+   */
+  const remove = (): void => {
+    if (removing) return
+    setRemoving(true)
+    setError(null)
+    fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}`, { method: 'DELETE' })
+      .then(async (response) => ({ ok: response.ok, body: await response.json().catch(() => ({})) }))
+      .then(({ ok, body }) => {
+        if (!ok || !body?.success) {
+          // Back to the plain row: the refusal is worth reading — a run in flight is the one
+          // the board expects — and a confirmation still open over it reads as a retry button.
+          setError(body?.error ?? 'That project could not be removed.')
+          setRemoving(false)
+          setConfirming(false)
+          return
+        }
+        onRemoved(workspaceId, (body.workspaces ?? []) as WorkspaceSummary[])
+      })
+      .catch((problem: Error) => { setError(problem.message); setRemoving(false) })
   }
 
   /**
@@ -467,6 +514,45 @@ export const WorkspaceConfigDialog: React.FC<{
             )}
           </>
         )}
+
+        {/*
+          The way back out, and it is here rather than on the tab for the reason the gear is
+          here: this dialog is already about *this* project and has already named it in its
+          title, while a control on the strip would offer to remove whichever tab the pointer
+          happened to be over. Below everything else because it is the one action that is not
+          about editing a setting, and outside `draft` because a project whose config could
+          not be read at all is exactly the one somebody is trying to get rid of.
+        */}
+        <div className="workspace-config__danger">
+          {confirming ? (
+            <>
+              <p className="workspace-config__danger-ask">
+                Remove <strong>{workspacePath || workspaceId}</strong> from this board?
+              </p>
+              <p className="workspace-config__danger-note">
+                Only the tab and its line in the workspace registry go. The folder itself and
+                its <code>board.config.json</code> are left exactly as they are, and so is the
+                board you have drawn here — adding the project back brings it with it.
+              </p>
+              <div className="workspace-dialog__actions">
+                <button className="workspace-config__cancel" onClick={() => setConfirming(false)}>
+                  Keep it
+                </button>
+                <button className="workspace-config__danger-go" onClick={remove} disabled={removing}>
+                  {removing ? 'Removing…' : 'Remove project'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="workspace-config__danger-open"
+              onClick={() => setConfirming(true)}
+            >
+              Remove this project from the board
+            </button>
+          )}
+        </div>
 
         {error && <p className="workspace-dialog__error">{error}</p>}
 

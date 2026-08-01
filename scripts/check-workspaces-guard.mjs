@@ -4,9 +4,10 @@
  *
  * The route returns the registry: every project's `id`, its **absolute filesystem path** and,
  * for a WSL project, its `innerPath`. That is the map of everything the operator works on, and
- * it was the one route in its block with no guard at all — its five siblings (`POST
- * /api/workspaces`, `PUT /api/workspaces/order`, both `/api/workspaces/:id/config` routes and
- * `GET /api/fs/directories`) each call `offLoopback`. The guard's own comment says they are
+ * it was the one route in its block with no guard at all — its siblings (`POST
+ * /api/workspaces`, `DELETE /api/workspaces/:id`, `PUT /api/workspaces/order`, both
+ * `/api/workspaces/:id/config` routes and `GET /api/fs/directories`) each call `offLoopback`.
+ * The guard's own comment says they are
  * guarded because reaching them from the network would be strictly worse than reaching a route
  * that only reads a project; this one reads more than a project, it reads the map of all of
  * them.

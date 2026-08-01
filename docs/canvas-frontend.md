@@ -67,6 +67,31 @@ The button is disabled when the page is not on loopback, because the route is re
 The server side of it — and why a supervisor outside the process tree is the only way to do
 this — is in [rest-api.md](rest-api.md) and `src/core/restart-supervisor.ts`.
 
+## Emptying the board
+
+`Clear Canvas`, beside it, is the other press that cannot be taken back, and until #345 it was
+the only one with nothing in front of it: one click fetched every element and deleted it. That
+was survivable while the store was memory only — a drawing is somebody's to redraw — but every
+board is written back to disk a second after it changes now, so the click reached the *file*.
+
+It opens a confirmation naming **this board and how many elements it holds**, counted from the
+store at the moment of the press rather than from the scene, because the store is the half that
+gets emptied and saved. A board with nothing on it opens no dialog at all: there is nothing to
+confirm, and a confirmation for a no-op teaches a reader to dismiss the one that matters.
+
+Confirming sends **one** `DELETE /api/elements/clear` rather than a delete per element. That is
+not only fewer round trips: the copy that makes this recoverable is taken by that route, a loop
+of per-id deletes walks straight past it, and a loop that fails halfway leaves the board half
+emptied. Where the copy went comes back in the response and the canvas says it, through the same
+toast every other unaskable question on this board is answered with. A failure now leaves the
+canvas alone — it used to clear the scene anyway, which on a board that is saved shows an empty
+canvas over a full store and invites the next sync to make the lie true.
+
+The button stays rather than going, though Excalidraw's own menu offers `Reset canvas` behind a
+confirmation of its own: this is the one that clears the **store**, which is the half that is
+saved, so removing it would leave the gesture available and take away the only copy of it this
+product controls. `scripts/check-clear-canvas-guard.mjs` drives all of it in a browser.
+
 ## Hiding Excalidraw's own menus
 
 `Hide Menus`, beside `Clear Canvas`, takes away the three pieces of chrome Excalidraw draws over

@@ -15,7 +15,7 @@ import { createRequire } from 'module';
 import logger from './utils/logger.js';
 import {
   files,
-  snapshots,
+  snapshotsFor,
   generateId,
   EXCALIDRAW_ELEMENT_TYPES,
   ServerElement,
@@ -45,6 +45,7 @@ import {
   hasWorkspaceRegistry,
   loadWorkspaces,
   registryPath,
+  removeWorkspace,
   reorderWorkspaces,
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -140,7 +141,9 @@ import {
 } from './core/element-store.js';
 import { allowedAuthorities, verifyOrigin } from './core/origin-gate.js';
 import {
+  backupBoardBefore,
   boardStateFile,
+  dropBoardState,
   flushBoardStateSaves,
   persistBoardFor,
   readBoardState,
@@ -781,12 +784,26 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
   }
 });
 
-// Clear all elements (must be before /:id route)
-app.delete('/api/elements/clear', (req: Request, res: Response) => {
+/**
+ * Empty one board's store (must be before the `/:id` route, or `clear` reads as an id).
+ *
+ * The copy is taken here rather than in whoever asked, because everything that empties a
+ * board comes through this one route and only one of those callers has a person in front of
+ * it: the header's `Clear Canvas` confirms first, but the MCP `clear_canvas` tool, the CLI's
+ * `clear --yes` and `restore_snapshot` — which clears *before* it restores, and says
+ * `canvas was cleared` when the restore then fails — do not, and must not start to. A
+ * confirmation in front of this route would break an agent-facing contract; a copy behind it
+ * breaks nothing and is what makes any of them recoverable (#345).
+ *
+ * The path it went to is in the response, so the caller can say it. A backup nobody is told
+ * about is a backup nobody restores.
+ */
+app.delete('/api/elements/clear', async (req: Request, res: Response) => {
   try {
     const workspaceId = workspaceIdFrom(req);
     const store = elementsFor(workspaceId);
     const count = store.size;
+    const backup = await backupBoardBefore(workspaceId);
     store.clear();
 
     broadcast({
@@ -794,12 +811,14 @@ app.delete('/api/elements/clear', (req: Request, res: Response) => {
       timestamp: new Date().toISOString()
     }, workspaceId);
 
-    logger.info(`Canvas cleared: ${count} elements removed`);
+    logger.info(`Canvas cleared: ${count} elements removed`
+      + (backup ? `; the board as it was is in ${backup}` : ''));
 
     res.json({
       success: true,
       message: `Cleared ${count} elements`,
-      count
+      count,
+      backup
     });
   } catch (error) {
     logger.error('Error clearing canvas:', error);
@@ -1377,6 +1396,79 @@ app.post('/api/workspaces', async (req: Request, res: Response) => {
     res.status(201).json({ success: true, workspace: result.workspace, workspaces: result.workspaces });
   } catch (error) {
     logger.error('Failed to add a workspace:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/**
+ * Take a project off the board.
+ *
+ * The other half of the `+`, and the thing whose absence made the first mistake a stranger
+ * makes permanent: the wrong folder picked, or a project moved after registering, left a tab
+ * that `loadWorkspace` marks broken rather than dropping, and the only way out was
+ * hand-editing a JSON file whose path the reader has never been told.
+ *
+ * **It removes a line from the registry, and nothing else.** The project directory is not
+ * this board's to delete and neither is its `board.config.json` — which is what the
+ * confirmation in the settings dialog promises, in those words.
+ *
+ * The one thing that is arguably the board's own is the drawing, saved beside the registry
+ * and copied nowhere. It is kept, so a project removed by mistake and added back comes back
+ * drawn, and `?board=delete` is how a caller who means otherwise says so. An opt-in rather
+ * than a side effect, because nothing else has that scene.
+ *
+ * A run in flight is refused rather than orphaned. The worktree, the branch and the pull
+ * request a run is in the middle of all hang off the entry this would delete, and the process
+ * writing to them would carry on against a project the board no longer knows: the refusal
+ * names the runs so the reader knows what to wait for.
+ */
+app.delete('/api/workspaces/:id', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Projects are removed')) return;
+
+  const id = req.params.id ?? '';
+
+  // Spelled out rather than "anything that is not `delete` means keep": a typo in the one
+  // parameter that decides whether a drawing survives should be an error, not a default.
+  const board = typeof req.query.board === 'string' && req.query.board ? req.query.board : 'keep';
+  if (board !== 'keep' && board !== 'delete') {
+    return res.status(400).json({
+      success: false,
+      error: `board must be "keep" or "delete", not "${board}". `
+        + 'Leaving it out keeps the board this project was drawn on.'
+    });
+  }
+
+  const inFlight = runningImplements(normalizeWorkspaceId(id));
+  if (inFlight.length) {
+    return res.status(409).json({
+      success: false,
+      error: `"${id}" still has ${inFlight.length} implementation(s) running, and removing it now `
+        + 'would orphan them: the worktree, the branch and the pull request would outlive the '
+        + `project they belong to. In flight: ${inFlight.map((run) => run.issueUrl).join(', ')}`,
+      running: inFlight.map((run) => run.issueUrl)
+    });
+  }
+
+  try {
+    const result = await removeWorkspace(registryPath(), id);
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, error: result.error });
+    }
+    // After the registry write, never before it: a board forgotten on a removal that then
+    // failed would stop being saved while its project was still on the strip.
+    const dropped = await dropBoardState(result.removed.id, { deleteFile: board === 'delete' });
+    logger.info(
+      `Workspace "${result.removed.id}" removed from the registry; ${result.removed.path} was left alone`
+      + `${dropped.deleted ? `, and its saved board at ${dropped.file} was deleted` : ''}.`
+    );
+    res.json({
+      success: true,
+      removed: result.removed,
+      workspaces: result.workspaces,
+      board: dropped
+    });
+  } catch (error) {
+    logger.error('Failed to remove a workspace:', error);
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 });
@@ -5098,14 +5190,15 @@ app.post('/api/snapshots', (req: Request, res: Response) => {
       });
     }
 
+    const workspaceId = workspaceIdFrom(req);
     const snapshot: Snapshot = {
       name,
-      elements: Array.from(elementsFor(workspaceIdFrom(req)).values()),
+      elements: Array.from(elementsFor(workspaceId).values()),
       createdAt: new Date().toISOString()
     };
 
-    snapshots.set(name, snapshot);
-    logger.info(`Snapshot saved: "${name}" with ${snapshot.elements.length} elements`);
+    snapshotsFor(workspaceId).set(name, snapshot);
+    logger.info(`Snapshot saved: "${name}" on "${workspaceId}" with ${snapshot.elements.length} elements`);
 
     res.json({
       success: true,
@@ -5125,7 +5218,7 @@ app.post('/api/snapshots', (req: Request, res: Response) => {
 // Snapshots: list
 app.get('/api/snapshots', (req: Request, res: Response) => {
   try {
-    const list = Array.from(snapshots.values()).map(s => ({
+    const list = Array.from(snapshotsFor(workspaceIdFrom(req)).values()).map(s => ({
       name: s.name,
       elementCount: s.elements.length,
       createdAt: s.createdAt
@@ -5149,12 +5242,13 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
 app.get('/api/snapshots/:name', (req: Request, res: Response) => {
   try {
     const { name } = req.params;
-    const snapshot = snapshots.get(name!);
+    const workspaceId = workspaceIdFrom(req);
+    const snapshot = snapshotsFor(workspaceId).get(name!);
 
     if (!snapshot) {
       return res.status(404).json({
         success: false,
-        error: `Snapshot "${name}" not found`
+        error: `Snapshot "${name}" not found on "${workspaceId}"`
       });
     }
 
