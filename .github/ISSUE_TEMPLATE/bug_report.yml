@@ -1,0 +1,103 @@
+name: Bug report
+description: Something the board, the CLI or the MCP server does that it should not
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to write this up.
+
+        **Not for security vulnerabilities.** An issue here is public the moment it is filed —
+        [docs/SECURITY.md](https://github.com/vitorengers/vibemaxxing/blob/main/docs/SECURITY.md)
+        says where those go instead.
+
+        The four questions below the description are the ones every reproduction of a failure
+        in this tool has needed. They are asked rather than guessed because the answers change
+        which code runs: the state directory, the shell, the paths and the agent are all
+        platform-forked.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, and what the tool did instead of what you expected.
+      placeholder: I clicked the + on the notes column and nothing appeared.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The shortest path from a started board to the failure.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      description: The one the board itself runs on, not the one inside a distro.
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: The output of `node --version`.
+      placeholder: v22.11.0
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Which agent
+      description: >-
+        What is driving the board. The agent variables are command lines rather than a vendor,
+        so which command is behind them decides a lot of the behaviour.
+      options:
+        - Claude Code
+        - Codex CLI
+        - Another coding agent
+        - No agent — the CLI or the MCP server directly
+        - No agent — I use the canvas by hand
+    validations:
+      required: true
+  - type: dropdown
+    id: wsl
+    attributes:
+      label: Is the project WSL-backed
+      description: >-
+        A WSL-backed project runs its agents and its `gh` inside the distro, on paths spelled
+        the distro's way. If you are not on Windows the answer is no.
+      options:
+        - "No"
+        - "Yes — the project is inside a WSL distro"
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Which version
+      description: >-
+        The number the board prints when it starts, or the commit you are on if you run it
+        from a clone.
+      placeholder: 0.1.0
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Anything the log said
+      description: >-
+        The server's log file, or what the terminal it was started from printed. Pasted here
+        it is formatted as code automatically, so no backticks are needed.
+      render: shell
+    validations:
+      required: false

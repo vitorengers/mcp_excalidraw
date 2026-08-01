@@ -27,6 +27,10 @@ import {
 import { isBoardHotkeyChord, textEntryOwnsKeyboard } from './board-hotkeys'
 import { boardFitOptions, measureBoardChrome } from './board-fit'
 import { referenceImageName } from '../../src/core/pasted-images'
+import {
+  BOARD_IMAGE_BUDGET_BYTES, FILE_UPLOAD_LIMIT_BYTES, megabytes, referencedFileIds, uploadBatches
+} from '../../src/core/board-files'
+import type { BoardFile } from '../../src/core/board-files'
 import { layoutLabel, BOUND_TEXT_PADDING } from '../../src/core/text-layout'
 import {
   layoutMirror,
@@ -1222,6 +1226,27 @@ function App(): JSX.Element {
   const loadedSceneKeyRef = useRef<string | null>(null)
   /** Set when the socket's own initial message already delivered this board's files. */
   const filesFromSocketRef = useRef<string | null>(null)
+
+  /**
+   * The file ids this page knows the server is holding for the board it is looking at.
+   *
+   * The autosync uploads what the board points at and the server has not seen, and this is
+   * the "has not seen" half. Everything the server *tells* us it has goes in — the socket's
+   * `initial_elements`, a `files_added` broadcast, the loader's own `GET /api/files` — and so
+   * does everything a `POST` of ours succeeded with. Naming a board rather than a bare set is
+   * what makes the two failure modes impossible: carried across a board switch it would skip
+   * uploading files the new board needs, and carried across a *reconnect to a restarted
+   * server* it would claim a store that no longer exists holds them. Both reset themselves,
+   * because both change `sceneKey()`.
+   */
+  const serverFilesRef = useRef<{ key: string; ids: Set<string> }>({ key: '', ids: new Set() })
+
+  /**
+   * Images this board has been told about and will not try again: one too large to post at
+   * all, or a board over its saved-image budget. Said once per board, not once per second.
+   */
+  const refusedFilesRef = useRef<Set<string>>(new Set())
+  const budgetSaidForRef = useRef<string | null>(null)
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window === 'undefined') return 'light'
@@ -5156,6 +5181,10 @@ function App(): JSX.Element {
 
     if (warm.files.length > 0) {
       api.addFiles(warm.files as Parameters<ExcalidrawImperativeAPI['addFiles']>[0])
+      // They came from the server on this board's own socket, so they are the server's.
+      noteServerFiles((warm.files as { id?: string }[])
+        .map((file) => file?.id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0))
     }
     applySceneUpdateWithoutAutoSync(api, {
       elements: [
@@ -5416,6 +5445,7 @@ function App(): JSX.Element {
           const filesResult = await filesResponse.json() as ApiResponse
           if (filesResult.files) {
             excalidrawAPI?.addFiles(Object.values(filesResult.files))
+            noteServerFiles(Object.keys(filesResult.files))
           }
         }
       }
@@ -5681,6 +5711,9 @@ function App(): JSX.Element {
           if ((data as any).files) {
             excalidrawAPI.addFiles(Object.values((data as any).files))
             filesFromSocketRef.current = sceneKey()
+            // And this is the server saying which files it holds — the only statement of it
+            // this page gets on a fresh connection, and therefore what the upload skips.
+            noteServerFiles(Object.keys((data as any).files))
           }
           if (landingOnANewBoard) finishBoardSwitch()
           // The scene was just replaced wholesale, and the terminal's blocks are derived, so
@@ -5692,6 +5725,9 @@ function App(): JSX.Element {
         case 'files_added':
           if (Array.isArray((data as any).files)) {
             excalidrawAPI.addFiles((data as any).files)
+            noteServerFiles(((data as any).files as { id?: string }[])
+              .map((file) => file?.id)
+              .filter((id): id is string => typeof id === 'string' && id.length > 0))
           }
           break
 
@@ -6095,6 +6131,103 @@ function App(): JSX.Element {
   }
 
   /**
+   * What the server is known to hold for the board on screen, reset when that board changes.
+   *
+   * A reconnect changes it too, and deliberately: the socket that just came back may belong
+   * to a process that was restarted, whose file store is whatever it read off disk. Starting
+   * from nothing there costs one re-upload of a board's images on a reconnect and buys the
+   * case where the store really did lose them — an image is an upsert by id, so the redundant
+   * half is cheap and the missing half is the whole feature.
+   */
+  const knownServerFiles = (): Set<string> => {
+    const key = sceneKey()
+    if (serverFilesRef.current.key !== key) {
+      serverFilesRef.current = { key, ids: new Set() }
+      refusedFilesRef.current = new Set()
+    }
+    return serverFilesRef.current.ids
+  }
+
+  /** The server holds these — because it said so, or because a POST of ours landed. */
+  const noteServerFiles = (ids: Iterable<string>): void => {
+    const held = knownServerFiles()
+    for (const id of ids) held.add(id)
+  }
+
+  /**
+   * Put the bytes behind this board's images on the server, before the elements that name
+   * them.
+   *
+   * This is the half of the file store that was never built. `POST /api/files` existed for
+   * the issue block's picker and nothing else ever called it, so an image pasted on the
+   * canvas synced as an element with a `fileId` and no bytes anywhere but this tab: reload,
+   * and the board came back with a hole in it (#343).
+   *
+   * Three things it is careful about, all of them the naive version's cost:
+   *
+   *  - **only what is new.** A board with ten screenshots would otherwise re-post megabytes
+   *    on every debounce, which is a second of the machine's time per drag.
+   *  - **only what fits.** `express.json` refuses a body over ten megabytes, so the upload is
+   *    split into requests that will land, and an image too large to be posted at all is said
+   *    out loud rather than retried into a 413 forever.
+   *  - **never fatal.** A failed upload leaves the ids out of the known set so the next change
+   *    tries again; it does not take the element sync down with it, because a board that
+   *    cannot post one image must still be able to save the sentence somebody just typed.
+   */
+  const syncSceneFiles = async (
+    api: ExcalidrawImperativeAPI,
+    elements: readonly ExcalidrawElement[]
+  ): Promise<void> => {
+    const wanted = referencedFileIds(elements as unknown as { fileId?: unknown }[])
+    if (!wanted.length) return
+
+    const held = (api.getFiles() ?? {}) as Record<string, BoardFile | undefined>
+    const carried = wanted.map((id) => held[id]).filter((file): file is BoardFile => Boolean(file?.dataURL))
+
+    // Said where the reader is, because the alternative is a board that looks complete today
+    // and comes back short tomorrow. The cap is the save's, so the sentence is about the save.
+    const total = carried.reduce((sum, file) => sum + file.dataURL.length, 0)
+    if (total > BOARD_IMAGE_BUDGET_BYTES && budgetSaidForRef.current !== sceneKey()) {
+      budgetSaidForRef.current = sceneKey()
+      sayOnCanvas(api, `This board is carrying more than ${megabytes(BOARD_IMAGE_BUDGET_BYTES)}`
+        + ' of images. They are all on the canvas, but the ones over that line are not saved,'
+        + ' so they will not come back after a restart.')
+    }
+
+    const known = knownServerFiles()
+    const pending = carried.filter((file) => !known.has(file.id) && !refusedFilesRef.current.has(file.id))
+    if (!pending.length) return
+
+    const { batches, refused } = uploadBatches(pending)
+    for (const file of refused) {
+      refusedFilesRef.current.add(file.id)
+      sayOnCanvas(api, `An image on this board is larger than ${megabytes(FILE_UPLOAD_LIMIT_BYTES)}`
+        + ' once encoded, which is more than the board can store. It stays on the canvas and'
+        + ' will not survive a reload.')
+    }
+
+    for (const batch of batches) {
+      try {
+        // No workspace on the path: the file store is content-addressed and process-wide, so
+        // the same id is the same image on every board — which is the same reasoning
+        // `attachIssueImages` posts under.
+        const response = await fetch('/api/files', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files: batch })
+        })
+        if (!response.ok) {
+          console.warn(`Could not store ${batch.length} image(s): HTTP ${response.status}`)
+          continue
+        }
+        noteServerFiles(batch.map((file) => file.id))
+      } catch (error) {
+        console.warn('Could not store this board\'s images:', error)
+      }
+    }
+  }
+
+  /**
    * Main sync function. Answers whether the scene actually reached the server.
    *
    * The answer matters to one caller — the flush a reconnect makes before it accepts a scene
@@ -6144,6 +6277,11 @@ function App(): JSX.Element {
       const currentElements = scene.filter((element) => !isDerivedElement(element)
         && !(element.containerId && derivedIds.has(element.containerId)))
       console.log(`Syncing ${currentElements.length} elements to backend`)
+
+      // 2. The bytes behind this board's images, before the elements that name them — so the
+      // store never takes in an element whose file it has never seen, which is the state a
+      // second window and every future reload read as a hole in the board (#343).
+      await syncSceneFiles(api, currentElements)
 
       // 3. Convert to backend format
       const backendElements = currentElements.map(convertToBackendFormat)

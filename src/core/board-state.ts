@@ -43,16 +43,27 @@
  * does. Both are already kept out of the autosync and out of the export; this is the third
  * door, and it needs to be, because the store is reachable from the REST API too.
  *
- * Files are not saved. `scripts/export-board.mjs` writes none either, so this is the same
- * limit the tracked boards already have: an image pasted onto a board comes back after a
- * restart as an element whose file the process no longer holds.
+ * Files are saved too, since #343, and that is the one thing here with a ceiling on it. A
+ * dataURL is base64 and a board of screenshots can outgrow any figure, while this file is
+ * rewritten on a one-second debounce — so a board's images are written up to
+ * `BOARD_IMAGE_BUDGET_BYTES` and the rest are named in a warning rather than silently
+ * halved. Without them the save was a scene that referred to pictures nobody could produce:
+ * every reload of every board, not the restart-only limit this comment used to claim.
+ *
+ * ## What is kept when a board is emptied
+ *
+ * The same scene, written once, beside the saved board and named after it — because a clear is
+ * the one write that is not a change to a board but the end of one, and since #225 it reaches
+ * the file (#345). It carries the images too, on the same budget: they are exactly what a
+ * clear would otherwise take with no way back.
  */
 import fs from 'fs/promises';
 import { renameSync, writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
-import { ServerElement } from '../types.js';
+import { ExcalidrawFile, ServerElement, files } from '../types.js';
 import { elementsFor, normalizeWorkspaceId } from './element-store.js';
+import { BOARD_IMAGE_BUDGET_BYTES, megabytes, referencedFileIds, withinBudget } from './board-files.js';
 import { BoardScene, parseBoardScene } from './board-seed.js';
 import { registryPath } from './workspaces.js';
 import { env } from './settings.js';
@@ -157,23 +168,70 @@ export function persistableElements(elements: Iterable<ServerElement>): ServerEl
     && !(element.containerId && derivedIds.has(element.containerId)));
 }
 
-/** What goes in a file: a scene, readable by anything that reads a `.excalidraw`. */
-function sceneOf(elements: ServerElement[], source: string): string {
+/**
+ * Which boards have already been told they are over the image budget.
+ *
+ * The save runs every second or two for as long as somebody is drawing, and a warning printed
+ * on every one of them is a log nobody can read. Cleared when the board comes back under, so
+ * the next time it happens is said again.
+ */
+const overBudget = new Set<string>();
+
+/**
+ * The files a board's saved scene carries: the ones its own saved elements point at, up to
+ * the budget.
+ *
+ * Walked from the *persistable* elements rather than the whole store, so the scene never
+ * carries bytes for a shape it did not save — a terminal block's image, if one ever existed,
+ * would otherwise be written into a file whose elements have no mention of it.
+ */
+function filesFor(workspaceId: string, elements: ServerElement[]): Record<string, ExcalidrawFile> {
+  const { kept, dropped, bytes } = withinBudget(
+    referencedFileIds(elements),
+    (id) => files.get(id),
+    BOARD_IMAGE_BUDGET_BYTES
+  );
+
+  if (dropped.length && !overBudget.has(workspaceId)) {
+    overBudget.add(workspaceId);
+    logger.warn(
+      `"${workspaceId}" is carrying more images than a saved board holds: `
+      + `${megabytes(bytes)} of ${megabytes(BOARD_IMAGE_BUDGET_BYTES)} written, `
+      + `${dropped.length} image(s) left out. They stay on the canvas and will not survive a restart.`
+    );
+  }
+  if (!dropped.length) overBudget.delete(workspaceId);
+
+  const scoped: Record<string, ExcalidrawFile> = {};
+  for (const file of kept) scoped[file.id] = file as ExcalidrawFile;
+  return scoped;
+}
+
+/**
+ * What goes in a file: a scene, readable by anything that reads a `.excalidraw`.
+ *
+ * The elements are passed in rather than read here, because the two callers do not agree on
+ * what they are: the save writes the board as it stands, and the copy taken before a clear
+ * writes the same board one moment before it stops standing. The files follow whichever set
+ * of elements it is handed, so a copy carries the pictures its own shapes point at — the
+ * board's images are exactly what a clear would otherwise take with no way back.
+ */
+function sceneOf(workspaceId: string, elements: ServerElement[], source: string): string {
   return `${JSON.stringify({
     type: 'excalidraw',
     version: 2,
     source,
     savedAt: new Date().toISOString(),
     elements,
-    // Empty, as `scripts/export-board.mjs` writes it. See the note at the top of the file.
     appState: {},
-    files: {},
+    files: filesFor(workspaceId, elements),
   }, null, 0)}\n`;
 }
 
 /** The board as it is now, for the file it is saved in. */
 function sceneFor(workspaceId: string): string {
-  return sceneOf(persistableElements(elementsFor(workspaceId).values()), 'excalidraw-canvas-board-state');
+  return sceneOf(workspaceId, persistableElements(elementsFor(workspaceId).values()),
+                 'excalidraw-canvas-board-state');
 }
 
 /**
@@ -228,7 +286,7 @@ export async function backupBoardBefore(workspaceId: string): Promise<string | n
   const temporary = `${file}.${process.pid}.tmp`;
   try {
     await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(temporary, sceneOf(elements, 'excalidraw-canvas-board-cleared'), 'utf-8');
+    await fs.writeFile(temporary, sceneOf(id, elements, 'excalidraw-canvas-board-cleared'), 'utf-8');
     await fs.rename(temporary, file);
     return file;
   } catch (error) {
