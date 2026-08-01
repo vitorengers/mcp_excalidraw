@@ -60,7 +60,7 @@ const RESOLVED_LOG_FILE_PATH = resolveLogFilePath();
  * the caller's project, and therefore somewhere nobody asked for a log would think to look. The
  * *resolved* path rather than the setting, so that the fallback to the temporary directory is
  * visible too: an unset and unwritable default lands there, and a command echoing the variable
- * back would name a file that was never opened. `excalidraw-canvas status` prints this.
+ * back would name a file that was never opened. The CLI's `status` prints this, in every branch.
  */
 export const logFilePath: string = RESOLVED_LOG_FILE_PATH;
 
@@ -131,7 +131,7 @@ const logger: winston.Logger = winston.createLogger({
       level: FILE_LEVEL,
       maxsize: LOG_MAX_SIZE,
       maxFiles: LOG_MAX_FILES,
-      // The newest lines stay in `filename`; the history is `…1.log`, `…2.log` and so on.
+      // The newest lines stay in `filename`; the history is `vibemaxxing1.log` upwards.
       tailable: true
     })
   ]
