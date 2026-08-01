@@ -121,6 +121,36 @@ export function reasonStalls(reason: QueuePassReason): boolean {
     && reason !== 'reclaimed';
 }
 
+/**
+ * Whether a reason is worth interrupting a reader on the canvas for.
+ *
+ * Narrower than `reasonStalls` by exactly one, and `cap-full` is the one. **A full cap is a
+ * queue at capacity, not a queue that is stuck**: every slot is held by a run doing what the
+ * switch was turned on for, there is nothing for the reader to do, and it clears itself the
+ * moment one of them ends. That is the same fact `nothing-startable` and `blocked` are quiet
+ * about — a reason firing on every quiet pass is a reason nobody reads (#360).
+ *
+ * It also repeated, twice over, which is what #483 reports from a live board: the browser
+ * forgets what it said whenever a pass is not a stall, so a saturated queue oscillating
+ * between `cap-full` and `started` raised the box afresh per completed run; and the sentence
+ * names the holders, so swapping one run for another is a new sentence and a new box even
+ * with no non-stalled pass in between.
+ *
+ * The reason itself is not suppressed. `GET /api/implement` still answers `cap-full` naming
+ * the runs holding the slots, the toggle still draws its outline broken, and the server still
+ * says it once at `warn`; what stops is the interruption. The cases kept are the ones a reader
+ * must act on and none of which oscillates: a column renamed on GitHub, a board that is gone,
+ * a `gh` that has stopped answering, and a wait nothing will end.
+ *
+ * What this deliberately no longer surfaces is a cap held by a run that has wedged. That was
+ * the original reason for saying it at all, and `cap-full` never could tell that case from a
+ * healthy one; since #357 the dead half is `reclaimStalledRuns`' to close, on evidence, under
+ * its own reason.
+ */
+export function reasonAnnounces(reason: QueuePassReason): boolean {
+  return reasonStalls(reason) && reason !== 'cap-full';
+}
+
 export function recordQueuePass(
   workspaceId: string,
   pass: Omit<QueuePass, 'stalled'>

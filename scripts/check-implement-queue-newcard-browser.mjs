@@ -14,10 +14,11 @@
  *  - **a queue that is on and idle looks different from a queue that is on and stuck.** That
  *    is #263's third complaint, and it is the one the toggle could not answer: on was on,
  *    whether the passes were starting runs or hitting a wall every thirty seconds;
- *  - **the reason reaches the reader**, as a sentence rather than as a shape. A broken
- *    outline says "still not moving"; only the toast says four slots are held and by what;
- *  - **and it is said once.** A stall stalls on a timer, so a toast per poll would be the
- *    board repeating itself every twenty seconds until somebody switched it off.
+ *  - **the reason is there to be asked for and is not pushed at anybody.** A full cap is a
+ *    queue at capacity: the outline breaks, `GET /api/implement` names the runs holding the
+ *    slots, and nothing is put over the canvas (#483).
+ *    `check-implement-queue-cap-quiet-browser.mjs` is where that is driven through a whole
+ *    rotation, and where the stalls that *are* worth a box still get exactly one.
  *
  * The fixture is rewritten mid-run, which is the whole point: the project gains a Todo card
  * while the page is open and the queue is already draining. Cap two, so the sequence is
@@ -447,22 +448,21 @@ try {
   check('and it is the same button, not a second shape', stuck.queue.id === onLook.id,
         `${onLook.id} vs ${stuck.queue.id}`);
 
-  console.log('\n5. the reason reaches the reader, in words, and only once');
-  const said = await waitFor(async () => {
-    const toasts = await evaluate('window.__toasts || []');
-    return toasts.some((text) => text.includes('starting nothing')) ? toasts : null;
-  }, 'the board to say why the queue is stuck', 240);
-  check('the board said the queue is on and starting nothing',
-        said.some((text) => text.includes('starting nothing')), JSON.stringify(said));
-  check('naming a run that is holding a slot',
-        said.some((text) => text.includes(issueUrl(42)) || text.includes(issueUrl(43))),
-        JSON.stringify(said));
-  // Two polls at least, so a toast raised per poll would have been raised twice by now.
+  console.log('\n5. the reason reaches the reader without a box over what they are reading');
+  // A full cap is a queue at capacity and not a queue that is stuck, so it is drawn and
+  // answered and never announced (#483). The rotation that used to raise one of these per
+  // completed run is driven by check-implement-queue-cap-quiet-browser.mjs, which also holds
+  // the other half of the rule: a stall that is a stall still speaks, once.
   await sleep(Math.max(2 * QUEUE_MS, 3000));
-  const stillSaid = await evaluate('window.__toasts || []');
-  check('and it said it once rather than at every pass',
-        stillSaid.filter((text) => text.includes('starting nothing')).length === 1,
-        JSON.stringify(stillSaid));
+  const said = await evaluate('window.__toasts || []');
+  check('the board did not interrupt the reader about a cap its own runs are holding',
+        said.filter((text) => text.includes('starting nothing')).length === 0,
+        JSON.stringify(said));
+  const capped = await serverQueue();
+  check('and the sentence is still there to be asked for, naming who holds the slots',
+        String(capped?.lastPass?.detail ?? '').includes(issueUrl(42))
+        && String(capped?.lastPass?.detail ?? '').includes(issueUrl(43)),
+        JSON.stringify(capped?.lastPass));
 
   console.log('\n6. a slot freeing puts the toggle back to a queue that is simply on');
   release(42);

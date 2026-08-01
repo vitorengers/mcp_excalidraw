@@ -174,6 +174,16 @@ interface ImplementQueueState {
    * across has room for a broken outline and not for a paragraph.
    */
   stalled: boolean;
+  /**
+   * And it is worth interrupting a reader for.
+   *
+   * A second bit rather than the reason's name, so the vocabulary stays on the server: which
+   * stalls are worth a box is a fact about the taxonomy and not about the canvas. Every stall
+   * used to be one, and a full cap is the counter-example — a queue at capacity is doing what
+   * it was switched on for, so a saturated board interrupted its reader roughly once per
+   * completed run (#483).
+   */
+  announce: boolean;
   /** Why, in words the reader can act on. Empty when the queue has no pass to report. */
   reason: string;
 }
@@ -2895,6 +2905,7 @@ function App(): JSX.Element {
           enabled: body.queue.enabled === true,
           column: String(body.queue.column ?? ''),
           stalled: body.queue.stalled === true,
+          announce: body.queue.announce === true,
           reason: String(body.queue.lastPass?.detail ?? '')
         }
         : null
@@ -2918,15 +2929,20 @@ function App(): JSX.Element {
    *
    * The toggle's broken outline is what a reader sees at a glance and it cannot carry the
    * reason — which is the half that matters, because every stall has a different thing to do
-   * about it: four slots held by runs that will never end, a column renamed on GitHub, a `gh`
-   * that has stopped answering. The server composes the sentence; this decides when it is
-   * worth interrupting for, which is when it changes.
+   * about it: a column renamed on GitHub, a board that is gone, a `gh` that has stopped
+   * answering, a wait nothing will end. The server composes the sentence and says which
+   * stalls are worth interrupting for; this decides when, which is when it changes.
+   *
+   * A full cap is the stall that is not one of them (#483). It is still drawn and still on the
+   * API — the toggle's outline breaks and `queue.lastPass` names the runs holding the slots —
+   * but a queue at capacity is a queue working, and a box over the canvas per completed run is
+   * the board interrupting a reader to say so.
    */
   const announceQueueStall = (
     api: ExcalidrawImperativeAPI,
     queue: ImplementQueueState | null
   ): void => {
-    if (!queue?.enabled || !queue.stalled || !queue.reason) {
+    if (!queue?.enabled || !queue.announce || !queue.reason) {
       announcedStallRef.current = ''
       return
     }
@@ -2974,6 +2990,7 @@ function App(): JSX.Element {
           enabled: body.queue.enabled === true,
           column: String(body.queue.column ?? ''),
           stalled: body.queue.stalled === true,
+          announce: body.queue.announce === true,
           reason: String(body.queue.lastPass?.detail ?? '')
         },
         signature: ''

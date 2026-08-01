@@ -92,6 +92,7 @@ import {
   dependenciesOf,
   queueEnabled,
   queuedWorkspaces,
+  reasonAnnounces,
   recordQueuePass,
   setQueueEnabled,
   startableCards
@@ -3532,12 +3533,15 @@ function syncQueueTimer(): void {
  * is off, where "the last pass" would be describing a decision somebody has already undone.
  * `stalled` is lifted out of it because it is the one bit the board draws, and a mirror that
  * had to know the reason vocabulary to draw a toggle would have to be edited every time a
- * reason is added.
+ * reason is added. `announce` is the second bit, for the same reason and at the same cost:
+ * whether this is worth putting a box over somebody's canvas for is a fact about the taxonomy,
+ * and it is answered here rather than by a list of reason names in the browser.
  */
 function queueStateFor(workspace: Workspace | undefined, workspaceId: string): {
   enabled: boolean;
   column: string;
   stalled: boolean;
+  announce: boolean;
   lastPass: QueuePass | null;
 } {
   const pass = lastQueuePass(workspaceId);
@@ -3545,6 +3549,7 @@ function queueStateFor(workspace: Workspace | undefined, workspaceId: string): {
     enabled: queueEnabled(workspaceId),
     column: workspace ? todoColumn(workspace).name : DEFAULT_TODO_COLUMN,
     stalled: Boolean(pass?.stalled),
+    announce: Boolean(pass && reasonAnnounces(pass.reason)),
     lastPass: pass
   };
 }
