@@ -81,6 +81,18 @@ export type QueuePassReason =
    * queue that quietly starts nothing is the whole of #263.
    */
   | 'blocked'
+  /**
+   * Every card it could otherwise have started is waiting on an issue that is open and already
+   * holds a settled run.
+   *
+   * A stall, and the one case where this module disagrees with the paragraph above it.
+   * `blocked` is quiet because something will eventually close the foundation; here nothing
+   * will — `dispatchQueue` skips any issue the implement registry already answers for, so the
+   * dependency cannot be started a second time and every card built on it waits forever. On
+   * 2026-08-01 that state was reported as `blocked` for over two hours while the board drew a
+   * healthy queue over seven frozen cards, which is the same silence #263 exists to end.
+   */
+  | 'deadlocked'
   /** The board read failed — `gh` unresolvable, an expired login, a GitHub outage. */
   | 'unreadable';
 

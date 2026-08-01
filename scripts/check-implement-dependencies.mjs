@@ -292,6 +292,24 @@ const call = async (path, options = {}) => {
   return { status: response.status, body: await response.json().catch(() => ({})) };
 };
 
+/**
+ * The queue state once a pass has run that started nothing.
+ *
+ * A fixed sleep was reading whichever pass happened to be last, and the pass that starts the
+ * foundation reports `started` — so this check failed about one run in several on a machine
+ * under load, claiming the queue had not blocked anything when it simply had not got there
+ * yet. A check that has to be re-run to be believed is worse than one that fails.
+ */
+async function settledPass() {
+  let state = await call('/api/implement');
+  for (let attempt = 0; attempt < 30; attempt++) {
+    if ((state.body?.queue?.lastPass?.reason ?? 'started') !== 'started') return state;
+    await sleep(QUEUE_MS);
+    state = await call('/api/implement');
+  }
+  return state;
+}
+
 try {
   for (let attempt = 0; ; attempt++) {
     if (child.exitCode !== null) throw new Error(`the canvas server exited early:\n${serverOutput}`);
@@ -310,17 +328,45 @@ try {
   check('the card built on it did not, though the cap had room', !first.includes('303'), first.join(','));
   check('the card whose dependency is on no board did start', first.includes('304'), first.join(','));
 
-  const state = await call('/api/implement');
+  const state = await settledPass();
   const pass = state.body?.queue?.lastPass ?? {};
   check('the pass says it blocked something', pass.reason === 'blocked', JSON.stringify(pass));
   check('and names what it is waiting on', String(pass.detail ?? '').includes('303') && String(pass.detail ?? '').includes('302'), String(pass.detail ?? ''));
   check('a blocked card is not a stalled queue', state.body?.queue?.stalled !== true, JSON.stringify(state.body?.queue ?? {}));
 
-  console.log('\n4. and starts it on the pass after the foundation closes');
+  console.log('\n4. a foundation that settled without closing is a deadlock, not waiting');
+
+  // Releasing the agent without closing the issue is the shape #326 was in: a settled record
+  // against an issue that is still open. `dispatchQueue` skips any issue that already has a
+  // record, so nothing will ever start #302 again and #303 can never be unblocked — but the
+  // pass reads identically to case 3, where the foundation had simply not run yet. For two
+  // hours on 2026-08-01 that difference was the difference between a queue nobody needed to
+  // look at and seven cards frozen behind one bad record.
+  writeFileSync(join(workDir, 'release-302'), '', 'utf8');
+  await sleep(QUEUE_MS * 10);
+
+  const settled = await call(`/api/implement?url=${encodeURIComponent(issueUrl(302))}`);
+  check('the foundation has a settled record', settled.body?.implement?.state
+        && settled.body.implement.state !== 'running', JSON.stringify(settled.body?.implement ?? {}));
+  check('and its issue is still open', !JSON.parse(readFileSync(statePath, 'utf8')).closed.includes(302));
+
+  const stuck = await settledPass();
+  const deadPass = stuck.body?.queue?.lastPass ?? {};
+  check('the pass no longer calls it plain waiting', deadPass.reason !== 'blocked', JSON.stringify(deadPass));
+  check('it says the queue is deadlocked', deadPass.reason === 'deadlocked', JSON.stringify(deadPass));
+  check('the queue reports itself stalled', stuck.body?.queue?.stalled === true,
+        JSON.stringify(stuck.body?.queue ?? {}));
+  check('and the detail names the dependent and its foundation',
+        String(deadPass.detail ?? '').includes('303') && String(deadPass.detail ?? '').includes('302'),
+        String(deadPass.detail ?? ''));
+  check('and the state of the record it cannot get past',
+        /done|failed|blocked/.test(String(deadPass.detail ?? '')), String(deadPass.detail ?? ''));
+  check('nothing was started by the change in reporting', !started().includes('303'), started().join(','));
+
+  console.log('\n5. and it starts on the pass after the foundation closes');
 
   writeFileSync(statePath, JSON.stringify({ closed: [302] }), 'utf8');
   writeProject();
-  writeFileSync(join(workDir, 'release-302'), '', 'utf8');
   await sleep(QUEUE_MS * 10);
 
   const second = started();
