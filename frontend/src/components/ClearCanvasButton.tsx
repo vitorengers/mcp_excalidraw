@@ -36,12 +36,20 @@ interface ClearCanvasButtonProps {
   readCount: () => Promise<number>
   /** Empty it. Saying what happened is the caller's, which is where the canvas already is. */
   onClear: () => Promise<void>
+  /**
+   * A press that found nothing to clear.
+   *
+   * Opening no dialog is right — there is nothing to confirm — but a control that answers a
+   * press with nothing at all is indistinguishable from one that does not work, which is the
+   * whole reason `sayOnCanvas` exists (#244). So the press is answered in words instead.
+   */
+  onNothingToClear?: (boardName: string) => void
   /** Nothing to confirm: no board is on screen yet. */
   disabled?: boolean
 }
 
 export const ClearCanvasButton: React.FC<ClearCanvasButtonProps> = ({
-  boardName, readCount, onClear, disabled = false,
+  boardName, readCount, onClear, onNothingToClear, disabled = false,
 }) => {
   const [phase, setPhase] = useState<Phase>('idle')
   const [count, setCount] = useState(0)
@@ -83,6 +91,7 @@ export const ClearCanvasButton: React.FC<ClearCanvasButtonProps> = ({
     if (gone.current) return
     setCount(held)
     setPhase(held > 0 ? 'confirming' : 'idle')
+    if (held === 0) onNothingToClear?.(boardName)
   }
 
   const clear = async (): Promise<void> => {

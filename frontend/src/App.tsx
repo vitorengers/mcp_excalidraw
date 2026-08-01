@@ -6594,6 +6594,9 @@ function App(): JSX.Element {
             boardName={activeBoardName}
             readCount={countOnBoard}
             onClear={clearCanvas}
+            onNothingToClear={(board) => {
+              if (excalidrawAPI) sayOnCanvas(excalidrawAPI, `There is nothing on ${board} to clear.`)
+            }}
             disabled={!excalidrawAPI}
           />
 

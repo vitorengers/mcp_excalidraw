@@ -238,6 +238,12 @@ const PROBE = `(() => {
   return {
     button: boxOf(button),
     buttonLabel: (button?.textContent || '').trim(),
+    // Both halves of "is this page ready to be pressed". The button renders before the canvas
+    // API exists and before the workspace list has answered, and a press in that window is
+    // either swallowed by a disabled control or asked of the default board — which is empty,
+    // and correctly opens nothing. The title is what says the switch has happened.
+    buttonDisabled: button ? Boolean(button.disabled) : null,
+    title: document.title,
     confirm: boxOf(confirm),
     confirmText: (confirm?.innerText || '').replace(/\\s+/g, ' ').trim(),
     cancel: boxOf(document.querySelector('.clear-canvas__cancel')),
@@ -273,8 +279,9 @@ try {
   await send('Page.bringToFront');
   const found = await waitFor(async () => {
     const seen = await evaluate(PROBE);
-    return seen.button ? seen : null;
-  }, 'the Clear Canvas button');
+    return seen.button && seen.buttonDisabled === false && seen.title.includes(BOARD_NAME)
+      ? seen : null;
+  }, 'the Clear Canvas button, on the seeded board');
 
   console.log('1. the button is still the one the bar has always carried');
   check('it says Clear Canvas', found.buttonLabel === 'Clear Canvas', found.buttonLabel);
