@@ -4,9 +4,11 @@
  * This is a strictly more dangerous thing than the issue agent, which
  * `docs/issue-block.md` already calls the most dangerous thing this server does: that one
  * spawns a process with a fixed prompt, this one spawns a process that runs whatever
- * arrives over an API with no authentication. So it copies the same guards, and the copy is
- * deliberate — opt in by environment variable, loopback only, and a **capped** number of
- * sessions per workspace. The routes in `src/server.ts` apply them.
+ * arrives over the API. So it copies the same guards, and the copy is deliberate — opt in by
+ * environment variable, loopback only, and a **capped** number of sessions per workspace. The
+ * routes in `src/server.ts` apply them. They stayed after #350 put a token in front of every
+ * route: that token is a file this account can read, so it says nothing about a process already
+ * running as this account, which is who these guards are for.
  *
  * A PTY where there is one, and a pipe where there is not. A pipe runs commands and streams
  * their output, and that is all it can ever do: a process on three pipes sees `stdin.isTTY`
@@ -43,8 +45,8 @@ export const SCROLLBACK_LIMIT = 200_000;
  * How many shells one board may have running at once.
  *
  * The rule used to be one, and that was a guard rather than an oversight: this runs whatever
- * arrives over an unauthenticated API, so the count is one of the three things standing
- * between the feature and a machine. Tabs relax it from 1 to N; they do not remove it, and
+ * arrives over the API, and anything running as this account can read the token in front of it,
+ * so the count is one of the three things standing between the feature and a machine. Tabs relax it from 1 to N; they do not remove it, and
  * "unbounded" would remove it — a page that could ask in a loop would be asking for as many
  * shells as it liked.
  *

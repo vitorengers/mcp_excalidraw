@@ -4,10 +4,10 @@ The trust model this tool asks you to accept, written down, because the stronges
 it used to be a paragraph inside [terminal.md](terminal.md) — a page nobody reads before
 installing.
 
-**VibeMaxxing is a local canvas server that can spawn coding agents and real shells, and its
-API has no authentication.** Everything below is what that means and what stands in front of
-it. It is here rather than in the README because the README is where somebody decides to
-install this, and this is what they are deciding.
+**VibeMaxxing is a local canvas server that can spawn coding agents and real shells, behind a
+secret only your account can read.** Everything below is what that means and what stands in
+front of it. It is here rather than in the README because the README is where somebody decides
+to install this, and this is what they are deciding.
 
 Uppercase in `docs/` rather than lowercase like every other document here: GitHub reads a
 security policy out of the repository root, `docs/` or `.github/` and nowhere else, and this
@@ -39,7 +39,7 @@ The version supported is the **latest published one** — `@vitorengers/vibemaxx
 child of that process: your account, your environment, your `PATH`, your `gh` login, your SSH
 keys, your working directories. There is no sandbox, no second user to drop to, and no
 container — that path was deleted rather than half-supported, because the image bound every
-interface on a server whose API has no authentication.
+interface on a server that at the time had no authentication of any kind.
 
 So the question this document answers is not "what can the tool do" — it can do what you can
 do. It is **who can make it do that**, and the answer is: whatever can reach the port, subject
@@ -68,16 +68,53 @@ decision about what runs and what is overwritten.
 Turning any of them on is a decision to let **anything that can reach this server** trigger
 that command. The rest of this document is about who that is.
 
+## The token in front of the API
+
+Every request under `/api`, and every WebSocket upgrade, has to carry a secret that this start
+of the server generated. Without it the answer is **401** and nothing runs.
+
+It is a file rather than a password. The server writes it into your per-user state directory
+beside its pidfile — `server-<port>.token`, owner-only — and everything entitled to drive the
+board reads it from there: the launcher puts it in the URL it opens in your browser, and the CLI
+and the MCP server read the file directly. You never type it, there is nothing to configure, and
+it is gone when the server stops. A new start is a new secret — except a **restart**, which is a
+replacement rather than a stop: the board hands its secret to the one taking its place, so the tab
+watching the Restart button does not come back to a board that refuses it.
+
+The page's half is worth knowing about, because it is what keeps the secret out of your history:
+the launcher opens `http://127.0.0.1:<port>/?t=<secret>`, the page reads it once, keeps it in
+`sessionStorage` for that tab, and takes it back out of the address bar. So `GET /` and the
+static assets stay open — the page cannot read a token out of an address bar it has not loaded
+yet — and so does `/health`, which is how any tool finds out what is listening on a port at all.
+Neither of those reads a board. If you open the bare URL by hand, the page loads and the board
+stays empty; start it with `vibemaxxing`, or reuse the tab the launcher opened.
+
+**What this defends against, and what it does not.** The file's permissions are the operating
+system's own boundary between accounts, so another user on a machine you share, and a sandboxed
+process that cannot read your state directory, are shut out. Until this existed they were not:
+loopback is not a permission boundary, and an `npm postinstall` in a project you had just opened
+could start a shell here. A process already running **as you** can read the file, exactly as it
+can read your SSH keys, and against that this is worth nothing. That is the deliberate limit of
+the control rather than an oversight.
+
+`VIBEMAXXING_NO_AUTH=1` turns it off, and it exists for the checks in `scripts/`, each of which
+starts a throwaway board and drives it over plain HTTP. There is no reason to set it on a board
+a person uses, and a board started with it writes a line saying so into its log file.
+
+`scripts/check-token-auth.mjs` holds this — the refusal and the acceptance, the file's mode, the
+refused upgrade, and, in a real browser, the launcher URL loading a working board whose address
+bar no longer carries the secret.
+
 ## Where it listens
 
 `HOST` defaults to **`127.0.0.1`**, and `PORT` to 3737 — a preference the launch path walks
 past to the next free port, not a pin ([running.md](running.md)).
 
-`HOST=0.0.0.0` publishes the board on **every network interface**, and the API has no built-in
-authentication of any kind: no token, no password, no session. Everyone who can route a packet
-to that port is the operator as far as this server is concerned. What such a board costs you is
-the workbench: off loopback every GitHub-backed route answers **403**, and so do the agents and
-the terminal, so what is published is a drawing canvas and nothing else. Do not do it on a
+`HOST=0.0.0.0` publishes the board on **every network interface**. The token goes with it, and
+it is one secret with no sessions and no accounts behind it: anyone who has it is the operator as
+far as this server is concerned, and anyone who has not is refused. What such a board costs you
+is the workbench: off loopback every GitHub-backed route answers **403**, and so do the agents
+and the terminal, so what is published is a drawing canvas and nothing else. Do not do it on a
 network you do not control, and put access control in front of it if you do it at all.
 
 What a non-loopback bind actually exposes, because the dangerous half refuses to run there:
@@ -115,11 +152,11 @@ there is a gate in front of every route, refusing with 403 before the route runs
 
 `scripts/check-cross-origin.mjs` holds both sides of this.
 
-**What the gate does not defend against is a local program.** Any process that can open a
-socket to the port — yours, or another account's on a machine you share — sends no `Origin` at
-all and drives the whole API, including the switches above. Loopback is not a permission
-boundary between users. On a shared machine, a board with the agents or the terminal enabled is
-a shell for everybody with a login on it.
+**What the gate does not defend against is a local program.** Any process that can open a socket
+to the port sends no `Origin` at all, so nothing here sees it — which is why the token above
+exists and why it is a file with owner-only permissions rather than a header the gate could have
+checked. Between the two, another account on a machine you share is refused; a process running as
+you is not, because it can read the file.
 
 ## What a run does to your repository
 
@@ -136,8 +173,9 @@ afternoon, and that is the exposure.
 
 ## What it stores
 
-The registry, the per-board scene state, the pidfile and `config.json` sit in a per-user state
-directory ([configuration.md](configuration.md)); the log file goes where `LOG_FILE_PATH` says.
+The registry, the per-board scene state, the pidfile, the running server's token and
+`config.json` sit in a per-user state directory ([configuration.md](configuration.md)); the log
+file goes where `LOG_FILE_PATH` says.
 The board holds whatever you drew on it. None of it is encrypted, and none of it is sent
 anywhere by this tool — the network calls it makes are `gh` to GitHub, and whatever the agent
 command line you configured does on its own account.

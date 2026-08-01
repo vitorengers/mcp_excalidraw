@@ -220,6 +220,11 @@ export const SETTINGS = [
     description: '`1` stops the CLI and the MCP server auto-spawning a canvas'
   },
   {
+    name: 'NO_AUTH',
+    fallback: 'unset',
+    description: '`1` starts the board with **no token**, so anything that can reach the port drives it — see [SECURITY.md](SECURITY.md). It is what the checks set, because each of them spawns a server and drives it over plain `fetch`; on a board a person uses, the token costs nothing to keep, since the launcher hands it over and the page remembers it'
+  },
+  {
     name: 'ALLOW_VERSION_SKEW',
     fallback: 'unset',
     description: '`1` attaches to a running canvas built from a different version instead of refusing. For a working copy driving an installed board — otherwise the refusal is what stops a session talking to a server running the previous release\'s code, silently ([trap-stale-server.md](trap-stale-server.md))'
