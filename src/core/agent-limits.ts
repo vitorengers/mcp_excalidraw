@@ -36,7 +36,13 @@
  */
 import { promises as fs } from 'fs';
 import path from 'path';
-import type { WorkspaceEnvironment } from './workspace-paths.js';
+import type { AgentLimitsReading, RateWindow } from './agent-adapter.js';
+import type { WorkspaceEnvironment } from './workspace-environment.js';
+
+// The two shapes this module fills in belong to the adapter contract that hands them back —
+// `agent-adapter.ts` says why — and are re-exported here so that a caller reading limits has
+// one place to import from.
+export type { AgentLimitsReading, RateWindow };
 
 /**
  * How old a reading may be before it is called stale.
@@ -47,37 +53,6 @@ import type { WorkspaceEnvironment } from './workspace-paths.js';
  * figures pass for this afternoon's.
  */
 export const STALE_AFTER_SECONDS = 600;
-
-/** One rate-limit window, as the status line reports it. */
-export interface RateWindow {
-  /** 0 to 100. */
-  usedPercent: number;
-  /** Unix epoch seconds when the window resets, or null when the file did not say. */
-  resetsAt: number | null;
-}
-
-/**
- * One environment's reading. Every field is independently nullable, and `null` is
- * "not said" rather than `0` — the distinction `agent-usage.ts` already draws.
- *
- * A window "appears only for Claude.ai subscribers (Pro/Max) after the first API response in
- * the session", each of the two independently, so an absent one is the normal case and not a
- * failure. Reporting it as `0%` would be a claim that nothing has been spent.
- */
-export interface AgentLimitsReading {
-  /** What a reader calls this machine: `Windows`, `Host`, or the distro's own name. */
-  label: string;
-  environment: WorkspaceEnvironment;
-  account: string | null;
-  fiveHour: RateWindow | null;
-  sevenDay: RateWindow | null;
-  /** Unix epoch seconds the reading was taken, or null when there is no reading. */
-  observedAt: number | null;
-  /** How long ago that was, or null when there is no reading. Never negative. */
-  ageSeconds: number | null;
-  /** True only when there is a reading and it is older than {@link STALE_AFTER_SECONDS}. */
-  stale: boolean;
-}
 
 /** `native.json`, or `wsl-Ubuntu-22.04.json`. */
 export function limitsFileFor(environment: WorkspaceEnvironment): string {

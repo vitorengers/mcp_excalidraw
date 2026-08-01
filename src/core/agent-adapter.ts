@@ -51,7 +51,7 @@
  */
 import type { AgentAction } from './terminal-palette.js';
 import type { TranscriptState } from './agent-stream-render.js';
-import type { AgentLimitsReading } from './agent-limits.js';
+import type { WorkspaceEnvironment } from './workspace-environment.js';
 
 /** The two agents, which are two because granting research must not grant repository writes. */
 export type AgentRole = 'issue' | 'implement';
@@ -386,6 +386,45 @@ export type UsagePatch =
   | { kind: 'message'; id: string | null; counts: UsageCounts }
   | { kind: 'settled'; counts: UsageCounts }
   | { kind: 'thinking'; delta: number };
+
+/**
+ * One rate-limit window, as a backend reports it.
+ *
+ * Here rather than in `agent-limits.ts` for the reason `UsageCounts` is here rather than in
+ * `agent-usage.ts`: it is part of what an adapter hands back, so the contract owns the shape and
+ * the module that does the work imports it. That it also keeps this file free of Node — see
+ * `workspace-environment.ts` — is what makes the rule cheap to keep.
+ */
+export interface RateWindow {
+  /** 0 to 100. */
+  usedPercent: number;
+  /** Unix epoch seconds when the window resets, or null when the backend did not say. */
+  resetsAt: number | null;
+}
+
+/**
+ * One environment's reading. Every field is independently nullable, and `null` is
+ * "not said" rather than `0` — the distinction `agent-usage.ts` already draws.
+ *
+ * A window may be absent for reasons that are entirely ordinary: Claude Code reports one "only
+ * for Claude.ai subscribers (Pro/Max) after the first API response in the session", each of the
+ * two independently. Reporting an absent one as `0%` would be a claim that nothing has been
+ * spent.
+ */
+export interface AgentLimitsReading {
+  /** What a reader calls this machine: `Windows`, `Host`, or the distro's own name. */
+  label: string;
+  environment: WorkspaceEnvironment;
+  account: string | null;
+  fiveHour: RateWindow | null;
+  sevenDay: RateWindow | null;
+  /** Unix epoch seconds the reading was taken, or null when there is no reading. */
+  observedAt: number | null;
+  /** How long ago that was, or null when there is no reading. Never negative. */
+  ageSeconds: number | null;
+  /** True only when there is a reading and it is older than `STALE_AFTER_SECONDS`. */
+  stale: boolean;
+}
 
 /**
  * One coding agent, named.
