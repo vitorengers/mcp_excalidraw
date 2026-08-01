@@ -120,6 +120,11 @@ export const SETTINGS = [
     description: 'Path to the registry JSON. Unset resolves the per-user default, which is created when the first project is added — see [workspaces.md](workspaces.md)'
   },
   {
+    name: 'WORKSPACE',
+    fallback: 'the one registered project, else `default`',
+    description: 'Which registered project the CLI and the MCP tools draw on when nothing else names one. The singular of `WORKSPACES`, which is the list. `--workspace <id>` and an MCP tool\'s own `workspace` argument both beat it; unset, a board with one project resolves to that project, a board with none to the `default` scratch canvas, and a board with several refuses and names them — see [workspaces.md](workspaces.md)'
+  },
+  {
     name: 'BOARD_STATE',
     fallback: 'beside the registry',
     description: 'Where each registered board is saved between processes. Unset puts them in a directory named after the registry file, default registry included — [element-store.md](element-store.md)'

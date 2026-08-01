@@ -76,6 +76,8 @@ function printHelp(): void {
     '  Diagnostics go to stderr.',
     '  Exit codes: 0 ok, 1 error, 2 usage, 3 canvas unreachable, 4 browser tab required.',
     `  Canvas-driving commands auto-start the server (disable with ${settingName('NO_AUTOSTART')}=1).`,
+    '  --workspace <id> picks the registered project board to act on; a board with one project',
+    `  or none needs no flag, and ${settingName('WORKSPACE')} is the same answer without it.`,
     `  Canvas URL comes from EXPRESS_SERVER_URL or --url; otherwise the running board`,
     `  named in the state file, or port ${DEFAULT_CANVAS_PORT} — the next free one above it if that is taken.`,
     '  PORT pins the port instead, and is never scanned past.',
@@ -88,6 +90,11 @@ function printHelp(): void {
 function exitCodeFor(error: unknown): number {
   if (error instanceof CliUsageError) return 2;
   const code = (error as any)?.code;
+  // Not naming a board on a canvas that has several, or naming one nobody registered, is the
+  // caller having said the wrong thing — the same class as a bad flag, and the message already
+  // lists what could have been said. It reuses the documented usage code rather than inventing a
+  // fifth one nobody's scripts know about.
+  if (code === 'WORKSPACE_AMBIGUOUS' || code === 'WORKSPACE_UNKNOWN') return 2;
   if (code === 'CANVAS_UNREACHABLE') return 3;
   if (code === 'BROWSER_REQUIRED') return 4;
   return 1;
