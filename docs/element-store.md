@@ -16,6 +16,12 @@ client than an attack.
 
 Ids are normalised to `^[a-z0-9][a-z0-9._-]{0,63}$` before they are compared or logged.
 
+That is what a request carries; how each client decides *what to carry* is its own question. The
+browser appends the active tab (`apiUrl` in `frontend/src/App.tsx`); the CLI and the MCP tools
+resolve one in `src/core/canvas-client.ts` from `--workspace`, a tool's `workspace` argument or
+`EXCALIDRAW_WORKSPACE`, and refuse rather than guess when a board has several projects and
+nothing named one — [workspaces.md](workspaces.md).
+
 ## Two deliberate choices
 
 **Stores are created on first use.** There is no registration step: an unknown workspace id

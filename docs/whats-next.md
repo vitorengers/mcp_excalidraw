@@ -27,12 +27,16 @@ implement agent that wedges, and a block offering a reset is all a reader has to
 
 What its tab would not be is interactive, for the same measured reason — see `docs/terminal.md`.
 
-## Neither the MCP tools nor the CLI are workspace-aware
+## Neither the MCP tools nor the CLI were workspace-aware
 
-`src/core/canvas-client.ts` never sends `?workspace=`, so both always act on the `default` store.
-An agent driving the canvas over MCP cannot target a registered project board at all — only the
-REST API can. That is a real gap for a tool whose whole point is that agents draw on project
-boards.
+`src/core/canvas-client.ts` never sent `?workspace=`, so both always acted on the `default` store
+and an agent driving the canvas over MCP could not target a registered project board at all —
+only the REST API could. That was a real gap for a tool whose whole point is that agents draw on
+project boards, and it is closed since #344: `--workspace <id>` on any CLI command, an optional
+`workspace` argument on every MCP tool that reaches a canvas, and `EXCALIDRAW_WORKSPACE` for a
+whole session. What is left of the question is what "none named" should mean, and the answer
+chosen is in [workspaces.md](workspaces.md): one registered project is that project, none is
+`default`, several is a refusal that lists them.
 
 ## Nothing *saves* `boardFile`, and nothing is going to
 

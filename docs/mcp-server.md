@@ -82,8 +82,20 @@ If nothing is listening, the client starts the canvas itself. It also refuses to
 something that answers on that port but does not identify as this canvas server, rather than
 writing elements into a stranger.
 
-## Limitation
+## Which project board a tool draws on
 
-The MCP tools never send `?workspace=`, so every one of them operates on the `default` store.
-An agent driving the canvas over MCP cannot target a registered project board — only the REST
-API can. The same is true of the CLI.
+Every tool but `read_diagram_guide` takes an optional `workspace`: the id of a registered
+project, the same string its tab is listed under by `GET /api/workspaces`.
+
+```json
+{ "type": "rectangle", "x": 0, "y": 0, "width": 160, "height": 60, "workspace": "board-tool" }
+```
+
+Omit it and one registered project is that project, none registered is the `default` scratch
+canvas, and **several is an error naming them** rather than a guess. `EXCALIDRAW_WORKSPACE` in
+the MCP client's `env` is the same answer for a whole session, and the tool's own argument beats
+it. [workspaces.md](workspaces.md) is where the rule and the reasoning are.
+
+Until #344 no tool sent `?workspace=` at all, so every one of them operated on `default` and an
+agent driving the canvas over MCP could not reach a registered project board — only the REST API
+could.

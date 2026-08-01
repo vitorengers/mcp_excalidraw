@@ -19,6 +19,17 @@ Three interfaces drive the same live canvas. Pick the first one that applies:
 
 The canvas URL comes from `EXPRESS_SERVER_URL`, else the running board's own state file, else `http://127.0.0.1:3737` (the next free port above it if that is taken); `status` prints the one in use. Remind the user to open that URL in a browser — screenshots, image export, mermaid conversion, and viewport control need an open tab (CLI exits with code 4 when it's missing).
 
+### Step 0.5: Pick a Board
+
+One canvas holds several **project boards** — a tab per registered project, plus a `default` scratch canvas. Everything you draw goes on exactly one of them. Only a registered project gets a **tab**, so work put on `default` while projects are registered is on a board nobody is looking at. Say which one:
+
+- **CLI**: `--workspace <id>` on any command (`add --workspace board-tool`, `describe --workspace board-tool`).
+- **MCP**: a `workspace` argument on any canvas tool (`{"type": "rectangle", "x": 0, "y": 0, "workspace": "board-tool"}`).
+- **REST**: `?workspace=<id>` on the URL, or an `x-workspace-id` header.
+- For a whole session, export `EXCALIDRAW_WORKSPACE=<id>` once instead of repeating the flag.
+
+**When you name none:** a canvas with exactly one project registered uses it, a canvas with none uses `default`, and a canvas with **several refuses the command and lists the ids** (exit code 2) — pick one from that refusal rather than retrying. `GET /api/workspaces` lists them too. An id nobody registered is refused the same way, because it would be an invisible canvas: no tab, and nothing saving it.
+
 ### CLI Quick Reference
 
 Results are JSON on stdout — except `describe` (plain text) and raw-content output when `--out` is omitted (`export` scene JSON, `screenshot --format svg`). Diagnostics on stderr. Exit codes: 0 ok, 1 error, 2 usage, 3 canvas unreachable, 4 browser tab required.
@@ -264,6 +275,8 @@ Round-trips are safe: text-element block references follow the plugin's own id r
 - **Exit code 3 (canvas unreachable)?** Auto-start is disabled (`EXCALIDRAW_NO_AUTOSTART=1`) or a non-loopback `EXPRESS_SERVER_URL` is set. Run `start` explicitly or fix the env.
 - **Exit code 3 naming two version numbers?** A canvas from an older install is still holding the port and serving its own code. `restart` replaces it with the current build on the same port (it refuses while issues are being implemented — `--force` overrides); `status` shows both versions; `VIBEMAXXING_ALLOW_VERSION_SKEW=1` attaches to the old one anyway.
 - **Exit code 4 (browser required)?** Open the canvas URL (`status` prints it) in a browser, then retry — screenshots, image export, viewport, and mermaid conversion render in the frontend.
+- **"nothing said which one to draw on"?** The canvas has several project boards registered. Re-run with `--workspace <id>` (MCP: a `workspace` argument) using one of the ids the refusal listed — see Step 0.5.
+- **Drew something and the user cannot see it?** It probably went on `default`, which has no tab when projects are registered. `describe --workspace <id>` on each id tells you where it landed; redraw on the right board.
 - **Elements not appearing?** Check `describe` — they may be off-screen. In MCP mode, use `set_viewport` with `scrollToContent: true`, or `scrollToElementIds` plus optional `viewportZoomFactor` to focus on a specific subgraph; in a browser, press the zoom-to-fit button.
 - **Arrow not connecting?** Verify element IDs with `get <id>`. Make sure `startElementId`/`endElementId` match existing element IDs.
 - **Canvas in a bad state?** `snapshot save` first, then `clear --yes` and rebuild. Or `snapshot restore` to go back. Snapshots are in memory and belong to the board they were taken on, so they do not survive a restart and `before` on one board is not `before` on another.
