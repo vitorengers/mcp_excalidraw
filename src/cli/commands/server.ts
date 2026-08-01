@@ -7,6 +7,7 @@ import { readPidFile } from '../../core/pidfile.js';
 import { ensureSettingsFile } from '../../core/settings.js';
 import { openBrowser } from '../../core/open-browser.js';
 import { packageVersion, productName } from '../../core/version.js';
+import { logFilePath } from '../../utils/logger.js';
 
 /**
  * What the command with no arguments does: bring the board up, open it, say where it is.
@@ -94,6 +95,19 @@ export async function stop(argv: string[]): Promise<void> {
   printJson(result);
 }
 
+/**
+ * What every branch of `status` says, however the board answered.
+ *
+ * The log path is here rather than in the healthy branch alone because the moment somebody is
+ * asked for a log is the moment the board is *not* answering: a `running: false` that names no
+ * file leaves the reader with a console capped at warn and a log under `%LOCALAPPDATA%` that
+ * nothing has ever mentioned. It is this process's resolved path, which is the one the board it
+ * spawns resolves too — the same code, the same environment.
+ */
+function whereTheLogIs(): { logFile: string } {
+  return { logFile: logFilePath };
+}
+
 export async function status(argv: string[]): Promise<void> {
   parseArgs(argv, {});
 
@@ -101,7 +115,7 @@ export async function status(argv: string[]): Promise<void> {
   try {
     health = await getHealth();
   } catch {
-    printJson({ running: false, url: EXPRESS_SERVER_URL });
+    printJson({ running: false, url: EXPRESS_SERVER_URL, ...whereTheLogIs() });
     const error = new Error(`Canvas server is not running at ${EXPRESS_SERVER_URL}`);
     (error as any).code = 'CANVAS_UNREACHABLE';
     (error as any).quiet = true; // JSON above already tells the story
@@ -112,7 +126,8 @@ export async function status(argv: string[]): Promise<void> {
     printJson({
       running: false,
       url: EXPRESS_SERVER_URL,
-      conflict: 'another service (or a pre-1.1 canvas build) is answering at this URL'
+      conflict: 'another service (or a pre-1.1 canvas build) is answering at this URL',
+      ...whereTheLogIs()
     });
     const error = foreignServiceError();
     (error as any).quiet = true;
@@ -131,6 +146,7 @@ export async function status(argv: string[]): Promise<void> {
     pid: health.pid ?? readPidFile(canvasPort()) ?? undefined,
     elements: health.elements_count,
     browserClients: health.websocket_clients,
+    ...whereTheLogIs(),
     ...sync
   });
 }
