@@ -143,6 +143,7 @@ import {
 import { allowedAuthorities, verifyOrigin } from './core/origin-gate.js';
 import {
   backupBoardBefore,
+  boardStateExists,
   boardStateFile,
   dropBoardState,
   flushBoardStateSaves,
@@ -3360,6 +3361,65 @@ function chooseSeed(
 }
 
 /**
+ * The board a project that has never had one comes up on, or nothing.
+ *
+ * `__dirname` is `dist/` once compiled, so the default is this build's own `docs/`, the way
+ * `TOOL_DOCS_DIR` is — the repository's in a checkout and the package's in an installed copy,
+ * where `files` ships it beside the documents its cards point at. A project registered through
+ * the `+` gets a config with a name and possibly a `docsDir` and no `board` at all, which used
+ * to mean a blank canvas: nothing explaining the section keys, the blocks or the tabs, and
+ * `Alt+P` and `Alt+G` doing nothing at all, because those keys are declared by board data and
+ * there was none.
+ *
+ * `undefined`, not falsy, exactly as `DOCS_DIR` and `LIBRARY` are read: an **explicitly empty**
+ * setting is how a board says it wants new projects to come up blank, which is a thing somebody
+ * has to be able to say now that unset no longer means none. Every self-contained check sets it
+ * empty (`scripts/lib/spawn-canvas.mjs`) for the reason that helper deletes the rest of the
+ * machine's configuration — a throwaway project growing a board it never asked for decides
+ * assertions about element counts and about where a click lands, in checks that are about
+ * neither. `scripts/check-welcome-board.mjs` is the one that unsets it again.
+ */
+const WELCOME_BOARD_SETTING = env('WELCOME_BOARD');
+const WELCOME_BOARD_FILE = WELCOME_BOARD_SETTING === undefined
+  ? path.resolve(__dirname, '../docs/welcome.excalidraw')
+  : (WELCOME_BOARD_SETTING ? path.resolve(WELCOME_BOARD_SETTING) : null);
+
+/**
+ * The welcome board, for a project that has nothing else to come up as — or nothing.
+ *
+ * Three conditions, and each of them is a way of saying *nobody has been here yet*:
+ *
+ * - there is a welcome board to seed from at all: `WELCOME_BOARD` set empty is a board saying
+ *   its projects come up blank, and that answer is honoured before anything else is read.
+ * - the project declares no `board`. One that declares a file it cannot read is a project with
+ *   a board and a problem, and it stays empty and says so — putting a welcome board over that
+ *   would answer a broken path with a board the reader never asked for.
+ * - nothing was chosen from the two places a board is kept, which the caller has already
+ *   established by the time this runs.
+ * - and this canvas has never written a state file for it *at all*. That is the strict form of
+ *   "no saved state", and it is what makes this happen once: a board somebody emptied has a
+ *   saved scene with no elements in it, which `readBoardState` reports as nothing to come back
+ *   as — so the looser reading would put the welcome board back over a deliberate clear, every
+ *   start, forever.
+ *
+ * Past the first seed nothing here runs again: the elements land in a store that is already
+ * marked as worth saving, the file appears a second later, and every later start reads that.
+ */
+async function welcomeSeed(
+  workspaceId: string,
+  boardFile: string | null
+): Promise<{ scene: BoardScene; from: string } | null> {
+  if (!WELCOME_BOARD_FILE || boardFile) return null;
+  if (await boardStateExists(workspaceId)) return null;
+
+  const welcome = await readBoardFile(workspaceId, WELCOME_BOARD_FILE);
+  if (!welcome) return null;
+
+  logger.info(`"${workspaceId}" has no board of its own; seeding the welcome board.`);
+  return { scene: welcome.scene, from: WELCOME_BOARD_FILE };
+}
+
+/**
  * Put one registered board's saved scene into its store, and say it is worth saving from now
  * on.
  *
@@ -3369,6 +3429,11 @@ function chooseSeed(
  * every project, in the canvas's own state directory — because a draft on a board that
  * declares no file has even fewer places to survive than one on a board that does.
  *
+ * What it also gains, and only on the very first start, is the welcome board: a project that
+ * declares no `board` and that this canvas has never saved has nothing at all to show, and a
+ * blank canvas is where every one of them used to arrive. `welcomeSeed` is the whole of that
+ * decision, and it still writes nothing into the project.
+ *
  * Seeded by the *normalised* id. `elementsFor` normalises its argument and the registry
  * does not, so the raw id would reach the same store — but `broadcast` compares against
  * what a socket registered, which is normalised, and a project id with a capital letter
@@ -3376,7 +3441,7 @@ function chooseSeed(
  */
 async function seedBoardFromFile(workspace: Workspace): Promise<void> {
   if (workspace.error) return;
-  await seedBoard(normalizeWorkspaceId(workspace.id), workspace.boardFile);
+  await seedBoard(normalizeWorkspaceId(workspace.id), workspace.boardFile, welcomeSeed);
 }
 
 /**
@@ -3388,8 +3453,18 @@ async function seedBoardFromFile(workspace: Workspace): Promise<void> {
  * `Map` that could not have reported a change if anything had. It has no tracked board file
  * and never will: nothing on disk is a project's, so there is nothing to seed it from but the
  * state this canvas keeps of it.
+ *
+ * And no welcome board either, which is why `fallback` is a parameter rather than something
+ * this function decides. `default` is not a project somebody registered and has no directory,
+ * no documents and no settings behind it; a welcome board there would be a canvas somebody
+ * opened to draw on, filled with cards about projects they have not added.
  */
-async function seedBoard(workspaceId: string, boardFile: string | null): Promise<void> {
+async function seedBoard(
+  workspaceId: string,
+  boardFile: string | null,
+  fallback?: (workspaceId: string, boardFile: string | null)
+    => Promise<{ scene: BoardScene; from: string } | null>
+): Promise<void> {
   const store = elementsFor(workspaceId);
   if (store.size) {
     // Empty at startup, which is when this runs. Said out loud rather than assumed, because
@@ -3408,7 +3483,8 @@ async function seedBoard(workspaceId: string, boardFile: string | null): Promise
   // to read before anybody has seen it.
   persistBoardFor(workspaceId);
 
-  const chosen = chooseSeed(workspaceId, boardFile, saved, fromFile);
+  const chosen = chooseSeed(workspaceId, boardFile, saved, fromFile)
+    ?? (fallback ? await fallback(workspaceId, boardFile) : null);
   if (!chosen) return;
   const scene = chosen.scene;
 
