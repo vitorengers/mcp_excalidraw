@@ -49,8 +49,14 @@ change, and read back before the board file at startup. Getting a board into its
 still `node scripts/export-board.mjs --workspace <id>`, run by hand against a running server, and
 still a commit like any other.
 
-What is left of the asymmetry is images: neither the export nor the save carries `scene.files`, so a
-pasted image comes back after a restart as an element whose file the process no longer holds.
+Images were the last of the asymmetry and are closed since #343. The gap was never restart-only,
+which is what this section used to say: the autosync uploaded no bytes at all, so a pasted image
+lived in the tab it was pasted into and nowhere else — gone on every reload, and invisible to a
+second window from the start. The browser now posts what its scene names before the elements that
+name them, and the save carries `scene.files` up to a per-board ceiling. The *export* still writes
+none, so a tracked board file carries no images; that is the piece of the asymmetry that remains, and
+it is the same argument as above — a tracked artifact is a commit somebody makes, not something a
+timer writes.
 
 This was also the loose end behind the mojibake #151 was opened about: a canvas was seen holding a
 scene fifty merges older than the tracked file, with its em dashes and middle dots corrupted, and
