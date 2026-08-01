@@ -192,7 +192,7 @@ try {
   const workspace = (listing.workspaces ?? []).find((candidate) => candidate.id === workspaceId);
   check('the clone is the board\'s one project', Boolean(workspace),
         `ids: ${JSON.stringify((listing.workspaces ?? []).map((each) => each.id))}`);
-  check('and it loaded without an error', workspace?.error === null ?? false, JSON.stringify(workspace?.error));
+  check('and it loaded without an error', workspace?.error === null, JSON.stringify(workspace?.error));
 
   // Seeding is started at `listen` and deliberately not awaited, so the first request can beat
   // the read of a board file off disk. Poll rather than sleep a fixed time.
