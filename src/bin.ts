@@ -36,6 +36,29 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 
+// Global --workspace flag: which registered project board every canvas-touching command acts on.
+//
+// Global rather than a per-command flag for the reason --url is: it is the same question for all
+// of them, and adding it to fourteen flag specifications is fourteen places to leave it out. It
+// goes into the *flag* layer of core/settings.ts rather than into the environment, which is what
+// makes it beat an EXCALIDRAW_WORKSPACE somebody exported; `core/canvas-client.ts` reads it there.
+for (let i = 0; i < argv.length; i++) {
+  const token = argv[i]!;
+  let named: string | undefined;
+  if (token === '--workspace' && argv[i + 1]) {
+    named = argv[i + 1];
+    argv.splice(i, 2);
+  } else if (token.startsWith('--workspace=')) {
+    named = token.slice('--workspace='.length);
+    argv.splice(i, 1);
+  }
+  if (named !== undefined) {
+    const { overrideSetting } = await import('./core/settings.js');
+    overrideSetting('WORKSPACE', named);
+    break;
+  }
+}
+
 // Global --no-open flag, in the environment rather than in a parsed flag for the same reason
 // --url is: the bare invocation has no subcommand to hang a flag on, and `vibemaxxing --no-open`
 // has to stay the argument-less launch rather than becoming an unknown command. One code path

@@ -330,6 +330,45 @@ its own value back, so leaving the field alone cannot clear it.
 `scripts/check-workspace-settings-browser.mjs` is the check, and it is a browser one because
 "in the DOM only after `Advanced` is pressed" is a claim about the DOM.
 
+## Naming a board from the CLI and from the MCP tools
+
+The registry is what the tab strip shows, and until #344 it was also the one thing an agent
+could not reach: `src/core/canvas-client.ts` sent no `?workspace=` at all, so every CLI command
+and every MCP tool acted on the `default` store whatever was registered. The product's own claim
+— that agents draw on your project board — was reachable only by hand-written REST.
+
+A board is named in three places now, and they are the same answer in three spellings:
+
+```bash
+vibemax add --workspace board-tool elements.json    # any command; --workspace=board-tool too
+export EXCALIDRAW_WORKSPACE=board-tool              # the same, for a whole session
+```
+
+```json
+{ "type": "rectangle", "x": 0, "y": 0, "workspace": "board-tool" }
+```
+
+— an optional `workspace` argument on every MCP tool but `read_diagram_guide`, which touches no
+canvas. The flag beats the variable, and a tool's argument beats both.
+
+**What "none named" means is the decision.** With exactly one project registered it is that
+project; with none it is `default`, which is what every command did before this existed, so a
+board that has configured nothing behaves identically. With **several** the command is refused
+and the message lists the registered ids — exit code 2 from the CLI, an error from the tool.
+Guessing among several is the failure being removed: an agent silently drawing on a board
+nobody has a tab for is worse than one that stops and asks which.
+
+An id nobody registered is refused the same way, for the same reason — `elementsFor` is
+deliberately forgiving and hands out a store for any name, but nothing gives that store a tab
+and `persistBoardFor` will not save it, so a typo would be an invisible canvas rather than an
+error. `default` is always addressable by name: it is a real board and the one a caller asks
+for precisely when they want no project.
+
+The client asks the *canvas* what is registered, over `GET /api/workspaces`, rather than
+reading the registry itself — an agent driving a board from some other directory has no
+registry path and never will. A canvas that will not answer is treated as one that registered
+nothing, so an older build is not made unusable by a question it has never heard.
+
 ## What reads it
 
 `GET /api/workspaces` loads the registry **per request**, not once at boot: a project's config
@@ -338,6 +377,8 @@ the library endpoint and the issue block each resolve their own workspace the sa
 agents resolve their model, effort and ceiling per run for the same reason.
 
 - `src/core/workspaces.ts` — registry and config loading, and both write paths
+- `src/core/canvas-client.ts` — how the CLI and the MCP tools resolve which board to draw on
+- `scripts/check-cli-workspace.mjs` — that they do
 - `src/core/workspace-paths.ts` — Windows/WSL path canonicalisation
 - `src/core/directory-browse.ts` — the picker's directory listing
 - `frontend/src/components/WorkspaceTabs.tsx`, `WorkspaceDialogs.tsx` — the strip, the `+`, the
