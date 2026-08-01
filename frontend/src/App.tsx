@@ -12,6 +12,7 @@ import {
 import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
 import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/mermaidConverter'
 import { canvasFontsReady } from './canvas-fonts'
+import { withBoardToken } from './auth'
 import { CollapsibleTarget, CommentPosted, IssueTarget } from './components/DocsPanel'
 import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
 import type { Rect } from '../../src/core/anchored-placement'
@@ -5565,9 +5566,12 @@ function App(): JSX.Element {
     // The socket declares its board once: the server then filters events to it, so a
     // tab never redraws with another board's shapes. And who it is, so that a write this
     // page sends over HTTP is not read back to it over here — see `CLIENT_ID`.
-    const wsUrl = `${protocol}//${window.location.host}`
+    // And the board token, because the upgrade is gated on it exactly as `/api` is — it streams
+    // the scene and every live shell's scrollback the moment it opens. On the URL rather than in
+    // a header because the `WebSocket` constructor has nowhere to put one; see ./auth.ts.
+    const wsUrl = withBoardToken(`${protocol}//${window.location.host}`
       + `?workspace=${encodeURIComponent(activeWorkspaceRef.current)}`
-      + `&client=${encodeURIComponent(CLIENT_ID)}`
+      + `&client=${encodeURIComponent(CLIENT_ID)}`)
 
     connectionGenerationRef.current += 1
     const socket = new WebSocket(wsUrl)

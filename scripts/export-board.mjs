@@ -27,6 +27,12 @@
 
 import { writeFileSync } from 'node:fs';
 
+// From the build, because this is the only reader of a *live, configured* board in `scripts/`
+// and since #350 that board refuses a request with no token. Everything else here starts its own
+// server with the token off. Run `./node_modules/.bin/tsc` first, as every other script that
+// reaches into `dist/` says.
+import { authHeaders } from '../dist/core/auth-token.js';
+
 function arg(name, fallback) {
   const index = process.argv.indexOf(`--${name}`);
   return index !== -1 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
@@ -69,7 +75,7 @@ const DERIVED_KINDS = new Set(['project-board', 'terminal']);
 const url = `${BASE}/api/elements?workspace=${encodeURIComponent(WORKSPACE)}`;
 let response;
 try {
-  response = await fetch(url);
+  response = await fetch(url, { headers: authHeaders(BASE) });
 } catch (error) {
   console.error(`GET ${url} failed: ${error?.message ?? error}`);
   console.error('Is the board running, and is --url the port it was started on?');

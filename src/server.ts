@@ -5,7 +5,7 @@ import './core/env.js';
 import { env, settingName } from './core/settings.js';
 import express, { Request, Response, NextFunction } from 'express';
 import { WebSocketServer } from 'ws';
-import { createServer } from 'http';
+import { createServer, IncomingHttpHeaders } from 'http';
 import net from 'net';
 import path from 'path';
 import fs from 'fs/promises';
@@ -140,6 +140,16 @@ import {
 } from './core/element-store.js';
 import { allowedAuthorities, verifyOrigin } from './core/origin-gate.js';
 import {
+  authRequired,
+  newToken,
+  removeAuthToken,
+  sameToken,
+  tokenFilePath,
+  writeAuthToken,
+  TOKEN_HEADER,
+  TOKEN_QUERY
+} from './core/auth-token.js';
+import {
   boardStateFile,
   flushBoardStateSaves,
   persistBoardFor,
@@ -182,6 +192,42 @@ function boardAuthorities(): Set<string> {
   return authorities;
 }
 
+/**
+ * The secret this start of the server knows, or null when it was told to want none.
+ *
+ * Generated here rather than read from anywhere: it is per *start*, and a token that came from
+ * a file would be valid for whatever else had held this port. It is written to the state
+ * directory once `listen` succeeds — see `startServer` at the bottom — and every caller that may
+ * drive this board reads it from there: the launcher puts it in the URL it opens, the page keeps
+ * it for the tab, and the CLI and the MCP server read the file directly.
+ *
+ * The gate this feeds is authentication and not authorization: one secret, and holding it is the
+ * whole of being allowed. What it defends against is another *account* and a sandboxed process,
+ * because the file's permissions are the operating system's own boundary. It defends against
+ * nothing already running as the operator, and `docs/SECURITY.md` says so in those words.
+ */
+const AUTH_TOKEN: string | null = authRequired() ? newToken() : null;
+
+/**
+ * The token a caller offered, in the two spellings there are.
+ *
+ * A header for a program, because it stays out of logs and out of an address bar. A query
+ * parameter because a browser's `WebSocket` constructor takes a URL and nothing else, so the
+ * upgrade has no other door — and once it is accepted there it may as well be accepted on an
+ * ordinary request, so that `curl` and a check script have one spelling that works everywhere.
+ */
+function offeredToken(headers: IncomingHttpHeaders, url: string | undefined): string | null {
+  const header = headers[TOKEN_HEADER];
+  if (typeof header === 'string' && header.trim()) return header.trim();
+  try {
+    // A base, because a request URL is a path and `new URL` needs an origin to parse one. Which
+    // origin is irrelevant: nothing but the query is read out of it.
+    const query = new URL(url ?? '/', 'http://board.invalid').searchParams.get(TOKEN_QUERY);
+    if (query && query.trim()) return query.trim();
+  } catch { /* not a URL we can read a query out of */ }
+  return null;
+}
+
 // The socket is the same hole as the routes by a door CORS does not cover at all: it declared
 // no `verifyClient`, so a page at any origin got `initial_elements` and every live shell's
 // scrollback on connect. Both gates have to exist; either one alone leaves the board readable.
@@ -192,6 +238,15 @@ const wss = new WebSocketServer({
     if (!verdict.ok) {
       logger.warn(`Refused a WebSocket upgrade: ${verdict.reason}`);
       done(false, 403, 'Forbidden');
+      return;
+    }
+    // The upgrade streams the scene and every live shell's scrollback the moment it opens, so it
+    // is one of the two things the token has to cover — the other being everything under `/api`.
+    // Refused here rather than after `connection`, because a socket that opens and is then closed
+    // has already been handed `initial_elements`.
+    if (AUTH_TOKEN && !sameToken(offeredToken(req.headers, req.url), AUTH_TOKEN)) {
+      logger.warn('Refused a WebSocket upgrade: it carried no valid board token.');
+      done(false, 401, 'Unauthorized');
       return;
     }
     done(true);
@@ -217,6 +272,41 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   }
   next();
 });
+
+/**
+ * The token gate, and what it deliberately leaves open.
+ *
+ * `GET /` and the static mounts below stay open, because the page has to be able to bootstrap:
+ * it is the page that reads the token out of the address bar, and it cannot do that before it
+ * has loaded. What they serve is this build's own frontend and Excalidraw's fonts — a bundle
+ * anybody could fetch from npm — so what an unauthenticated caller gets from them is the
+ * software, not the board. `/health` stays open for the same shape of reason and a second one:
+ * it is how `core/port.ts`, `core/spawn.ts` and the restart supervisor find out whether anything
+ * of ours is on a port at all, and it is answered before the token file exists.
+ *
+ * Everything under `/api` requires the token. That is the whole of the reachable surface — the
+ * scene, the files, the terminal, the agents, the registry and the directory picker — and until
+ * #350 every one of them was open to any process on the machine that could open a socket.
+ *
+ * In front of `express.json`, so an unauthenticated caller cannot make this process parse ten
+ * megabytes of body before being turned away.
+ */
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (!AUTH_TOKEN) return next();
+  if (req.path !== '/api' && !req.path.startsWith('/api/')) return next();
+  if (sameToken(offeredToken(req.headers, req.url), AUTH_TOKEN)) return next();
+
+  // The path, never the token: a refusal that echoed what it was offered would put a near-miss
+  // in the log file, and the log file is not where a secret goes.
+  logger.warn(`Refused ${req.method} ${req.path}: it carried no valid board token.`);
+  res.status(401).json({
+    success: false,
+    error: 'This board requires its token. The launcher puts it in the URL it opens; a program '
+      + `reads it from ${tokenFilePath(PORT)} and sends it as the ${TOKEN_HEADER} header or as `
+      + `?${TOKEN_QUERY}=. See docs/SECURITY.md.`
+  });
+});
+
 app.use(express.json({ limit: '10mb' }));
 
 // Serve static files from the build directory
@@ -5534,6 +5624,26 @@ async function startServer(): Promise<void> {
     // Written only after listen succeeds so stale files can't shadow a
     // server that never came up; lets the CLI's `stop` command find us.
     writePidFile(PORT, process.pid);
+    // And the token, on the same terms and for a sharper version of the same reason: a
+    // concurrent-start loser that wrote its own would replace the winner's, and every caller
+    // reading that file would then be refused by the board that is actually running.
+    //
+    // A failure here is fatal rather than a warning. Nothing can drive a board whose token
+    // cannot be read — not the page, not the CLI, not the MCP server — and it would answer
+    // `status: healthy` throughout, which is the failure that is hardest to diagnose from
+    // outside. `warn` when there is no token at all, because a board anything on the machine
+    // can drive is worth one line on the console.
+    if (AUTH_TOKEN) {
+      try {
+        writeAuthToken(PORT, AUTH_TOKEN);
+      } catch (error) {
+        failStartup(`Canvas server cannot write its token to ${tokenFilePath(PORT)}: `
+          + `${(error as Error).message}. Nothing would be able to drive this board.`);
+      }
+    } else {
+      logger.warn(`${settingName('NO_AUTH')}=1: this board has no token, so anything that can `
+        + 'reach the port drives it — see docs/SECURITY.md.');
+    }
     // And beside it, the port itself — the one thing a later command cannot work out on its
     // own once the port stopped being a constant. It is written, never trusted: every reader
     // probes /health before believing it.
@@ -5568,7 +5678,7 @@ async function startServer(): Promise<void> {
     // rather than a minute — but a shutdown that discarded the last edit would be the same
     // loss #225 is about, arriving through the one door that could have been closed politely.
     flushBoardStateSaves();
-    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); }
+    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); removeAuthToken(PORT); }
     server.close(() => process.exit(0));
     // Force-exit if open sockets keep the server from closing promptly
     setTimeout(() => process.exit(0), 2000).unref();
@@ -5577,7 +5687,7 @@ async function startServer(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('exit', () => {
     flushBoardStateSaves();
-    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); }
+    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); removeAuthToken(PORT); }
   });
 }
 

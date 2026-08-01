@@ -12,6 +12,7 @@ import { DEFAULT_CANVAS_PORT, removeCanvasState, whatIsOn } from './port.js';
 
 export { foreignServiceError };
 import { readPidFile, removePidFile, startupLogPath } from './pidfile.js';
+import { boardUrlWithToken, removeAuthToken } from './auth-token.js';
 import { ensureStateDir, realEnvironment, settingName } from './settings.js';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
@@ -273,8 +274,14 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
       // terminal killed it, and the only thing that said so was a field nobody had reason to
       // read. A line here costs nothing and is read by whoever is confused later.
       const bare = (health as { workspaces?: string } | null)?.workspaces === 'none';
+      // The address a person can actually use. Since #350 the board refuses an `/api` request
+      // with no token, so the bare URL opened by hand is a page that loads and then does nothing
+      // — this carries the token the server has just written, exactly as the launcher does, and
+      // the page takes it back out of the address bar once it has read it. A board with no token
+      // gets its URL back unchanged. On stderr, where this whole paragraph already was: it is
+      // for a person, and `start`'s stdout stays the JSON a script parses.
       process.stderr.write(
-        `Canvas server running at ${EXPRESS_SERVER_URL} — open it in a browser for screenshots and mermaid conversion.\n`
+        `Canvas server running at ${boardUrlWithToken(EXPRESS_SERVER_URL)} — open it in a browser for screenshots and mermaid conversion.\n`
         + (bare ? 'This one has no workspace registry and no terminal: a scratch canvas, not a configured board.\n' : '')
       );
       return { url: EXPRESS_SERVER_URL, spawned: true };
@@ -330,9 +337,13 @@ export async function stopCanvas(): Promise<StopResult> {
     if (filePid !== null) {
       removePidFile(port);
       removeCanvasState(port);
+      // And the token beside them. A process killed outright never runs its own cleanup, and a
+      // token left behind is a secret on disk for a server that no longer exists.
+      removeAuthToken(port);
       return { stopped: false, pid: filePid, message: `Canvas server is not running; stale pidfile removed (pid ${filePid}).` };
     }
     removeCanvasState(port);
+    removeAuthToken(port);
     return { stopped: false, message: 'Canvas server is not running.' };
   }
 
@@ -356,6 +367,7 @@ export async function stopCanvas(): Promise<StopResult> {
     if (!(await healthOrNull(300))) {
       removePidFile(port);
       removeCanvasState(port);
+      removeAuthToken(port);
       return { stopped: true, pid, message: `Canvas server (pid ${pid}) stopped.` };
     }
     await new Promise(resolve => setTimeout(resolve, 200));

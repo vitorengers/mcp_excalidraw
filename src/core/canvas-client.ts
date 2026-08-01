@@ -3,6 +3,11 @@ import { ServerElement } from '../types.js';
 import { EXPRESS_SERVER_URL, ENABLE_CANVAS_SYNC } from './config.js';
 import { CANVAS_SERVICE_NAME, isAcceptedCanvasService } from './identity.js';
 import { env, settingName } from './settings.js';
+// The board token, read off disk per request. Fresh every time rather than captured: an MCP
+// server outlives several starts of the canvas it drives, and a token cached at import would be
+// the previous one's. A file read of sixty-four bytes against a request that is about to cross a
+// socket is not a cost worth a cache.
+import { authHeaders } from './auth-token.js';
 import { AsyncLocalStorage } from 'async_hooks';
 // Type only: this module is on the CLI's own startup path, and the preflight reaches the
 // agent module and its spawns. What is wanted here is the shape of a payload, not the code.
@@ -85,6 +90,7 @@ async function registeredWorkspaceIds(): Promise<string[] | null> {
   const probe = registryProbe ?? (registryProbe = (async () => {
     try {
       const response = await fetch(`${EXPRESS_SERVER_URL}/api/workspaces`, {
+        headers: authHeaders(EXPRESS_SERVER_URL),
         signal: AbortSignal.timeout(2000)
       });
       if (!response.ok) return null;
@@ -160,6 +166,21 @@ async function boardPath(path: string): Promise<string> {
   return `${path}${separator}workspace=${encodeURIComponent(workspace)}`;
 }
 
+/**
+ * A request init with this board's token on it.
+ *
+ * Every `/api` request from this process goes through here. Since #350 the canvas refuses one
+ * that does not carry the token it wrote to the state directory at startup — which is what stops
+ * *any other process on the machine* driving an API that spawns coding agents and real shells.
+ * The caller's own headers win nothing and lose nothing: the token is added beside them.
+ *
+ * A board that wrote no token file — one started with the opt-out, or from a build older than
+ * this one — yields no header and is driven exactly as before.
+ */
+function withCanvasAuth(init?: RequestInit): RequestInit {
+  return { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...authHeaders(EXPRESS_SERVER_URL) } };
+}
+
 // Helper functions to sync with Express server (canvas)
 export async function syncToCanvas(operation: string, data: any): Promise<SyncResponse | null> {
   if (!ENABLE_CANVAS_SYNC) {
@@ -217,7 +238,7 @@ export async function syncToCanvas(operation: string, data: any): Promise<SyncRe
     await assertCanvasIdentity();
 
     logger.debug(`Syncing to canvas: ${operation}`, { url, data });
-    const response = await fetch(url, options);
+    const response = await fetch(url, withCanvasAuth(options));
 
     // Parse JSON response regardless of HTTP status
     const result = await response.json() as ApiResponse;
@@ -280,7 +301,8 @@ export async function getElementFromCanvas(elementId: string): Promise<ServerEle
 
   try {
     await assertCanvasIdentity();
-    const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements/${elementId}${on}`);
+    const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements/${elementId}${on}`,
+      withCanvasAuth());
     if (!response.ok) {
       logger.warn(`Failed to fetch element ${elementId}: ${response.status}`);
       return null;
@@ -297,7 +319,7 @@ export async function getElementFromCanvas(elementId: string): Promise<ServerEle
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   await assertCanvasIdentity();
-  const response = await fetch(`${EXPRESS_SERVER_URL}${path}`, init);
+  const response = await fetch(`${EXPRESS_SERVER_URL}${path}`, withCanvasAuth(init));
   const data = await response.json().catch(() => null) as any;
   if (!response.ok) {
     throw new Error(data?.error || `HTTP server error: ${response.status} ${response.statusText}`);
