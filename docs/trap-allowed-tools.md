@@ -1,4 +1,4 @@
-# Trap: the headless agent is blocked without `--allowedTools`
+# Trap: the headless agent is blocked without a permission grant
 
 `claude -p` runs non-interactively. Any command that would need approval is not prompted for —
 it is refused. So the issue agent investigates the repository perfectly well, writes a good
@@ -7,6 +7,27 @@ issue in its head, and then cannot run `gh`. It exits **code 0, with no URL**.
 Exit code 0 is what makes this expensive. Nothing failed. The server sees a clean exit, finds no
 URL in stdout, and reports that the agent finished without producing one — which reads as the
 agent being confused, not as the agent being muzzled.
+
+**It is the same trap on both backends and neither spells it the same way.** Claude Code grants
+by naming tools; Codex CLI grants by naming a sandbox, and its non-interactive default is a
+sandbox with no network in it, so plain `codex exec` reaches the identical exit-0-with-no-URL
+failure by a different road. What each one needs, per role:
+
+| | Claude Code | Codex CLI |
+|---|---|---|
+| **Issue agent — reads, opens issues, writes no code** | `--allowedTools "<the list below>"`, one rule per sub-command | `--sandbox read-only` is the safe posture and **cannot reach github.com**; a run that has to open an issue needs `--sandbox workspace-write -c sandbox_workspace_write.network_access=true`, under which `.git` still stays read-only |
+| **Implement agent — writes code, builds, commits** | `--allowedTools "Read Grep Glob Write Edit NotebookEdit Task TodoWrite WebFetch WebSearch Bash(git:*) Bash(gh:*) Bash(npm:*) Bash(npx:*) Bash(node:*)"` | `--sandbox workspace-write -c sandbox_workspace_write.network_access=true`, which still refuses `git commit`; committing needs the full-access grant below |
+| **Everything, no checks at all** | `--dangerously-skip-permissions` | `--sandbox danger-full-access`, alias `--yolo` / `--dangerously-bypass-approvals-and-sandbox` |
+| **What a missing grant costs** | a tool outside the list is refused with no prompt, so the run exits 0 having quietly not looked | the same, one sandbox along: a refused write or a blocked socket, no prompt, exit 0 |
+
+Since #327 those are not only sentences. A board that **names a backend** —
+`claude-code` or `codex-cli` — has the row for its role written onto the command by the adapter
+(`src/core/agent-adapter.ts`, `PermissionPosture`), and the issue role cannot carry a full-access
+flag even when one is configured: it is taken back off. `VIBEMAXXING_IMPLEMENT_FULL_ACCESS=1` is
+the one way to the last row, it reaches the implement agent only, and a board that gets there
+says so in a warning at startup. The **default backend is still `raw`** — an arbitrary command
+line, spawned byte for byte — so on every board configured today the command line below *is* the
+boundary, and this document is what an operator copies.
 
 ## The configuration
 
@@ -111,6 +132,38 @@ They are read-only, so the narrowness that matters — nothing that writes code 
 scoped form is `WebFetch(domain:example.com)`, or `WebFetch(domain:*.example.com)` for
 subdomains; `WebSearch` takes no argument. Scoping is left off here because a host nobody
 predicted is refused the same silent way, which is the defect rather than a fix for it.
+
+## The same trap, one backend along
+
+Codex CLI has no `--allowedTools` and needs none: what it grants is a **sandbox**, and the trap
+is in the default. Its own non-interactive documentation says it outright — *"In non-interactive
+mode, Codex does not ask for command or edit approvals. By default it runs in `read-only` mode,
+so it cannot edit files or run commands that require network access."* So a board configured with
+a plain `codex exec` has an issue agent that reads the repository perfectly well, writes a good
+issue in its head, and cannot reach github.com to file it. **Exit 0, no URL** — the same failure
+this document opens with, arrived at without a single tool name being involved.
+
+The three modes, read out of that CLI's own documentation rather than remembered:
+
+| Mode | Files | Network |
+| --- | --- | --- |
+| `--sandbox read-only` | reads, writes nothing | **off** — "requires approval… to access network", and in `exec` there is nobody to ask |
+| `--sandbox workspace-write` | writes inside the workspace; **`.git` stays read-only**, so `git commit` is refused | off unless `-c sandbox_workspace_write.network_access=true` |
+| `--sandbox danger-full-access` (`--yolo`) | everything | everything |
+
+Two consequences worth stating plainly, because each is a way a recipe could be plausible and
+wrong:
+
+- **`network_access` only exists under `workspace-write`.** There is no read-only mode with a
+  network in it, so an issue agent that has to run `gh issue create` is given a mode in which it
+  can also write files — bounded by `.git` staying protected, which is what keeps it from
+  committing. That is the honest limit of Codex's controls, not a preference.
+- **`--yolo` is the wrong fix for a refusal.** It is what a reader reaches for when the sandbox
+  refuses something, and reached for on the *issue* variable it grants full write on the machine
+  to a run that is driven by repository text and open-web pages, started from an API with no
+  authentication in front of it. A named `codex-cli` backend removes it from an issue-role run
+  for that reason; the `raw` backend cannot, because its contract is to spawn what it was given,
+  so it warns instead.
 
 ## Why quoting matters
 

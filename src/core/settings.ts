@@ -152,7 +152,12 @@ export const SETTINGS = [
   {
     name: 'IMPLEMENT_AGENT',
     fallback: 'unset',
-    description: 'The command line that implements one. Unset means the button is not offered'
+    description: 'The command line that implements one. Unset means the button is not offered. The shipped default grants an enumerated list — `Write`, `Edit`, reading, the web, and `git`, `gh`, `npm`, `npx` and `node` — and **not** `--dangerously-skip-permissions`: the prompt it is handed is built from issue text anybody can write ([trap-allowed-tools.md](trap-allowed-tools.md))'
+  },
+  {
+    name: 'IMPLEMENT_FULL_ACCESS',
+    fallback: 'unset',
+    description: '`1` gives the implement agent every permission there is — `--dangerously-skip-permissions` for Claude Code, `--sandbox danger-full-access` for Codex CLI. A named backend writes a bounded grant without it; this is how a board asks for the unbounded one **on purpose**, and it never reaches the issue agent'
   },
   {
     name: 'ISSUE_AGENT_TIMEOUT',
