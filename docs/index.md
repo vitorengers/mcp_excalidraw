@@ -24,6 +24,7 @@ The board itself is cut into two halves, each with a key that scrolls onto it â€
 | [without-github.md](without-github.md) | The four levels of absent GitHub, and what each one keeps and loses |
 | [SECURITY.md](SECURITY.md) | The trust model: what the tool runs as, which switches spawn code, the bind and the origin gate, and where to report a vulnerability |
 | [board-sections.md](board-sections.md) | The two halves of the board and the keys that reach them |
+| [faq.md](faq.md) | The questions the front page used to answer at length, and the failures worth recognising on sight |
 | [whats-next.md](whats-next.md) | What has not shipped |
 | [development-log.md](development-log.md) | One dated entry per merged pull request: the issue, the pull request, and what was decided |
 

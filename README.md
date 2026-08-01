@@ -1,105 +1,66 @@
-# VibeMaxxing — Excalidraw MCP Server, CLI & Agent Skill
+# VibeMaxxing
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**VibeMaxxing** (`vitorengers/vibemaxxing`) is a fork of the upstream project
-`yctimlin/mcp_excalidraw`. It keeps everything upstream does — a live
-[Excalidraw](https://excalidraw.com) canvas agents draw on, drive from a CLI, or reach over MCP —
-and builds a **workbench for running a software project on that canvas** on top of it: registered
-projects, a mirrored GitHub project board, blocks that open issues and implement them, and real
-shells.
+A live [Excalidraw](https://excalidraw.com) canvas your coding agent draws on — and, on top of
+it, a workbench for running a software project on that canvas: blocks that open GitHub issues,
+your GitHub project mirrored beside them, implementations that each get a git worktree of their
+own, and real shells.
 
-There are no badges here beyond the licence, on purpose: a green badge for the upstream
-project's pipeline or package would say nothing true about this tree. What this repository does
-publish is `@vitorengers/vibemaxxing` on npm, from a GitHub Release
-([`.github/workflows/npm-publish.yml`](.github/workflows/npm-publish.yml)), and it runs its own
-checks on Linux, macOS and Windows ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). It
-publishes no container image: [#300](https://github.com/vitorengers/vibemaxxing/issues/300)
-deleted the Docker path rather than half-supporting it.
+![This repository's own board: the GitHub project mirrored on the canvas, an issue block, and a terminal tab](docs/media/board.png)
 
-One canvas, three ways to drive it:
+## Installation
 
-- **Agent Skill + CLI** — recommended for coding agents (Claude Code, Codex CLI, Cursor, OpenCode): `npx -y @vitorengers/vibemaxxing <command>`. Zero config, auto-starts the canvas, composable JSON in/out.
-- **MCP Server** — 26 tools over stdio for any Model Context Protocol client (Claude Desktop, Cursor, Codex CLI, Antigravity, ...).
-- **REST API** — 57 routes over plain HTTP; the only workspace-aware surface, and what the board itself is built on.
+Node ≥ 20 is the only prerequisite. Any one of these three lines is a working start:
 
-Core drawing runs fully local (Node ≥ 20, MIT licensed) — no API keys. Mermaid conversion runs in the local browser canvas; `share` is optional and uploads an encrypted scene to excalidraw.com.
+```bash
+npx -y @vitorengers/vibemaxxing                                    # the board, opened in your browser
+npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>  # the drawing skill, into your agent
+claude mcp add vibemaxxing -- npx -y @vitorengers/vibemaxxing      # or reach it over MCP
+```
 
-**Start here:** [docs/install.md](docs/install.md) gets a board up on Windows, macOS or Linux; [docs/index.md](docs/index.md) indexes every document; [docs/running.md](docs/running.md) is the operator and development procedure; [CONTRIBUTING.md](CONTRIBUTING.md) is how work is done in this repository, and [AGENTS.md](AGENTS.md) is the same agreement for a coding agent.
+[docs/install.md](docs/install.md) is the same ground at length — every command spelled for
+Windows, macOS and Linux, the double-click launchers, and the from-source path (`npm ci`,
+`npm run build`) a contributor wants. [docs/mcp-server.md](docs/mcp-server.md) has the tool
+catalogue and a configuration block for each MCP client.
 
-## Demo
+> If you had this server configured as `excalidraw`, the key is what a client turns into tool
+> ids, so `mcp__excalidraw__*` becomes `mcp__vibemaxxing__*` — update any `--allowedTools`
+> pattern with it, or the agent is refused and exits 0 with nothing to say why
+> ([docs/trap-allowed-tools.md](docs/trap-allowed-tools.md)).
 
-![The upstream project's demo: an AI agent drawing an architecture diagram on a live Excalidraw canvas via MCP](demo.gif)
+## Your first five minutes
 
-*The upstream project's demo, not this fork's — `demo.gif` and the video are upstream's work, kept because they still show what the canvas does ([NOTICE.md](NOTICE.md)). An AI agent creates a complete architecture diagram from a single prompt (4x speed). [Watch the upstream demo video on YouTube](https://youtu.be/ufW78Amq5qA)*
+1. **Bring the board up.** The first line above starts the canvas server, opens a tab and
+   prints where it is. A fresh clone comes up on a blank canvas, and that is not a broken
+   build: the board on screen belongs to nobody until a registry names a project.
+2. **Register the clone as its own project.**
+   [The first run](docs/running.md#the-first-run-register-the-clone-as-its-own-project) is three
+   steps. A registry JSON lists your projects — `EXCALIDRAW_WORKSPACES` names it — and each
+   project describes its own board in a `board.config.json` at its root: its docs directory, its
+   shape library, its GitHub repository and project, its per-agent model and effort. Tabs along
+   the top switch between them ([docs/workspaces.md](docs/workspaces.md)).
+3. **Press `Alt+P`, then `Alt+G`.** This repository's own board is cut into two marked sections
+   and each declares its own key: **Project structure** (`Alt+P`) is what the tool is,
+   **Development** (`Alt+G`) is how it got that way. The keys are not constants in the frontend —
+   a section is a shape that carries its own title and hotkey
+   ([docs/board-sections.md](docs/board-sections.md)).
+4. **Write an observation into the issue block and press "Create issue".** An agent researches
+   the repository, opens the issue with `gh`, and the URL lands back on the block. From the
+   mirror's Todo column you can then have it implemented.
 
-## Table of Contents
+## The blocks on the canvas
 
-- [Demo](#demo)
-- [What This Fork Adds](#what-this-fork-adds)
-- [What It Is](#what-it-is)
-- [How We Differ from the Official Excalidraw MCP](#how-we-differ-from-the-official-excalidraw-mcp)
-- [What's New](#whats-new)
-- [Installation](#installation)
-- [Agent Skill](#agent-skill)
-- [CLI Reference](#cli-reference)
-- [Configure MCP Clients](#configure-mcp-clients)
-  - [Claude Desktop](#claude-desktop)
-  - [Claude Code](#claude-code)
-  - [Cursor](#cursor)
-  - [Codex CLI](#codex-cli)
-  - [OpenCode](#opencode)
-  - [Antigravity (Google)](#antigravity-google)
-- [MCP Tools (26 Total)](#mcp-tools-26-total)
-- [Quick Start (From Source)](#quick-start-from-source)
-- [Testing](#testing)
-- [FAQ](#faq)
-- [Troubleshooting](#troubleshooting)
-- [Known Issues / TODO](#known-issues--todo)
-- [Development](#development)
-- [License](#license)
-
-## What This Fork Adds
-
-Everything from here to [What It Is](#what-it-is) is VibeMaxxing, and exists only in
-`vitorengers/vibemaxxing`. Every document referenced below is in
-[docs/index.md](docs/index.md).
-
-### One project per board
-
-A registry JSON lists your projects — `EXCALIDRAW_WORKSPACES` names it, and with that unset it
-is `workspaces.json` in this machine’s per-user state directory, created when you add the first
-project; each project then
-describes its own board settings in a `board.config.json` at its root — its docs directory, its
-shape library, its GitHub repository and project, and per-agent model and effort. Settings travel
-with the project instead of piling up in one machine's global config. Tabs along the top of the
-canvas switch between them, `+` registers another, and each project's element store is its own.
-See [docs/workspaces.md](docs/workspaces.md).
-
-### The board is two maps, and a key reaches each
-
-This repository's own board is `docs/board.excalidraw`, cut into two marked sections:
-
-- **Project structure** — `Alt+P` — what the tool is: the architecture, the blocks, how to try it.
-- **Development** — `Alt+G` — how it got that way: the traps already paid for, what is next, and the dated log.
-
-The keys are not constants in the frontend. A section is a shape carrying
-`customData.kind = "board-section"` with its own title and `hotkeyCode`, so a board declares its
-own navigation. See [docs/board-sections.md](docs/board-sections.md).
-
-### Blocks, and the marks a key aims at
-
-A shape's `customData.kind` decides what it is. A `docKey` instead of a `kind` makes it a
-documentation card, which opens the matching markdown in a panel
-([docs/docs-block.md](docs/docs-block.md)).
+A shape's `customData.kind` decides what it is; a `docKey` instead makes it a documentation card
+that opens the matching markdown in a panel ([docs/docs-block.md](docs/docs-block.md)).
 
 **Blocks** — a shape that does something:
 
 | `customData.kind` | What it is |
 |---|---|
-| `issue` | Write an observation into the shape; an agent investigates the repository, opens the issue with `gh`, and the URL lands back on the block — [docs/issue-block.md](docs/issue-block.md) |
+| `issue` | Write an observation into the shape; an agent investigates the repository, opens the issue, and the URL lands back on the block — [docs/issue-block.md](docs/issue-block.md) |
 | `project-board` | Your GitHub project, mirrored on the canvas and redrawn from GitHub on every read, with two-way moves and a queue that implements issues — [docs/project-board.md](docs/project-board.md) |
-| `terminal` | Real shells on the canvas, as tabs, up to eight per board — [docs/terminal.md](docs/terminal.md) |
+| `terminal` | Real shells on the canvas, as tabs — [docs/terminal.md](docs/terminal.md) |
 
 **Marks** — a shape drawn *around* part of the board, which does nothing but say where a key
 lands:
@@ -107,525 +68,105 @@ lands:
 | `customData.kind` | What it is |
 |---|---|
 | `board-section` | A half of the board, carrying the key that reaches it — [docs/board-sections.md](docs/board-sections.md) |
-| `board-subsection` | A part of a section, with no key of its own: `Alt+Left` / `Alt+Right` step between the parts of the section being read — [docs/board-sections.md](docs/board-sections.md) |
-
-### Issues become implementations, each in its own checkout
+| `board-subsection` | A part of a section, with no key of its own: `Alt+Left` and `Alt+Right` step between the parts of the half being read — [docs/board-sections.md](docs/board-sections.md) |
 
 An implementation started from the board is given a git worktree of its own before the agent is
 spawned: `<project>-worktrees/issue-<n>`, on a branch of the same name, cut from the default
-branch. Several run at once (`EXCALIDRAW_IMPLEMENT_CONCURRENCY`, four by default), and each
-opens and merges its own pull request. That is why the convention exists rather than a shared
-checkout: four agents building in one working tree is four agents overwriting each other.
+branch. Several run at once, and each opens and merges its own pull request — which is why the
+convention exists rather than a shared checkout.
 
-**Which coding agent does that work is a command line you supply**, and not a vendor this tool
-picks: [docs/agents.md](docs/agents.md) has a Claude Code recipe and a Codex CLI recipe side by
-side, what each flag buys, and the rules that hold whatever the binary is — it must run
-non-interactively, it must be permitted to run `gh` and `git`, and it must print the URL last.
-
-### Starting it
-
-The workbench half reads **github.com and only github.com** — issue blocks, the project mirror,
-implementations and interrupted-run recovery all require it, there is no host setting, and a
+The workbench half reads **github.com and only github.com**: there is no host setting, and a
 GitHub Enterprise Server or a GitLab is out of scope. The canvas itself requires none of it.
 
-The canvas server is `node dist/server.js` after `npm run build`, and everything else is
-environment. [docs/running.md](docs/running.md) is the procedure: the port (3737 by default, and
-3000 is unusable on the development machine — [docs/trap-port-3000.md](docs/trap-port-3000.md)), the kill-the-stale-server
-step that comes before it, and a table of every `EXCALIDRAW_*` variable with its default —
-generated from the one declaration in `src/core/settings.ts`, so it is the list rather than a
-copy of it. Each can be spelled `VIBEMAXXING_*` instead, and they are read from
-[`config.json`](docs/configuration.md) in a per-OS directory as well as from the environment.
-
-**A clone that has just been built comes up on a blank canvas**, and that is not a broken build:
-the board on screen belongs to nobody until a registry names a project, so nothing on disk is
-behind it. [The first run](docs/running.md#the-first-run-register-the-clone-as-its-own-project)
-is the three steps that make this clone its own first project, after which the tab holds the
-board this repository keeps of itself and every card in `docs/` opens.
-
-## What It Is
-
-Ask your agent to *"draw the architecture of this service"* and it produces a real, editable Excalidraw diagram — not a one-shot image. Because the agent can query, screenshot, and update individual elements, it iterates until labels fit, nothing overlaps, and arrows route cleanly; then it exports the result as a `.excalidraw` file that lives in your repo and gets updated when the code changes.
-
-Under the hood there are two processes, one product:
-
-- **Canvas server**: Excalidraw web UI + REST API + WebSocket real-time sync (default `http://127.0.0.1:3737`, or the next free port above it)
-- **A thin front-end of your choice**: the CLI, the MCP stdio server, or raw HTTP — all drive the same canvas
-
-Since v1.1 the canvas server starts itself: canvas-driving CLI commands (and the MCP server on launch) auto-spawn it if nothing is listening. `status` only inspects the current server state. Set `EXCALIDRAW_NO_AUTOSTART=1` to opt out.
-
-## How We Differ from the Official Excalidraw MCP
-
-Excalidraw has an [official MCP](https://github.com/excalidraw/excalidraw-mcp) — a chat widget that streams a diagram inline from a single prompt (the model gets two tools: a format reference and `create_view`). It's great for "draw me a cat" in Claude or ChatGPT. We solve a different problem: giving *coding agents* a persistent canvas workbench.
-
-| | Official Excalidraw MCP | This Project |
-|---|---|---|
-| **Approach** | Prompt in, diagram out (one-shot widget) | Programmatic element-level control (CLI + 26 MCP tools) |
-| **State** | Checkpoints inside the chat widget | Persistent live canvas with real-time sync |
-| **Element CRUD** | Declarative re-send with delete markers | Full create / read / update / delete per element |
-| **AI sees the canvas** | No | `describe` (structured text) + `screenshot` (image) |
-| **Iterative refinement** | Regenerate from checkpoint | Draw → look → adjust → look again, element by element |
-| **Layout tools** | No | align, distribute, group / ungroup, lock, duplicate |
-| **File I/O** | No model-facing export | `.excalidraw` export/import — diagrams as repo artifacts |
-| **Snapshot & rollback** | Widget-side checkpoints | Named server-side snapshots |
-| **Mermaid conversion** | No | `mermaid` / `create_from_mermaid` |
-| **Shareable URLs** | Widget-only | `share` / `export_to_excalidraw_url` |
-| **Viewport control** | Camera animations | `set_viewport` (zoom-to-fit all or selected elements, center on one element, manual zoom) |
-| **Works without MCP** | No | Yes — CLI + agent skill + REST API |
-| **Multi-agent** | Single chat | Multiple agents on the same canvas concurrently |
-
-**TL;DR** — The official MCP shows Excalidraw diagrams in your chat. This project gives your coding agent a full Excalidraw workbench: a canvas it can draw on, inspect, refine, and commit to your repo.
-
-## What's New
-
-Current package version: **0.1.0**, published as **`@vitorengers/vibemaxxing`**. The numbering
-restarts here: `1.1.0` was the upstream package's, and this fork has never published one of its
-own. The release line below is what that version contains.
-
-### v1.1 — CLI-First
-
-- **First-class CLI**: every capability is now a composable command — `npx -y @vitorengers/vibemaxxing add|query|describe|screenshot|export|import|mermaid|snapshot|arrange|share|...` — JSON on stdout, meaningful exit codes. Also installed as the `vibemax` alias.
-- **Zero-setup**: canvas-driving CLI commands and the MCP server **auto-start the canvas server** if it isn't running (closes #66). Opt out with `EXCALIDRAW_NO_AUTOSTART=1`.
-- **`apply`**: multi-op patches (`{"create":[...],"update":[{"id":"a","set":{...}}],"delete":[...]}`) in a single invocation.
-- **`install-skill`**: `npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>` copies the portable agent skill into the directory your agent chooses (project or global), cleanly replacing older versions.
-- **Skill is now CLI-first** and no longer needs a cloned repo or configured MCP server to work.
-- **Typed queries**: `query --filter locked=true --filter label.text=API` — booleans, numbers, and nested keys work.
-- **Internals**: shared core library (`src/core/`) behind both the CLI and MCP server; canvas `groupIds` are the source of truth for grouping (ungroup now works across restarts); `node-fetch` dropped; MCP version metadata derived from `package.json`; canvas server writes a pidfile and shuts down cleanly.
-
-## Installation
-
-The only prerequisite is **Node.js ≥ 20**, which is what `engines.node` declares and what CI
-measures against. [docs/install.md](docs/install.md) is the same ground at more length, with
-every command spelled for Windows, macOS and Linux; the short version follows here.
-
-### Easiest: let your agent install it
-
-Copy this into your coding agent — it installs the portable skill into the project/global skill directory that agent already knows how to use, then verifies it by drawing a test diagram:
-
-```text
-Install the Excalidraw canvas toolkit so you can draw diagrams for me:
-
-1. Choose the right skill directory for this agent and scope (project or global).
-2. Run: npx -y @vitorengers/vibemaxxing install-skill --dir <that-skills-directory>
-3. Read the installed vibemaxxing-canvas/SKILL.md so you know the drawing workflow.
-4. Start the canvas with: npx -y @vitorengers/vibemaxxing start
-   then tell me to open the URL it prints in my browser (screenshots need an open tab).
-5. Draw a small test diagram — two labeled boxes connected by an arrow — take a
-   screenshot, and show me the result to confirm everything works.
-```
-
-### Manual install
-
-| You are... | Install with | Then |
-|---|---|---|
-| **Modern coding agent** | `npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>` | Let the agent choose project/global scope and its skill root |
-| **Claude Code shortcut** | `npx -y @vitorengers/vibemaxxing install-skill` | Installs to `~/.claude/skills` for backward compatibility |
-| **Codex shortcut** | `npx -y @vitorengers/vibemaxxing install-skill --target codex` | Installs to `~/.codex/skills` for backward compatibility |
-| **MCP client user** (Claude Desktop, Cursor, ...) | Add the npx config below | See [Configure MCP Clients](#configure-mcp-clients) |
-| **CLI user / scripting** | Nothing — `npx -y @vitorengers/vibemaxxing <command>` | See [CLI Reference](#cli-reference) |
-| **Contributor / from source** | `git clone` + `npm ci` + `npm run build` | See [Quick Start (From Source)](#quick-start-from-source) |
-
-There is no separate server setup: any drawing command auto-starts the local canvas server on `http://127.0.0.1:3737` — or, if something else already holds that port, on the next free one above it, which `start` prints and every later command finds by itself.
-
-### 60-Second Quick Start (CLI)
-
-No clone, no config:
-
-```bash
-# the whole of it: starts the canvas, opens it in your browser, prints where it is
-npx -y @vitorengers/vibemaxxing
-# → VibeMaxxing 0.1.0 — http://127.0.0.1:3737
-# (a browser tab is what enables screenshots & mermaid. `start` is the same thing
-#  without the browser, printing JSON, for a script or an agent.)
-
-# draw something
-echo '[
-  {"id":"api","type":"rectangle","x":100,"y":100,"width":160,"height":80,"text":"API Server","backgroundColor":"#a5d8ff"},
-  {"id":"db","type":"rectangle","x":400,"y":100,"width":160,"height":80,"text":"Database","backgroundColor":"#99e9f2"},
-  {"type":"arrow","x":0,"y":0,"startElementId":"api","endElementId":"db","text":"SQL"}
-]' | npx -y @vitorengers/vibemaxxing add
-
-# let your agent see its work
-npx -y @vitorengers/vibemaxxing describe
-npx -y @vitorengers/vibemaxxing screenshot --out diagram.png
-
-# diagrams as repo artifacts
-mkdir -p docs
-npx -y @vitorengers/vibemaxxing export --out docs/architecture.excalidraw
-
-# or straight into an Obsidian vault (.md extension → Obsidian Excalidraw plugin format)
-npx -y @vitorengers/vibemaxxing export --out ~/vault/diagrams/architecture.excalidraw.md
-```
-
-Give your agent the full playbook:
-
-```bash
-npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>
-npx -y @vitorengers/vibemaxxing install-skill --print-source  # inspect bundled source path
-```
-
-> **Security note:** The canvas server binds `127.0.0.1` only by default, and the GitHub half of the board is bound to that: off loopback every GitHub-backed route answers `403` — the project mirror, a card move, the issue blocks, `/api/github-status` and the workspace registry — so what you get on a network interface is a drawing canvas and nothing else. The board says so on itself rather than showing you an empty region. If you expose it (`HOST=0.0.0.0`) anyway, put network-level access controls in front — the API has no built-in authentication. **[docs/SECURITY.md](docs/SECURITY.md) is the whole of it**: what the tool runs as, which switches spawn a coding agent or a real shell and what each one grants, the origin gate in front of every route, and where to report a vulnerability.
-
-## Agent Skill
-
-The skill at `skills/vibemaxxing-canvas/` teaches agents the full workflow — layout planning, the screenshot-verify-fix quality loop, arrow routing, anti-patterns, snapshots, and file I/O. It works through the CLI (preferred, zero setup), MCP tools (if configured), or raw REST — in that order.
-
-```bash
-npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>
-```
-
-The command copies the bundled `vibemaxxing-canvas/` directory into `<skills-root>/vibemaxxing-canvas`. Let your agent choose whether that root should be project-level or global. Re-running `install-skill` upgrades in place — it replaces the target directory, so files removed upstream don't linger.
-
-This skill used to install as `excalidraw-skill`, which is also the name upstream's published package installs. An agent loads every directory under its skills root, so `install-skill` removes a legacy `excalidraw-skill` directory from the root it is writing to — but only when that directory holds a `SKILL.md` whose own front matter names the legacy skill, so a directory of yours that happens to share the name is left alone. Whatever it removed is listed under `removed` in the command's JSON output.
-
-Where the skill shines:
-
-- **Diagrams as code artifacts**: export `.excalidraw` files into the repo, commit them, re-import + refine when the architecture changes.
-- **Obsidian vaults**: export with a `.excalidraw.md` extension and the file opens natively in the [Obsidian Excalidraw plugin](https://github.com/zsviczian/obsidian-excalidraw-plugin) — no compatibility-mode warning, block references and sync work; `import` reads both plain and lz-string-compressed vault files back.
-- **Self-verifying diagrams**: the agent screenshots its own work and fixes truncation/overlap before calling it done.
-- **No-MCP environments**: CI jobs, plain shells, and frameworks get the same capabilities through the CLI.
-
-## CLI Reference
-
-`npx -y @vitorengers/vibemaxxing <command>` or (after `npm i -g @vitorengers/vibemaxxing`) `vibemaxxing <command>`, with `vibemax` installed beside it as a shorter alias of the same binary. The inherited names `mcp-excalidraw-server` and `excalidraw-canvas` are **gone**: upstream's published package installs both, so keeping them meant a global install of the two packages fighting over the same command. If you had either in a script, change it to `vibemaxxing`.
-
-**With no arguments at all it launches the board** — starts it, opens it, prints the one line above — and it does that only when stdin is a terminal, because a bare invocation is also how every MCP client starts the stdio server. A pipe on stdin is a client and gets the transport; a terminal is a person and gets the board. Say `launch` or `mcp` to settle it outright. `--no-open` or `VIBEMAXXING_NO_OPEN=1` launches without a browser, and a stdout that is not a terminal suppresses the browser on its own, so agents and CI are unaffected.
-
-Conventions: JSON results on stdout — except `describe` (plain text by design) and raw-content output when `--out` is omitted (`export` prints the scene JSON, `screenshot --format svg` prints SVG). Diagnostics on stderr. Exit codes: `0` ok, `1` error, `2` usage, `3` canvas unreachable, `4` browser tab required. Canvas URL from `EXPRESS_SERVER_URL` or `--url`. Canvas-driving commands auto-start the server; `status` only reports current state. Explicit `start` overrides the `EXCALIDRAW_NO_AUTOSTART=1` opt-out (it's user intent, not auto-start).
-
-| Command | Description |
-|---------|-------------|
-| *(no arguments)* / `launch` | Start the board, open it in a browser, print one line: `VibeMaxxing <version> — <url>`. A second launch prints the same line and brings the existing tab forward |
-| `start` / `stop` / `status` | Manage the canvas server (detached; `stop` identity-checks the live server via `/health` before signaling) |
-| `mcp` | Run the MCP stdio server by name (what a bare invocation means to an MCP client) |
-| `add [file\|-]` | Batch-create elements from a JSON array (file or stdin); `--one '{...}'` for a single element |
-| `apply [file\|-]` | One-call multi-op patch: `{"create":[...],"update":[{"id":"a","set":{...}}],"delete":["id"]}` |
-| `get <id>` / `delete <id...>` | Read / remove elements |
-| `update <id> --set '{...}'` | Update an element |
-| `query` | `--type`, `--bbox x0,y0,x1,y1`, `--filter k=v` (typed, nested keys), `--filter-json '{...}'` |
-| `describe` | AI-readable scene summary (plain text) |
-| `screenshot` | `--out f.png`, `--format png\|svg`, `--no-background` (browser tab required) |
-| `export [--out f.excalidraw] [--format json\|obsidian]` / `import [file\|-] [--replace]` | Scene file I/O — a `.md` out path writes Obsidian's `.excalidraw.md` format; `import` reads it back |
-| `mermaid [file\|-]` | Mermaid → canvas (browser tab required) |
-| `snapshot save\|list\|restore <name>` | Named snapshots |
-| `arrange align\|distribute\|group\|ungroup\|lock\|unlock\|duplicate` | Layout ops (`--ids a,b,c`, `--to left\|horizontal\|...`) |
-| `share` | Encrypted upload → shareable excalidraw.com URL |
-| `clear --yes` | Wipe the canvas |
-| `install-skill [--dir <skills-root>]` | Install the portable agent skill |
-
-Labels and arrow bindings use the agent-friendly format everywhere in the CLI: `"text"` on any shape, `"startElementId"`/`"endElementId"` on arrows — normalization is automatic.
-
-## Configure MCP Clients
-
-The MCP server runs over stdio. Since v1.1 the simplest config is `npx` — no clone, no absolute paths, and the canvas auto-starts. The bare invocation below stays the stdio server for a client: a launch needs a terminal on stdin, and a client hands it a pipe. Add `"mcp"` to the arguments if you would rather say so outright.
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `EXPRESS_SERVER_URL` | URL of the canvas server. Set, it is a hard override and nothing is scanned | the running board's URL, else `http://127.0.0.1:3737` |
-| `ENABLE_CANVAS_SYNC` | Enable real-time canvas sync | `true` |
-| `EXCALIDRAW_NO_AUTOSTART` | Set `1` to disable canvas auto-start | (unset) |
-| `EXCALIDRAW_EXPORT_DIR` | Base directory MCP file exports may write to | current working dir |
-| `PORT` / `HOST` | Canvas server bind address. `PORT` pins the port and is never scanned past; a `HOST` that is not loopback turns every GitHub-backed route into a `403` (see the security note above) | `3737` (next free port above it if taken) / `127.0.0.1` |
-| `EXCALIDRAW_CANVAS_PORT` | Preferred port to try first — a preference, not a pin: the search may walk past it | `3737` |
-| `EXCALIDRAW_STATE_HOME` | Parent directory for the pidfile and the running board's state file | per-OS state directory |
-| `VIBEMAXXING_NO_OPEN` | Set `1` so a launch never opens a browser (`--no-open` sets it). A stdout that is not a terminal already suppresses it | (unset) |
-| `VIBEMAXXING_OPEN_COMMAND` | Command line to open a URL with instead of the platform's own, URL appended last — for a machine with no `xdg-open` | `cmd /c start ""` · `open` · `xdg-open` |
-
----
-
-### Claude Desktop
-
-Config location:
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-- Linux: `~/.config/Claude/claude_desktop_config.json`
-
-**npx (recommended)**
-```json
-{
-  "mcpServers": {
-    "vibemaxxing": {
-      "command": "npx",
-      "args": ["-y", "@vitorengers/vibemaxxing"]
-    }
-  }
-}
-```
-
-> **If you had this server configured as `excalidraw`**, the key is what a client turns into tool ids, so `mcp__excalidraw__*` becomes `mcp__vibemaxxing__*` — update any `--allowedTools mcp__excalidraw__*` pattern with it, because an agent whose allowed-tools list no longer matches is refused and exits 0 with nothing to say why (see [`docs/trap-allowed-tools.md`](docs/trap-allowed-tools.md)). Keep the old key if you also have upstream's package configured; two servers cannot share one key.
-
-**Local (node)**
-```json
-{
-  "mcpServers": {
-    "vibemaxxing": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp_excalidraw/dist/index.js"],
-      "env": {
-        "EXPRESS_SERVER_URL": "http://127.0.0.1:3737",
-        "ENABLE_CANVAS_SYNC": "true"
-      }
-    }
-  }
-}
-```
-
----
-
-### Claude Code
-
-**npx (recommended)**
-```bash
-claude mcp add vibemaxxing --scope user -- npx -y @vitorengers/vibemaxxing
-```
-
-> Tip: for coding agents, the skill + CLI often beats MCP config entirely — let the agent pick its skill root, then run `npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>`.
-
-**Local (node)** - User-level (available across all projects):
-```bash
-claude mcp add vibemaxxing --scope user \
-  -e EXPRESS_SERVER_URL=http://127.0.0.1:3737 \
-  -e ENABLE_CANVAS_SYNC=true \
-  -- node /absolute/path/to/mcp_excalidraw/dist/index.js
-```
-
-**Manage servers:**
-```bash
-claude mcp list              # List configured servers
-claude mcp remove vibemaxxing # Remove a server
-```
-
----
-
-### Cursor
-
-Config location: `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json` for global config)
-
-**npx (recommended)**
-```json
-{
-  "mcpServers": {
-    "vibemaxxing": {
-      "command": "npx",
-      "args": ["-y", "@vitorengers/vibemaxxing"]
-    }
-  }
-}
-```
-
----
-
-### Codex CLI
-
-**npx (recommended)**
-```bash
-codex mcp add vibemaxxing -- npx -y @vitorengers/vibemaxxing
-```
-
-**Manage servers:**
-```bash
-codex mcp list              # List configured servers
-codex mcp remove vibemaxxing # Remove a server
-```
-
----
-
-### OpenCode
-
-Config location: `~/.config/opencode/opencode.json` or project-level `opencode.json`
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "vibemaxxing": {
-      "type": "local",
-      "command": ["npx", "-y", "@vitorengers/vibemaxxing"],
-      "enabled": true
-    }
-  }
-}
-```
-
----
-
-### Antigravity (Google)
-
-Config location: `~/.gemini/antigravity/mcp_config.json`
-
-```json
-{
-  "mcpServers": {
-    "vibemaxxing": {
-      "command": "npx",
-      "args": ["-y", "@vitorengers/vibemaxxing"]
-    }
-  }
-}
-```
-
----
-
-### Notes
-
-- **No container**: this repository publishes no image and ships no `Dockerfile`. The MCP server and the canvas both run from `npx -y @vitorengers/vibemaxxing` or from a clone, on the host, where the `gh` and `git` a container has not got are the ones the issue blocks and the terminal need.
-- **Elements survive a restart**: the canvas saves each board about a second after it last changed, into a state file beside the workspace registry in this tool's own per-user state directory, and reads it back at startup. That includes the board you get before any project is registered. Nothing is written into your repository — `export` is still the only way a scene reaches a tracked `.excalidraw` file. Pasted image files and named `snapshot`s are still memory only, so an exported image comes back as an element whose file the server no longer holds.
-
-## MCP Tools (26 Total)
-
-| Category | Tools |
-|---|---|
-| **Element CRUD** | `create_element`, `get_element`, `update_element`, `delete_element`, `query_elements`, `batch_create_elements`, `duplicate_elements` |
-| **Layout** | `align_elements`, `distribute_elements`, `group_elements`, `ungroup_elements`, `lock_elements`, `unlock_elements` |
-| **Scene Awareness** | `describe_scene`, `get_canvas_screenshot` |
-| **File I/O** | `export_scene`, `import_scene`, `export_to_image`, `export_to_excalidraw_url`, `create_from_mermaid` |
-| **State Management** | `clear_canvas`, `snapshot_scene`, `restore_snapshot` |
-| **Viewport** | `set_viewport` |
-| **Design Guide** | `read_diagram_guide` |
-| **Resources** | `get_resource` |
-
-Full schemas are discoverable via `tools/list` or in `skills/vibemaxxing-canvas/references/cheatsheet.md`.
-
-Viewport group focus can tune framing with `viewportZoomFactor`:
-
-```json
-{
-  "scrollToElementIds": ["id1", "id2", "id3"],
-  "viewportZoomFactor": 0.85
-}
-```
-
-`scrollToElementIds` zooms to fit every requested element, while `scrollToElementId` centers one element without changing the current zoom. Specify only one viewport mode per request. `viewportZoomFactor` accepts values greater than 0 and at most 1.
-
-## Quick Start (From Source)
-
-From source (Node >= 20) — [docs/install.md](docs/install.md#from-source) is the fuller version:
-
-```bash
-npm ci
-npm run build
-npm run canvas                    # canvas server (terminal 1) — http://127.0.0.1:3737
-node dist/index.js                # MCP server over stdio (terminal 2, usually launched by your MCP client)
-node dist/bin.js status           # or drive the CLI straight from the build
-```
-
-Nothing there is spelled for one shell: 3737 is the default port, so there is no `VAR=value`
-prefix to write. To pin a different one, or to set any other variable,
-[docs/install.md](docs/install.md#setting-a-variable-in-three-shells) has the line for
-PowerShell, for cmd and for a POSIX shell.
-
-There is no container path. It was deleted rather than repaired ([#300](https://github.com/vitorengers/vibemaxxing/issues/300)): the image bound every interface on a server whose API has no authentication, and carried neither `gh` nor `git`, so the issue blocks, the project-board mirror and the terminal — most of what this fork is — could not have run inside it. Run it on the host, from `npx` or from a clone.
+## Choose your agent
+
+Which coding agent does that work is a command line you supply, not a vendor this tool picks.
+[docs/agents.md](docs/agents.md) has a Claude Code recipe and a Codex CLI recipe side by side,
+what each flag buys, and the rules that hold whatever the binary is — it must run
+non-interactively, it must be permitted to run `gh` and `git`, and it must print the pull request
+URL last.
+
+## Where it runs
+
+| Platform | Canvas and CLI | Issue blocks, mirror, implementations | Terminal blocks |
+|---|---|---|---|
+| **Windows** | yes | yes | yes — a real console host |
+| **Windows + WSL** | yes | yes — a project may declare a WSL environment and its agents run inside the distribution | yes |
+| **macOS** | yes | yes | yes |
+| **Linux** | yes | yes | yes |
+
+Node ≥ 20 everywhere; `git` and `gh` are needed only by the workbench half. There is no
+container path — it was deleted rather than half-supported
+([#300](https://github.com/vitorengers/vibemaxxing/issues/300)): the image bound every interface
+on a server whose API has no authentication, and carried neither `gh` nor `git`, so most of what
+this tool is could not have run inside it.
+
+**Security note:** the canvas server binds `127.0.0.1` only by default, and the GitHub half is
+bound to that — off loopback every GitHub-backed route answers `403`, so what you get on a
+network interface is a drawing canvas and nothing else, and the board says so on itself rather
+than showing you an empty region. If you expose it on a network interface (`HOST=0.0.0.0`)
+anyway, put network-level access controls in front: the API has no built-in authentication.
+**[docs/SECURITY.md](docs/SECURITY.md) is the whole of it** — what the tool runs as, which
+switches spawn a coding agent or a real shell and what each one grants, the origin gate in front
+of every route, and where to report a vulnerability.
 
 ## Testing
 
-This fork's tests are `scripts/check-*.mjs`: one per behaviour that has ever broken, each a
-plain Node script with no test framework. `npm test` runs all of them.
+The tests are `scripts/check-*.mjs`: one per behaviour that has ever broken, each a plain Node
+script with no test framework, each starting whatever server it needs on a port the kernel just
+handed it.
 
 ```bash
 npm run build     # the checks load dist/, and the runner refuses to start without it
 npm test          # every check
 ```
 
-`npm test` is `node scripts/run-checks.mjs`, and the runner takes a selection:
+`npm test` is `node scripts/run-checks.mjs`, which takes `--only`, `--skip`, `--tier`, `--list`
+and `--jobs`. Every check declares a tier — `fast`, `browser`, `windows`, `wsl` or `repo` —
+saying what it needs beyond Node and a built `dist/`, and one whose tool this machine has not got
+is reported as a skip rather than passing quietly.
+[docs/running.md](docs/running.md) has the tier table and how to run a single check by hand.
 
-```bash
-node scripts/run-checks.mjs --tier fast,browser    # the contributor gate
-node scripts/run-checks.mjs --only 'check-docs-*'  # just the documentation checks
-node scripts/run-checks.mjs --skip '*-browser'     # everything that needs no Chrome
-node scripts/run-checks.mjs --list                 # what would run, and nothing else
-node scripts/run-checks.mjs --help                 # every flag, including --jobs and --timeout
-```
+## Everything else
 
-Every check declares a `Tier:` — `fast`, `browser`, `windows`, `wsl` or `repo` — saying what it
-needs beyond Node and a built `dist/`. A tier whose tool this machine has not got is reported as
-`EXPECTED-SKIP` rather than passing quietly, and `browser` is the one that fails instead: a
-runner that was meant to have a Chrome and has not is set up wrong, not a machine that was never
-going to run those checks. A check that hangs is killed at 180 seconds, with every process it
-started, and reported as `TIMEOUT`. Output is buffered and printed only for the checks that
-failed, and the run ends on a table of pass, fail, skip and timeout.
+[docs/index.md](docs/index.md) indexes every document. The ones a first-time reader wants:
 
-[docs/running.md](docs/running.md) has the tier table, the environment the checks run in, and how
-to run a single one by hand.
+- [docs/cli.md](docs/cli.md) — every command, the conventions, the exit codes
+- [docs/mcp-server.md](docs/mcp-server.md) — the MCP tools, and a config block per client
+- [docs/rest-api.md](docs/rest-api.md) — the HTTP surface the board itself is built on, and the
+  only workspace-aware one
+- [docs/running.md](docs/running.md) — the operator and development procedure, and a table of
+  every `EXCALIDRAW_*` variable with its default, generated from `src/core/settings.ts`
+- [docs/faq.md](docs/faq.md) — how this differs from the official Excalidraw MCP, whether the
+  agent can really see what it drew, what to do when something does not come up
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how work is done in this repository, with
+  [AGENTS.md](AGENTS.md) as the copy a coding agent loads, and
+  [docs/development-log.md](docs/development-log.md), one dated entry per merged pull request
+- [docs/SECURITY.md](docs/SECURITY.md) — the trust model of a tool that spawns coding agents and
+  real shells: what it runs as, which switches grant that, and where to report a vulnerability.
+  [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) is what is expected of everyone taking part
 
-## FAQ
+Core drawing runs fully local and needs no API key. The optional `share` command uploads an
+encrypted scene to excalidraw.com; nothing else leaves the machine except the calls to
+github.com the workbench half makes on your behalf.
 
-### How is this different from the official Excalidraw MCP?
+## Demo
 
-The [official Excalidraw MCP](https://github.com/excalidraw/excalidraw-mcp) is a chat widget: you prompt, it streams a diagram into the conversation (the model gets two tools). This project is a **workbench for coding agents**: a persistent local canvas with element-level create/read/update/delete, layout tools, screenshots the model can see, snapshots, and `.excalidraw` file I/O — driveable via CLI, MCP, or REST. See the [full comparison table](#how-we-differ-from-the-official-excalidraw-mcp).
+![The upstream project's demo: an agent drawing an architecture diagram on a live Excalidraw canvas](demo.gif)
 
-### Which AI tools does it work with?
+*This is the upstream project's demo and not this fork's — `demo.gif` and the video are
+upstream's work, kept because they still show what the canvas does ([NOTICE.md](NOTICE.md)).
+[Watch the upstream demo video](https://youtu.be/ufW78Amq5qA).*
 
-Claude Code, Claude Desktop, Cursor, Codex CLI, OpenCode, and Google Antigravity are documented below — but any agent that can run shell commands can use the CLI, any MCP client can use the MCP server, and anything else (LangChain, custom apps) can use the REST API.
+## Licence and attribution
 
-### Can the AI actually see the diagram it drew?
+[MIT](LICENSE). This is a fork of the upstream project `yctimlin/mcp_excalidraw`, whose copyright
+is upstream's; it carries the same licence and is not affiliated with the Excalidraw team.
+[Excalidraw](https://github.com/excalidraw/excalidraw) is its own MIT-licensed project, and this
+one builds on it.
 
-Yes — that's the core feature. `describe` returns a structured text summary (ids, positions, labels, connections) and `screenshot` returns a rendered PNG. Agents use both to catch truncated labels, overlaps, and bad arrow routing, then fix them element by element.
-
-### Do I need a browser open?
-
-Only for rendering-dependent features: screenshots, PNG/SVG export, viewport control, and Mermaid conversion (they render in the Excalidraw frontend). Creating, querying, updating elements and exporting `.excalidraw` JSON all work headless. The CLI exits with code `4` and tells you when a browser tab is needed.
-
-### Are my diagrams persistent?
-
-Yes, across a restart: each board is saved a second after it changes into the tool's per-user state directory and restored when the server comes back, whether or not you have registered a project. That is a working memory, not a place to keep anything — nothing there is committed, and a state directory is not a repository. Export `.excalidraw` files into your repo for the diagrams you mean to keep (`export --out docs/architecture.excalidraw`), and re-`import` one to keep refining it later. Named `snapshot`s are still in memory only, for undoing a change within a session.
-
-### Are excalidraw.com share links private?
-
-`share` encrypts the scene locally with AES-GCM before uploading; the decryption key is only in the URL fragment, which excalidraw.com's server never sees. Anyone you give the full link to can view the diagram.
-
-### Does it need an API key or cloud service?
-
-No API key is required. Core drawing runs locally under MIT license. The only outbound call is the optional `share` upload to excalidraw.com.
-
-### Can I use it without configuring MCP?
-
-Yes — that's the recommended path for coding agents: `npx -y @vitorengers/vibemaxxing install-skill --dir <skills-root>` and the agent drives everything through the CLI. MCP configuration is only needed for chat clients like Claude Desktop.
-
-## Troubleshooting
-
-- **CLI exit code 3** (canvas unreachable): the server is not running for an inspecting command such as `status`, auto-start is disabled (`EXCALIDRAW_NO_AUTOSTART=1`), or `EXPRESS_SERVER_URL` points at a non-loopback host. Run `start` explicitly or fix the env.
-- **CLI exit code 4** (browser required): screenshots, image export, viewport, and mermaid conversion render in the frontend — open the canvas URL (`status` prints it) in a browser and retry.
-- **Canvas not updating**: confirm `EXPRESS_SERVER_URL` points at the running canvas server (`status` shows the URL in use).
-- **Updates/deletes fail after batch creation**: ensure you are on a build that includes the batch id preservation fix (merged via PR #34).
-- **The terminal block is missing from the canvas** (boards running with `EXCALIDRAW_TERMINAL`): press **Alt+T**. One key covers every way it can be absent — it scrolls to the blocks, places one if the board has none, and opens a session if none is running, including after the last tab was closed. Erasing a block while its shells are alive undoes itself, because nothing in that gesture kills a shell. A block carries a strip of tabs: `+` opens another shell, `×` ends one, `⧉` gives a tab a block of its own and `⇥` puts it back. See [docs/terminal.md](docs/terminal.md).
-
-## Known Issues / TODO
-
-- [ ] **Images and snapshots do not survive a restart**: elements do, but the files behind pasted images and named `snapshot`s are memory only, so a restored image is an element whose file has gone. Use `export` for anything you mean to keep.
-- [ ] **Image export requires a browser**: screenshots and image export rely on the frontend doing the actual rendering. A headless rendering mode is planned.
-
-Contributions welcome! How work is done here is written down rather than implied:
-[CONTRIBUTING.md](CONTRIBUTING.md) is the working agreement — an issue first, then a branch,
-and every behaviour change ships with a `scripts/check-*.mjs` run against the old code first —
-and `.github/pull_request_template.md` is the same rules as a checklist. This project also has
-a [code of conduct](CODE_OF_CONDUCT.md) and a [security policy](docs/SECURITY.md); a
-vulnerability goes to the second of those rather than to the issue tracker.
-
-## Development
-
-```bash
-npm run type-check
-npm run build
-npm test                   # every scripts/check-*.mjs — see Testing above
-npm run cli -- status      # run the CLI from the local build
-npm run sync:skills        # after editing skills/vibemaxxing-canvas, sync the repo-local agent copy
-```
-
-Every behaviour change in this fork ships with a `scripts/check-*.mjs` run against the old code
-first, and every change updates both halves of `docs/board.excalidraw`. The workflow — issue,
-branch, pull request, review — is in [CONTRIBUTING.md](CONTRIBUTING.md), with
-[AGENTS.md](AGENTS.md) as the copy a coding agent loads, and
-[docs/development-log.md](docs/development-log.md) is one dated entry per merged pull request.
-
-Bug reports and pull requests for **this fork** belong on
-[its own issue tracker](https://github.com/vitorengers/vibemaxxing/issues), and on the GitHub
-project the maintainer's board is pointed at — which is configured per checkout rather than
-shipped, so a clone of this repository is nobody else's project board
-([docs/workspaces.md](docs/workspaces.md)).
-
-## License
-
-[MIT](LICENSE). The upstream project is `yctimlin/mcp_excalidraw` and its copyright is upstream's; this fork carries the same licence and is not affiliated with the Excalidraw team. [Excalidraw](https://github.com/excalidraw/excalidraw) is its own MIT-licensed project; this toolkit builds on it with love.
-
-**Links:** [this fork](https://github.com/vitorengers/vibemaxxing) · [its issues](https://github.com/vitorengers/vibemaxxing/issues) · [documentation index](docs/index.md) · the upstream project's [npm package](https://www.npmjs.com/package/mcp-excalidraw-server) and [demo video](https://youtu.be/ufW78Amq5qA)
+Bug reports and pull requests belong on
+[this repository's issue tracker](https://github.com/vitorengers/vibemaxxing/issues) — the
+repository is `vitorengers/vibemaxxing` — and on the GitHub project the maintainer's board is
+pointed at, which is configured per checkout rather than shipped, so a clone of this repository
+is nobody else's project board.
