@@ -279,7 +279,7 @@ const PROBE = `(() => {
   out.view = { scrollX: state.scrollX, scrollY: state.scrollY, zoom: state.zoom.value,
                offsetLeft: state.offsetLeft, offsetTop: state.offsetTop };
   out.shift = (() => {
-    try { return (JSON.parse(window.localStorage.getItem('excalidraw-documentation-shift') || '{}'))['${WORKSPACE}'] ?? 0; }
+    try { return (JSON.parse(window.localStorage.getItem('vibemaxxing-documentation-shift') || '{}'))['${WORKSPACE}'] ?? 0; }
     catch (error) { return 'unreadable'; }
   })();
   for (const card of document.querySelectorAll('.terminal-card')) {
