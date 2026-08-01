@@ -6343,8 +6343,11 @@ function App(): JSX.Element {
       // would be a text element whose container the store has never heard of.
       const scene = api.getSceneElementsIncludingDeleted()
       const derivedIds = new Set(scene.filter(isDerivedElement).map((element) => element.id))
-      const currentElements = scene.filter((element) => !isDerivedElement(element)
-        && !(containerIdOf(element) && derivedIds.has(containerIdOf(element)!)))
+      const currentElements = scene.filter((element) => {
+        if (isDerivedElement(element)) return false
+        const container = containerIdOf(element)
+        return !(container && derivedIds.has(container))
+      })
       console.log(`Syncing ${currentElements.length} elements to backend`)
 
       // 2. The bytes behind this board's images, before the elements that name them — so the
