@@ -409,14 +409,37 @@ from the real environment only: exporting them works, putting them in `config.js
 
 | Variable | Default | What it does |
 |---|---|---|
-| `LOG_LEVEL` | `info` | The lowest level written to the log file — `error`, `warn`, `info`, `debug`. The console transport is fixed at warn-and-above whatever this says, so `info` here is how a server's own account of a start is read back |
-| `LOG_FILE_PATH` | a per-OS log file | Where that file is. Unset it is `%LOCALAPPDATA%\VibeMaxxing-MCP\vibemaxxing.log` on Windows, `~/Library/Logs/vibemaxxing-mcp.log` on macOS and `$XDG_STATE_HOME/vibemaxxing-mcp/vibemaxxing.log` elsewhere. Set and unwritable is a refusal to start; unset and unwritable falls back to the temp directory |
+| `LOG_LEVEL` | `info` | The lowest level written to the log file — `error`, `warn`, `info`, `debug`. The console transport is fixed at warn-and-above whatever this says, so `info` here is how a server's own account of a start is read back. `debug` adds the per-sync lines, which is a megabyte a minute on a board somebody is drawing on |
+| `LOG_FILE_PATH` | a per-OS log file | Where that file is — `vibemaxxing status` prints the resolved answer as `logFile`. Unset it is `%LOCALAPPDATA%\VibeMaxxing-MCP\vibemaxxing.log` on Windows, `~/Library/Logs/vibemaxxing-mcp.log` on macOS and `$XDG_STATE_HOME/vibemaxxing-mcp/vibemaxxing.log` elsewhere. It rotates at 1 MB across five files, so the whole history is at most 5 MB. Set and unwritable is a refusal to start; unset and unwritable falls back to the temp directory |
 | `DEBUG` | unset | `true` writes one line saying debug mode is on. Nothing else reads it — `LOG_LEVEL=debug` is what turns the detail on |
 
 <!-- /generated: settings-plain-table -->
 
 `LOG_LEVEL=info` with a `LOG_FILE_PATH` of your own is how a check reads back what a server said
 about itself; several in `scripts/` do exactly that.
+
+**The file is bounded.** Until #348 nothing truncated it: on the machine this was measured on it
+had reached 70 MB over five days of ordinary use, roughly 14 MB a day, most of it two `info`
+lines per autosync — and a board's browser autosyncs every time a shape moves. Those two lines
+are `debug` now, and the file rotates at 1 MB across five files, so the whole history on disk is
+at most 5 MB. `vibemaxxing.log` always holds the newest lines and `vibemaxxing1.log` upwards are
+the older ones, so the path below is the one to open and not merely the one to find. An
+oversized log left behind by an earlier build is rotated out of that window rather than kept
+beside the new ones. `node scripts/check-log-rotation.mjs` holds the ceiling and the two demoted
+lines together.
+
+**Ask for the path rather than working it out.** `status` prints it, and prints it whether or not
+the board is answering — which is the case that matters, because a board that will not come up is
+exactly when somebody is asked for a log:
+
+```
+$ vibemaxxing status
+{
+  "running": true,
+  "logFile": "C:\\Users\\you\\AppData\\Local\\VibeMaxxing-MCP\\vibemaxxing.log",
+  ...
+}
+```
 
 ## What a running board looks like
 
@@ -514,7 +537,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 137 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 138 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 77 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |

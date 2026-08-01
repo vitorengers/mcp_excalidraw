@@ -1201,7 +1201,10 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
   try {
     const { elements: frontendElements, timestamp } = req.body;
 
-    logger.info(`Sync request received: ${frontendElements.length} elements`, {
+    // `debug`, not `info`: the browser autosyncs whenever anything on the canvas moves, so this
+    // and the reconciliation below were two lines per nudge in a file nothing rotated — the bulk
+    // of the 14 MB a day #348 measured. A sync that goes wrong still says so at `warn`.
+    logger.debug(`Sync request received: ${frontendElements.length} elements`, {
       timestamp,
       elementCount: frontendElements.length
     });
@@ -1287,7 +1290,7 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       }
     });
 
-    logger.info(
+    logger.debug(
       `Sync reconciled: ${successCount} applied (${updatedCount} updates), ` +
       `${deletedCount} deleted, ${staleCount} ignored as stale, ` +
       `${carriedCount} kept their server-authored state, ${store.size} total`
