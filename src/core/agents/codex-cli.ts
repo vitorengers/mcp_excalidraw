@@ -113,13 +113,27 @@ export const codexCliAdapter: AgentAdapter = {
    * not — a `usage` that turned out to be cumulative across turns would be added to itself by
    * an accumulating meter and merely restated by this one.
    *
-   * `cached_input_tokens` is counted into the input for the reason `AgentUsage.inputTokens`
-   * gives: what is worth watching is what the model processed, and a run with caching on would
-   * otherwise read as having consumed almost nothing.
+   * **`cached_input_tokens` is not added**, and that is the opposite of what the same field is
+   * worth beside Claude Code. `AgentUsage.inputTokens` is everything the model processed, cache
+   * included, and Claude Code reaches that by *addition* because its `cache_read_input_tokens`
+   * is disjoint from its `input_tokens` — see `countsFrom` in `agent-usage.ts`. Codex reaches it
+   * for free, because its `input_tokens` already contains the cached share, so adding the two
+   * would count that share twice and show a plausible wrong figure rather than none.
    *
-   * Reasoning is not on the wire yet — it is an open request against the CLI — so it is read
-   * where it would arrive and reported as silence when it is not there, which is not the same
-   * answer as zero.
+   * Measured rather than assumed, against `codex exec --json` 0.146.0 driven through a stub
+   * Responses endpoint: six turns each reporting `input_tokens: 12345` with
+   * `input_tokens_details.cached_tokens: 11008` closed the run with `input_tokens: 74070` — six
+   * times 12345 exactly, the cached share neither added nor taken off. So the two fields are the
+   * API's own, and OpenAI's prompt-caching guide is what says which contains which: `cached_tokens`
+   * is the share of the input read from cache, its worked example pairing `prompt_tokens: 2006`
+   * with `cached_tokens: 1920`. `cache_write_input_tokens` is a share of the same figure and is
+   * left alone for the same reason. The capture is kept in `scripts/lib/codex-capture.mjs` and
+   * `scripts/check-agent-usage-codex.mjs` holds this to it.
+   *
+   * Reasoning **is** on the wire, which corrects the issue this came from: it expected
+   * `reasoning_output_tokens` to be absent, on the strength of an open request against the CLI to
+   * add it, and the capture has it. It is read where it arrives and reported as silence when it
+   * is not there, which is not the same answer as zero.
    */
   readUsage(event: Record<string, unknown>): UsagePatch | null {
     if (event.type !== 'turn.completed') return null;
@@ -130,7 +144,7 @@ export const codexCliAdapter: AgentAdapter = {
     return {
       kind: 'settled',
       counts: {
-        input: countAt(source, 'input_tokens') + countAt(source, 'cached_input_tokens'),
+        input: countAt(source, 'input_tokens'),
         output: countAt(source, 'output_tokens'),
         thinking: optionalCountAt(source, 'reasoning_output_tokens'),
       },
