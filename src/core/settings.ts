@@ -264,12 +264,12 @@ export const PLAIN_SETTINGS = [
   {
     name: 'LOG_LEVEL',
     fallback: '`info`',
-    description: 'The lowest level written to the log file — `error`, `warn`, `info`, `debug`. The console transport is fixed at warn-and-above whatever this says, so `info` here is how a server\'s own account of a start is read back'
+    description: 'The lowest level written to the log file — `error`, `warn`, `info`, `debug`. The console transport is fixed at warn-and-above whatever this says, so `info` here is how a server\'s own account of a start is read back. `debug` adds the per-sync lines, which is a megabyte a minute on a board somebody is drawing on'
   },
   {
     name: 'LOG_FILE_PATH',
     fallback: 'a per-OS log file',
-    description: 'Where that file is. Unset it is `%LOCALAPPDATA%\\VibeMaxxing-MCP\\vibemaxxing.log` on Windows, `~/Library/Logs/vibemaxxing-mcp.log` on macOS and `$XDG_STATE_HOME/vibemaxxing-mcp/vibemaxxing.log` elsewhere. Set and unwritable is a refusal to start; unset and unwritable falls back to the temp directory'
+    description: 'Where that file is — `vibemaxxing status` prints the resolved answer as `logFile`. Unset it is `%LOCALAPPDATA%\\VibeMaxxing-MCP\\vibemaxxing.log` on Windows, `~/Library/Logs/vibemaxxing-mcp.log` on macOS and `$XDG_STATE_HOME/vibemaxxing-mcp/vibemaxxing.log` elsewhere. It rotates at 1 MB across five files, so the whole history is at most 5 MB. Set and unwritable is a refusal to start; unset and unwritable falls back to the temp directory'
   },
   {
     name: 'DEBUG',
