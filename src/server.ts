@@ -1545,8 +1545,10 @@ app.get('/api/fs/directories', async (req: Request, res: Response) => {
 //
 // Turns an observation written on the board into a researched GitHub issue by running
 // an agent inside the project. This is the most dangerous thing the server does: it
-// spawns a process with full repository access on an API that has no authentication.
-// Hence three guards — opt-in by env var, loopback only, and one run per element.
+// spawns a process with full repository access. Hence three guards — opt-in by env var,
+// loopback only, and one run per element. They outlive the token #350 put in front of every
+// route, because that token is a file this account can read: it shuts out another account and
+// says nothing about a process already running as this one.
 //
 // Two commands rather than one, because a workspace may live in a WSL distro and a command
 // is a path: the host's `claude.exe` is `No such file or directory` inside a distro, and the
