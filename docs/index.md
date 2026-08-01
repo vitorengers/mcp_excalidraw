@@ -44,7 +44,7 @@ The board itself is cut into two halves, each with a key that scrolls onto it �
 | [element-store.md](element-store.md) | One `Map` per workspace, in memory, created on first use |
 | [sync-reconciliation.md](sync-reconciliation.md) | How a browser's edits and a run's writes merge without either losing |
 | [canvas-frontend.md](canvas-frontend.md) | The React frontend, one tab per project |
-| [claude-status.md](claude-status.md) | The Claude Code usage HUD in the header — the 5h and 7d windows, per environment |
+| [agent-limits.md](agent-limits.md) | The coding-agent usage HUD in the header — the 5h and 7d windows, per environment |
 
 ## The blocks on the canvas
 
