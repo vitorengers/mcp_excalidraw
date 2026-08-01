@@ -762,18 +762,21 @@ function boundToLoopback(): boolean {
  * only reads. The rest are **reads of board contents**: the elements, the images, the documents,
  * the library and the snapshots. They were left open when the writes were guarded, on the
  * reasoning that a read is the safe half; #366 decided that it is not. A board bound to an
- * interface was publishing everything on it to whoever reached the port, with no authentication
- * anywhere behind it, and the only honest choice between guarding the reads and writing down
- * that they are open was to guard them.
+ * interface was publishing everything on it to whoever reached the port, and the only honest
+ * choice between guarding the reads and writing down that they are open was to guard them.
  *
  * The consequence is stated rather than hidden: a non-loopback bind is now useless for
  * everything, not merely for the GitHub half. #278 had already taken the tab strip and the
  * picker; this takes the canvas. A reverse proxy is unaffected — it reaches this server on
  * loopback, which is the configuration `EXCALIDRAW_ALLOWED_HOSTS` exists for.
  *
- * This is not the origin gate (`src/core/origin-gate.ts`) and neither stands in for the other.
- * That one asks a browser question — `Origin`, `Host` — and its own comment says a program that
- * can set headers can set any header. This one asks about the bind, which no caller can forge.
+ * Three controls stand in front of these routes and none replaces another. The token (#350) is
+ * what the caller carries, and it is a `VIBEMAXXING_NO_AUTH` away from not being there — which
+ * is the state every check in `scripts/` runs in. The origin gate
+ * (`src/core/origin-gate.ts`) asks a browser question, `Origin` and `Host`, and its own comment
+ * says a program that can set headers can set any header. This asks about the **bind**, which is
+ * the one thing about a caller that nobody can forge, and it answers 403 to a request holding a
+ * perfectly good token.
  */
 function offLoopback(res: Response, what: string): boolean {
   if (boundToLoopback()) return false;
