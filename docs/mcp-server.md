@@ -18,6 +18,60 @@ server behind them.
 `describe_scene` and `get_canvas_screenshot` are the pair that makes iteration possible: the
 agent draws, reads back what it drew, and corrects. Without them it is working blind.
 
+## Configuring a client
+
+The server speaks stdio, and the simplest configuration is `npx` — no clone, no absolute paths,
+and the canvas starts itself. A bare invocation is the stdio server for a client and the board
+for a person: what decides is stdin, and a client always hands it a pipe. Add `"mcp"` to the
+arguments to say so outright.
+
+**Claude Desktop** — `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS,
+`%APPDATA%\Claude\claude_desktop_config.json` on Windows, `~/.config/Claude/` on Linux. **Cursor**
+— `.cursor/mcp.json` in the project, or `~/.cursor/mcp.json`. **Antigravity** —
+`~/.gemini/antigravity/mcp_config.json`. All three take the same block:
+
+```json
+{
+  "mcpServers": {
+    "vibemaxxing": {
+      "command": "npx",
+      "args": ["-y", "@vitorengers/vibemaxxing"]
+    }
+  }
+}
+```
+
+**OpenCode** — `~/.config/opencode/opencode.json`, or a project-level `opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "vibemaxxing": {
+      "type": "local",
+      "command": ["npx", "-y", "@vitorengers/vibemaxxing"],
+      "enabled": true
+    }
+  }
+}
+```
+
+**Claude Code** and **Codex CLI** configure it from the command line, and list and remove it the
+same way:
+
+```bash
+claude mcp add vibemaxxing --scope user -- npx -y @vitorengers/vibemaxxing
+codex mcp add vibemaxxing -- npx -y @vitorengers/vibemaxxing
+```
+
+The key is what a client turns into tool ids. Renaming it from `excalidraw` to `vibemaxxing`
+turns `mcp__excalidraw__*` into `mcp__vibemaxxing__*`, so any allowed-tools pattern has to be
+updated with it — [trap-allowed-tools.md](trap-allowed-tools.md) is what happens when it is not.
+Keep the old key if you also have the upstream package configured: two servers cannot share one.
+
+For a coding agent, the skill and the CLI usually beat an MCP configuration entirely — see
+[cli.md](cli.md).
+
 ## How it reaches the canvas
 
 Through `src/core/canvas-client.ts`, which calls the same REST API the browser uses, at
