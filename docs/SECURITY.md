@@ -75,8 +75,10 @@ past to the next free port, not a pin ([running.md](running.md)).
 
 `HOST=0.0.0.0` publishes the board on **every network interface**, and the API has no built-in
 authentication of any kind: no token, no password, no session. Everyone who can route a packet
-to that port is the operator as far as this server is concerned. Do not do it on a network you
-do not control, and put access control in front of it if you do it at all.
+to that port is the operator as far as this server is concerned. What such a board costs you is
+the workbench: off loopback every GitHub-backed route answers **403**, and so do the agents and
+the terminal, so what is published is a drawing canvas and nothing else. Do not do it on a
+network you do not control, and put access control in front of it if you do it at all.
 
 What a non-loopback bind actually exposes, because the dangerous half refuses to run there:
 
