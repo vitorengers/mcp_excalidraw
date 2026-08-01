@@ -1,6 +1,6 @@
 <!--
-The two boxes below are not ceremony: they are the rules CONTRIBUTING.md binds every change to,
-and each of them exists because something shipped without it once. Tick what is true and say so
+The boxes below are not ceremony: they are the rules CONTRIBUTING.md binds every change to, and
+each of them exists because something shipped without it once. Tick what is true and say so
 where it is not — a pull request that explains why a rule does not apply is fine, one that
 leaves the box blank is a question somebody has to ask.
 -->

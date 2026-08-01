@@ -47,7 +47,7 @@ to the guards below.
 
 ## What is off by default
 
-Five switches turn a drawing canvas into something that runs code. Every one of them is
+These switches turn a drawing canvas into something that runs code. Every one of them is
 **unset by default**, and each is a *command line you write*, not a vendor the tool picked —
 the tool runs the command you gave it, so the agent's own permissions are whatever that
 command grants.
@@ -60,12 +60,12 @@ command grants.
 | `EXCALIDRAW_IMPLEMENT_AGENT_WSL` | The same, inside the distro, with the same fallback. It is the *research/implement* split that never crosses: enabling research must not thereby enable repository writes, which is why these are four variables and not two |
 | `EXCALIDRAW_TERMINAL` | `POST /api/terminal` starts a **real shell** and `POST /api/terminal/input` types into it — whatever arrives over the API, run as you. At most eight sessions per board; the ninth is a 409. Unset, every terminal route is a 404 rather than a 403 — [terminal.md](terminal.md) |
 
-Two more are worth knowing about even though they grant nothing on their own:
+Worth knowing about even though they grant nothing on their own:
 `EXCALIDRAW_GH_COMMAND` names the `gh` binary the server invokes, and `EXCALIDRAW_EXPORT_DIR`
 is the base directory an MCP file export may write into. Both are paths, and a path is a
 decision about what runs and what is overwritten.
 
-Turning any of the five on is a decision to let **anything that can reach this server** trigger
+Turning any of them on is a decision to let **anything that can reach this server** trigger
 that command. The rest of this document is about who that is.
 
 ## Where it listens
