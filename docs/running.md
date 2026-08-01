@@ -315,6 +315,7 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` | none | The same, for implementing |
 | `EXCALIDRAW_IMPLEMENT_CONCURRENCY` | `4` | Runs at once. `0` is no cap, `1` serialises. Each one is a whole coding agent building on this machine |
 | `EXCALIDRAW_IMPLEMENT_QUEUE_MS` | `30000` | How often a workspace with its queue on looks for a free slot. The timer does not exist until a queue is turned on |
+| `EXCALIDRAW_IMPLEMENT_RECLAIM_MS` | `30000` | How long a run whose agent process has gone must sit before its slot is given back. The wait is there because a run's process ending is not the run ending — the server still has GitHub to ask and a checkout to release. `0` gives the slot back on the first sighting |
 | `EXCALIDRAW_ISSUE_MEMO_MS` | `30000` | How long one `gh` read of an issue is reused. `0` turns the memo off |
 | `EXCALIDRAW_GH_STATUS_MEMO_MS` | `30000` | How long one answer about `gh` *itself* — installed, logged in, which scopes — is reused before `GET /api/github-status` asks again. `0` turns the memo off. The canvas asks on a failing poll, so without it a board whose `gh` is broken would spawn two processes every twenty seconds to be told the same thing |
 | `EXCALIDRAW_GH_COMMAND` | `gh` | The GitHub CLI on **this machine**, when it is not on `PATH` — [trap-gh-path.md](trap-gh-path.md) |
@@ -478,11 +479,18 @@ $ vibemaxxing status
 ## Verifying a change
 
 ```
-./node_modules/.bin/tsc          # the server
-./node_modules/.bin/vite build   # the frontend
+./node_modules/.bin/tsc             # the server
+./node_modules/.bin/tsc -p frontend # the canvas — vite builds it and checks nothing
+./node_modules/.bin/vite build      # the frontend
 node scripts/check-<name>.mjs
 node scripts/check-board-map.mjs
 ```
+
+The second line is the one that is easy to leave out, and `frontend/tsconfig.json` says why it
+has to be there: the root `tsconfig.json` excludes `frontend/`, and `vite build` strips types
+without reading them, so for a long time nothing type-checked the canvas half of this
+repository at all. `npm run type-check:frontend` is the same command, and
+`scripts/check-frontend-types.mjs` is what runs it in the suite.
 
 That is the singular form, and it is what you want while a change is being written: one check,
 its output on the terminal, run against the old code first. **`npm test` is the whole suite** —
@@ -543,7 +551,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 142 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 144 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 79 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
