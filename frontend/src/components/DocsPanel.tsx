@@ -259,8 +259,7 @@ const NO_RUN: RunView = { startedAt: null, endedAt: null, usage: null }
 const runView = (record: Record<string, unknown> | null | undefined): RunView => ({
   startedAt: (record?.startedAt as string) ?? null,
   endedAt: (record?.endedAt as string) ?? null,
-  usage: (record?.usage as ImplementView['usage']) ?? null,
-  recovered: record?.recovered === true
+  usage: (record?.usage as ImplementView['usage']) ?? null
 })
 
 /** An implementation record as the server hands it over, in the shape the panel wants. */
@@ -270,7 +269,12 @@ const implementView = (record: Record<string, unknown> | null | undefined): Impl
   error: (record?.error as string) ?? null,
   startedAt: (record?.startedAt as string) ?? null,
   endedAt: (record?.endedAt as string) ?? null,
-  usage: (record?.usage as ImplementView['usage']) ?? null
+  usage: (record?.usage as ImplementView['usage']) ?? null,
+  // A `RunView` carried this line and no `RunView` has the field, so the one thing that reads
+  // it — the second-attempt notice, on a `running` and on a `failed` block — never saw
+  // anything but `undefined`. It belongs to the implementation record, which is where the
+  // server writes it.
+  recovered: record?.recovered === true
 })
 
 /** `4:07`, or `1:12:30` once there is an hour to show. */
@@ -381,9 +385,12 @@ function knownAlready(
   // The shape carries everything about the run except the token totals, which are
   // deliberately kept off elements because they change throughout one — so the remembered
   // copy is what those come from, even when the shape is the newer source for the rest.
+  // `NO_IMPLEMENT` under the remembered copy rather than instead of it: the cache holds three
+  // of these seven fields, so spreading it alone left a view missing the four it does not keep.
   const fromShape: ImplementView | null = issue?.implementState
     ? {
-        ...(remembered?.implement ?? NO_IMPLEMENT),
+        ...NO_IMPLEMENT,
+        ...(remembered?.implement ?? {}),
         state: issue.implementState,
         url: issue.implementUrl ?? null,
         error: issue.implementError ?? null,
@@ -396,7 +403,7 @@ function knownAlready(
     detail: !issueUrl
       ? { status: 'idle' }
       : remembered ? loadedIssue(remembered.issue) : { status: 'loading' },
-    implement: fromShape ?? remembered?.implement ?? NO_IMPLEMENT
+    implement: fromShape ?? (remembered ? { ...NO_IMPLEMENT, ...remembered.implement } : NO_IMPLEMENT)
   }
 }
 

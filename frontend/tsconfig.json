@@ -1,0 +1,39 @@
+{
+  // The frontend's own type check. The root `tsconfig.json` excludes this directory and
+  // compiles `src/` alone, and `vite build` only strips types — so until this file existed
+  // nothing type-checked `frontend/`, and an identifier defined nowhere reached the browser
+  // as a `ReferenceError` instead of failing a build (#412: `setWorkspacesConfigured`).
+  //
+  // It emits nothing. `vite` still does the building; this only answers whether what it
+  // builds means anything. `scripts/check-frontend-types.mjs` is what runs it.
+  "compilerOptions": {
+    "target": "ES2022",
+    // `DOM` because this half runs in a browser, and `types: []` so the server's ambient
+    // `@types/node` cannot quietly satisfy a name that will not exist at run time here.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "module": "ESNext",
+    // What `vite` itself resolves with, so a specifier that type-checks is one it can bundle.
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    // `main.tsx` imports `./App.tsx` by its real name.
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    // The root config also sets `noUncheckedIndexedAccess`. It is deliberately off here: it
+    // is red on eight index reads in `App.tsx`, `TerminalPanel.tsx` and `WorkspaceTabs.tsx`
+    // that are each guarded a line or two away, and turning it on is a separate change to
+    // those files rather than part of switching the type check on. Raise it, do not lower
+    // what is here.
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true
+  },
+  // `src/**` reaches `../../src/core/*` on its own, through the imports that cross over.
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

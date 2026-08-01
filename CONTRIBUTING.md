@@ -138,11 +138,12 @@ screenshot you actually read is worth more than a type that checks out.
 ## Verifying
 
 ```
-./node_modules/.bin/tsc          # the server
-./node_modules/.bin/vite build   # the frontend
-node scripts/check-<name>.mjs    # the check you just wrote
-node scripts/check-board-map.mjs # the board and the log still describe what landed
-npm test                         # and then all of them — scripts/run-checks.mjs
+./node_modules/.bin/tsc             # the server
+./node_modules/.bin/tsc -p frontend # the canvas — vite builds it and checks nothing
+./node_modules/.bin/vite build      # the frontend
+node scripts/check-<name>.mjs       # the check you just wrote
+node scripts/check-board-map.mjs    # the board and the log still describe what landed
+npm test                            # and then all of them — scripts/run-checks.mjs
 ```
 
 `npm test` is the whole suite and is non-zero if any check fails. It does **not** build: a
