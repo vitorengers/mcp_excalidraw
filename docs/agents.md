@@ -8,7 +8,8 @@ an unauthenticated socket.
 
 Since #326 `src/` *can* name a backend — `src/core/agent-adapter.ts` and `src/core/agents/`,
 where a backend builds the argv, says whether the run streams and reads its own events — but
-the two variables above are still read as a command line and nothing more. Every board is the
+the agent variables above, which `docs/running.md` lists, are still read as a command line and
+nothing more. Every board is the
 `raw` backend: an arbitrary command line, spawned byte for byte, which streams if and only if it
 says `--output-format stream-json`. So the recipes below are what an operator writes, and they
 are unchanged by that seam existing.
