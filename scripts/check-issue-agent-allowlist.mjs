@@ -82,8 +82,8 @@ const agents = readFileSync(agentsPath, 'utf8');
  * The line is shipped inside single quotes, as an operator pastes it, so the outer quoting
  * comes off first and what is left is a command line `tokenizeCommand` understands.
  */
-function documentedAllowlist(source) {
-  const line = source.split(/\r?\n/).find((l) => l.includes('EXCALIDRAW_ISSUE_AGENT=')
+function documentedAllowlist(source, variable = 'EXCALIDRAW_ISSUE_AGENT') {
+  const line = source.split(/\r?\n/).find((l) => l.includes(`${variable}=`)
                                                  && l.includes('--allowedTools'));
   if (!line) return null;
   const command = line.slice(line.indexOf('=') + 1).trim().replace(/^'|'$/g, '');
@@ -230,7 +230,16 @@ for (const [name, source] of OTHER_DOCUMENTS) {
 // `agents.md` quotes it a third time, in the table of what each flag buys, which is the copy the
 // narrowing missed: a table cell too small for ten rules is exactly where `Bash(gh:*)` survives
 // as shorthand, and shorthand in a document about permissions is the list an operator copies.
-const granted = new Set(rules);
+//
+// **The implement agent's own list is granted here too, since #327.** These documents now ship
+// two lists, and the wide one is deliberately wide: `Bash(git:*)` on the agent that has to
+// commit is not the shorthand this rule hunts for. So what a document may spell out is the
+// union — and the implement half cannot go stale either, because
+// `check-agent-permissions.mjs` holds the documented line to the list the adapter writes.
+const granted = new Set([
+  ...rules,
+  ...(documentedAllowlist(block, 'EXCALIDRAW_IMPLEMENT_AGENT') ?? []),
+]);
 const confirmation = trap.indexOf('confirmed by running the CLI');
 const prose = confirmation < 0 ? trap : trap.slice(0, confirmation);
 for (const [name, source] of [['trap-allowed-tools.md', prose], ...OTHER_DOCUMENTS]) {

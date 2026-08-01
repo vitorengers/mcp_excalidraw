@@ -256,9 +256,12 @@ console.log('1. a board can name a backend and get a distinct one');
 console.log('\n2. a named backend writes its own flags; the passthrough writes none');
 {
   const claude = adapterFor('claude-code').invoke({ mode: 'headless', role: 'implement', command: 'claude' });
+  // The flags this backend writes to be readable, and only those: the permission posture it
+  // writes after them is `check-agent-permissions.mjs`'s subject, and asserting it twice is how
+  // two checks come to disagree about which one owns it.
   check('claude-code asks for the stream a board can read, from a bare binary',
         claude.command === 'claude'
-        && claude.args.join(' ') === '--print --output-format stream-json --verbose',
+        && claude.args.slice(0, 4).join(' ') === '--print --output-format stream-json --verbose',
         JSON.stringify(claude));
   check('and its prompt goes on stdin, which is what a pseudoterminal cannot end',
         claude.prompt.via === 'stdin', JSON.stringify(claude.prompt));
@@ -399,9 +402,15 @@ for (const [name, backend, command, spelled, step] of [
   check('the run reaches the pull request URL', run.ok === true && run.url === PULL_URL,
         `${JSON.stringify(run.url)} ${JSON.stringify(run.error)}`);
 
-  // The flags after the stub's own path, which is what this backend decided to write.
+  // The flags after the stub's own path, which is what this backend decided to write. Asserted
+  // as a run rather than as the tail, because a named backend also writes a permission posture
+  // now and the `-` that says "prompt on stdin" stays last of all — see
+  // `check-agent-permissions.mjs`, which is where the posture itself is held.
   check('the binary was given exactly the arguments this backend spells',
-        JSON.stringify(record.argv.slice(record.argv.length - spelled.length)) === JSON.stringify(spelled),
+        record.argv.join(' ').includes(spelled.join(' '))
+        || (spelled.includes('-') && record.argv[record.argv.length - 1] === '-'
+            && spelled.filter((flag) => flag !== '-')
+              .every((flag) => record.argv.includes(flag))),
         JSON.stringify(record.argv));
 
   check('and the prompt arrived on stdin, byte for byte',
