@@ -130,6 +130,13 @@ import {
   worktreesHoldingWork
 } from './core/implement-worktree.js';
 import { describeInterrupted, interruptedRuns } from './core/implement-recovery.js';
+import {
+  ReclaimedRun,
+  forgetSighting,
+  goneProcessReclaim,
+  landedReclaim,
+  reclaimDetail
+} from './core/implement-reclaim.js';
 import { layoutLabel, DEFAULT_BOUND_TEXT_FONT_SIZE } from './core/text-layout.js';
 import {
   elementsFor,
@@ -2372,11 +2379,19 @@ function recordImplement(
 function carriedImplement(
   workspaceId: string,
   issueUrl: string
-): Pick<ImplementRecord, 'startedAt' | 'usage' | 'terminal' | 'recovered'> {
+): Pick<ImplementRecord, 'startedAt' | 'usage' | 'terminal' | 'recovered' | 'pid' | 'reclaimed'> {
   const existing = readImplement(workspaceId, issueUrl);
   return {
     startedAt: existing?.startedAt ?? null,
     usage: existing?.usage ?? null,
+    // Carried like the token counts: it arrives in the middle of a run, from the spawn, and a
+    // record rebuilt from literals halfway through would lose the one fact that says whether
+    // anybody is still waiting on this run.
+    pid: existing?.pid ?? null,
+    // And this one is never carried forward as anything but null. A reclaim is a fact about the
+    // record it closed; a run that goes on to report for itself has settled honestly, and
+    // leaving the evidence on it would say the server took a slot back that it did not.
+    reclaimed: null,
     // Carried for the same reason the start time is: the session is opened once, in the
     // middle of the run, and a record rebuilt from literals at the end would forget which
     // tab the run happened in exactly when somebody goes looking for its transcript.
@@ -2428,6 +2443,29 @@ function recordImplementTerminal(
   const existing = readImplement(workspaceId, issueUrl);
   if (!existing || existing.state !== 'running') return;
   writeImplement(workspaceId, issueUrl, { ...existing, terminal });
+}
+
+/**
+ * The process a run is in, onto the record and nowhere else.
+ *
+ * The same door as the token counts and the terminal session, for the same reason: it arrives
+ * in the middle of a run and no block with nothing selected can show it.
+ *
+ * **Both calls matter and the second matters more.** A pid on a `running` record says this
+ * process is still waiting on a child; `null` says the agent has returned and the server is
+ * finishing up — asking GitHub about the pull request, releasing the checkout — which is work
+ * that takes seconds and must never be mistaken for a wedge. The sighting kept in
+ * `implement-reclaim.ts` is dropped alongside it so a record that gets a new process, as a
+ * recovered second attempt does, is not reclaimed on what was seen about the first.
+ *
+ * Ignored once the run has settled, so a spawn reported late cannot resurrect a finished
+ * record — including one this server has just reclaimed.
+ */
+function recordImplementPid(workspaceId: string, issueUrl: string, pid: number | null): void {
+  forgetSighting(workspaceId, issueUrl);
+  const existing = readImplement(workspaceId, issueUrl);
+  if (!existing || existing.state !== 'running') return;
+  writeImplement(workspaceId, issueUrl, { ...existing, pid });
 }
 
 /**
@@ -2511,6 +2549,11 @@ async function beginImplement(
   // refusal has to say which run is holding the slot to be worth reading. It is not only a
   // budget: a cap that leaks puts two `git worktree add` in the same instant, and they
   // collide on the shared `.git/config`.
+  // Before the count, and never between it and the claim below. A slot held by a run that is
+  // over is not a slot, and a click refused by one is #357 arriving through the other door: a
+  // board whose queue is off has nothing else that would ever notice.
+  await reclaimStalledRuns(workspaceId);
+
   const inFlight = runningImplements(workspaceId);
   if (IMPLEMENT_CONCURRENCY > 0 && inFlight.length >= IMPLEMENT_CONCURRENCY) {
     return {
@@ -2543,7 +2586,11 @@ async function beginImplement(
     terminal: null,
     // This is the one write that starts a run rather than continuing one, so it is where the
     // recovery allowance is handed out. Every record after it carries this forward.
-    recovered: false
+    recovered: false,
+    // Nothing has been spawned yet — the claim is made before the first `await` on purpose —
+    // so there is no process to name until `runImplementation` gets one.
+    pid: null,
+    reclaimed: null
   });
 
   /**
@@ -2723,6 +2770,9 @@ async function runImplementation(
         // Reached only when the configured command already streams. Otherwise the agent
         // prints prose at exit, there is nothing to read, and this is never called.
         onUsage: (usage) => recordImplementUsage(workspaceId, issueUrl, usage),
+        // Which process the run is in while it is in one, and null the moment it is not. This
+        // is the whole of what makes a wedged record distinguishable from a working one.
+        onPid: (pid) => recordImplementPid(workspaceId, issueUrl, pid),
         ...(host ? { host } : {})
       });
 
@@ -2757,7 +2807,10 @@ async function runImplementation(
 
     recordImplement(workspaceId, issueUrl, {
       state: landing.state, url: landing.url, error: landing.error, worktree: kept,
-      ...carriedImplement(workspaceId, issueUrl), endedAt: new Date().toISOString()
+      ...carriedImplement(workspaceId, issueUrl), endedAt: new Date().toISOString(),
+      // Said again rather than carried: a settled run is in no process at all, and a stale pid
+      // on it would be a pid the machine is free to hand to somebody else.
+      pid: null
     });
     if (landing.state === 'done') logger.info(`${issueUrl} implemented at ${landing.url}`);
     else logger.warn(`${issueUrl} implementation ${landing.state}: ${landing.error}`);
@@ -2768,7 +2821,8 @@ async function runImplementation(
       error: (error as Error).message,
       worktree: await releaseWorktreeFor(workspace, worktree, issueUrl),
       ...carriedImplement(workspaceId, issueUrl),
-      endedAt: new Date().toISOString()
+      endedAt: new Date().toISOString(),
+      pid: null
     });
   }
 
@@ -2842,6 +2896,122 @@ function slotFree(workspaceId: string): boolean {
 }
 
 /**
+ * How long a run whose process has gone waits before its slot comes back.
+ *
+ * A grace rather than a formality: a run's process ending is not the run ending. The pid is
+ * cleared from the record the instant the agent's promise resolves, so a `running` record still
+ * carrying one has not reached the server's own tidying up — but that clearing is delivered on a
+ * turn of the loop a pass can be ahead of. Waiting for a second sighting closes the window and
+ * costs a wedged run one interval.
+ *
+ * Reused as the floor on the *other* evidence, which is a different thing said with the same
+ * number on purpose: a run that started a moment ago is not what any of this is for, and asking
+ * GitHub about one would spend a `gh` process to be told so.
+ */
+const IMPLEMENT_RECLAIM_MS = (() => {
+  const configured = env('IMPLEMENT_RECLAIM_MS');
+  if (configured === undefined || configured.trim() === '') return 30_000;
+  const parsed = Number(configured);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 30_000;
+})();
+
+/**
+ * Give back every slot held by a run that is over and never said so.
+ *
+ * The two evidences in `implement-reclaim.ts`, gathered in the order they cost. The process
+ * check is one `kill(pid, 0)` per running record and is made every time. Asking GitHub is a
+ * process per record, so it is made only when the cap is full — which is the only state in which
+ * a stale record is costing anything, and is precisely the state #357 was observed in: four
+ * slots, one held by a run whose pull request had merged four hours earlier, and a board that
+ * could say only `cap-full`.
+ *
+ * **Nothing here stops anything.** A reclaim closes a record; the agent, if there somehow still
+ * is one, goes on exactly as it was and its own report — when it comes — overwrites this. That is
+ * the whole reason the evidence has to be positive: the cost of being wrong is another agent
+ * started beside one that is still writing, and no clock can tell those apart.
+ *
+ * Said out loud, once per reclaim, because it is the one thing that happens to a run without
+ * anybody asking for it. The queue reports it as a pass of its own as well; this line is what a
+ * board with no queue on it still gets.
+ */
+async function reclaimStalledRuns(workspaceId: string): Promise<ReclaimedRun[]> {
+  const reclaimed: ReclaimedRun[] = [];
+  // Read before anything is given back, not after. A cheap reclaim below frees a slot, and
+  // asking "is there room now" would then skip the expensive half for the very reason the pass
+  // was worth making — leaving the remaining stale records to be found one interval at a time.
+  // What decides it is the state this pass *arrived* in.
+  const stuck = !slotFree(workspaceId);
+
+  for (const entry of runningImplements(workspaceId)) {
+    const { issueUrl, ...record } = entry;
+    const gone = goneProcessReclaim(workspaceId, issueUrl, record.pid, IMPLEMENT_RECLAIM_MS);
+    if (!gone) continue;
+    recordImplement(workspaceId, issueUrl, {
+      ...record,
+      // The state a restart's inference already uses, and the one **Resume** already offers
+      // back: what is left of this run is a checkout, which is exactly what `interrupted` means.
+      state: 'interrupted',
+      error: gone.detail,
+      endedAt: new Date().toISOString(),
+      pid: null,
+      reclaimed: gone
+    });
+    reclaimed.push({ issueUrl, reclaimed: gone });
+    logger.warn(`Reclaimed the slot held by ${issueUrl}: ${gone.detail}`);
+  }
+
+  // The expensive half buys one thing — a slot — so it is not paid for by a board that had one
+  // to spare when this began.
+  if (!stuck) return reclaimed;
+
+  const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace || workspace.error) return reclaimed;
+
+  for (const entry of runningImplements(workspaceId)) {
+    const { issueUrl, ...record } = entry;
+    const startedAt = record.startedAt ? Date.parse(record.startedAt) : NaN;
+    if (Number.isFinite(startedAt) && Date.now() - startedAt < IMPLEMENT_RECLAIM_MS) continue;
+
+    let issue: IssueDetail;
+    try {
+      // Behind the memo an issue block and a queue pass already read through, so a board stuck
+      // at its cap asks GitHub about each held issue once a window rather than once a pass.
+      issue = await issueMemo.read(workspaceId, issueUrl, () => fetchIssue(workspace, issueUrl));
+    } catch (error) {
+      // A `gh` that will not answer has taught us nothing, which is not the same as a run that
+      // is still going — and treating it as one would invent an ending for a run that has none.
+      logger.warn(`Could not ask GitHub whether ${issueUrl} is over: ${(error as Error).message}`);
+      continue;
+    }
+    if (issue.state.toUpperCase() !== 'CLOSED') continue;
+
+    for (const pull of issue.closedBy) {
+      // Closed is not landed. An issue closed as not planned, or closed by hand, says nothing
+      // about the run — so the pull request GitHub names as having closed it is asked, and only
+      // `merged` counts. `fetchPullLanding` answers null for every failure, which falls through
+      // here as "learned nothing" exactly as it should.
+      if (await fetchPullLanding(workspace, pull.url) !== 'merged') continue;
+      const landed = landedReclaim(pull.url);
+      recordImplement(workspaceId, issueUrl, {
+        ...record,
+        state: 'done',
+        url: pull.url,
+        error: null,
+        endedAt: new Date().toISOString(),
+        pid: null,
+        reclaimed: landed
+      });
+      reclaimed.push({ issueUrl, reclaimed: landed });
+      logger.warn(`Reclaimed the slot held by ${issueUrl}: ${landed.detail}`);
+      break;
+    }
+  }
+
+  return reclaimed;
+}
+
+/**
  * Start as many queued issues as there are free slots, oldest first.
  *
  * The board is read **uncapped**. `projectCardLimit` decides what is *drawn*, and reading the
@@ -2894,6 +3064,16 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
   };
 
   try {
+    // Before the cap is looked at, because a record that is over is exactly what makes the cap
+    // lie. Reported instead of starting anything, so the reader sees the reclaim rather than a
+    // queue that unstuck itself for no stated reason; the next pass, one interval later, fills
+    // the slots it gave back.
+    const reclaimed = await reclaimStalledRuns(workspaceId);
+    if (reclaimed.length > 0) {
+      outcome = { reason: 'reclaimed', detail: reclaimDetail(reclaimed) };
+      return;
+    }
+
     if (!slotFree(workspaceId)) {
       outcome = capFullOutcome(workspaceId);
       return;
@@ -3227,7 +3407,14 @@ async function recoverInterruptedRuns(): Promise<void> {
           // its recovery is not written in the checkout. `false` is the honest reading, and it
           // costs nothing — an `interrupted` run is offered to a person through **Resume**
           // rather than continued automatically, and that offer has never been rationed.
-          recovered: false
+          recovered: false,
+          // Nor this: the process was the previous server's child and went down with it, and a
+          // pid read off a checkout would name whatever the machine has since handed it to.
+          pid: null,
+          // Inferred, not reclaimed. This record was derived from git at startup rather than
+          // taken back from a slot it was holding, and saying otherwise would put evidence on
+          // it that nothing gathered.
+          reclaimed: null
         });
         logger.warn(
           `${run.issueUrl} was being implemented when a previous server stopped; `
@@ -4688,7 +4875,11 @@ function implementTerminalHost(workspace: Workspace, issueUrl: string): AgentHos
       // Asked of the session rather than of the command a second time: what it actually got
       // is the answer, and a machine with no binary for its platform gets `pipe` from a
       // command line that reads interactive.
-      interactive: started.session.mode === 'pty' && !started.session.readOnly
+      interactive: started.session.mode === 'pty' && !started.session.readOnly,
+      // A pseudoterminal is connected on a thread of its own and reports `0` until it is, so
+      // anything that is not a real pid is `null`: no evidence at all is better than evidence
+      // about process zero.
+      pid: started.session.pid && started.session.pid > 0 ? started.session.pid : null
     };
   };
 }
