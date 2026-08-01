@@ -146,5 +146,8 @@ export async function clear(argv: string[]): Promise<void> {
 
   await ensureCanvasRunning();
   const result = await clearCanvas();
-  printJson({ success: true, cleared: result.count ?? 0 });
+  // `backup` is where the route put the board on its way out. Printed rather than dropped:
+  // `--yes` is the whole of the confirmation here, and the caller that passed it in a script
+  // is the one most likely to want the file afterwards (#345).
+  printJson({ success: true, cleared: result.count ?? 0, backup: result.backup ?? null });
 }

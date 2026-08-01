@@ -1145,11 +1145,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           throw new Error(`Snapshot "${params.name}" not found`);
         }
 
-        // Clear current canvas, then restore elements
-        await clearCanvas();
+        // Clear current canvas, then restore elements. The clear takes a copy of what was
+        // there on its way through, so the sentence below can name a way back rather than
+        // only reporting that the board is gone (#345).
+        const cleared = await clearCanvas();
         const restored = await batchCreateElementsOnCanvas(snapshot.elements);
         if (!restored) {
-          throw new Error(`Failed to restore snapshot "${params.name}": HTTP server unavailable (canvas was cleared)`);
+          throw new Error(`Failed to restore snapshot "${params.name}": HTTP server unavailable (canvas was cleared)`
+            + (cleared.backup
+              ? `. The board as it was before the clear is in ${cleared.backup}`
+              : ''));
         }
 
         return {

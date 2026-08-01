@@ -19,7 +19,7 @@ The canvas store, one `Map` per workspace — see [element-store.md](element-sto
 | `GET /api/elements/:id` | Read one |
 | `PUT /api/elements/:id` | Update one |
 | `DELETE /api/elements/:id` | Delete one |
-| `DELETE /api/elements/clear` | Empty the store. Declared before `:id`, so `clear` is never read as an element id |
+| `DELETE /api/elements/clear` | Empty the store, having first copied it beside the board's saved state — the path is `backup` in the response, or null if there was nothing to copy. Declared before `:id`, so `clear` is never read as an element id |
 | `GET /api/elements/search` | Filter by type, bounding box and arbitrary fields |
 | `POST /api/elements/batch` | Create many, ids preserved |
 | `POST /api/elements/from-mermaid` | Hand a Mermaid diagram to the browser to render |
@@ -127,14 +127,21 @@ loopback only, and capped per board.
 
 | Route | What it does |
 |---|---|
-| `POST /api/snapshots` | Save the scene under a name |
-| `GET /api/snapshots` | List the names |
-| `GET /api/snapshots/:name` | Restore one |
+| `POST /api/snapshots` | Save this workspace's scene under a name |
+| `GET /api/snapshots` | List the names this workspace has taken |
+| `GET /api/snapshots/:name` | Read one back, from the workspace that took it |
 | `GET /` | The built frontend |
 | `GET /health` | Liveness, plus the `pid` of whatever is actually answering, the `platform` it is answering from, and what the startup preflights found: `agents` per role and environment, and `gh` (`resolved` plus a version number — never the login, the scopes or stderr, which this route is not authenticated enough for) |
 | `POST /api/restart` | Replace this server with a new one on the same port (loopback only) |
 | `GET /api/sync/status` | What the store and the connected browsers currently hold |
 | `GET /api/claude-status` | What each Claude Code environment on this machine has spent (loopback only) — [claude-status.md](claude-status.md) |
+
+Snapshots are **in memory and per workspace**, and both halves of that matter. They die with the
+process, so they are not the thing that makes a board recoverable — the copy
+`DELETE /api/elements/clear` writes to disk is. And they are keyed by name *within* a board since
+#345: a snapshot called `before` taken on one project used to be read, and silently overwritten,
+from another, which made the safety net the most dangerous thing in the room for the caller most
+likely to reach for it.
 
 ### `POST /api/restart`
 

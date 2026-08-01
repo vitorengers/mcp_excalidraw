@@ -265,7 +265,8 @@ Round-trips are safe: text-element block references follow the plugin's own id r
 - **Exit code 4 (browser required)?** Open the canvas URL (`status` prints it) in a browser, then retry — screenshots, image export, viewport, and mermaid conversion render in the frontend.
 - **Elements not appearing?** Check `describe` — they may be off-screen. In MCP mode, use `set_viewport` with `scrollToContent: true`, or `scrollToElementIds` plus optional `viewportZoomFactor` to focus on a specific subgraph; in a browser, press the zoom-to-fit button.
 - **Arrow not connecting?** Verify element IDs with `get <id>`. Make sure `startElementId`/`endElementId` match existing element IDs.
-- **Canvas in a bad state?** `snapshot save` first, then `clear --yes` and rebuild. Or `snapshot restore` to go back.
+- **Canvas in a bad state?** `snapshot save` first, then `clear --yes` and rebuild. Or `snapshot restore` to go back. Snapshots are in memory and belong to the board they were taken on, so they do not survive a restart and `before` on one board is not `before` on another.
+- **Cleared something you wanted?** Every clear writes the board out first, to `<workspace>.cleared-<when>.excalidraw` beside the board's saved state, and `DELETE /api/elements/clear` answers with that path. Re-import it with `import <file>`.
 - **Element won't update?** It may be locked — `arrange unlock --ids <id>` first.
 - **Duplicate text elements / element count doubling?** The frontend auto-sync timer periodically writes the full Excalidraw scene back to the server. Excalidraw internally generates a bound text element for every shape with a label; clearing and re-sending elements can re-inject cached bound texts. Clean up: `query --type text` to find elements with a `containerId`, `delete` the unwanted ones, wait a few seconds for auto-sync to settle. The safest prevention: **never put labels on background zone rectangles** — use free-standing text elements.
 
