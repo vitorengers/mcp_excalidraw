@@ -168,7 +168,7 @@ export function runningImplements(workspaceId: string): ImplementEntry[] {
  * of them, because the thing it answers for is the *process*: `restart` ends the server, and
  * with it every coding agent the server is hosting, whichever board asked for it. A caller with
  * no workspace to ask about — the CLI has none, `docs/cli.md` says so — could otherwise only
- * ever be told about `default`, which is the one workspace a board's real runs are never in.
+ * ever be told about `default`, and a registered project's runs are not in that one.
  */
 export function runningImplementCount(): number {
   let running = 0;

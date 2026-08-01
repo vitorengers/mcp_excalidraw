@@ -143,8 +143,11 @@ export function describeSkew(skew: VersionSkew): string {
  */
 export function versionSkewError(skew: VersionSkew): Error {
   const error = new Error(
-    `${describeSkew(skew)} It is serving the previous build's code and frontend, so this `
-    + `command would act on software that is not the one you installed. Replace it with `
+    // Neutral about which way the two run, because both happen: the ordinary case is a server
+    // left behind by the previous release, and the other is a working copy older than what is
+    // installed globally. Neither is the software the caller thinks it is driving.
+    `${describeSkew(skew)} It is serving that build's code and frontend, so this command would `
+    + `act on software that is not the one you installed. Replace it with `
     + `\`${BIN_NAME} restart\`, or set ${settingName('ALLOW_VERSION_SKEW')}=1 to use it as it is.`
   );
   // The same code an unreachable canvas gets, and for the same reason a caller cares about: from

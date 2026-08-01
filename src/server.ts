@@ -156,6 +156,15 @@ onElementStoreChanged(scheduleBoardStateSave);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/**
+ * The build this process is, for `/health` to name — read once rather than per request.
+ *
+ * The frontend polls that route, and this is a property of the running process that cannot
+ * change under it: a canvas serving a different build is a different process, which is the whole
+ * of what the field is for.
+ */
+const PACKAGE_VERSION = packageVersion();
+
 const app = express();
 const server = createServer(app);
 
@@ -5240,7 +5249,7 @@ app.get('/health', (req: Request, res: Response) => {
     //
     // Here rather than in `canvasIdentity()`, for the reason `platform` is here: that object is
     // what a *replacement* must match, and a restart is expressly how a board changes version.
-    version: packageVersion(),
+    version: PACKAGE_VERSION,
     // What a restart would end, counted across every workspace rather than one. `restart` reads
     // it before it stops anything: the server hosts the coding agents, so stopping it stops them,
     // and doing that to somebody mid-implement without saying so is the failure this pre-empts.

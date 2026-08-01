@@ -218,7 +218,7 @@ export async function status(argv: string[]): Promise<void> {
   });
 
   if (skew.mismatch) {
-    note(`${describeSkew(skew)} It is serving the previous build's code and frontend — the `
-      + `browser shows nothing about this. Replace it with \`${BIN_NAME} restart\`.`);
+    note(`${describeSkew(skew)} It is serving that build's code and frontend — the browser `
+      + `shows nothing about this. Replace it with \`${BIN_NAME} restart\`.`);
   }
 }

@@ -136,8 +136,8 @@ it against its own before attaching. When they differ, the command **refuses** a
 ```
 $ vibemaxxing describe
 Error: The canvas server at http://127.0.0.1:3737 is version 0.1.0; this one is 0.2.0. It is
-serving the previous build's code and frontend, so this command would act on software that is
-not the one you installed. Replace it with `vibemaxxing restart`, or set
+serving that build's code and frontend, so this command would act on software that is not the
+one you installed. Replace it with `vibemaxxing restart`, or set
 VIBEMAXXING_ALLOW_VERSION_SKEW=1 to use it as it is.
 ```
 
