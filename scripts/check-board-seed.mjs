@@ -8,7 +8,9 @@
  * that declares a board holds its elements a moment after the port opens — and the rest are
  * the ways that seed can be wrong:
  *
- * - A workspace that declares no board stays empty. The feature is opt-in.
+ * - A workspace that declares no board stays empty, and reads no board file. The feature is
+ *   opt-in. (Since #351 a project like that is seeded from the board the tool ships instead —
+ *   `scripts/check-welcome-board.mjs` — and every check turns that off, this one included.)
  * - A board file that is not there leaves that board empty and the server up.
  * - A tombstone in the file does not come back as an element.
  * - The fields the server authors are seeded as *finished* facts only. An issue that exists
@@ -293,7 +295,17 @@ try {
     JSON.stringify(files?.files ?? {}).slice(0, 200));
 
   console.log('Opt-in, and honest about a file it cannot read');
-  check('a workspace that declares no board stays empty', (await elementsOf('unsaved')).length === 0);
+  // Empty here because `canvasEnvironment` sets `EXCALIDRAW_WELCOME_BOARD` empty for every
+  // check: since #351 a project that declares no board is otherwise seeded from the board the
+  // tool ships, which is `check-welcome-board.mjs`'s subject. What this asks either way is that
+  // no *board file* reached a project that never named one, so the second assertion holds even
+  // if the first is one day answered by a welcome board.
+  const unsaved = await elementsOf('unsaved');
+  check('a workspace that declares no board stays empty', unsaved.length === 0,
+    `${unsaved.length} element(s) — is EXCALIDRAW_WELCOME_BOARD still emptied for checks?`);
+  const leaked = unsaved.filter((element) => byId.has(element.id));
+  check('and reads no board file of its own', leaked.length === 0,
+    leaked.map((element) => element.id).join(', '));
   check('a board file that is not there leaves the board empty', (await elementsOf('absent')).length === 0);
   check('the server is still up after a board it could not read', child.exitCode === null);
 
