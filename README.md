@@ -136,7 +136,8 @@ is reported as a skip rather than passing quietly.
   every `EXCALIDRAW_*` variable with its default, generated from `src/core/settings.ts`
 - [docs/faq.md](docs/faq.md) — how this differs from the official Excalidraw MCP, whether the
   agent can really see what it drew, what to do when something does not come up
-- [CLAUDE.md](CLAUDE.md) — how work is done in this repository, and
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how work is done in this repository, with
+  [AGENTS.md](AGENTS.md) as the copy a coding agent loads, and
   [docs/development-log.md](docs/development-log.md), one dated entry per merged pull request
 
 Core drawing runs fully local and needs no API key. The optional `share` command uploads an

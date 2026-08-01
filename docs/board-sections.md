@@ -275,7 +275,8 @@ not arguing with a default it did not choose.
 ## Keeping both halves true
 
 The sections are only worth drawing if they stay right, so the rule is in
-[CLAUDE.md](../CLAUDE.md): an implementation is not finished until
+[AGENTS.md](../AGENTS.md), and in [CONTRIBUTING.md](../CONTRIBUTING.md) for a reader who is not
+an agent: an implementation is not finished until
 [development-log.md](development-log.md) has its dated entry naming the issue and the pull
 request, and until the structure map reflects any architecture or feature change — a file, a
 route, a block kind or a feature added or removed.

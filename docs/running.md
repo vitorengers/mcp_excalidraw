@@ -464,11 +464,11 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 127 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 130 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 75 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
-| `repo` | the full history, and this repository's own board | anywhere with a full clone | 7 | no |
+| `repo` | the full history, and this repository's own board | anywhere with a full clone | 8 | no |
 
 The gate is `fast` plus `browser`. `repo` is off it because it cannot be satisfied from a
 contributor's fork — `check-board-map.mjs` reads `docs/board.excalidraw` and the merge history
