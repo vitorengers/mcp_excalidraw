@@ -14,6 +14,7 @@ import { terminalCssVars, terminalDocumentInk, terminalXtermTheme } from '../../
 import type { TerminalTheme } from '../../../src/core/terminal-palette'
 import { clipboardImages } from '../../../src/core/pasted-images'
 import { terminalFontReady } from '../terminal-metrics'
+import { STORAGE_KEYS, readSetting, writeSetting } from '../storage'
 import { macKeyboard, terminalEditingChord } from '../terminal-keys'
 import type { Rect } from '../../../src/core/anchored-placement'
 import './TerminalPanel.css'
@@ -611,14 +612,14 @@ const TerminalScreen: React.FC<{
  * a board restarted yesterday is not `s1` today. Worst case is a row that comes back open on a
  * session that never had it, which costs a click.
  */
-const FOLD_STORE = 'excalidraw.terminal.folds'
+const FOLD_STORE = STORAGE_KEYS.terminalFolds
 
 /** How many open rows one session remembers. A reader who opened a hundred has a fold problem. */
 const FOLD_STORE_LIMIT = 200
 
 function readOpenFolds(sessionId: string): Set<string> {
   try {
-    const raw = window.localStorage?.getItem(`${FOLD_STORE}:${sessionId}`)
+    const raw = readSetting(FOLD_STORE, `:${sessionId}`)
     const ids = raw ? JSON.parse(raw) : []
     return new Set(Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [])
   } catch {
@@ -631,7 +632,7 @@ function readOpenFolds(sessionId: string): Set<string> {
 function writeOpenFolds(sessionId: string, open: Set<string>): void {
   try {
     const ids = [...open].slice(-FOLD_STORE_LIMIT)
-    window.localStorage?.setItem(`${FOLD_STORE}:${sessionId}`, JSON.stringify(ids))
+    writeSetting(FOLD_STORE, JSON.stringify(ids), `:${sessionId}`)
   } catch { /* private mode, or the quota. The fold still works for this page. */ }
 }
 
