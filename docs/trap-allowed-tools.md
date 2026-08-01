@@ -24,8 +24,9 @@ Since #327 those are not only sentences. A board that **names a backend** —
 `claude-code` or `codex-cli` — has the row for its role written onto the command by the adapter
 (`src/core/agent-adapter.ts`, `PermissionPosture`), and the issue role cannot carry a full-access
 flag even when one is configured: it is taken back off. `VIBEMAXXING_IMPLEMENT_FULL_ACCESS=1` is
-the one way to the last row, it reaches the implement agent only, and a board that gets there
-says so in a warning at startup. The **default backend is still `raw`** — an arbitrary command
+how such a board asks for the last row, it reaches the implement agent only, and a board that
+gets there — by the variable or by writing the flag itself — says so in a warning at startup.
+The **default backend is still `raw`** — an arbitrary command
 line, spawned byte for byte — so on every board configured today the command line below *is* the
 boundary, and this document is what an operator copies.
 
