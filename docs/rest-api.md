@@ -1,6 +1,6 @@
 # REST API
 
-`src/server.ts`. 57 routes, and the only surface that is workspace-aware — everything the
+`src/server.ts`. 58 routes, and the only surface that is workspace-aware — everything the
 browser does, and everything this board was built with, goes through here.
 
 The table below is the whole set, one row per route. It used to be a summary of thirty, under a
@@ -33,6 +33,7 @@ One project per board — see [workspaces.md](workspaces.md).
 |---|---|
 | `GET /api/workspaces` | The registry, reloaded per request (loopback only — it is every project's absolute path) |
 | `POST /api/workspaces` | Append a project to the registry (loopback only) |
+| `DELETE /api/workspaces/:id` | Drop that entry — the folder and its `board.config.json` are left alone, and so is the saved board unless `?board=delete` (loopback only) |
 | `PUT /api/workspaces/order` | Permute the registry, which is the order of the tabs (loopback only) |
 | `GET /api/workspaces/:id/config` | That project's `board.config.json`, as it is on disk (loopback only) |
 | `PUT /api/workspaces/:id/config` | Write it back, round-tripped (loopback only) |
