@@ -664,7 +664,11 @@ const CANVAS_FREE_TOOLS = new Set(['read_diagram_guide']);
 
 for (const tool of tools) {
   if (CANVAS_FREE_TOOLS.has(tool.name)) continue;
-  const properties = (tool.inputSchema.properties ?? {}) as Record<string, unknown>;
+  // `Record<string, object>` rather than `unknown`: the SDK types a JSON Schema property bag as
+  // a record of objects, which every entry here is. It typed the value `unknown` up to 1.15.x,
+  // so an `unknown` cast compiled then and does not now — the one place the 1.15 → 1.30 bump of
+  // #349 was visible at all.
+  const properties = (tool.inputSchema.properties ?? {}) as Record<string, object>;
   properties.workspace = {
     type: 'string',
     description: 'Id of the registered project board to act on (the tab it appears under). '
@@ -1181,11 +1185,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
             throw new Error(`Snapshot "${params.name}" not found`);
           }
 
-          // Clear current canvas, then restore elements
-          await clearCanvas();
+          // Clear current canvas, then restore elements. The clear takes a copy of what was
+          // there on its way through, so the sentence below can name a way back rather than
+          // only reporting that the board is gone (#345).
+          const cleared = await clearCanvas();
           const restored = await batchCreateElementsOnCanvas(snapshot.elements);
           if (!restored) {
-            throw new Error(`Failed to restore snapshot "${params.name}": HTTP server unavailable (canvas was cleared)`);
+            throw new Error(`Failed to restore snapshot "${params.name}": HTTP server unavailable (canvas was cleared)`
+              + (cleared.backup
+                ? `. The board as it was before the clear is in ${cleared.backup}`
+                : ''));
           }
 
           return {

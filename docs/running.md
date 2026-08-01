@@ -515,7 +515,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 135 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 136 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 77 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
@@ -528,7 +528,7 @@ of *this* fork — and `wsl` is off it because a hosted runner has no distro.
 A tier whose tool is not on the machine is reported as **EXPECTED-SKIP** and the run still
 exits 0, so `--tier wsl` on a Linux box is honest rather than green. `browser` is the one
 exception: with no Chrome it *fails*, because a runner that was meant to have one and does not
-would otherwise hide seventy-six checks behind a green tick that never ran them.
+would otherwise hide seventy-seven checks behind a green tick that never ran them.
 
 The tiers are held to the source by `node scripts/check-tiers.mjs`: a check added with no
 `Tier:` line fails it, as does one that spawns `wsl.exe` while calling itself `fast`.
@@ -592,6 +592,34 @@ half of it with evidence. The matrix used to carry a third combination, 18 on ub
 find out whether the `>=18` the manifest claimed held; Node 18 went end of life in April 2025,
 so the answer worth buying was raising the floor rather than going on measuring it (#281).
 `check-ci-workflow.mjs` fails if the manifest and the matrix disagree again.
+
+### The versions a consumer installs
+
+Everything above runs against `package-lock.json`, because `npm ci` is what installs it. **A
+consumer never sees that lockfile.** `npx -y <pkg>` and `npm i -g <pkg>` resolve the ranges in
+`package.json` fresh against the registry, so what a reader of the README installs is decided by
+the manifest alone, on the day they run it.
+
+`"@modelcontextprotocol/sdk": "latest"` was therefore a version nobody had run. The lockfile held
+1.15.1 and hid it from every check here, while a new user got whatever the SDK's `latest` was
+that morning — up to and including a new major, under three deep import paths that have moved
+before (`src/index.ts:7-14`). A product that breaks with no change to this repository, and no way
+to reproduce the report.
+
+**The standing policy is a caret on a version the check suite has been run against**, bumped
+deliberately rather than on a schedule, with the resolved version in
+[development-log.md](development-log.md) so a bug report has a tree to reproduce against. A caret
+keeps what `latest` was for — a patch or a minor still arrives without a commit here — and gives
+up only the major, which is the one bump that should not be taken unreviewed. The alternative,
+an exact pin re-reviewed each release, buys a reproducibility the lockfile already gives this
+repository and costs every consumer the security patches. A scheduled bump was rejected for the
+narrower reason that a calendar cannot read a red suite.
+
+`node scripts/check-dependency-ranges.mjs` holds it: no spec in any of the four dependency blocks
+may be a dist-tag or a wildcard, the lockfile's root block has to ask for what the manifest
+declares — the agreement `npm ci` refuses to install without — and every locked version has to
+sit inside its declared range. It reads `engines.node` against the CI matrix from the manifest's
+side as well, which `check-ci-workflow.mjs` already does from the workflow's.
 
 **`scripts/check-smoke-start.mjs` is what makes the two new images mean anything.** It is a
 `fast` check, so it runs in that job on all three: it starts a real `dist/server.js` on a port
