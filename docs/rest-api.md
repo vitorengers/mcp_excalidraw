@@ -1,6 +1,6 @@
 # REST API
 
-`src/server.ts`. 57 routes, and the only surface that is workspace-aware — everything the
+`src/server.ts`. 58 routes, and the only surface that is workspace-aware — everything the
 browser does, and everything this board was built with, goes through here.
 
 The table below is the whole set, one row per route. It used to be a summary of thirty, under a
