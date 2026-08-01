@@ -186,10 +186,24 @@ check('with the sandbox that lets it reach gh',
       codexRun.invocation.args.includes('--sandbox')
       && codexRun.invocation.args.includes('workspace-write'),
       codexRun.invocation.args.join(' '));
-check('and the marker that says the prompt is on stdin',
-      codexRun.invocation.prompt.marker === '-'
-      && codexRun.invocation.args[codexRun.invocation.args.length - 1] === '-',
-      codexRun.invocation.args.join(' '));
+// #484: `codex exec` takes its prompt as a positional argument and stdin beside one is read as
+// *context*, so a board that wrote nothing but a backend name gets no `-` written for it — and
+// the pipe is closed rather than left open, which is openai/codex#20919.
+check('its prompt goes on argv, and stdin is closed rather than left hanging',
+      codexRun.invocation.prompt.via === 'argv'
+      && codexRun.invocation.prompt.stdin === 'closed'
+      && !codexRun.invocation.args.includes('-'),
+      JSON.stringify(codexRun.invocation.prompt));
+// The command line beside the backend name is the override the pair is for, and a `-` written
+// there is the operator saying where their prompt goes. The backend honours it and still writes
+// the flags they left out.
+const codexDash = agentGrants({ backends: ['codex-cli'], command: 'codex exec -' });
+const dashRun = agentRunFor(codexDash.native[0], 'implement', null);
+check('but a dash the operator wrote beside the name is honoured, marker and all',
+      dashRun.invocation.prompt.via === 'stdin'
+      && dashRun.invocation.prompt.marker === '-'
+      && dashRun.invocation.args.includes('--json'),
+      `${JSON.stringify(dashRun.invocation.prompt)} ${dashRun.invocation.args.join(' ')}`);
 
 const distro = distroLine(agentRunFor(named.wsl[0], 'implement', null).invocation);
 check('a distro run is handed the bare binary and none of this machine\'s paths',
