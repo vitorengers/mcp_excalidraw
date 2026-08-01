@@ -38,6 +38,14 @@
  * stood in for — `VIBEMAXXING_OPEN_COMMAND` names a recorder that writes down the URL it was
  * handed — because a check that opened a real browser would be a check nobody could run twice.
  *
+ * **An open belongs to the launch that performed it, and this check waits for it rather than
+ * hoping.** The opener is a detached process the product deliberately does not wait for, so its
+ * write can land after the launch has exited and be counted against whichever case is reading the
+ * record by then: the second launch's open showing up as the suppressed one's (#438). The shim
+ * therefore keeps that one child referenced, which makes the launch outlive its own opener, and
+ * the recorder writes late on purpose so that a run on a quiet machine asserts the same thing a
+ * run on a busy one does. No delay is waited out anywhere.
+ *
  * Section 0 drives the pure functions over fixtures, including the two platforms this machine is
  * not, so the Windows and macOS openers are asserted wherever the suite runs.
  *
@@ -105,17 +113,38 @@ const shimDir = make('shims');
 const openedLog = join(workDir, 'opened.log');
 writeFileSync(openedLog, '', 'utf8');
 
-/** A stand-in for the platform's browser opener: it writes down the URL and exits. */
+/**
+ * A stand-in for the platform's browser opener: it writes down the URL and exits.
+ *
+ * **It writes late on purpose.** The real opener is a detached process nothing waits for, so on a
+ * loaded machine its write lands after the launch that spawned it has already exited, and the open
+ * is counted against the *next* case (#438). A recorder that writes immediately usually beats that
+ * exit and the ordering is decided by how busy the machine is. This one never does, which turns a
+ * flake into a property: every run of this check asserts that the launch waits for its opener.
+ *
+ * Not a fix by sleeping — this is the defect made reliable, not the repair. Nothing below waits
+ * for a duration; what makes the record complete is the shim keeping the opener's process attached.
+ */
+const RECORDER_DELAY_MS = 250;
 const recorder = join(workDir, 'record-open.cjs');
 writeFileSync(recorder, [
   'const { appendFileSync } = require("node:fs");',
-  `appendFileSync(${JSON.stringify(openedLog)}, process.argv.slice(2).join(" ") + "\\n");`,
+  `setTimeout(() => appendFileSync(${JSON.stringify(openedLog)},`,
+  `  process.argv.slice(2).join(" ") + "\\n"), ${RECORDER_DELAY_MS});`,
   '',
 ].join('\n'), 'utf8');
 
 /** Quoted, because a Node installation on Windows habitually lives under a path with a space. */
 const openCommand = `"${process.execPath}" "${recorder}"`;
 
+/**
+ * Every open the launches awaited so far performed, and no half of one.
+ *
+ * Complete by construction rather than by luck: an open is written by the recorder before the
+ * process that spawned it is allowed to exit (see `makeShim`), and `run()` resolves on that exit.
+ * So a count taken here is a count of finished opens, and the difference between two of them
+ * belongs to the launch that ran between.
+ */
 const opened = () => readFileSync(openedLog, 'utf8').split('\n').filter((line) => line.trim());
 
 /**
@@ -129,6 +158,21 @@ const opened = () => readFileSync(openedLog, 'utf8').split('\n').filter((line) =
  *
  * CommonJS on purpose. An extensionless entry point is CommonJS to Node unless its own syntax
  * says otherwise, and a dynamic `import()` is available in both.
+ *
+ * **And it keeps the opener attached, which is the one thing npm's shim does not do.**
+ * `openBrowser` spawns the opener `detached`, `stdio: 'ignore'`, and `unref()`s it — correctly,
+ * since a launch must not outlive a browser that hangs — so the launch is free to exit while the
+ * recorder is still starting up, and the record of what it opened arrives after the check has
+ * already read the file and moved on to the next case (#438). Neutering `unref()` on that one
+ * child, and only on it, leaves the spawn the product performs exactly as it was and makes the
+ * process wait for it: node keeps the loop alive for a referenced child, the recorder writes and
+ * exits, and only then does the launch exit and `run()` resolve. Every other child is untouched —
+ * the canvas server is spawned detached and unref'd too, and holding *that* one would mean no
+ * launch ever returns.
+ *
+ * Patching the builtin from CommonJS reaches the ESM `import { spawn } from 'child_process'` in
+ * `dist/core/open-browser.js`: `require('child_process')` and `node:child_process` are one object,
+ * and Node re-reads its properties for the named exports it hands an ES module.
  */
 function makeShim(name, { stdinTty = false, stdoutTty = false } = {}) {
   const file = join(shimDir, name);
@@ -136,6 +180,16 @@ function makeShim(name, { stdinTty = false, stdoutTty = false } = {}) {
     '// A stand-in for the shim npm installs. See check-launch-command.mjs.',
     ...(stdinTty ? ['process.stdin.isTTY = true;'] : []),
     ...(stdoutTty ? ['process.stdout.isTTY = true;'] : []),
+    'const childProcess = require("child_process");',
+    'const spawnReal = childProcess.spawn;',
+    'childProcess.spawn = function (command, args, options) {',
+    '  const child = spawnReal.call(this, command, args, options);',
+    `  if (Array.isArray(args) && args.includes(${JSON.stringify(recorder)})) {`,
+    '    // The launch may not exit until this one has written what it was handed.',
+    '    child.unref = () => child;',
+    '  }',
+    '  return child;',
+    '};',
     'const { pathToFileURL } = require("node:url");',
     `import(pathToFileURL(${JSON.stringify(binPath)}).href)`,
     '  .catch((error) => { console.error(error); process.exit(70); });',

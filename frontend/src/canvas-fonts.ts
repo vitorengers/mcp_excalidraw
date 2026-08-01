@@ -59,7 +59,8 @@ const ABSENT_FAMILY = '__excalidraw-canvas-absent__'
 /** Anything with text on it, from the socket or from `GET /api/elements`. */
 export interface MeasurableText {
   type?: string
-  fontFamily?: number
+  /** The wire carries this as either, and `charactersByFamily` reads it as a number. */
+  fontFamily?: string | number
   text?: string
   originalText?: string
 }
@@ -158,7 +159,11 @@ const charactersByFamily = (elements: readonly MeasurableText[]): Map<string, st
   const perFamily = new Map<string, Set<string>>()
   for (const element of elements) {
     if (element?.type !== 'text') continue
-    const family = FAMILY_NAMES[element.fontFamily ?? 5]
+    // `Number` rather than the value itself, because the index signature is numeric and the
+    // wire may spell the family as a string. It changes nothing at run time — a JavaScript
+    // object index is coerced to a string either way — and a name that is not a number lands
+    // on `NaN`, which misses, exactly as the name itself missed.
+    const family = FAMILY_NAMES[Number(element.fontFamily ?? 5)]
     if (!family) continue
     const text = element.originalText ?? element.text ?? ''
     let characters = perFamily.get(family)
