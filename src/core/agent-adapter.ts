@@ -93,6 +93,19 @@ export interface AgentCommandSpec {
   backend: AgentBackendId;
   /** The command line the operator granted. For `raw` it is the whole invocation. */
   command: string;
+  /**
+   * Arguments the operator pinned onto every run, or nothing.
+   *
+   * The third of the keys that replace four hand-written command lines: a board that names a
+   * backend has handed the binary and the flags to an adapter, and this is where an `--add-dir`
+   * or a `--mcp-config` that the adapter knows nothing about still goes. Appended last, after
+   * the posture and after a project's model and effort, so that what an operator pinned is the
+   * last word on the line — which is the word the CLI keeps.
+   *
+   * Absent for every board configured today, and that is what keeps `raw` byte for byte: an
+   * empty list appends nothing at all.
+   */
+  args?: readonly string[];
 }
 
 /**
@@ -350,6 +363,25 @@ export function withoutFullAccess(
       ))) continue;
     }
     kept.push(argument);
+  }
+  return kept;
+}
+
+/**
+ * The same argv with every backend's full-access markers taken out of it.
+ *
+ * `withoutFullAccess` asks one backend; this asks all of them, and the caller is the one place
+ * that holds arguments before a backend has been chosen — the operator's pinned `extraArgs`.
+ * A `--yolo` typed there would otherwise reach a Claude Code issue run untouched, since Claude
+ * Code's adapter has no reason to recognise Codex's spelling, and arrive at the research agent
+ * as the very grant #327 takes back off. Read across every backend for the same reason
+ * `fullAccessFlag` is: what is being filtered is a word somebody typed, not an argv a backend
+ * built.
+ */
+export function withoutAnyFullAccess(args: readonly string[]): string[] {
+  let kept = [...args];
+  for (const permissions of Object.values(AGENT_PERMISSIONS)) {
+    kept = withoutFullAccess(permissions, kept);
   }
   return kept;
 }

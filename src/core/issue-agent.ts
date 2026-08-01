@@ -26,9 +26,12 @@ import os from 'os';
 import path from 'path';
 import logger from '../utils/logger.js';
 import {
-  deliverStdin, invocationArgs, singleQuoted,
+  deliverStdin, invocationArgs, singleQuoted, tokenizeCommand, withoutAnyFullAccess,
   type AgentAdapter, type AgentCommandSpec, type AgentInvocation, type AgentRole,
 } from './agent-adapter.js';
+import {
+  agentGrants, agentSpecFor, parseAgentBackends, type AgentGrants,
+} from './agent-backend.js';
 import { adapterFor } from './agents/index.js';
 import { commandLineInvocation } from './agents/raw.js';
 import { AgentUsage, UsageMeter } from './agent-usage.js';
@@ -542,10 +545,75 @@ export interface AgentCommands {
 /** A command line and the backend it is run under. Null for an empty or absent command. */
 export function agentCommandSpec(
   command: string | null | undefined,
-  backend: AgentCommandSpec['backend']
+  backend: AgentCommandSpec['backend'],
+  args: readonly string[] = []
 ): AgentCommandSpec | null {
   const trimmed = command?.trim() || null;
-  return trimmed ? { backend, command: trimmed } : null;
+  if (!trimmed) return null;
+  return args.length ? { backend, command: trimmed, args } : { backend, command: trimmed };
+}
+
+/**
+ * One role's grants, read out of the environment this process was started with.
+ *
+ * The one place the three keys of `core/agent-backend.ts` and the two legacy command variables
+ * are read, so that the server is two lines rather than the four hand-composed strings this
+ * replaced. It lives here rather than beside `agentGrants` because discovery is
+ * `resolveExecutable` against `agentPath()` — the PATH every child of this board is given,
+ * which this module owns — and `agent-backend.ts` deliberately imports neither.
+ *
+ * The PATH is resolved once, per call, rather than per backend: a board reads this twice at
+ * startup and the answer cannot change between the two.
+ */
+export function agentGrantsFromEnv(role: AgentRole): AgentGrants {
+  const variable = role === 'issue' ? 'ISSUE_AGENT' : 'IMPLEMENT_AGENT';
+  const search = agentPath();
+  return agentGrants({
+    backends: parseAgentBackends(settingValue('AGENT_BACKEND')),
+    wslBackends: parseAgentBackends(settingValue('AGENT_BACKEND_WSL')),
+    command: settingValue(variable) ?? null,
+    wslCommand: settingValue(role === 'issue' ? 'ISSUE_AGENT_WSL' : 'IMPLEMENT_AGENT_WSL') ?? null,
+    args: tokenizeCommand(settingValue('AGENT_ARGS') ?? ''),
+    resolve: (binary) => resolveExecutable(binary, search),
+  });
+}
+
+/**
+ * The one command per environment the board itself would run.
+ *
+ * Everything that asks "is this role configured, and what binary would it probe" wants this
+ * rather than the whole grant: the preflight runs argv[0] of the command a run would use, and
+ * a board that enabled a second backend for a project to pick has not thereby made that second
+ * binary the one to report on at startup.
+ */
+export function agentCommandsOf(grants: AgentGrants): AgentCommands {
+  return {
+    native: grants.native[0] ?? null,
+    // Deliberately not the fallback: `AgentCommands` has always meant "what was granted for
+    // this environment", and `agentCommandFor` is where a distro with nothing of its own falls
+    // back to the machine's.
+    wsl: grants.wsl[0] ?? null,
+  };
+}
+
+/**
+ * The spec a run in this workspace is spawned from — the project's pick, or the board's own.
+ *
+ * The successor to `agentCommandFor` for the paths that actually start something: a project may
+ * name a backend among those the operator enabled, and the command that reaches its binary
+ * travels with the backend rather than with the board. `agentCommandFor` stays for the callers
+ * that only hold an `AgentCommands` — the preflight, and the refusal that names a variable.
+ */
+export function agentGrantFor(
+  workspace: Workspace,
+  grants: AgentGrants,
+  role: AgentRole
+): AgentCommandSpec | null {
+  return agentSpecFor(
+    workspace.environment.kind === 'wsl' ? 'wsl' : 'native',
+    grants,
+    workspace.agents[role].backend
+  );
 }
 
 /**
@@ -597,6 +665,7 @@ export function agentRunFor(
   mode: 'headless' | 'interactive' = 'headless'
 ): { adapter: AgentAdapter; invocation: AgentInvocation } {
   const adapter = adapterFor(agent.backend);
+  const pinned = agent.args ?? [];
   return {
     adapter,
     invocation: adapter.invoke({
@@ -605,6 +674,11 @@ export function agentRunFor(
       command: agent.command,
       model: settings?.model ?? null,
       effort: settings?.effort ?? null,
+      // The operator's pinned arguments, minus any full-access marker on the way to the
+      // research agent. An adapter takes its own backend's spelling off the *command line* it
+      // was handed; these arrive from a variable that names no backend, so every spelling comes
+      // off — see `withoutAnyFullAccess`, and `PermissionPosture` for why it is this role only.
+      extraArgs: role === 'issue' ? withoutAnyFullAccess(pinned) : pinned,
       fullAccess: role === 'implement' && implementFullAccess(),
     }),
   };
