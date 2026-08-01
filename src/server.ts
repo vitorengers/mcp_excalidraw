@@ -63,6 +63,7 @@ import {
   ClaudeEnvironmentStatus, readClaudeStatus, STALE_AFTER_SECONDS
 } from './core/claude-status.js';
 import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
+import { referencedFileIds } from './core/board-files.js';
 import {
   readProjectBoard,
   moveCard,
@@ -4726,14 +4727,10 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
  * needed none of them.
  */
 function filesForWorkspace(workspaceId: string): Record<string, ExcalidrawFile> {
-  const wanted = new Set<string>();
-  for (const element of elementsFor(workspaceId).values()) {
-    const fileId = (element as { fileId?: unknown }).fileId;
-    if (typeof fileId === 'string' && fileId) wanted.add(fileId);
-    for (const id of issueImageIds(element.customData)) wanted.add(id);
-  }
   const scoped: Record<string, ExcalidrawFile> = {};
-  for (const id of wanted) {
+  // The same walk the save uses, so what a board is served can never be a different set from
+  // what it is saved with (#343).
+  for (const id of referencedFileIds(elementsFor(workspaceId).values())) {
     const file = files.get(id);
     if (file) scoped[id] = file;
   }
