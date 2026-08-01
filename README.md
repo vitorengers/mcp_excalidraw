@@ -108,6 +108,11 @@ branch. Several run at once (`EXCALIDRAW_IMPLEMENT_CONCURRENCY`, four by default
 opens and merges its own pull request. That is why the convention exists rather than a shared
 checkout: four agents building in one working tree is four agents overwriting each other.
 
+**Which coding agent does that work is a command line you supply**, and not a vendor this tool
+picks: [docs/agents.md](docs/agents.md) has a Claude Code recipe and a Codex CLI recipe side by
+side, what each flag buys, and the rules that hold whatever the binary is — it must run
+non-interactively, it must be permitted to run `gh` and `git`, and it must print the URL last.
+
 ### Starting it
 
 The workbench half reads **github.com and only github.com** — issue blocks, the project mirror,
@@ -121,6 +126,12 @@ step that comes before it, and a table of every `EXCALIDRAW_*` variable with its
 generated from the one declaration in `src/core/settings.ts`, so it is the list rather than a
 copy of it. Each can be spelled `VIBEMAXXING_*` instead, and they are read from
 [`config.json`](docs/configuration.md) in a per-OS directory as well as from the environment.
+
+**A clone that has just been built comes up on a blank canvas**, and that is not a broken build:
+the board on screen belongs to nobody until a registry names a project, so nothing on disk is
+behind it. [The first run](docs/running.md#the-first-run-register-the-clone-as-its-own-project)
+is the three steps that make this clone its own first project, after which the tab holds the
+board this repository keeps of itself and every card in `docs/` opens.
 
 ## What It Is
 
