@@ -69,6 +69,15 @@ turns this clone into a board that shows its own documentation cards and its own
    EXCALIDRAW_WORKSPACES=/path/to/workspaces.json node dist/server.js
    ```
 
+   ```powershell
+   $env:EXCALIDRAW_WORKSPACES = 'C:/path/to/workspaces.json'
+   node dist/server.js
+   ```
+
+   The prefix form is one line and runs in no Windows shell;
+   [install.md](install.md#setting-a-variable-in-three-shells) is the same variable in all
+   three, `cmd` included.
+
 3. **Open `http://127.0.0.1:<PORT>`.** There is now one project tab, holding the elements of
    `docs/board.excalidraw`: the two maps this repository keeps of itself, and the cards that
    open every document in `docs/`. `Alt+P` and `Alt+G` are the keys that scroll to each —
@@ -503,7 +512,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 127 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 130 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 75 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
