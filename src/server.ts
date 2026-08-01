@@ -798,10 +798,12 @@ function offLoopback(res: Response, what: string): boolean {
 // API Routes
 
 // Get all elements
-app.get('/api/elements', (req: Request, res: Response) => {
+app.get('/api/elements', async (req: Request, res: Response) => {
   if (offLoopback(res, 'The board is read')) return;
 
   try {
+    // What is on this board — which cannot be answered until this board has been read back.
+    await whenBoardsRestored();
     const elementsArray = Array.from(elementsFor(workspaceIdFrom(req)).values());
     res.json({
       success: true,
@@ -1043,13 +1045,15 @@ app.delete('/api/elements/:id', (req: Request, res: Response) => {
 });
 
 // Query elements with filters
-app.get('/api/elements/search', (req: Request, res: Response) => {
+app.get('/api/elements/search', async (req: Request, res: Response) => {
   // With no query at all this is `GET /api/elements` by another name, so it carries the same
   // guard. A lock beside an open door is not a decision, it is the shape the routes happened
-  // to have.
+  // to have. The wait below is here for the same reason: a search of a board that has not been
+  // read back is a search of an empty board, and it answers "nothing matched".
   if (offLoopback(res, 'The board is searched')) return;
 
   try {
+    await whenBoardsRestored();
     const { type, x_min, x_max, y_min, y_max, ...filters } = req.query;
     let results = Array.from(elementsFor(workspaceIdFrom(req)).values());
 
@@ -1097,7 +1101,7 @@ app.get('/api/elements/search', (req: Request, res: Response) => {
 });
 
 // Get element by ID
-app.get('/api/elements/:id', (req: Request, res: Response) => {
+app.get('/api/elements/:id', async (req: Request, res: Response) => {
   if (offLoopback(res, 'An element is read')) return;
 
   try {
@@ -1110,6 +1114,10 @@ app.get('/api/elements/:id', (req: Request, res: Response) => {
       });
     }
 
+    // Before the lookup, and it matters more here than on the two reads above: a board that has
+    // not been read back yet answers this one **404**, which says the element does not exist
+    // rather than that the board is empty.
+    await whenBoardsRestored();
     const element = elementsFor(workspaceIdFrom(req)).get(id);
 
     if (!element) {
@@ -3887,6 +3895,87 @@ async function seedBoardsFromFiles(): Promise<void> {
   }));
 }
 
+/**
+ * The restore above, as something a request can wait for.
+ *
+ * `Promise.resolve()` until `listen` replaces it, and that is not a placeholder standing in
+ * for the real thing: nothing can reach a route before the port accepts, and the seed is
+ * started from inside the callback that opens it.
+ */
+let boardsRestored: Promise<void> = Promise.resolve();
+
+/**
+ * Whether that has already happened, which after the first second or so it always has.
+ *
+ * The wait below costs a promise and a timer, and every read of every board for the rest of the
+ * process would pay it to be told the same thing. This is what makes it a boolean read instead:
+ * the window is the first twenty milliseconds of a start, and nothing reopens it.
+ */
+let boardsAreBack = false;
+
+/**
+ * How long a read of a board's contents waits for that board to have been read back.
+ *
+ * Two orders of magnitude above what it costs — forty saved boards are back in about
+ * twenty-five milliseconds — because the number is not there to bound the normal case. It is
+ * there for the board on the `wsl$` share whose read crosses a distro boundary: refused is
+ * fast, but *hung* is not, and a read of a local board must not wait on that for ever. When it
+ * expires the board is answered as it stands, which is the old behaviour, with the one thing
+ * the old behaviour never had — a line saying the answer may be short.
+ */
+const BOARD_RESTORE_CEILING_MS = 10_000;
+
+/** Said once. A ceiling that has expired once will expire on every read after it. */
+let restoreCeilingSaid = false;
+
+/**
+ * Answer for a board only once it has been read back.
+ *
+ * The saved boards are put into their stores by `seedBoardsFromFiles`, which `listen` starts
+ * and deliberately does not await — a slow read must not sit between the port opening and the
+ * board being usable. The other end of that decision was never closed: for the twenty-odd
+ * milliseconds between the two, the server was up, `/health` said `healthy`, and every read of
+ * a board answered with an empty one. Not "not ready", not an error — a board with nothing on
+ * it, which is indistinguishable from a board somebody lost the contents of. That is what
+ * `scripts/check-notes-column-without-project-browser.mjs` reported as a draft not surviving a
+ * restart, one run in four (#441), and what anything that auto-starts a canvas and reads it the
+ * moment `/health` answers is standing in.
+ *
+ * So the reads that say *what is on this board* wait here, and nothing else does. `/health`
+ * must not: it is the readiness probe the CLI, the MCP server and every check in `scripts/`
+ * poll, and `core/canvas-client.ts` reads a non-200 from it as a foreign service on the port
+ * rather than as a canvas still starting — delaying it, or answering 503 from it, would refuse
+ * the board instead of the request.
+ */
+async function whenBoardsRestored(): Promise<void> {
+  if (boardsAreBack) return;
+
+  let ceiling: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<'expired'>((resolve) => {
+    ceiling = setTimeout(() => resolve('expired'), BOARD_RESTORE_CEILING_MS);
+    // Nothing here is a reason for the process to stay alive.
+    ceiling.unref?.();
+  });
+
+  try {
+    // Caught rather than propagated: a board that could not be read has already said so, one
+    // board at a time, and a read of some *other* board is not the place to raise it again.
+    const outcome = await Promise.race([
+      boardsRestored.then(() => 'restored' as const, () => 'restored' as const),
+      expiry
+    ]);
+    if (outcome === 'expired' && !restoreCeilingSaid) {
+      restoreCeilingSaid = true;
+      logger.warn(
+        `The saved boards were still being read after ${BOARD_RESTORE_CEILING_MS} ms; `
+        + 'answering reads with the boards as they stand. Anything not back yet will look empty.'
+      );
+    }
+  } finally {
+    if (ceiling) clearTimeout(ceiling);
+  }
+}
+
 /** The agent writes to the repository, so every entrance carries the same two guards. */
 function implementingRefused(res: Response): boolean {
   if (!IMPLEMENT_AGENT_CONFIGURED) {
@@ -6181,7 +6270,15 @@ async function startServer(): Promise<void> {
     // In that order, because recovery writes what it derives from git onto the elements
     // carrying the issue, and it can only write onto elements that are in the store when it
     // looks. The other order leaves a recovered `interrupted` run recorded but undrawn.
-    void seedBoardsFromFiles().then(recoverInterruptedRuns);
+    //
+    // Kept rather than discarded, so a read of a board can wait for the board: not awaiting it
+    // is what makes the port open promptly, and `whenBoardsRestored` is what stops that being
+    // paid for with an empty answer.
+    boardsRestored = seedBoardsFromFiles();
+    // Settled either way: a board that could not be read has said so, and a read waiting on it
+    // has nothing further to wait for.
+    void boardsRestored.then(() => { boardsAreBack = true; }, () => { boardsAreBack = true; });
+    void boardsRestored.then(recoverInterruptedRuns);
 
     // And the one question nothing used to ask: do the agents this board is configured with
     // actually run? Here for the same reason as the line above — a `wsl.exe` round trip must
