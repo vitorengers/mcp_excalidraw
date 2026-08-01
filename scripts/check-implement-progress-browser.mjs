@@ -108,8 +108,19 @@ const usage = (i, cc, cr, o) => ({
 
 let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
+const waitForFile = async (name) => {
+  for (let attempt = 0; attempt < 1800; attempt++) {
+    if (existsSync(join(workDir, name))) return;
+    await sleep(100);
+  }
+};
+
 process.stdin.on('end', async () => {
   line({ type: 'system', subtype: 'init', session_id: 'stub' });
+  // Nothing is reported until the check asks for it, so there is a stretch of this run with a
+  // clock and no figures at all — which is what most runs look like, and the only moment at
+  // which "absent, not zero" can be asserted rather than raced.
+  await waitForFile('spend');
   line({ type: 'assistant', message: { id: 'msg_a', usage: usage(120, 900, 6800, 240) } });
   // Reasoning, where Claude Code actually puts it — an event of its own, with a running
   // total that restarts at every turn. 90 + 22 for the first, then 18 for the second: the
@@ -230,15 +241,41 @@ const GRAB_API = `(() => {
 const PANEL = `(() => {
   const progress = document.querySelector('.element-docs__progress');
   const tokens = document.querySelector('.element-docs__tokens');
+  const rate = document.querySelector('.element-docs__rate');
   const hint = document.querySelector('.element-docs__hint');
   const links = [...document.querySelectorAll('.element-docs__issue-link')].map((a) => a.textContent);
   return {
     progress: progress ? progress.textContent : null,
     tokens: tokens ? tokens.textContent : null,
+    rate: rate ? rate.textContent : null,
     hint: hint ? hint.textContent : null,
     links,
   };
 })()`;
+
+/**
+ * The panel once it has had a chance to catch up, whether or not it did.
+ *
+ * `waitFor` throws, which is right where nothing after it could mean anything. A rate that
+ * never turns up is not that: the run carries on, it finishes, and what a finished run shows
+ * is a separate claim that deserves to be asserted rather than skipped.
+ */
+async function panelUntil(predicate, tries = 40) {
+  let last = null;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    last = await evaluate(PANEL);
+    if (predicate(last)) return last;
+    await sleep(250);
+  }
+  return last;
+}
+
+/** `1.6k tok/s` back to 1600, so what is on screen can be compared with what was spent. */
+const asRate = (text) => {
+  const found = /([\d.]+)\s*(k|M)?\s*tok\/s/.exec(text ?? '');
+  if (!found) return null;
+  return Number(found[1]) * (found[2] === 'k' ? 1000 : found[2] === 'M' ? 1_000_000 : 1);
+};
 
 const select = (id) => evaluate(
   `window.__progressCheckApi.updateScene({ appState: { selectedElementIds: { ${JSON.stringify(id)}: true } } })`
@@ -296,6 +333,13 @@ try {
   check('a duration is on screen', asSeconds(first.progress) !== null, `progress=${first.progress}`);
   check('the panel still says the run has no time limit',
         /no time\s*limit/i.test(first.hint ?? ''), `hint=${first.hint}`);
+  // A run that has reported nothing has not reported nothing *per second* either. Most runs
+  // never report at all — the agent command has to stream it — so this is the resting state
+  // of the line and it has to read properly with the clock alone.
+  check('nothing has been reported yet, so there are no totals',
+        first.tokens === null, `tokens=${first.tokens}`);
+  check('and no rate either — absent, not 0/s',
+        first.rate === null, `rate=${first.rate}`);
 
   console.log('\n2. it advances on its own, with no reload and no click');
   const firstSeconds = asSeconds(first.progress);
@@ -316,6 +360,7 @@ try {
         `version ${versionBefore} became ${versionAfter} — a clock written onto the shape churns every export`);
 
   console.log('\n4. the token counts turn up beside it, because this agent streams them');
+  writeFileSync(join(workDir, 'spend'), '', 'utf8');
   const spending = await waitFor(async () => {
     const panel = await evaluate(PANEL);
     return panel.tokens ? panel : null;
@@ -335,6 +380,20 @@ try {
         /240\s*out\s*\(\s*130\s*thinking\s*\)/.test(thinkingShown.tokens ?? ''),
         `tokens=${thinkingShown.tokens}`);
 
+  console.log('\n4b. and an average rate, which two totals on their own never say');
+  const rated = await panelUntil((panel) => asRate(panel.rate) !== null);
+  await shot('03c-rate');
+  const shown = asRate(rated.rate);
+  const overSeconds = asSeconds(rated.progress);
+  // 120 + 900 + 6800 given to the model and 240 written back: what the run has spent so far,
+  // which is the numerator a reader would compute from the two figures beside it.
+  const SPENT = 120 + 900 + 6800 + 240;
+  const expected = SPENT / Math.max(1, overSeconds);
+  check('a rate is on screen, in tokens a second', shown !== null, `rate=${rated.rate}`);
+  check('and it is everything spent over how long it took, not one half of it',
+        shown !== null && overSeconds >= 1 && Math.abs(shown - expected) <= 0.45 * expected,
+        `${rated.rate} after ${rated.progress} — ${SPENT} tokens over ${overSeconds}s is ${expected.toFixed(0)}/s`);
+
   console.log('\n5. a finished run shows a total rather than a live clock');
   writeFileSync(join(workDir, 'release'), '', 'utf8');
   const finished = await waitFor(async () => {
@@ -344,6 +403,9 @@ try {
   await shot('04-done');
   const frozen = asSeconds(finished.progress);
   check('the duration is still shown once it is over', frozen !== null, `progress=${finished.progress}`);
+  // Read after the `result` event has settled the totals rather than at the instant the link
+  // appeared, so what is compared below is two reads of a finished run and not one of each.
+  const settled = await evaluate(PANEL);
   await sleep(4000);
   const stillFrozen = await evaluate(PANEL);
   check('and it has stopped moving', asSeconds(stillFrozen.progress) === frozen,
@@ -359,6 +421,13 @@ try {
   check('and the reasoning split is still there beside them',
         /310\s*out\s*\(\s*130\s*thinking\s*\)/.test(stillFrozen.tokens ?? ''),
         `tokens=${stillFrozen.tokens}`);
+  // An average over a run that has stopped is a fact about that run, and a fact does not keep
+  // moving. A rate still dividing by a clock that is running would fall towards zero for as
+  // long as the panel is left open.
+  check('the average is still there once the run is over',
+        asRate(stillFrozen.rate) !== null, `rate=${stillFrozen.rate}`);
+  check('and it has stopped moving, like the clock beside it',
+        stillFrozen.rate === settled.rate, `${settled.rate} → ${stillFrozen.rate}`);
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);

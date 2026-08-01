@@ -63,11 +63,87 @@ function windowText(name: string, window: AgentRateWindow | null, nowSeconds: nu
   )
 }
 
+/** One drawn row: which machines it stands for, and the one reading its figures come from. */
+interface HudRow {
+  key: string
+  /** Every environment in the group, in the order the route listed them. */
+  labels: string[]
+  /** The reading the figures come from: the freshest in the group. */
+  reading: AgentLimitsReading
+}
+
 /**
- * One row per coding-agent environment on this machine: what it has spent and who spent it.
+ * What two readings must share to be one row: the account, ignoring case and surrounding
+ * space. An email address is not case-sensitive, and a space a status line left on the end
+ * of one is not a second subscription. Blank is `null` — "not said", never a key.
+ */
+function accountKey(account: string | null): string | null {
+  const trimmed = (account ?? '').trim()
+  return trimmed ? trimmed.toLowerCase() : null
+}
+
+/** Which of two readings a merged row should draw. A reading with no age has none to beat. */
+function fresher(candidate: AgentLimitsReading, incumbent: AgentLimitsReading): boolean {
+  if (candidate.ageSeconds === null) return false
+  if (incumbent.ageSeconds === null) return true
+  return candidate.ageSeconds < incumbent.ageSeconds
+}
+
+/**
+ * One row per *account*, not per machine — where the machines agree about whose account it is.
  *
- * Rendered only when the board is configured to look — `VIBEMAXXING_AGENT_LIMITS` unset
- * makes the route a 404 and this component is never given anything to draw.
+ * The windows are per account — per Claude.ai subscription, for the one backend that can report
+ * them today — so two environments signed in as the same person are not two quotas: they are one
+ * quota, reported twice, differing only in how stale each copy is. Drawn as two rows that is two
+ * percentages for the same number, and a reader has to know which is the later one to know which
+ * is true. Merged, the figures come from the freshest reading and the label names every machine
+ * behind it.
+ *
+ * Safe only when the account matches, which is why the key is the account and nothing else.
+ * `docs/agent-limits.md` argues the other direction for the case this does not cover — two
+ * homes are two credential stores and frequently two subscriptions, and a percentage attributed
+ * to the wrong account is worse than no percentage at all. **A `null` account joins nobody**,
+ * including another `null`: "not said" is not something two machines can have in common.
+ *
+ * Decided per render, out of the response the page already has. An account that changes
+ * mid-session splits or joins a row on the next poll with no state to keep in step — which is
+ * the whole reason this lives here and not in the route, where a merged record would have to
+ * be a record of something the server does not know.
+ */
+function rowsByAccount(environments: AgentLimitsReading[]): HudRow[] {
+  const rows: HudRow[] = []
+  const byAccount = new Map<string, HudRow>()
+
+  for (const environment of environments) {
+    const key = accountKey(environment.account)
+    if (key === null) {
+      rows.push({ key: `env:${environment.label}`, labels: [environment.label], reading: environment })
+      continue
+    }
+    const existing = byAccount.get(key)
+    if (!existing) {
+      const row: HudRow = { key: `account:${key}`, labels: [environment.label], reading: environment }
+      byAccount.set(key, row)
+      rows.push(row)
+      continue
+    }
+    existing.labels.push(environment.label)
+    if (fresher(environment, existing.reading)) existing.reading = environment
+  }
+  return rows
+}
+
+/**
+ * One row per coding-agent *account* on this machine: what it has spent and which environments
+ * spent it.
+ *
+ * Off unless the board was configured to look — `VIBEMAXXING_AGENT_LIMITS` unset makes the
+ * route a 404, as does a build whose backends cannot read limits at all. That used to render
+ * nothing at all, which is the one state this HUD could not tell a reader about: an empty
+ * header corner is exactly what a board without the feature looks like, and the answer to "why
+ * is there no usage on my board" was in a document nobody had been given a reason to open. So
+ * `off` is one muted line naming that document, and the server's own sentence — which says
+ * which of the two refusals this is — is on it for a reader who hovers.
  *
  * `data-poll-ms` is the interval the page is actually using, reflected onto the element so
  * that "one poll a minute" is something a reader — and
@@ -76,13 +152,23 @@ function windowText(name: string, window: AgentRateWindow | null, nowSeconds: nu
 export function AgentLimitsHud({
   environments,
   pollMs,
+  off = null,
   now = Date.now(),
 }: {
   environments: AgentLimitsReading[]
   pollMs: number
+  /** The server's reason the route is off, or null while it is on. */
+  off?: string | null
   /** Injected so a check can put a countdown at a known point rather than race the clock. */
   now?: number
 }): JSX.Element | null {
+  if (off) {
+    return (
+      <div className="agent-limits" title={off}>
+        <span className="agent-limits__off">Agent usage off · docs/agent-limits.md</span>
+      </div>
+    )
+  }
   if (!environments.length) return null
   const nowSeconds = Math.floor(now / 1000)
 
@@ -92,34 +178,40 @@ export function AgentLimitsHud({
       data-poll-ms={pollMs}
       title="Coding agent usage, as each environment last reported it"
     >
-      {environments.map((environment) => {
+      {rowsByAccount(environments).map((row) => {
+        const reading = row.reading
         // "Nobody has run a session here" is a different answer from "this machine is idle",
         // and only one of them is worth a percentage. A row with nothing at all behind it
         // still shows, because a machine missing from the HUD looks like one that is fine.
-        const silent = environment.account === null
-          && environment.fiveHour === null
-          && environment.sevenDay === null
-          && environment.observedAt === null
+        const silent = reading.account === null
+          && reading.fiveHour === null
+          && reading.sevenDay === null
+          && reading.observedAt === null
 
         return (
           <div
-            key={environment.label}
-            className={`agent-limits__row${environment.stale ? ' agent-limits__row--stale' : ''}`}
+            key={row.key}
+            className={`agent-limits__row${reading.stale ? ' agent-limits__row--stale' : ''}`}
           >
-            <span className="agent-limits__env">{environment.label}</span>
-            {environment.account && (
-              <span className="agent-limits__account" title={environment.account}>
-                {environment.account}
+            {/* Joined into one span rather than one each: the flex row wraps between its
+                children, so a label in two pieces could wrap and read as two machines —
+                which is the mistake this row exists to stop, arriving from the other side. */}
+            <span className="agent-limits__env" title={row.labels.join(', ')}>
+              {row.labels.join(' + ')}
+            </span>
+            {reading.account && (
+              <span className="agent-limits__account" title={reading.account}>
+                {reading.account}
               </span>
             )}
             {silent ? (
               <span className="agent-limits__unknown">not seen</span>
             ) : (
               <>
-                {windowText('5h', environment.fiveHour, nowSeconds)}
-                {windowText('7d', environment.sevenDay, nowSeconds)}
-                {environment.stale && environment.ageSeconds !== null && (
-                  <span className="agent-limits__age">{ageLabel(environment.ageSeconds)}</span>
+                {windowText('5h', reading.fiveHour, nowSeconds)}
+                {windowText('7d', reading.sevenDay, nowSeconds)}
+                {reading.stale && reading.ageSeconds !== null && (
+                  <span className="agent-limits__age">{ageLabel(reading.ageSeconds)}</span>
                 )}
               </>
             )}
