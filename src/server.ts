@@ -3905,6 +3905,15 @@ async function seedBoardsFromFiles(): Promise<void> {
 let boardsRestored: Promise<void> = Promise.resolve();
 
 /**
+ * Whether that has already happened, which after the first second or so it always has.
+ *
+ * The wait below costs a promise and a timer, and every read of every board for the rest of the
+ * process would pay it to be told the same thing. This is what makes it a boolean read instead:
+ * the window is the first twenty milliseconds of a start, and nothing reopens it.
+ */
+let boardsAreBack = false;
+
+/**
  * How long a read of a board's contents waits for that board to have been read back.
  *
  * Two orders of magnitude above what it costs — forty saved boards are back in about
@@ -3939,6 +3948,8 @@ let restoreCeilingSaid = false;
  * the board instead of the request.
  */
 async function whenBoardsRestored(): Promise<void> {
+  if (boardsAreBack) return;
+
   let ceiling: ReturnType<typeof setTimeout> | undefined;
   const expiry = new Promise<'expired'>((resolve) => {
     ceiling = setTimeout(() => resolve('expired'), BOARD_RESTORE_CEILING_MS);
@@ -6264,6 +6275,9 @@ async function startServer(): Promise<void> {
     // is what makes the port open promptly, and `whenBoardsRestored` is what stops that being
     // paid for with an empty answer.
     boardsRestored = seedBoardsFromFiles();
+    // Settled either way: a board that could not be read has said so, and a read waiting on it
+    // has nothing further to wait for.
+    void boardsRestored.then(() => { boardsAreBack = true; }, () => { boardsAreBack = true; });
     void boardsRestored.then(recoverInterruptedRuns);
 
     // And the one question nothing used to ask: do the agents this board is configured with
