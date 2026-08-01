@@ -57,7 +57,7 @@ The board holds these of both agents. What differs between the two is power, and
 the issue agent gets reading, and the handful of `gh` and `git` sub-commands the prompt actually
 names, and nothing that writes, so that turning on issue blocks cannot quietly turn on
 repository writes. The implement agent has to write code, run the build and run the checks, so
-it gets everything.
+it gets writing, `git`, `gh` and the runners — wide, and still bounded rather than everything.
 
 ## Claude Code
 
@@ -81,8 +81,10 @@ than reasoned about — and widen either list **by name**, never by dropping it.
 on purpose. It reaches the implement agent only, and a board that has it — or writes the flag
 into the command line itself — says so in a warning at startup.
 
-**Every `Bash` rule in it names a sub-command rather than a binary**, which is why the list is
-ten rules long instead of two. A rule naming `gh` or `git` with no verb after it grants every
+**Every `Bash` rule in the issue list names a sub-command rather than a binary**, which is why
+it is ten rules long instead of two — the implement list names binaries because an agent that
+has to commit, push and open a pull request needs those two whole, and scoping them by verb
+there would be theatre. A rule naming `gh` or `git` with no verb after it grants every
 verb the binary has: `gh repo delete` and `gh api -X DELETE`, `git commit`, `git push --force`
 and `git config` — the whole write reach of the account behind `gh`, handed to an agent whose
 prompt sends it to read the open web and act on what it finds.

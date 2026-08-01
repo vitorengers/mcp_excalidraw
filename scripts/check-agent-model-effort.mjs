@@ -276,8 +276,12 @@ check('claude-code writes no --model and no --effort',
       && !adapterFor('claude-code').invoke({ ...UNTUNED, command: 'claude' }).args.includes('--model'),
       argvOf(adapterFor('claude-code').invoke({ ...UNTUNED, command: 'claude' })));
 const bareCodex = adapterFor('codex-cli').invoke({ ...UNTUNED, command: 'codex' });
-check('and codex-cli writes no override', !bareCodex.args.includes('-c')
-      && !bareCodex.args.some((argument) => argument.startsWith('model_reasoning_effort')),
+// Stated as the override it is about rather than as "no `-c` at all", which was the same claim
+// while the effort was the only thing that reached for that flag. Since #327 the codex-cli
+// permission posture spells its sandbox's network access with a `-c` too — that one is
+// `check-agent-permissions.mjs`'s subject, and it is written whatever the project configures.
+check('and codex-cli writes no reasoning-effort override',
+      !bareCodex.args.some((argument) => argument.includes('model_reasoning_effort')),
       argvOf(bareCodex));
 
 // ─── 6. the appending helper is gone ───────────────────────────
