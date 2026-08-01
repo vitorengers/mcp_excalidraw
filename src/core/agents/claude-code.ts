@@ -32,6 +32,16 @@ import { readClaudeUsage } from '../agent-usage.js';
 import { CLAUDE_CLAIMED_TYPES, renderClaudeEvent } from '../agent-stream-render.js';
 import { agentAction } from '../terminal-palette.js';
 
+/**
+ * The levels `--effort` takes, read off `claude --help` rather than remembered:
+ *
+ *     --effort <level>   Effort level for the current session (low, medium, high, xhigh, max)
+ *
+ * Exported because the `raw` backend spells effort Claude Code's way — see `agents/raw.ts` — and
+ * two copies of a list read from one `--help` is how they come to disagree.
+ */
+export const CLAUDE_CODE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
 /** What a headless run has to say to print an answer, exit, and speak while it works. */
 function headlessArguments(args: string[]): void {
   if (!hasArgument(args, '-p', '--print')) args.push('--print');
@@ -87,6 +97,7 @@ export const claudeCodeAdapter: AgentAdapter = {
     (argument) => argument === 'stream-json' || argument === '--output-format=stream-json'
   ),
 
+  efforts: CLAUDE_CODE_EFFORTS,
   readUsage: readClaudeUsage,
   renderEvent: renderClaudeEvent,
   claimedTypes: CLAUDE_CLAIMED_TYPES,

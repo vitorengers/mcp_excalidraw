@@ -1405,8 +1405,8 @@ A project's own `board.config.json` can now say four things per agent, under
 
 | Setting | Per-project | Global |
 | --- | --- | --- |
-| `model` | `agents.<kind>.model` → appended as `--model` | `--model` in the command line |
-| `effort` | `agents.<kind>.effort` → appended as `--effort` | `--effort` in the command line |
+| `model` | `agents.<kind>.model` → written in the backend's own spelling | `--model` in the command line |
+| `effort` | `agents.<kind>.effort` → written in the backend's own spelling, from the levels that backend takes | `--effort` in the command line |
 | time limit | `agents.<kind>.timeoutSeconds` | `EXCALIDRAW_ISSUE_AGENT_TIMEOUT`, `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` |
 | how the agent works | `agents.<kind>.workflow` → the text of `agent-workflows/<slug>.md`, last section of the prompt | the base prompt, which holds no project's conventions |
 | the command itself | **never** | `EXCALIDRAW_ISSUE_AGENT`, `EXCALIDRAW_IMPLEMENT_AGENT` |
@@ -1420,11 +1420,20 @@ supply one would mean editing a JSON file to start an unattended agent with
 `--dangerously-skip-permissions` on a board where nobody allowed one. The config surface refuses
 an `agents.<kind>.command` by name rather than ignoring it.
 
-The model and the effort are **appended** to the operator's command rather than substituted into
-it, which works because the last flag is the one the CLI keeps — checked against the CLI rather
-than assumed: `claude --model sonnet --model definitely-not-a-model -p hi` complains about the
-second one. Nothing else in that command line is rewritten, which is the line `agent-usage.ts`
+The model and the effort reach a run as **values**, and the backend that will run it decides how
+they are spelled — `--model X --effort Y` for `claude-code`, `--model X -c
+model_reasoning_effort="Y"` for `codex-cli`, and both appended to the operator's own line, in
+Claude Code's spelling, for the passthrough every board uses today. Appended rather than
+substituted, which works because the last flag is the one the CLI keeps — checked against the CLI
+rather than assumed: `claude --model sonnet --model definitely-not-a-model -p hi` complains about
+the second one. Nothing else in that command line is rewritten, which is the line `agent-usage.ts`
 already draws about `--output-format`.
+
+**The levels `effort` may take are the backend's own**, and a level outside them is refused when
+the settings are saved, with the backend named: `minimal` is Codex's and not Claude Code's, and a
+message that named neither would leave a typo and a backend mismatch reading identically.
+[agents.md](agents.md#what-the-board-reads-out-of-your-command-line) has the lists and where each
+was read from.
 
 **A project that configures nothing spawns the command line it spawned before any of this
 existed, byte for byte — and sends the same prompt, byte for byte.**  That is the same rule
