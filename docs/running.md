@@ -29,8 +29,12 @@ npm run build            # vite build, then tsc — the server serves the built 
 node dist/server.js      # with the environment below
 ```
 
-Then open `http://127.0.0.1:<PORT>`. A tab has to be open for anything that renders: screenshots,
-PNG/SVG export, viewport control and Mermaid conversion all happen in the frontend.
+Then open the board. **Not the bare address**: since #350 everything under `/api` is behind a
+secret the server writes to its state directory at startup, so `http://127.0.0.1:<PORT>` typed by
+hand loads a page and leaves it empty. `vibemaxxing` opens it correctly against a board that is
+already running, and [install.md](install.md#opening-the-board-yourself) has the address written
+out for a machine where that is not an option. A tab has to be open for anything that renders:
+screenshots, PNG/SVG export, viewport control and Mermaid conversion all happen in the frontend.
 
 An installed copy does all three of those in one word — `vibemaxxing`, with no arguments, starts
 the board, opens the tab and prints `VibeMaxxing <version> — <url>`. That is the path a user
@@ -78,10 +82,10 @@ turns this clone into a board that shows its own documentation cards and its own
    [install.md](install.md#setting-a-variable-in-three-shells) is the same variable in all
    three, `cmd` included.
 
-3. **Open `http://127.0.0.1:<PORT>`.** There is now one project tab, holding the elements of
-   `docs/board.excalidraw`: the two maps this repository keeps of itself, and the cards that
-   open every document in `docs/`. `Alt+P` and `Alt+G` are the keys that scroll to each —
-   [board-sections.md](board-sections.md).
+3. **Open the board**, with `vibemaxxing` or the tokenised address above. There is now one
+   project tab, holding the elements of `docs/board.excalidraw`: the two maps this repository
+   keeps of itself, and the cards that open every document in `docs/`. `Alt+P` and `Alt+G` are
+   the keys that scroll to each — [board-sections.md](board-sections.md).
 
 The `+` at the end of the tab strip does step 1 for you, against the per-user registry the
 variable table below resolves to when nothing is set, and it is the right way to add the

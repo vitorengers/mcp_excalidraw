@@ -98,8 +98,8 @@ URL last.
 Node ≥ 20 everywhere; `git` and `gh` are needed only by the workbench half. There is no
 container path — it was deleted rather than half-supported
 ([#300](https://github.com/vitorengers/vibemaxxing/issues/300)): the image bound every interface
-on a server whose API has no authentication, and carried neither `gh` nor `git`, so most of what
-this tool is could not have run inside it.
+on a server that at the time had no authentication, and carried neither `gh` nor `git`, so most
+of what this tool is could not have run inside it.
 
 **Security note:** the canvas server binds `127.0.0.1` only by default, and the GitHub half is
 bound to that — off loopback every GitHub-backed route answers `403`, so what you get on a
