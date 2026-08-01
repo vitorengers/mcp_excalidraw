@@ -19,6 +19,7 @@
  * comes back at startup is read off git and written here, so the run that was lost is at least
  * a run the process knows about.
  */
+import { Reclaimed } from './implement-reclaim.js';
 
 /**
  * `interrupted` is the state no run ever writes for itself.
@@ -95,6 +96,31 @@ export interface ImplementRecord {
    * than a clean story about a first attempt.
    */
   recovered: boolean;
+  /**
+   * The process the agent is in, while this process is still waiting on it.
+   *
+   * Written when the agent is spawned and cleared the moment its promise resolves, and both
+   * halves are load bearing. A pid on a `running` record means the server has not heard back
+   * yet, so the process being gone is evidence that nobody is coming — the wedge this exists
+   * for. A `running` record with no pid is a run whose agent has already returned and whose
+   * server is finishing up: asking GitHub what became of the pull request, releasing the
+   * checkout. Reclaiming that one would be reclaiming a run that is working perfectly.
+   *
+   * Null is also the honest answer for a run whose host never said which process it opened,
+   * and for an `interrupted` record inferred at startup: that process was the previous
+   * server's, and a pid recovered from a checkout would name whatever holds it now.
+   */
+  pid: number | null;
+  /**
+   * How this record stopped being `running` without its own run reporting, or null.
+   *
+   * Null for every run that settled for itself, which is nearly all of them. It is on the
+   * record rather than folded into the state because the state cannot carry it: `interrupted`
+   * is also what a restart infers from a checkout, `done` is also what a run that printed a
+   * merged pull request gets, and a reader has to be able to tell those apart from a slot the
+   * server took back — and to know which fact took it. See `implement-reclaim.ts`.
+   */
+  reclaimed: Reclaimed | null;
 }
 
 /** Cumulative token counts for a run, as the agent reported them. */
@@ -159,6 +185,25 @@ export function listImplement(workspaceId: string): ImplementEntry[] {
 /** The runs in flight *in this process*, which is what a cap counts. */
 export function runningImplements(workspaceId: string): ImplementEntry[] {
   return listImplement(workspaceId).filter((entry) => entry.state === 'running');
+}
+
+/**
+ * How many runs are in flight anywhere in this process, across every workspace.
+ *
+ * The cap counts per workspace, because that is the thing being capped. This counts across all
+ * of them, because the thing it answers for is the *process*: `restart` ends the server, and
+ * with it every coding agent the server is hosting, whichever board asked for it. A caller with
+ * no workspace to ask about — the CLI has none, `docs/cli.md` says so — could otherwise only
+ * ever be told about `default`, and a registered project's runs are not in that one.
+ */
+export function runningImplementCount(): number {
+  let running = 0;
+  for (const records of byWorkspace.values()) {
+    for (const record of records.values()) {
+      if (record.state === 'running') running++;
+    }
+  }
+  return running;
 }
 
 /**

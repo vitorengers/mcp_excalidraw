@@ -287,6 +287,31 @@ async function waitForRunning(workspace, predicate, what, ms = 15_000) {
   return seen;
 }
 
+/**
+ * Watch the queue until a pass reports it started something, and hand that pass back.
+ *
+ * `lastPass` is one slot, overwritten by every pass — so `started` is a state the queue is in
+ * for one interval and then leaves, because the pass after it finds the column empty and says
+ * `nothing-startable` truthfully. Reading it once, straight after the *record* says the run is
+ * in flight, races that: the slot is claimed before the first `await` in `beginImplement` and
+ * the pass only reports in its `finally`, so the record leads the report by however long the
+ * guards between them take. Anything that lengthens those guards — #355 added a `gh` probe to
+ * them — turns the race into a reliable failure under load.
+ *
+ * So the pass is *observed* rather than sampled: every reading is kept, and the first one that
+ * says `started` is the answer however soon it is replaced.
+ */
+async function waitForStarted(workspace, ms = 8_000) {
+  const deadline = Date.now() + ms;
+  let seen = null;
+  while (Date.now() < deadline) {
+    seen = await readQueue(workspace);
+    if (seen?.lastPass?.reason === 'started' && seen?.lastPass?.started >= 1) return seen;
+    await sleep(50);
+  }
+  return seen;
+}
+
 /** Wait until the last pass reports one of these reasons, so an assertion is not racing it. */
 async function waitForReason(workspace, reasons, ms = 6_000) {
   const deadline = Date.now() + ms;
@@ -341,7 +366,7 @@ try {
                                        'the card that arrived after switch-on to start', 12_000);
   check('the new Todo card started with nobody clicking anything', arrived.includes(501),
         JSON.stringify(arrived));
-  const drained = await readQueue('board-new');
+  const drained = await waitForStarted('board-new');
   check('and the pass that started it says it started something',
         drained?.lastPass?.reason === 'started' && drained?.lastPass?.started >= 1,
         JSON.stringify(drained));

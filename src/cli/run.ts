@@ -21,7 +21,8 @@ const COMMANDS: Record<string, Command> = {
   mcp: { handler: server.mcp, summary: 'Run the MCP stdio server (for MCP clients)', usage: 'mcp' },
   start: { handler: server.start, summary: 'Start the canvas server (detached)', usage: 'start' },
   stop: { handler: server.stop, summary: 'Stop the canvas server', usage: 'stop' },
-  status: { handler: server.status, summary: 'Canvas health, element count, browser clients', usage: 'status' },
+  restart: { handler: server.restart, summary: 'Replace the running canvas with this build, on the same port', usage: 'restart [--force] (--force restarts even while issues are being implemented)' },
+  status: { handler: server.status, summary: 'Canvas health, versions, element count, browser clients', usage: 'status' },
   doctor: { handler: doctor, summary: 'Whether the configured agents can actually run, per role and environment', usage: 'doctor' },
   apply: { handler: elements.apply, summary: 'Apply a {create,update,delete} patch in one call', usage: 'apply [patch.json|-] (update entries accept direct fields or {id,set:{...}})' },
   add: { handler: elements.add, summary: 'Create elements from a JSON array', usage: 'add [elements.json] (or stdin) | add --one \'{"type":"rectangle",...}\'' },
@@ -76,6 +77,8 @@ function printHelp(): void {
     '  Diagnostics go to stderr.',
     '  Exit codes: 0 ok, 1 error, 2 usage, 3 canvas unreachable, 4 browser tab required.',
     `  Canvas-driving commands auto-start the server (disable with ${settingName('NO_AUTOSTART')}=1).`,
+    '  --workspace <id> picks the registered project board to act on; a board with one project',
+    `  or none needs no flag, and ${settingName('WORKSPACE')} is the same answer without it.`,
     `  Canvas URL comes from EXPRESS_SERVER_URL or --url; otherwise the running board`,
     `  named in the state file, or port ${DEFAULT_CANVAS_PORT} — the next free one above it if that is taken.`,
     '  PORT pins the port instead, and is never scanned past.',
@@ -88,6 +91,11 @@ function printHelp(): void {
 function exitCodeFor(error: unknown): number {
   if (error instanceof CliUsageError) return 2;
   const code = (error as any)?.code;
+  // Not naming a board on a canvas that has several, or naming one nobody registered, is the
+  // caller having said the wrong thing — the same class as a bad flag, and the message already
+  // lists what could have been said. It reuses the documented usage code rather than inventing a
+  // fifth one nobody's scripts know about.
+  if (code === 'WORKSPACE_AMBIGUOUS' || code === 'WORKSPACE_UNKNOWN') return 2;
   if (code === 'CANVAS_UNREACHABLE') return 3;
   if (code === 'BROWSER_REQUIRED') return 4;
   return 1;

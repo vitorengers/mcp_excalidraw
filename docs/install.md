@@ -111,6 +111,12 @@ node dist/server.js
 the built frontend. `node dist/server.js` is the canvas; [cli.md](cli.md) is the CLI over the
 same build, and `node dist/index.js` is the MCP stdio server.
 
+**That canvas comes up blank, and it is meant to.** A clone has no project registered, so the
+board on screen is the one that belongs to nobody and nothing on disk is behind it — including
+the `docs/board.excalidraw` this repository keeps of itself.
+[The first run](running.md#the-first-run-register-the-clone-as-its-own-project) is the three
+steps that make the clone its own first project.
+
 ### Setting a variable, in three shells
 
 The board reads its configuration from [`config.json`](configuration.md) in a per-user state
@@ -146,21 +152,29 @@ being written in it. The other two are two lines and run everywhere.
 
 ### Opening the board yourself
 
-A launch opens the tab for you. When you started the server directly, or passed `--no-open`,
-this is the same job per platform:
+**The short answer is to run `vibemaxxing` again.** Against a board that is already running it
+starts nothing and simply opens the tab, and it is the thing that knows the board's secret: since
+the board answers `401` to any request that does not carry it, the bare address opens a page that
+loads and then stays empty ([SECURITY.md](SECURITY.md)).
+
+If you have to build the address yourself — a desktopless machine, a browser that is not the
+registered handler — it is the URL with `?t=` and the contents of `server-<port>.token` from the
+state directory in [configuration.md](configuration.md):
 
 ```powershell
-Start-Process http://127.0.0.1:3737
-```
-
-```bat
-start "" http://127.0.0.1:3737
+$secret = Get-Content "$env:LOCALAPPDATA\Excalidraw-Canvas\server-3737.token"
+Start-Process "http://127.0.0.1:3737/?t=$secret"
 ```
 
 ```bash
-open http://127.0.0.1:3737     # macOS
-xdg-open http://127.0.0.1:3737 # Linux
+# macOS
+open "http://127.0.0.1:3737/?t=$(cat ~/Library/Application\ Support/excalidraw-canvas/server-3737.token)"
+# Linux
+xdg-open "http://127.0.0.1:3737/?t=$(cat "${XDG_STATE_HOME:-$HOME/.local/state}/excalidraw-canvas/server-3737.token")"
 ```
+
+The page takes the secret back out of the address bar as soon as it has read it, so what is left
+on screen, and in your history, is the plain address.
 
 `VIBEMAXXING_OPEN_COMMAND` replaces the one the tool picks, for a machine that has none of
 these — a desktopless Linux box, or a browser that is not the registered handler.
@@ -172,11 +186,16 @@ these — a desktopless Linux box, or a browser that is not the registered handl
   On macOS a launcher can report this on a machine that does have Node, when it was installed
   by `nvm` — [launchers.md](launchers.md) says why, and typing the `npx` command in a terminal
   is the answer.
-- **The tab opens on an empty canvas with no project tabs.** Something else is already on that
-  port, answering healthy — usually a canvas an editor's MCP client auto-started. `GET /health`
-  reports the `pid` and whether it has a registry; [trap-stale-server.md](trap-stale-server.md)
-  and [running.md](running.md#before-you-start-kill-what-is-already-listening) are that trap and
-  the way out of it.
+- **The tab opens on an empty canvas with no project tabs.** Two causes, and `GET /health`
+  separates them: it reports the `pid` answering and whether that server has a registry. If the
+  `pid` is the one you started, nothing is wrong — a board with no project registered has no
+  board file behind it, and
+  [the first run](running.md#the-first-run-register-the-clone-as-its-own-project) is how it
+  gets one. If it is some other `pid`, something else is already on that port answering healthy,
+  usually a canvas an editor's MCP client auto-started —
+  [trap-stale-server.md](trap-stale-server.md) and
+  [running.md](running.md#before-you-start-kill-what-is-already-listening) are that trap and the
+  way out of it.
 - **Port 3000.** Do not move the board onto it. It is the default of most tutorial servers and
   on at least one Windows machine a portproxy rule maps it to itself, so the server looks
   healthy and every request hangs — [trap-port-3000.md](trap-port-3000.md).

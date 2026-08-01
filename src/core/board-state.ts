@@ -43,16 +43,27 @@
  * does. Both are already kept out of the autosync and out of the export; this is the third
  * door, and it needs to be, because the store is reachable from the REST API too.
  *
- * Files are not saved. `scripts/export-board.mjs` writes none either, so this is the same
- * limit the tracked boards already have: an image pasted onto a board comes back after a
- * restart as an element whose file the process no longer holds.
+ * Files are saved too, since #343, and that is the one thing here with a ceiling on it. A
+ * dataURL is base64 and a board of screenshots can outgrow any figure, while this file is
+ * rewritten on a one-second debounce — so a board's images are written up to
+ * `BOARD_IMAGE_BUDGET_BYTES` and the rest are named in a warning rather than silently
+ * halved. Without them the save was a scene that referred to pictures nobody could produce:
+ * every reload of every board, not the restart-only limit this comment used to claim.
+ *
+ * ## What is kept when a board is emptied
+ *
+ * The same scene, written once, beside the saved board and named after it — because a clear is
+ * the one write that is not a change to a board but the end of one, and since #225 it reaches
+ * the file (#345). It carries the images too, on the same budget: they are exactly what a
+ * clear would otherwise take with no way back.
  */
 import fs from 'fs/promises';
 import { renameSync, writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
-import { ServerElement } from '../types.js';
+import { ExcalidrawFile, ServerElement, files } from '../types.js';
 import { elementsFor, normalizeWorkspaceId } from './element-store.js';
+import { BOARD_IMAGE_BUDGET_BYTES, megabytes, referencedFileIds, withinBudget } from './board-files.js';
 import { BoardScene, parseBoardScene } from './board-seed.js';
 import { registryPath } from './workspaces.js';
 import { env } from './settings.js';
@@ -142,6 +153,65 @@ export function persistBoardFor(workspaceId: string): void {
   persisted.add(id);
 }
 
+/** Where a board's saved scene was, and whether it was deleted with the project. */
+export interface DroppedBoard {
+  file: string | null;
+  deleted: boolean;
+}
+
+/**
+ * Forget a board this canvas no longer lists, and optionally take its file with it.
+ *
+ * `DELETE /api/workspaces/:id` is the only caller. Two things have to stop before the entry
+ * is gone, and neither of them is the file: the debounced save this board may already owe,
+ * which would otherwise fire a second later and write out a project nothing lists any more,
+ * and the standing permission `persistBoardFor` granted at startup, which would let the next
+ * store write arm another one.
+ *
+ * **The file is kept by default, and that is the whole point of the flag.** It is the only
+ * copy of that drawing anywhere — the tracked board file is written by `export-board.mjs` and
+ * by nothing else — so a project removed by mistake and added back comes back drawn. Deleting
+ * it is somebody saying so on the request, never a side effect of tidying a registry.
+ *
+ * When it *is* asked for, the store goes too. Half a delete — the drawing gone from disk and
+ * still in memory — comes back the moment anything re-registers this id, which would make
+ * `?board=delete` a promise the next few seconds break.
+ */
+export async function dropBoardState(
+  workspaceId: string,
+  { deleteFile = false } = {}
+): Promise<DroppedBoard> {
+  const id = normalizeWorkspaceId(workspaceId);
+
+  const owed = pending.get(id);
+  if (owed) {
+    clearTimeout(owed.timer);
+    pending.delete(id);
+  }
+  persisted.delete(id);
+
+  const file = boardStateFile(id);
+  if (!deleteFile) return { file, deleted: false };
+
+  // Whatever `saveBoardState` still owes, before the unlink and not after it: a save ends in
+  // a rename, and a rename that landed afterwards would put the file straight back.
+  try { await (writing.get(id) ?? Promise.resolve()); } catch { /* it logged its own failure */ }
+  writing.delete(id);
+
+  elementsFor(id).clear();
+
+  if (!file) return { file, deleted: false };
+  try {
+    await fs.unlink(file);
+    return { file, deleted: true };
+  } catch (error) {
+    // Nothing to delete is not a failure: a project nobody ever drew on has no file.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { file, deleted: false };
+    logger.warn(`Could not delete the saved board for "${id}" at ${file}: ${(error as Error).message}`);
+    return { file, deleted: false };
+  }
+}
+
 /** Elements as they are saved: no tombstones, and nothing derived. */
 export function persistableElements(elements: Iterable<ServerElement>): ServerElement[] {
   const all = [...elements];
@@ -157,18 +227,131 @@ export function persistableElements(elements: Iterable<ServerElement>): ServerEl
     && !(element.containerId && derivedIds.has(element.containerId)));
 }
 
-/** What goes in the file: a scene, readable by anything that reads a `.excalidraw`. */
-function sceneFor(workspaceId: string): string {
+/**
+ * Which boards have already been told they are over the image budget.
+ *
+ * The save runs every second or two for as long as somebody is drawing, and a warning printed
+ * on every one of them is a log nobody can read. Cleared when the board comes back under, so
+ * the next time it happens is said again.
+ */
+const overBudget = new Set<string>();
+
+/**
+ * The files a board's saved scene carries: the ones its own saved elements point at, up to
+ * the budget.
+ *
+ * Walked from the *persistable* elements rather than the whole store, so the scene never
+ * carries bytes for a shape it did not save — a terminal block's image, if one ever existed,
+ * would otherwise be written into a file whose elements have no mention of it.
+ */
+function filesFor(workspaceId: string, elements: ServerElement[]): Record<string, ExcalidrawFile> {
+  const { kept, dropped, bytes } = withinBudget(
+    referencedFileIds(elements),
+    (id) => files.get(id),
+    BOARD_IMAGE_BUDGET_BYTES
+  );
+
+  if (dropped.length && !overBudget.has(workspaceId)) {
+    overBudget.add(workspaceId);
+    logger.warn(
+      `"${workspaceId}" is carrying more images than a saved board holds: `
+      + `${megabytes(bytes)} of ${megabytes(BOARD_IMAGE_BUDGET_BYTES)} written, `
+      + `${dropped.length} image(s) left out. They stay on the canvas and will not survive a restart.`
+    );
+  }
+  if (!dropped.length) overBudget.delete(workspaceId);
+
+  const scoped: Record<string, ExcalidrawFile> = {};
+  for (const file of kept) scoped[file.id] = file as ExcalidrawFile;
+  return scoped;
+}
+
+/**
+ * What goes in a file: a scene, readable by anything that reads a `.excalidraw`.
+ *
+ * The elements are passed in rather than read here, because the two callers do not agree on
+ * what they are: the save writes the board as it stands, and the copy taken before a clear
+ * writes the same board one moment before it stops standing. The files follow whichever set
+ * of elements it is handed, so a copy carries the pictures its own shapes point at — the
+ * board's images are exactly what a clear would otherwise take with no way back.
+ */
+function sceneOf(workspaceId: string, elements: ServerElement[], source: string): string {
   return `${JSON.stringify({
     type: 'excalidraw',
     version: 2,
-    source: 'excalidraw-canvas-board-state',
+    source,
     savedAt: new Date().toISOString(),
-    elements: persistableElements(elementsFor(workspaceId).values()),
-    // Empty, as `scripts/export-board.mjs` writes it. See the note at the top of the file.
+    elements,
     appState: {},
-    files: {},
+    files: filesFor(workspaceId, elements),
   }, null, 0)}\n`;
+}
+
+/** The board as it is now, for the file it is saved in. */
+function sceneFor(workspaceId: string): string {
+  return sceneOf(workspaceId, persistableElements(elementsFor(workspaceId).values()),
+                 'excalidraw-canvas-board-state');
+}
+
+/**
+ * Where a board goes before something empties it.
+ *
+ * Beside its saved state and named after it, so a reader who knows where the board lives
+ * knows where its copies are without being told a second directory. `.cleared-<when>` rather
+ * than a single `.backup`, because the interesting clear is rarely the last one: an agent
+ * that clears and restores badly does it repeatedly, and one file would be overwritten by the
+ * clear that came after the one worth reading.
+ *
+ * The stamp has its colons and dot beaten out of it — an ISO timestamp is not a filename on
+ * Windows — and it stays sortable either way, which is what makes "the newest one" a `sort()`.
+ *
+ * It does *not* collide with what `readBoardState` reads: that opens `<id>.excalidraw` by
+ * name, so a copy sitting beside it is never mistaken for the board itself.
+ */
+export function boardBackupFile(workspaceId: string, at: Date): string | null {
+  const directory = boardStateDir();
+  if (!directory) return null;
+  const stamp = at.toISOString().replace(/[:.]/g, '-');
+  return path.join(directory, `${normalizeWorkspaceId(workspaceId)}.cleared-${stamp}.excalidraw`);
+}
+
+/**
+ * Keep what is about to be destroyed, and say where it was put.
+ *
+ * `DELETE /api/elements/clear` is the one write on this server that is not a change to a
+ * board but the end of one, and since #225 it reaches the file: the store empties, the save
+ * listener fires, and a second later the board's saved `.excalidraw` holds an empty element
+ * list. Nothing in the product could get that back — snapshots were in memory and died with
+ * the process — so the copy is taken here, in the route, rather than in the one caller that
+ * happens to have a person in front of it (#345).
+ *
+ * Not gated on `persistBoardFor`. That gate exists so a request naming a workspace nobody
+ * registered cannot create a file per typo, and it cannot here either: a store nobody has
+ * written to has no elements, and a board with no elements is not copied. What the gate would
+ * cost instead is the case this is for — an unregistered board holding somebody's only copy
+ * of something, emptied by a tool call.
+ *
+ * Written through a temporary file and a rename for the same reason the board is: a copy that
+ * is half a file is not a copy, and this one exists precisely for the moment somebody needs it.
+ */
+export async function backupBoardBefore(workspaceId: string): Promise<string | null> {
+  const id = normalizeWorkspaceId(workspaceId);
+  const elements = persistableElements(elementsFor(id).values());
+  if (!elements.length) return null;
+
+  const file = boardBackupFile(id, new Date());
+  if (!file) return null;
+
+  const temporary = `${file}.${process.pid}.tmp`;
+  try {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(temporary, sceneOf(id, elements, 'excalidraw-canvas-board-cleared'), 'utf-8');
+    await fs.rename(temporary, file);
+    return file;
+  } catch (error) {
+    logger.warn(`Could not copy the board for "${id}" to ${file} before clearing it: ${(error as Error).message}`);
+    return null;
+  }
 }
 
 /**
@@ -267,6 +450,26 @@ export interface SavedBoard {
  * asserted as running, and a tombstone is dropped. A saved board is exactly as unable to
  * tell a live run from an abandoned one as a committed board is.
  */
+/**
+ * Whether this canvas has ever written a state file for the board, whatever is in it.
+ *
+ * A separate question from `readBoardState`, and the difference is the whole point: that one
+ * answers nothing for a board somebody emptied, because a scene with no elements is not a
+ * scene to come back as. This one answers "somebody has been here", which is what a *first*
+ * run has to ask before it puts a welcome board on a canvas. Without it, clearing the welcome
+ * board would bring it back on the next start — a deliberate emptying read as a fresh project.
+ */
+export async function boardStateExists(workspaceId: string): Promise<boolean> {
+  const file = boardStateFile(normalizeWorkspaceId(workspaceId));
+  if (!file) return false;
+  try {
+    await fs.access(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function readBoardState(workspaceId: string): Promise<SavedBoard | null> {
   const id = normalizeWorkspaceId(workspaceId);
   const file = boardStateFile(id);

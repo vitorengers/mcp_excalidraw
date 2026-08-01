@@ -20,13 +20,16 @@ them — all of `gh`, all of `git` — under the sentence *"the agent opens issu
 touch the repository"*, and that sentence was not true of it: whole `git` is `git commit`,
 `git push --force` and `git config`, and whole `gh` is `gh repo delete`, `gh issue develop`,
 which creates a branch, and `gh api -X DELETE` against any repository the operator's
-credentials reach. The block spawns this agent from an API with no authentication, and the
-prompt sends it to read this repository and the open web and to act on what it finds, so page
-content was deciding what an account-level write reach did while the one document written to be
-believed about permissions said there was none.
+credentials reach. The prompt sends this agent to read this repository and the open web and to
+act on what it finds, so page content was deciding what an account-level write reach did while
+the one document written to be believed about permissions said there was none.
+
+This is not a formality. The block spawns the agent from an API whose token (#350) is a file
+this account can read — no boundary at all against a process running as this account — so the
+list below is the boundary, and it has to be narrow enough to be one.
 
 **No `Write`, no `Edit`, no open `Bash`** was always true and is not the interesting half. The
-two tables below are the claim, and `scripts/check-issue-agent-allowlist.mjs` parses the list
+tables below are the claim, and `scripts/check-issue-agent-allowlist.mjs` parses the list
 out of the line above and holds every row of both to it, so neither table can drift from the
 list without going red.
 

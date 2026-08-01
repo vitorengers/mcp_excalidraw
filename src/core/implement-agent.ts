@@ -318,6 +318,15 @@ export async function runImplementAgent(
      */
     onUsage?: (usage: AgentUsage) => void;
     /**
+     * Which process this run is in, so a record can be reconciled against a running process.
+     *
+     * Passed through untouched, and note what it does **not** change: the prompt, the command
+     * line, or anything about how the run is spawned. Whether the board can tell a wedged run
+     * from a working one is the server's business and none of the agent's. See
+     * `implement-reclaim.ts`.
+     */
+    onPid?: (pid: number | null) => void;
+    /**
      * Where the board would like to show the run, when it has somewhere to show it.
      *
      * Passed through untouched, and note what it does **not** change: the prompt. Whether a
@@ -363,6 +372,7 @@ export async function runImplementAgent(
     what: 'implement agent',
     directory: worktree,
     ...(options.onUsage ? { onUsage: options.onUsage } : {}),
+    ...(options.onPid ? { onPid: options.onPid } : {}),
     ...(options.host ? { host: options.host } : {}),
   });
 }

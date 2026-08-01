@@ -109,10 +109,11 @@ export function seedableElement(element: ServerElement): ServerElement {
 /**
  * The files a scene carries, as the process-wide store holds them.
  *
- * Nothing comes back through here today: `scripts/export-board.mjs` writes an empty `files`
- * object unconditionally, so no saved board has any. It costs one function and it is what
- * keeps the first export that does save them from seeding image elements as broken
- * references.
+ * This is the door the saved board comes back in by, since #343: `board-state.ts` writes the
+ * files its elements point at, and without this the seed would put image elements back as
+ * broken references. `scripts/export-board.mjs` still writes an empty `files` object, so a
+ * *tracked* board carries none — which is why this is lenient about the object being absent
+ * rather than treating it as a malformed scene.
  */
 function readFiles(raw: unknown): Record<string, ExcalidrawFile> {
   const files: Record<string, ExcalidrawFile> = {};

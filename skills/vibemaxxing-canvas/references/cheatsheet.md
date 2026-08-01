@@ -5,6 +5,8 @@
 - Canvas base URL: `EXPRESS_SERVER_URL`, else the running board's state file, else `http://127.0.0.1:3737` (next free port above it if taken); CLI also accepts `--url <canvasUrl>`
 - Canvas health: `GET /health` or `npx -y @vitorengers/vibemaxxing status`
 - Auto-start: any canvas-touching CLI command starts the server if it's down (opt out with `EXCALIDRAW_NO_AUTOSTART=1`)
+- Project board: `--workspace <id>` (CLI, any command), a `workspace` argument (any MCP canvas tool), `?workspace=<id>` or an `x-workspace-id` header (REST), or `EXCALIDRAW_WORKSPACE=<id>` for the whole session. Name none and a canvas with one registered project uses it, one with none uses `default`, one with several refuses and lists the ids (exit 2). `GET /api/workspaces` is the list.
+- Version skew: a canvas from another build is refused, not used — `/health` carries the version and the command compares it. `restart` replaces it; `VIBEMAXXING_ALLOW_VERSION_SKEW=1` attaches anyway
 
 ## CLI Reference
 
@@ -17,7 +19,8 @@ JSON results on stdout — except `describe` (plain text) and raw-content output
 |---------|-------------|
 | `start` | Start the canvas server (detached); prints URL + pid |
 | `stop` | Stop the canvas server (identity-checked via `/health` — never signals foreign services) |
-| `status` | Health, element count, connected browser tabs |
+| `restart` | Replace a running canvas with this build on the same port; refuses while issues are being implemented unless `--force` |
+| `status` | Health, running vs installed version, element count, connected browser tabs |
 
 ### Elements
 
@@ -61,6 +64,8 @@ JSON results on stdout — except `describe` (plain text) and raw-content output
 | `help [command]`, `--version` | Usage and version |
 
 ## MCP Tools (26 total)
+
+Every tool but `read_diagram_guide` also takes an optional `workspace` (the project board to act on) — see Defaults.
 
 ### Element CRUD
 
@@ -141,6 +146,8 @@ Notes:
 
 ### Elements
 
+Every endpoint below takes `?workspace=<id>` (or an `x-workspace-id` header) naming the project board it is about; without one it acts on `default`.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/elements` | List all elements |
@@ -148,7 +155,7 @@ Notes:
 | `POST` | `/api/elements` | Create element |
 | `PUT` | `/api/elements/:id` | Update element |
 | `DELETE` | `/api/elements/:id` | Delete element |
-| `DELETE` | `/api/elements/clear` | Clear all elements |
+| `DELETE` | `/api/elements/clear` | Clear all elements. Copies them beside the board's saved state first and answers with the path in `backup` |
 | `GET` | `/api/elements/search?type=...` | Search with filters (exact string match + bbox) |
 | `POST` | `/api/elements/batch` | Batch create |
 | `POST` | `/api/elements/sync` | Overwrite import (clear + write) |
@@ -182,6 +189,7 @@ Notes:
 |--------|----------|-------------|
 | `GET` | `/health` | Health check (`websocket_clients` = open browser tabs) |
 | `GET` | `/api/sync/status` | Memory/WebSocket stats |
+| `GET` | `/api/workspaces` | The registered project boards; each `id` is what `--workspace` / `workspace` takes |
 
 ## Design Guide (quick version)
 

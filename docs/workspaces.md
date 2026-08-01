@@ -13,16 +13,22 @@ the restart log — `%LOCALAPPDATA%\Excalidraw-Canvas\` on Windows,
 `$XDG_STATE_HOME/excalidraw-canvas/` (or `~/.local/state/…`) on Linux. Nothing is written until
 the first project is added, so a board that has never had one has no file.
 
-Either way the shape is the same:
+Either way the shape is the same. One entry per project, and a path is written the way the
+platform the board runs on writes one — Windows, macOS and Linux in that order below:
 
 ```json
 {
   "workspaces": [
-    { "id": "fica-ai",    "path": "C:/Users/you/Documents/Projects/FicaAI" },
-    { "id": "board-tool", "path": "C:/Users/you/Documents/Projects/mcp_excalidraw" }
+    { "id": "board-tool", "path": "C:/Users/you/Documents/Projects/vibemaxxing" },
+    { "id": "notes",      "path": "/Users/you/Projects/notes" },
+    { "id": "api",        "path": "/home/you/projects/api" }
   ]
 }
 ```
+
+`you` is a placeholder for your own account name, and the three lines are three platforms
+rather than three projects one machine could have: a registry holds the paths of the machine
+it is on.
 
 `id` is optional — without it the id is derived from the last path segment. A `distro` field
 marks a WSL-backed project, and Windows and WSL spellings of the same path collapse onto one
@@ -56,6 +62,87 @@ than to this repository:
   config without it is a board where every `docKey` answers 404. A project whose documents live
   elsewhere gets the blank and fills it in the settings dialog; a project already registered is
   never rewritten to repair it.
+
+## The board a new project comes up on
+
+A project registered that way names no `board`, because nothing on disk implies one — so until
+#351 it came up on a blank Excalidraw canvas. Blank is a poor first answer here: nothing on it
+explains the tabs, the blocks or the documentation cards, and `Alt+P` and `Alt+G` did nothing at
+all, because the section keys are declared by board data ([board-sections.md](board-sections.md))
+and there was none.
+
+So the tool ships **`docs/welcome.excalidraw`** and seeds a project from it when three things are
+true at once: the project names no `board`, this canvas has never saved a board for it, and its
+store is empty. It carries two sections — `Alt+P` and `Alt+G` — a draft issue block, and cards
+whose `docKey`s are the tool's own ([docs-block.md](docs-block.md)), so they answer on a board
+belonging to somebody else's project.
+
+Four things follow from those three conditions, and each is a decision:
+
+- **It is a startup path.** The seed runs when the server starts, so a project added through the
+  `+` mid-session gets its welcome board at the *next* start rather than the moment the tab
+  appears.
+- **It happens once.** The seeded elements land in a store that is already marked as worth
+  saving, so the board's own saved scene exists a second later and every later start reads that
+  instead. The test is the *existence* of that saved file rather than what is in it: a board
+  somebody emptied on purpose has a saved scene with nothing in it, and the looser reading would
+  put the welcome board back over that clear on every start, forever.
+- **A project that names a board it cannot read is left alone.** That is a project with a board
+  and a problem; it comes up empty and the log says why, which is a more useful answer than
+  cards nobody asked for over a path that is wrong.
+- **`default` gets none.** It is nobody's project — no directory, no documents, no settings — so
+  a welcome board there would be a canvas somebody opened to draw on, filled with cards about
+  projects they have not added.
+
+Nothing is written into the project either way. The welcome board is read out of the install and
+saved beside the registry, like every other board ([element-store.md](element-store.md)). A
+project removed and added back therefore comes back drawn rather than welcomed, because its
+saved board is still there — unless it was removed with `?board=delete` below, which makes it a
+project nobody has been to again. `scripts/check-welcome-board.mjs` covers all of it.
+
+`EXCALIDRAW_WELCOME_BOARD` names the file, and set **empty** it turns the whole thing off, for a
+board whose projects should come up blank ([running.md](running.md)). Every self-contained check
+sets it empty: a throwaway project growing 32 shapes it never asked for decides assertions about
+element counts, and about where a click lands, in checks that are about neither.
+
+## Removing a project from the board
+
+`DELETE /api/workspaces/:id`, **loopback only** like the rest of this block. It drops exactly
+that entry, writes the file back through the same read–modify–write the `+` uses, and answers
+with the reloaded list — so the tab goes with no restart. Removing an id the registry does not
+hold is a `404` naming what the board does have, and the file is left byte for byte as it was.
+
+This existed nowhere until #346, and its absence was the first thing a stranger could not undo.
+Pick the wrong folder, or move a project after registering it, and the tab stayed for good:
+`loadWorkspace` marks such an entry broken rather than dropping it, `PUT /api/workspaces/order`
+refuses a list that leaves an id out, so it could not be pressed into service as a removal, and
+the only way back was hand-editing a JSON file whose path comes from a variable the reader has
+never set.
+
+What it does **not** touch is most of the point:
+
+- **The project directory is not the board's to delete**, and neither is its
+  `board.config.json`. A removal is a line out of a registry. The confirmation on screen says so
+  in those words, because "remove" is a word people have learned to read as "delete the files".
+- **The board you drew on is kept.** It is saved beside the registry, in `<registry>-state/`
+  (*The save half* in [element-store.md](element-store.md)), and copied nowhere else — so a
+  project removed by mistake and added back comes back drawn. `DELETE /api/workspaces/:id?board=delete` is how a
+  caller who means otherwise says so — an opt-in on the request, never a side effect, and the
+  answer's `board` field reports which of the two happened. The parameter takes `keep` or
+  `delete` and refuses anything else: a typo in the one flag that decides whether a drawing
+  survives should be an error rather than a default.
+- **A run in flight is refused**, with a `409` naming the issue URLs holding it. The worktree,
+  the branch and the pull request an implementation is in the middle of all hang off the entry
+  being deleted, and the agent would carry on writing to a project the board no longer knows.
+  Wait for the run, or restart the board.
+
+On screen it is at the foot of the project settings dialog — the ⚙ on the tab in front — as
+*Remove this project from the board*, behind a confirmation that names the folder. There rather
+than on the tab itself because the dialog is already about one project and has already named it;
+a control on the strip would offer to remove whichever tab a pointer was over. When the board
+being removed is the one on screen, the canvas moves to the first project left, or to `default`
+— the board of somebody who has registered nothing, which is what removing the last one makes
+you again.
 
 ## The order of the tabs
 
@@ -285,6 +372,45 @@ its own value back, so leaving the field alone cannot clear it.
 `scripts/check-workspace-settings-browser.mjs` is the check, and it is a browser one because
 "in the DOM only after `Advanced` is pressed" is a claim about the DOM.
 
+## Naming a board from the CLI and from the MCP tools
+
+The registry is what the tab strip shows, and until #344 it was also the one thing an agent
+could not reach: `src/core/canvas-client.ts` sent no `?workspace=` at all, so every CLI command
+and every MCP tool acted on the `default` store whatever was registered. The product's own claim
+— that agents draw on your project board — was reachable only by hand-written REST.
+
+A board is named in three places now, and they are the same answer in three spellings:
+
+```bash
+vibemax add --workspace board-tool elements.json    # any command; --workspace=board-tool too
+export EXCALIDRAW_WORKSPACE=board-tool              # the same, for a whole session
+```
+
+```json
+{ "type": "rectangle", "x": 0, "y": 0, "workspace": "board-tool" }
+```
+
+— an optional `workspace` argument on every MCP tool but `read_diagram_guide`, which touches no
+canvas. The flag beats the variable, and a tool's argument beats both.
+
+**What "none named" means is the decision.** With exactly one project registered it is that
+project; with none it is `default`, which is what every command did before this existed, so a
+board that has configured nothing behaves identically. With **several** the command is refused
+and the message lists the registered ids — exit code 2 from the CLI, an error from the tool.
+Guessing among several is the failure being removed: an agent silently drawing on a board
+nobody has a tab for is worse than one that stops and asks which.
+
+An id nobody registered is refused the same way, for the same reason — `elementsFor` is
+deliberately forgiving and hands out a store for any name, but nothing gives that store a tab
+and `persistBoardFor` will not save it, so a typo would be an invisible canvas rather than an
+error. `default` is always addressable by name: it is a real board and the one a caller asks
+for precisely when they want no project.
+
+The client asks the *canvas* what is registered, over `GET /api/workspaces`, rather than
+reading the registry itself — an agent driving a board from some other directory has no
+registry path and never will. A canvas that will not answer is treated as one that registered
+nothing, so an older build is not made unusable by a question it has never heard.
+
 ## What reads it
 
 `GET /api/workspaces` loads the registry **per request**, not once at boot: a project's config
@@ -293,6 +419,8 @@ the library endpoint and the issue block each resolve their own workspace the sa
 agents resolve their model, effort and ceiling per run for the same reason.
 
 - `src/core/workspaces.ts` — registry and config loading, and both write paths
+- `src/core/canvas-client.ts` — how the CLI and the MCP tools resolve which board to draw on
+- `scripts/check-cli-workspace.mjs` — that they do
 - `src/core/workspace-paths.ts` — Windows/WSL path canonicalisation
 - `src/core/directory-browse.ts` — the picker's directory listing
 - `frontend/src/components/WorkspaceTabs.tsx`, `WorkspaceDialogs.tsx` — the strip, the `+`, the

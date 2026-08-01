@@ -587,8 +587,12 @@ anyone would have made on purpose. So it has its own variable and is **off until
 set**:
 
 ```
-EXCALIDRAW_IMPLEMENT_AGENT='<agent-binary> -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
+EXCALIDRAW_IMPLEMENT_AGENT='claude -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
 ```
+
+Claude Code's spelling of it; [agents.md](agents.md) has Codex CLI's, which is
+`--dangerously-bypass-approvals-and-sandbox`, and what makes the grant the same decision either
+way.
 
 `--dangerously-skip-permissions` rather than a list of tools, because an enumerated list is
 also a *deny* list: in `-p` mode there is no prompt to answer, so a tool outside the list is
@@ -714,6 +718,36 @@ the record, so `GET /api/implement` says where the work is.
 A workspace that is not a git repository gets no worktree and runs in the project directory, the
 way everything did before. Isolation is what a repository buys; nothing else changes.
 
+### A run the account cannot push is refused before the worktree exists
+
+Everything after the first commit assumes the account behind `gh` can push. The worktree is cut
+with no upstream, because the one an agent wants is written by its own
+`git push -u origin issue-N`; the prompt makes opening and merging the pull request the agent's
+own and demands its URL as the last line it prints; and the branch is removed with
+`git branch -d`. A reader who **cloned** this repository rather than forking it bought the whole
+run — investigate, build, verify — and got `Agent finished without returning a pull request URL`
+with six hundred characters of tail, commits stranded in a worktree, and every later server start
+calling the run interrupted.
+
+So one `gh repo view <origin> --json viewerPermission` is asked at the start, and `ADMIN`,
+`MAINTAIN` and `WRITE` are the three answers that carry a push. `READ` and `TRIAGE` refuse the run
+with **403** and a sentence naming the fork and the `git remote set-url origin` that follows it.
+The probe is asked about **`origin`**, not the configured `repo`: what a run pushes to is the
+remote the checkout has, and a fork's `repo` names where the *issues* live.
+
+**A probe that cannot say lets the run through.** An older `gh` without the field, a call that
+fails at connect, a login that has expired, an `origin` on another host or none at all — every one
+of those starts the run and writes an `info` line saying why nobody could say. Blocking on the
+probe's own failure would take implementing away from a board whose GitHub is merely having a bad
+minute, which is a larger defect than the one this guards.
+
+It sits after the slot is claimed and gives the slot back, for the reason below: it needs the
+workspace, which is resolved two awaits later. What matters is that it is before `ensureWorktree`
+— a refusal leaves no directory, no branch and no record behind it. The answer is memoised per
+workspace behind `EXCALIDRAW_GH_STATUS_MEMO_MS`, so a queue pass starting four runs makes one
+`gh`. `scripts/check-implement-no-push.mjs` covers both directions and both shapes of "cannot
+say".
+
 ### How many at once
 
 `EXCALIDRAW_IMPLEMENT_CONCURRENCY` caps the implementations one workspace may have in flight,
@@ -790,6 +824,7 @@ Each pass now records how it ended, and `GET /api/implement` carries it as `queu
 | `started` | It started runs. `started` says how many. | no |
 | `nothing-startable` | The column held nothing this queue may start. The resting state of a drained board. | no |
 | `cap-full` | Every slot is taken. `detail` names the runs holding them. | **yes** |
+| `reclaimed` | It gave slots back from runs that were over and never said so. `detail` names them and what closed each. | no |
 | `no-column` | The project has no column by the configured name. | **yes** |
 | `no-project` | The workspace is gone, unusable, or has no `githubProject`. | **yes** |
 | `unreadable` | The board read failed — `gh` unresolvable, an expired login, an outage. | **yes** |
@@ -806,9 +841,45 @@ clears whatever the last one found: a queue that is off is not stalled, it is of
 
 **The commonest stall is `cap-full` with nobody working.** Implementing has no timeout by design,
 so an agent that wedged — or an interactive run nobody ended (see "Interactive runs and `-p`") —
-holds its slot until somebody resets it. Four of those and the queue is on and permanently stuck,
-which is the shape #263's board was most likely in. The reset is `DELETE /api/implement`, or the
-button on the block.
+holds its slot. Four of those and the queue is on and permanently stuck, which is the shape
+#263's board was most likely in. Since #357 the board takes those slots back itself, on evidence
+rather than on a clock; the reset — `DELETE /api/implement`, or the button on the block — is what
+is left for a run no evidence can settle.
+
+#### Taking a slot back from a run that is over
+
+Observed on 2026-07-30: a run started at 18:01:26 was still `running` at 22:50, four and a half
+hours later, while its work had landed — the pull request merged and the issue closed. The record
+is what the cap counts, so the slot was held for ever and the board could say only `cap-full`.
+
+`src/core/implement-reclaim.ts` closes such a record, and **only on positive evidence — never on
+age**. A run that is merely old is left exactly where it is, because a slot given back while an
+agent is still writing puts a second agent on the machine beside it, and nothing can tell those
+two apart from outside. Nothing is stopped or thrown away either: a reclaim closes a record, the
+checkout stays, and the run's own report overwrites this if it ever arrives.
+
+Two evidences, gathered in the order they cost:
+
+- **The process is gone.** `runAgent` resolves on the child's *close*, which waits for the
+  process to exit *and* for its stdio to reach end of file — so an agent that leaves a detached
+  grandchild holding stdout exits, is reaped, and the server waits for ever. `ImplementRecord.pid`
+  carries the process from the spawn and is **cleared the moment the agent's promise resolves**,
+  which is the half that makes this safe: a `running` record with no pid is a run whose server is
+  merely finishing up, asking GitHub about the pull request and releasing the worktree, and that
+  takes seconds. A pid `process.kill(pid, 0)` cannot find, seen on two passes, closes the record
+  as `interrupted` — the state **Resume** already offers back.
+- **The work landed.** When the workspace is at its cap, and only then, GitHub is asked: an issue
+  that is `CLOSED` with a closing pull request that `MERGED` closes the record as `done` against
+  that URL. Closed is not landed, so the pull request is read rather than inferred, and
+  `github-pull.ts` answering `null` for a `gh` blip falls through as "learned nothing".
+
+`EXCALIDRAW_IMPLEMENT_RECLAIM_MS` (default `30000`) is the grace after a process is first seen
+gone, and the floor under asking GitHub about a run at all. Every record carries
+`reclaimed: { evidence, detail, at }`, or `null` for the runs that reported for themselves, so a
+reader can tell a slot the server took back from a run that finished — and which fact took it.
+The reclaim happens at the top of a queue pass, which is the unattended door, and in
+`beginImplement` before the cap is counted, which is the door a board with no queue on it uses.
+`scripts/check-implement-reclaim.mjs` holds all of it.
 
 #### A pass that never comes back
 
@@ -1217,8 +1288,16 @@ rather than assumed, in `scripts/check-issue-progress.mjs`.
 
 ## Configuration
 
+**Which agent, and how its flags are spelled, is [agents.md](agents.md)** — a Claude Code recipe
+and a Codex CLI recipe side by side, what each flag buys, and the rules that hold whatever the
+binary is. Everything below is Claude Code's spelling, because that is what this board runs and
+what the reasoning was worked out against: it is one shape rather than the shape, and a reader
+substituting another binary should take the requirement from that document and the flag from
+their own CLI. `-p` is the case worth carrying across on its own — it is `--print` here and
+`--profile` to Codex CLI, which takes an argument.
+
 ```
-EXCALIDRAW_ISSUE_AGENT='<agent-binary> -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh issue list:*) Bash(gh issue view:*) Bash(gh issue create:*) Bash(gh issue edit:*) Bash(gh issue comment:*) Bash(gh project item-add:*) Bash(git log:*) Bash(git show:*) Bash(git diff:*) Bash(git blame:*) Read Grep Glob WebFetch WebSearch"'
+EXCALIDRAW_ISSUE_AGENT='claude -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh issue list:*) Bash(gh issue view:*) Bash(gh issue create:*) Bash(gh issue edit:*) Bash(gh issue comment:*) Bash(gh project item-add:*) Bash(git log:*) Bash(git show:*) Bash(git diff:*) Bash(git blame:*) Read Grep Glob WebFetch WebSearch"'
 EXCALIDRAW_IMPLEMENT_CONCURRENCY=4
 EXCALIDRAW_ISSUE_MEMO_MS=30000
 ```

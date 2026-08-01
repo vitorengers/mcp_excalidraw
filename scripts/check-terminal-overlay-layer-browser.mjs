@@ -427,6 +427,21 @@ try {
     const landed = await evaluate('window.__hit');
     await shot('02-clear-clicked');
     check('the click was taken by the button', /button/.test(String(landed)), String(landed));
+
+    // Since #345 the press opens a confirmation rather than emptying the board, so the
+    // gesture this section is about has a second half — and that half is more of the same
+    // evidence, not less: the card it has to be clicked through is still over the chrome.
+    const go = await waitFor(async () => evaluate(`(() => {
+      const node = document.querySelector('.clear-canvas__go');
+      if (!node) return null;
+      const box = node.getBoundingClientRect();
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    })()`), 'the clear confirmation to open', 40).catch(() => null);
+    check('the press opened the confirmation instead of clearing the board', go !== null,
+          JSON.stringify((await (await api('/api/elements')).json()).count));
+    if (go) await click(go.x, go.y);
+    await shot('02b-clear-confirmed');
+
     const emptied = await waitFor(async () => {
       const stored = await (await api('/api/elements')).json();
       return stored.count === 0 ? stored : null;
@@ -436,6 +451,12 @@ try {
   }
 
   console.log('\n5. and none of #112 is undone: the body still types, the header still drags');
+  // Put away what the clear said. Since #345 it names the file the board was copied into, and
+  // `sayOnCanvas` leaves that on screen for ten seconds — over the canvas, which is where the
+  // rest of this file clicks. The toast is Excalidraw's own and belongs to nothing under test
+  // here; leaving it up would fail a question about the terminal for a reason about a message.
+  await evaluate('window.__layerCheckApi.setToast(null)');
+  await sleep(200);
   // The block comes back on its own after the board is emptied — erasing one does not get rid
   // of it — so this waits for the overlay again rather than making a second block.
   await waitFor(async () => (await evaluate(PROBE)).block, 'the terminal block to come back');

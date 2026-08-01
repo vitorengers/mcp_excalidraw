@@ -27,12 +27,16 @@ implement agent that wedges, and a block offering a reset is all a reader has to
 
 What its tab would not be is interactive, for the same measured reason — see `docs/terminal.md`.
 
-## Neither the MCP tools nor the CLI are workspace-aware
+## Neither the MCP tools nor the CLI were workspace-aware
 
-`src/core/canvas-client.ts` never sends `?workspace=`, so both always act on the `default` store.
-An agent driving the canvas over MCP cannot target a registered project board at all — only the
-REST API can. That is a real gap for a tool whose whole point is that agents draw on project
-boards.
+`src/core/canvas-client.ts` never sent `?workspace=`, so both always acted on the `default` store
+and an agent driving the canvas over MCP could not target a registered project board at all —
+only the REST API could. That was a real gap for a tool whose whole point is that agents draw on
+project boards, and it is closed since #344: `--workspace <id>` on any CLI command, an optional
+`workspace` argument on every MCP tool that reaches a canvas, and `EXCALIDRAW_WORKSPACE` for a
+whole session. What is left of the question is what "none named" should mean, and the answer
+chosen is in [workspaces.md](workspaces.md): one registered project is that project, none is
+`default`, several is a refusal that lists them.
 
 ## Nothing *saves* `boardFile`, and nothing is going to
 
@@ -49,8 +53,14 @@ change, and read back before the board file at startup. Getting a board into its
 still `node scripts/export-board.mjs --workspace <id>`, run by hand against a running server, and
 still a commit like any other.
 
-What is left of the asymmetry is images: neither the export nor the save carries `scene.files`, so a
-pasted image comes back after a restart as an element whose file the process no longer holds.
+Images were the last of the asymmetry and are closed since #343. The gap was never restart-only,
+which is what this section used to say: the autosync uploaded no bytes at all, so a pasted image
+lived in the tab it was pasted into and nowhere else — gone on every reload, and invisible to a
+second window from the start. The browser now posts what its scene names before the elements that
+name them, and the save carries `scene.files` up to a per-board ceiling. The *export* still writes
+none, so a tracked board file carries no images; that is the piece of the asymmetry that remains, and
+it is the same argument as above — a tracked artifact is a commit somebody makes, not something a
+timer writes.
 
 This was also the loose end behind the mojibake #151 was opened about: a canvas was seen holding a
 scene fifty merges older than the tracked file, with its em dashes and middle dots corrupted, and

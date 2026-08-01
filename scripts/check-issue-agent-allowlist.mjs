@@ -13,8 +13,15 @@
  * The allowlist itself is not in this repository — it lives in whatever starts the board, the
  * same way `check-agent-research.mjs` says the prompts are here and the command line is not.
  * What is here is the documented default an operator copies, and the claims printed next to
- * it. So this check is a lint over one document's internal consistency: it parses the list out
- * of the command line the document ships and holds every claim in the document to it.
+ * it. So this check is a lint over those documents' internal consistency: it parses the list out
+ * of the command line `trap-allowed-tools.md` ships and holds every claim in it to that list.
+ *
+ * **Three documents ship the line, so all three are read.** `issue-block.md` has it in its
+ * configuration section and `agents.md` has it twice — once as the Claude Code recipe and once
+ * in the table of what each flag buys. `agents.md` was added after the narrowing was branched
+ * and kept the wide list through it, which is the whole reason this check reads more than the
+ * document it was written for: an operator copies whichever one they open first, and a check
+ * that only knows about two of them goes green while the third hands out `Bash(git:*)`.
  *
  * **The permission rule is the CLI's, and it was confirmed by running it** rather than
  * remembered, because the whole fix rests on sub-command scoping actually being honoured:
@@ -42,6 +49,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const trapPath = join(repoRoot, 'docs', 'trap-allowed-tools.md');
 const blockPath = join(repoRoot, 'docs', 'issue-block.md');
+const agentsPath = join(repoRoot, 'docs', 'agents.md');
 
 let failures = 0;
 
@@ -66,6 +74,7 @@ const { ISSUE_AGENT_PROMPT, ISSUE_REVISE_PROMPT, tokenizeCommand } =
 
 const trap = readFileSync(trapPath, 'utf8');
 const block = readFileSync(blockPath, 'utf8');
+const agents = readFileSync(agentsPath, 'utf8');
 
 /**
  * The `--allowedTools` argument of the `EXCALIDRAW_ISSUE_AGENT` line in a document.
@@ -199,12 +208,17 @@ for (const command of named) {
         'the agent is ordered to run it and would be refused, silently, exiting 0');
 }
 
-console.log('\n5. the other document describing these powers says the same thing');
-const elsewhere = documentedAllowlist(block);
-check('docs/issue-block.md ships the same allowlist, rule for rule',
-      elsewhere !== null && elsewhere.length === rules.length
-      && elsewhere.every((rule, i) => rule === rules[i]),
-      `found ${elsewhere ? elsewhere.join(' ') : '(no EXCALIDRAW_ISSUE_AGENT line)'}`);
+// Every document that ships the line an operator pastes, so none of them can be the stale copy.
+const OTHER_DOCUMENTS = [['issue-block.md', block], ['agents.md', agents]];
+
+console.log('\n5. the other documents describing these powers say the same thing');
+for (const [name, source] of OTHER_DOCUMENTS) {
+  const elsewhere = documentedAllowlist(source);
+  check(`docs/${name} ships the same allowlist, rule for rule`,
+        elsewhere !== null && elsewhere.length === rules.length
+        && elsewhere.every((rule, i) => rule === rules[i]),
+        `found ${elsewhere ? elsewhere.join(' ') : '(no EXCALIDRAW_ISSUE_AGENT line)'}`);
+}
 
 // The list was quoted a second time in that document's prose, and prose is where a copy goes
 // stale unnoticed: the paragraph on sub-agents recited the whole list to say what was missing
@@ -212,10 +226,14 @@ check('docs/issue-block.md ships the same allowlist, rule for rule',
 // placeholder, `Bash(<binary> <verb>:*)`, which is how an operator is told the shape to widen
 // by, and except the rules the confirmation runs at the end of the trap document quote, which
 // are narrower lists fed to the CLI to see what it did with them.
+//
+// `agents.md` quotes it a third time, in the table of what each flag buys, which is the copy the
+// narrowing missed: a table cell too small for ten rules is exactly where `Bash(gh:*)` survives
+// as shorthand, and shorthand in a document about permissions is the list an operator copies.
 const granted = new Set(rules);
 const confirmation = trap.indexOf('confirmed by running the CLI');
 const prose = confirmation < 0 ? trap : trap.slice(0, confirmation);
-for (const [name, source] of [['trap-allowed-tools.md', prose], ['issue-block.md', block]]) {
+for (const [name, source] of [['trap-allowed-tools.md', prose], ...OTHER_DOCUMENTS]) {
   const stale = [...source.matchAll(/Bash\([^)]*\)/g)]
     .map((m) => m[0])
     .filter((rule) => !/[<>]/.test(rule) && !granted.has(rule));
@@ -223,8 +241,8 @@ for (const [name, source] of [['trap-allowed-tools.md', prose], ['issue-block.md
         `found ${stale.join(' ')}`);
 }
 
-console.log('\n6. neither document claims a reach the list does not deny');
-for (const [name, source] of [['trap-allowed-tools.md', trap], ['issue-block.md', block]]) {
+console.log('\n6. no document claims a reach the list does not deny');
+for (const [name, source] of [['trap-allowed-tools.md', trap], ...OTHER_DOCUMENTS]) {
   check(`${name} does not say the agent "does not touch the repository"`,
         !/does not touch the repositor/i.test(source),
         'true only of a list that refuses every write, and said of one that refused none');
