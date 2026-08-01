@@ -49,14 +49,39 @@ appended as its last argument — for a machine that has no `xdg-open`, which in
 images and WSL without `wslu`. Every failure to open degrades to the printed URL and never to an
 error.
 
+## Conventions
+
+JSON results on stdout — except `describe`, which is plain text by design, and raw content when
+`--out` is omitted (`export` prints the scene JSON, `screenshot --format svg` prints SVG).
+Diagnostics go to stderr. Exit codes: `0` ok, `1` error, `2` usage, `3` canvas unreachable,
+`4` a browser tab is required. The canvas URL comes from `EXPRESS_SERVER_URL` or `--url`, and
+which project board is drawn on from `--workspace` — see below.
+
+Labels and arrow bindings take the agent-friendly spelling everywhere: `"text"` on any shape,
+`"startElementId"` and `"endElementId"` on arrows. Normalisation is automatic.
+
 ## The commands
 
-| Group | Commands |
+| Command | What it does |
 |---|---|
-| Server | `launch` `start` `stop` `status` `mcp` `doctor` |
-| Elements | `add` `update` `delete` `get` `query` `apply` |
-| Scene | `describe` `screenshot` `export` `import` `mermaid` `share` `clear` |
-| Other | `snapshot` `arrange` `install-skill` |
+| *(no arguments)* / `launch` | Start the board, open it in a browser, print one line |
+| `start` / `stop` / `status` | Manage the canvas server; `stop` identity-checks the live server via `/health` before signalling |
+| `mcp` | Run the MCP stdio server by name |
+| `doctor` | Ask the board whether each agent can actually run — see below |
+| `add` | Batch-create elements from a JSON array, given as a file or on stdin; `--one` for a single element |
+| `apply` | One-call multi-op patch: `{"create":[...],"update":[{"id":"a","set":{...}}],"delete":["id"]}` |
+| `get` / `delete` | Read and remove elements by id |
+| `update` | Change one element: `--set` takes the JSON to merge into it |
+| `query` | `--type`, `--bbox x0,y0,x1,y1`, `--filter k=v` (typed, nested keys), `--filter-json` |
+| `describe` | An agent-readable scene summary, as plain text |
+| `screenshot` | `--out`, `--format` (png or svg), `--no-background` — needs a browser tab |
+| `export` / `import` | Scene file I/O; a `.md` out path writes Obsidian's `.excalidraw.md` format and `import` reads it back |
+| `mermaid` | Mermaid to canvas, from a file or stdin — needs a browser tab |
+| `snapshot` | Named snapshots, in memory: `save`, `list`, `restore` |
+| `arrange` | Layout operations: `align`, `distribute`, `group`, `ungroup`, `lock`, `unlock`, `duplicate` |
+| `share` | Encrypted upload, returning a shareable excalidraw.com URL |
+| `clear` | Wipe the canvas — `--yes` to mean it |
+| `install-skill` | Install the portable agent skill, into `--dir <skills-root>` |
 
 `apply` is the one worth knowing: it takes a single `{create, update, delete}` patch and
 applies it in one call, so a whole edit round-trips once instead of once per element.
@@ -96,8 +121,24 @@ Any command that needs the canvas will start it if nothing is listening — ther
 setup step. `start` runs it detached and records a pidfile (`src/core/pidfile.ts`) so `stop`
 knows what to kill.
 
-## Limitation
+## Which project board a command draws on
 
-Like the MCP tools, no command sends `?workspace=`, so the CLI always acts on the `default`
-store. Driving a registered project board from the CLI is not possible today; that needs a
-`--workspace` flag threaded through `src/core/canvas-client.ts`.
+`--workspace <id>` names one, on any command, and `--workspace=<id>` is the same thing:
+
+```bash
+vibemax add --workspace board-tool elements.json
+vibemax describe --workspace board-tool
+```
+
+It is global rather than per-command — the same question for all of them — so it is stripped
+from the arguments before the command parses them, exactly as `--url` is.
+`EXCALIDRAW_WORKSPACE` is the same answer for a whole session, and the flag beats it.
+
+Name none and a board with one registered project uses it, a board with none uses the `default`
+scratch canvas, and a board with **several refuses the command and lists the ids** — exit code
+`2`, because it is the caller having said too little rather than the canvas failing. An id
+nobody registered is refused the same way. [workspaces.md](workspaces.md) is where that rule and
+its reasoning live.
+
+Until #344 no command sent `?workspace=` at all, so the CLI always acted on `default` and
+driving a registered project board from it was not possible.
