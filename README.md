@@ -25,7 +25,7 @@ One canvas, three ways to drive it:
 
 Core drawing runs fully local (Node ≥ 20, MIT licensed) — no API keys. Mermaid conversion runs in the local browser canvas; `share` is optional and uploads an encrypted scene to excalidraw.com.
 
-**Start here:** [docs/install.md](docs/install.md) gets a board up on Windows, macOS or Linux; [docs/index.md](docs/index.md) indexes every document; [docs/running.md](docs/running.md) is the operator and development procedure; [CLAUDE.md](CLAUDE.md) is how work is done in this repository.
+**Start here:** [docs/install.md](docs/install.md) gets a board up on Windows, macOS or Linux; [docs/index.md](docs/index.md) indexes every document; [docs/running.md](docs/running.md) is the operator and development procedure; [CONTRIBUTING.md](CONTRIBUTING.md) is how work is done in this repository, and [AGENTS.md](AGENTS.md) is the same agreement for a coding agent.
 
 ## Demo
 
@@ -609,7 +609,8 @@ npm run sync:skills        # after editing skills/vibemaxxing-canvas, sync the r
 
 Every behaviour change in this fork ships with a `scripts/check-*.mjs` run against the old code
 first, and every change updates both halves of `docs/board.excalidraw`. The workflow — issue,
-branch, pull request, self-merge — is in [CLAUDE.md](CLAUDE.md), and
+branch, pull request, review — is in [CONTRIBUTING.md](CONTRIBUTING.md), with
+[AGENTS.md](AGENTS.md) as the copy a coding agent loads, and
 [docs/development-log.md](docs/development-log.md) is one dated entry per merged pull request.
 
 Bug reports and pull requests for **this fork** belong on
