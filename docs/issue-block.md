@@ -833,24 +833,34 @@ up were silent.
 
 Each pass now records how it ended, and `GET /api/implement` carries it as `queue.lastPass`:
 
-| `reason` | What it means | Stalled |
-|---|---|---|
-| `started` | It started runs. `started` says how many. | no |
-| `nothing-startable` | The column held nothing this queue may start. The resting state of a drained board. | no |
-| `cap-full` | Every slot is taken. `detail` names the runs holding them. | **yes** |
-| `reclaimed` | It gave slots back from runs that were over and never said so. `detail` names them and what closed each. | no |
-| `blocked` | Every card it could have started declares a dependency that is still open, and nothing has run against it yet. `detail` names who waits on what. | no |
-| `deadlocked` | The same, except the dependency already holds a settled run. Nothing will start it a second time, so the wait cannot end. | **yes** |
-| `no-column` | The project has no column by the configured name. | **yes** |
-| `no-project` | The workspace is gone, unusable, or has no `githubProject`. | **yes** |
-| `unreadable` | The board read failed — `gh` unresolvable, an expired login, an outage. | **yes** |
+| `reason` | What it means | Stalled | Said out loud |
+|---|---|---|---|
+| `started` | It started runs. `started` says how many. | no | no |
+| `nothing-startable` | The column held nothing this queue may start. The resting state of a drained board. | no | no |
+| `cap-full` | Every slot is taken. `detail` names the runs holding them. | **yes** | no |
+| `reclaimed` | It gave slots back from runs that were over and never said so. `detail` names them and what closed each. | no | no |
+| `blocked` | Every card it could have started declares a dependency that is still open, and nothing has run against it yet. `detail` names who waits on what. | no | no |
+| `deadlocked` | The same, except the dependency already holds a settled run. Nothing will start it a second time, so the wait cannot end. | **yes** | **yes** |
+| `no-column` | The project has no column by the configured name. | **yes** | **yes** |
+| `no-project` | The workspace is gone, unusable, or has no `githubProject`. | **yes** | **yes** |
+| `unreadable` | The board read failed — `gh` unresolvable, an expired login, an outage. | **yes** | **yes** |
 
-`queue.stalled` is the same answer as one bit, which is what the board draws: **the toggle keeps
-its on fill and its outline breaks**. `docs/project-board.md` has the three appearances. The
-reason itself is a sentence rather than a shape, and arrives as a toast the first time it changes
-— a stall stalls on a timer, and a toast per poll would be the board repeating itself every
-twenty seconds. The server logs the same transition at `warn`, which is the level that reaches
-the console.
+`queue.stalled` is the third column as one bit, which is what the board draws: **the toggle keeps
+its on fill and its outline breaks**. `docs/project-board.md` has the three appearances.
+`queue.announce` is the fourth, and it is the one that decides whether a reader gets interrupted:
+the reason is a sentence rather than a shape, and where it is worth a box it arrives as a toast
+the first time it changes — a stall stalls on a timer, and a toast per poll would be the board
+repeating itself every twenty seconds. The server logs the same transition at `warn`, which is
+the level that reaches the console, whichever column the reason is in.
+
+**A full cap is a queue at capacity, and is not announced.** Every slot is held by a run doing
+what the switch was turned on for; there is nothing to act on, and it clears itself the moment
+one of them ends. Announced, it was also the one reason that repeated: the browser forgets what
+it said whenever a pass is not a stall, so a saturated queue oscillating between `cap-full` and
+`started` raised the box afresh with every completed run — and the dedupe key is the sentence,
+which names the holders, so swapping one run for another was a new box even with no non-stalled
+pass in between. Observed on a live board and reported as #483. It still stalls, so the outline
+still breaks, and `queue.lastPass` still names who is holding what.
 
 `lastPass` is `null` until a pass has run since the switch was last flipped, and flipping it
 clears whatever the last one found: a queue that is off is not stalled, it is off.
@@ -864,12 +874,16 @@ for ever. That is `deadlocked`, it stalls, and the detail names the dependent, t
 the state of the record standing in the way. Observed on 2026-08-01 (#476): seven cards frozen
 behind #326 for over two hours while the board drew a queue nobody needed to look at.
 
-**The commonest stall is `cap-full` with nobody working.** Implementing has no timeout by design,
-so an agent that wedged — or an interactive run nobody ended (see "Interactive runs and `-p`") —
-holds its slot. Four of those and the queue is on and permanently stuck, which is the shape
-#263's board was most likely in. Since #357 the board takes those slots back itself, on evidence
-rather than on a clock; the reset — `DELETE /api/implement`, or the button on the block — is what
-is left for a run no evidence can settle.
+**The stall that hides inside `cap-full` is a slot nobody is working in.** Implementing has no
+timeout by design, so an agent that wedged — or an interactive run nobody ended (see "Interactive
+runs and `-p`") — holds its slot. Four of those and the queue is on and permanently stuck, which
+is the shape #263's board was most likely in, and it was the reason a full cap used to speak.
+`cap-full` never could tell that board from a healthy one, which is why it no longer does the
+telling: since #357 the board takes those slots back itself, on evidence rather than on a clock,
+and reports it under `reclaimed`. The reset — `DELETE /api/implement`, or the button on the block
+— is what is left for a run no evidence can settle. A cap whose holders are all wedged in a way
+no evidence reaches is therefore quiet on the canvas; the toggle's broken outline and
+`GET /api/implement` are what say so, and giving that case a reason of its own is open.
 
 #### Taking a slot back from a run that is over
 

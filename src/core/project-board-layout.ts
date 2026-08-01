@@ -666,7 +666,8 @@ export function layoutBoard(
     // and stalled is the solid one with its outline broken — the mirror already reads a dashed
     // outline as "not settled" on a card whose run is in flight, and a broken outline on a
     // button that is meant to be turning round is the same sentence. Why it stalled does not
-    // fit in twenty-eight pixels; that arrives as a toast, and through `GET /api/implement`.
+    // fit in twenty-eight pixels; that arrives through `GET /api/implement`, and — for the
+    // stalls worth interrupting a reader for, which a full cap is not (#483) — as a toast.
     if (options.queue && section.optionId === options.queue.sectionOptionId) {
       const on = options.queue.enabled;
       const stalled = on && options.queue.stalled === true;
