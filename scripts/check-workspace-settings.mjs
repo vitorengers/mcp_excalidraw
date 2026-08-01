@@ -49,7 +49,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 /** The two base prompts, so "unchanged" can be an equality rather than a description. */
 const { IMPLEMENT_AGENT_PROMPT } =
   await import(pathToFileURL(join(repoRoot, 'dist', 'core', 'implement-agent.js')).href);
-const { ISSUE_AGENT_PROMPT } =
+const { ISSUE_AGENT_PROMPT, issueTargetSection } =
   await import(pathToFileURL(join(repoRoot, 'dist', 'core', 'issue-agent.js')).href);
 
 let failures = 0;
@@ -239,12 +239,18 @@ const promptOf = (kind, workspace) =>
  * None of the throwaway projects is a git repository, so no worktree section is added; none
  * attaches an image, resumes, or selects a workflow. What is left is the base prompt and the
  * thing the run was asked about, which is what every run sent before any of this existed.
+ *
+ * Every one of them does name a `repo`, though, and since #335 a board that names one says so
+ * in the issue prompt. It is composed in rather than hard-coded for the same reason the rest is
+ * composed: the subject here is the model, the effort and the ceiling, so "unchanged" has to
+ * mean unchanged by *those*.
  */
 const observationFor = (workspace) => `WORKSPACE:${workspace} please look at this`;
 const plainImplementPrompt = (workspace) =>
   `${IMPLEMENT_AGENT_PROMPT}\n\n---\n\nThe issue to implement:\n\n${issueUrl(workspace)}`;
 const plainIssuePrompt = (workspace) =>
-  `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observationFor(workspace)}`;
+  `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${observationFor(workspace)}`
+  + issueTargetSection({ repo: 'vitorengers/vibemaxxing', githubProject: null });
 
 async function waitFor(predicate, what, attempts = 200) {
   for (let attempt = 0; attempt < attempts; attempt++) {

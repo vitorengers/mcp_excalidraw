@@ -186,7 +186,7 @@ check('nothing in fast or repo needs a tool', pretendPortable.length === 0,
       pretendPortable.join('; '));
 
 /**
- * The six that assert this repository rather than the product. Named, because there is
+ * The eight that assert this repository rather than the product. Named, because there is
  * nothing in a source file that distinguishes them: `check-readme.mjs` reads a tracked file
  * and so does `check-docs-encoding.mjs`, and only one of the two is about discipline the
  * maintainer's board has to be present for. `check-shallow-clone.mjs` is here for the other
@@ -195,13 +195,16 @@ check('nothing in fast or repo needs a tool', pretendPortable.length === 0,
  * history alone: it resolves the fork base commit and asks who introduced `demo.gif`, and a
  * depth-1 clone can answer neither. `check-install-paths.mjs` reads `package.json` against
  * `board.config.json` to decide whose package a command fetches, which is a question about
- * this repository and meaningless about the product.
+ * this repository and meaningless about the product. `check-contributing.mjs` is here because
+ * the working agreement it holds is this repository's own — it reads `git ls-files` and the
+ * tracked root documents, and says nothing about what the tool does.
  */
 const REPO_CHECKS = ['check-board-map.mjs', 'check-readme.mjs', 'check-docs-index.mjs',
                      'check-english-only.mjs', 'check-shallow-clone.mjs',
-                     'check-attribution.mjs', 'check-install-paths.mjs'];
+                     'check-attribution.mjs', 'check-install-paths.mjs',
+                     'check-contributing.mjs'];
 const repoDeclared = [...tierOf].filter(([, tier]) => tier === 'repo').map(([file]) => file).sort();
-check('repo is the seven discipline checks', repoDeclared.join(', ') === REPO_CHECKS.slice().sort().join(', '),
+check('repo is the eight discipline checks', repoDeclared.join(', ') === REPO_CHECKS.slice().sort().join(', '),
       `declared: ${repoDeclared.join(', ') || 'none'}`);
 
 // ─── 3. The runner selects by tier, and skips only what it must ──

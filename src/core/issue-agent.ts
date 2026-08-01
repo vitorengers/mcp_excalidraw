@@ -4,8 +4,9 @@
  * This spawns a process with full access to a repository, which is the most dangerous
  * thing this server does. Three guards apply, and none of them is optional:
  *
- *  - it only runs when EXCALIDRAW_ISSUE_AGENT is set, so it cannot be reached by
- *    default on a server that has no authentication;
+ *  - it only runs when EXCALIDRAW_ISSUE_AGENT is set, so it cannot be reached by default,
+ *    and the token in front of every route (#350) does not make it reachable either — a
+ *    secret this account can read is no boundary against a process running as this account;
  *  - it refuses to run unless the server is bound to loopback;
  *  - one run at a time per element, tracked by the caller, so a double click cannot
  *    open two issues.
@@ -778,6 +779,15 @@ export interface AgentHostHandle {
   /** Take it down, for a run that ran out of time. */
   close(): void;
   /**
+   * The process the host started, when it knows one.
+   *
+   * Optional, and null is a perfectly good answer: a host that cannot say which process it
+   * opened costs a run the cheap half of `implement-reclaim.ts` and nothing else. What it must
+   * not do is invent one — a pid that names something other than this run is worse than no pid,
+   * because it is evidence.
+   */
+  pid?: number | null;
+  /**
    * Whether what is in there is an interface rather than a command that prints and exits.
    *
    * It changes what the ending *means*, which is why the host has to say. A headless agent
@@ -955,6 +965,18 @@ export interface RunAgentOptions {
    * that changes nothing. Omitted, an exit 127 reports what the shell said and no more.
    */
   notFoundVariable?: string | null;
+  /**
+   * Which process the run is in, as soon as there is one, and `null` when it ends.
+   *
+   * Called twice at most and never in between: once with the pid the moment something is
+   * spawned, and once with `null` on the way out, whichever way this returns. The second call
+   * is the half that matters — it is what says "this process is no longer waiting on a child",
+   * and without it a caller reconciling a record against the running process cannot tell a
+   * wedged run from a run whose agent has finished and whose server is still tidying up.
+   *
+   * Optional, so nothing about the paths that do not want it changes.
+   */
+  onPid?: (pid: number | null) => void;
 }
 
 /**
@@ -965,6 +987,23 @@ export interface RunAgentOptions {
  * failure would have invited a second run for work that had already succeeded.
  */
 export async function runAgent(
+  workspace: Workspace,
+  prompt: string,
+  options: RunAgentOptions
+): Promise<AgentRun> {
+  try {
+    return await runAgentProcess(workspace, prompt, options);
+  } finally {
+    // Whichever way it ended — a host, a private child, a spawn that never happened — this
+    // process has stopped waiting on a process of its own, and saying so is the half of
+    // `onPid` that matters. Without it a caller reconciling a record against the running
+    // process would read "the pid is gone" as a wedge while the server is merely tidying up
+    // after a run that finished perfectly.
+    options.onPid?.(null);
+  }
+}
+
+async function runAgentProcess(
   workspace: Workspace,
   prompt: string,
   options: RunAgentOptions
@@ -1010,6 +1049,10 @@ export async function runAgent(
       // agent ever sees it.
       windowsHide: true,
     });
+
+    // Before anything is written to it: a spawn that fails reports `undefined` here and gets
+    // `null`, which is the same thing said about a run that never had a process.
+    options.onPid?.(child.pid ?? null);
 
     child.stdin?.on('error', () => { /* the agent may exit before reading stdin */ });
     child.stdin?.end(prompt);
@@ -1130,6 +1173,10 @@ async function runHostedAgent(
   }
   if (!handle) return null;
 
+  // After the decline above, so a host that fell through leaves the pid to the private child
+  // that actually runs the agent.
+  options.onPid?.(handle.pid ?? null);
+
   let timedOut = false;
   const timeout = timeoutMs
     ? setTimeout(() => { timedOut = true; handle?.close(); }, timeoutMs)
@@ -1211,6 +1258,64 @@ you write may point at these paths.`;
 }
 
 /**
+ * Which repository and which project this run is for — or nothing at all.
+ *
+ * Nothing at all is the important half again: a board that has configured neither must send
+ * the prompt it sent before this existed, byte for byte, the way `issueAgentPrompt(null)`
+ * already preserves the no-language case. Each half stands alone, because a board really can
+ * have one and not the other — registration writes `repo` from the project's own `origin` and
+ * deliberately never guesses a `githubProject`.
+ *
+ * This is not workflow, which stays out of the base prompts on purpose. It is a fact about the
+ * run, exactly as `worktreeSection` is for the implement agent: two answers the board already
+ * holds and the agent would otherwise have to work out — and would work out wrongly.
+ *
+ * **The repository is stated as `--repo`, not left to `gh`.** `gh` resolves the repository
+ * from the checkout's git remotes, where an `upstream` remote wins over `origin`; this
+ * repository's own trap document records what that costs, and it is a fork with such a remote
+ * — `gh issue list` here lists the *upstream* project's issues (`docs/trap-gh-path.md`). So a
+ * board that says which repository it is for has said something `gh` will not otherwise
+ * conclude, and the alternative — leaving resolution to `gh` — files a fork's issues on
+ * whatever it was forked from. Where the two disagree the configured value wins, because it is
+ * the answer somebody wrote down rather than one a remote implies.
+ *
+ * **And the project is what the board watches for.** With none named the agent cannot add the
+ * issue to one, so no card appears, `moveIssueToColumn` finds the issue "not on this project",
+ * and `reconcileDrafts` — which retires an observation only once its issue shows up among the
+ * mirror's cards — leaves the block in My Notes forever, looking like a run that half-worked.
+ *
+ * It grants nothing. Both values reach the prompt and nothing else: no argv, no environment,
+ * no permission. The prompt still arrives on the child's stdin.
+ */
+export function issueTargetSection(
+  workspace: Pick<Workspace, 'repo' | 'githubProject'>
+): string {
+  const repo = workspace.repo?.trim() || null;
+  const project = workspace.githubProject?.trim() || null;
+  if (!repo && !project) return '';
+
+  const facts = [
+    repo
+      ? `The repository is ${repo}. Pass \`--repo ${repo}\` to every \`gh\` call you make, `
+        + `\`gh issue list\` and \`gh issue view\` included. Without it \`gh\` resolves the `
+        + `repository from this checkout's git remotes, where an \`upstream\` remote wins over `
+        + `\`origin\` — on a fork that reads and files against whatever it was forked from. `
+        + `Where the remotes disagree with the name above, the name above is the right one.`
+      : null,
+    project
+      ? `The GitHub project is ${project}. That is the project this work is tracked on, and a `
+        + `card there is how the board knows the run finished: until the issue appears on it, `
+        + `the note this run started from stays on the canvas as an unfinished draft.`
+      : null,
+  ].filter(Boolean);
+
+  return `\n\n---\n\nWhere this issue belongs. These are facts about this run, already settled
+by the board that started it — not something to work out from the checkout:
+
+${facts.map((fact) => `- ${fact}`).join('\n\n')}`;
+}
+
+/**
  * The section carrying the project's own workflow — or nothing at all.
  *
  * Nothing at all is the important half a third time: a project that selects no workflow must
@@ -1283,7 +1388,11 @@ export async function runIssueAgent(
   // The project's language, per run, for the reason the model and the effort are per run:
   // one board runs several projects, and what language a project's issues are written in is
   // that project's to say.
+  // The target goes before the images, not after: the image section ends in a bullet list of
+  // paths, and a second bullet list immediately under it reads as more of the same. The
+  // images stay the last thing said about the observation, which is what they are material for.
   const prompt = `${issueAgentPrompt(workspace.language)}\n\n---\n\nObservation:\n\n${observation}`
+    + issueTargetSection(workspace)
     + imageReferenceSection(options.imagePaths ?? [])
     + workflowSection(workflow.text);
   const timeoutMs = options.timeoutMs !== undefined
@@ -1339,6 +1448,7 @@ export async function runReviseAgent(
 
   const prompt = `${issueRevisePrompt(workspace.language)}\n\n---\n\nThe issue to rewrite: ${issueUrl}`
     + `\n\n---\n\nNew observations:\n\n${observations}`
+    + issueTargetSection(workspace)
     + workflowSection(workflow.text);
   const timeoutMs = options.timeoutMs !== undefined
     ? options.timeoutMs

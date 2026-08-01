@@ -195,6 +195,21 @@ export interface AgentAdapter {
   renderEvent(event: Record<string, unknown>, ids: TranscriptState): string;
 
   /**
+   * The event types this backend has an opinion about, including the ones it draws nothing for.
+   *
+   * `renderEvent` answers "claimed and deliberately silent" and "never heard of it" with the
+   * same empty string, and #325 is what those two cost when they are read as one: a stream made
+   * entirely of unknown envelopes rendered to nothing, and a block somebody was watching stayed
+   * blank for a whole run. So the set is declared beside the renderer, and `AgentStreamRenderer`
+   * prints anything outside it verbatim rather than dropping it.
+   *
+   * It is per backend rather than per renderer, which is the whole reason it moved here: Codex's
+   * silent types are `thread.started` and `turn.started`, and drawing those decisions from
+   * Claude Code's list would silence its first line and print Claude Code's banner.
+   */
+  readonly claimedTypes: ReadonlySet<string>;
+
+  /**
    * What kind of thing a step is, by whatever this backend calls it.
    *
    * A tool name for Claude Code, an item type for Codex. It decides the colour a row is drawn

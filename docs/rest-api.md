@@ -1,6 +1,6 @@
 # REST API
 
-`src/server.ts`. 57 routes, and the only surface that is workspace-aware — everything the
+`src/server.ts`. 58 routes, and the only surface that is workspace-aware — everything the
 browser does, and everything this board was built with, goes through here.
 
 The table below is the whole set, one row per route. It used to be a summary of thirty, under a
@@ -8,19 +8,36 @@ heading that said twenty-seven, while the server answered on fifty;
 `scripts/check-docs-counts.mjs` now reads the routes out of `src/server.ts` and fails when one of
 them is missing from here.
 
+## Every route here needs the board's token
+
+`/api` answers **401** to a request that does not carry it, and so does the WebSocket upgrade.
+The server writes the secret to `server-<port>.token` in its state directory at startup, owner
+only ([configuration.md](configuration.md)), and a caller sends it either as the
+`X-VibeMaxxing-Token` header or as `?token=` — the second because a browser's `WebSocket`
+constructor has nowhere to put a header. `GET /` and `GET /health` are outside the gate, so that
+a page can load before it has read anything and so that a tool can find out what is on a port.
+[SECURITY.md](SECURITY.md) is what the secret is for and what it does not do.
+
+```bash
+curl -H "X-VibeMaxxing-Token: $(cat "$XDG_STATE_HOME/excalidraw-canvas/server-3737.token")" \
+  http://127.0.0.1:3737/api/elements
+```
+
+The CLI and the MCP server read that file themselves, so nothing below needs a flag.
+
 ## Elements
 
 The canvas store, one `Map` per workspace — see [element-store.md](element-store.md).
 
 | Route | What it does |
 |---|---|
-| `GET /api/elements` | Every element in this workspace |
+| `GET /api/elements` | Every element in this workspace (loopback only) |
 | `POST /api/elements` | Create one |
-| `GET /api/elements/:id` | Read one |
+| `GET /api/elements/:id` | Read one (loopback only) |
 | `PUT /api/elements/:id` | Update one |
 | `DELETE /api/elements/:id` | Delete one |
-| `DELETE /api/elements/clear` | Empty the store. Declared before `:id`, so `clear` is never read as an element id |
-| `GET /api/elements/search` | Filter by type, bounding box and arbitrary fields |
+| `DELETE /api/elements/clear` | Empty the store, having first copied it beside the board's saved state — the path is `backup` in the response, or null if there was nothing to copy. Declared before `:id`, so `clear` is never read as an element id |
+| `GET /api/elements/search` | Filter by type, bounding box and arbitrary fields (loopback only — with no query at all it is `GET /api/elements` by another name) |
 | `POST /api/elements/batch` | Create many, ids preserved |
 | `POST /api/elements/from-mermaid` | Hand a Mermaid diagram to the browser to render |
 | `POST /api/elements/sync` | The browser's merge back into the store — [sync-reconciliation.md](sync-reconciliation.md) |
@@ -33,6 +50,7 @@ One project per board — see [workspaces.md](workspaces.md).
 |---|---|
 | `GET /api/workspaces` | The registry, reloaded per request (loopback only — it is every project's absolute path) |
 | `POST /api/workspaces` | Append a project to the registry (loopback only) |
+| `DELETE /api/workspaces/:id` | Drop that entry — the folder and its `board.config.json` are left alone, and so is the saved board unless `?board=delete` (loopback only) |
 | `PUT /api/workspaces/order` | Permute the registry, which is the order of the tabs (loopback only) |
 | `GET /api/workspaces/:id/config` | That project's `board.config.json`, as it is on disk (loopback only) |
 | `PUT /api/workspaces/:id/config` | Write it back, round-tripped (loopback only) |
@@ -107,10 +125,10 @@ loopback only, and capped per board.
 
 | Route | What it does |
 |---|---|
-| `GET /api/docs/:key` | The markdown behind a `customData.docKey` — [docs-block.md](docs-block.md) |
-| `GET /api/library` | The environment-wide `.excalidrawlib` plus the project's own — [shared-library.md](shared-library.md) |
-| `GET /api/files` | The image payloads *this* board references |
-| `GET /api/files/:id` | One of them |
+| `GET /api/docs/:key` | The markdown behind a `customData.docKey` — [docs-block.md](docs-block.md) (loopback only) |
+| `GET /api/library` | The environment-wide `.excalidrawlib` plus the project's own — [shared-library.md](shared-library.md) (loopback only) |
+| `GET /api/files` | The image payloads *this* board references (loopback only) |
+| `GET /api/files/:id` | One of them (loopback only) |
 | `POST /api/files` | Add one |
 | `DELETE /api/files/:id` | Remove one |
 
@@ -127,14 +145,21 @@ loopback only, and capped per board.
 
 | Route | What it does |
 |---|---|
-| `POST /api/snapshots` | Save the scene under a name |
-| `GET /api/snapshots` | List the names |
-| `GET /api/snapshots/:name` | Restore one |
+| `POST /api/snapshots` | Save this workspace's scene under a name |
+| `GET /api/snapshots` | List the names this workspace has taken (loopback only) |
+| `GET /api/snapshots/:name` | Read one back, from the workspace that took it (loopback only) |
 | `GET /` | The built frontend |
-| `GET /health` | Liveness, plus the `pid` of whatever is actually answering, the `platform` it is answering from, and what the startup preflights found: `agents` per role and environment, and `gh` (`resolved` plus a version number — never the login, the scopes or stderr, which this route is not authenticated enough for) |
+| `GET /health` | Liveness, plus the `pid` of whatever is actually answering, the `version` it was built from, the `platform` it is answering from, how many issues it is `implementing`, and what the startup preflights found: `agents` per role and environment, and `gh` (`resolved` plus a version number — never the login, the scopes or stderr, which this route is not authenticated enough for) |
 | `POST /api/restart` | Replace this server with a new one on the same port (loopback only) |
 | `GET /api/sync/status` | What the store and the connected browsers currently hold |
 | `GET /api/claude-status` | What each Claude Code environment on this machine has spent (loopback only) — [claude-status.md](claude-status.md) |
+
+Snapshots are **in memory and per workspace**, and both halves of that matter. They die with the
+process, so they are not the thing that makes a board recoverable — the copy
+`DELETE /api/elements/clear` writes to disk is. And they are keyed by name *within* a board since
+#345: a snapshot called `before` taken on one project used to be read, and silently overwritten,
+from another, which made the safety net the most dangerous thing in the room for the caller most
+likely to reach for it.
 
 ### `POST /api/restart`
 
@@ -155,6 +180,12 @@ exactly what the stand-in said. It writes what happened to `restart-<port>.log` 
 pidfile, because the process that asked is deliberately gone by then.
 
 It restarts the build that is on disk. It does not run a build.
+
+It also restarts the build *this* server came from — `dist/server.js` is resolved relative to the
+dying process's own module URL — which is right for a board restarting itself and wrong for a
+canvas left behind by a previous release. Replacing that one is the CLI's `restart`
+([cli.md](cli.md)), which stops the old server and starts one from the install that ran the
+command.
 
 `scripts/check-restart-route.mjs` starts a configured server, restarts it through the route and
 asserts all of that, including the 403 off loopback.
@@ -177,14 +208,43 @@ viewport needs a real Excalidraw instance, which only exists in an open tab. The
 the WebSocket, the browser does the work and POSTs the answer to the matching `/result` route.
 With no tab open, those calls have nobody to ask.
 
-## No authentication
+## Where it listens, and what that decides
 
-There is none. `HOST` defaults to `127.0.0.1` — IPv4 loopback, not `::` — and startup refuses
-when another loopback listener already holds the port, which is what would otherwise leave two
-canvas servers splitting state across IPv4 and IPv6. `scripts/check-local-bind.mjs` pins both
-down.
+This section said **No authentication** and opened with *there is none* until #350 put the token
+above in front of `/api`. What has not changed is that the token is one shared secret and the
+bind is a separate answer underneath it, so both are still worth reading here.
+
+`HOST` defaults to `127.0.0.1` — IPv4 loopback, not `::` — and startup refuses when another
+loopback listener already holds the port, which is what would otherwise leave two canvas servers
+splitting state across IPv4 and IPv6. `scripts/check-local-bind.mjs` pins both down.
 
 `HOST` can still be set wider; nothing stops that. What does stop is every route marked
-*loopback only* above: each of them either spawns a process holding your `gh` credentials, writes
-to GitHub, or reaches your filesystem, and each refuses with 403 rather than doing so for a
-caller that arrived over the network.
+*loopback only* above, each of which refuses with 403 rather than answering a caller that
+arrived over the network. Two kinds of route carry that mark, and the second was decided in
+#366:
+
+- the ones that spawn a process holding your `gh` credentials, write to GitHub, or reach your
+  filesystem;
+- **and every read of board contents** — `GET /api/elements`, `/api/elements/search`,
+  `/api/elements/:id`, `/api/files`, `/api/files/:id`, `/api/docs/:key`, `/api/library`,
+  `/api/snapshots` and `/api/snapshots/:name`, plus the **WebSocket upgrade**, which sends the
+  whole scene as `initial_elements` the moment it is accepted.
+
+The choice there was between guarding them and writing down that a board bound to an interface
+publishes its contents to whoever reaches the port. They are guarded. The consequence is stated
+rather than hidden: a non-loopback bind now answers nothing worth having — #278 had already
+taken the tab strip and the picker with the registry, and this takes the canvas itself. A reverse
+proxy is unaffected, because it reaches this server on loopback, which is the shape
+`EXCALIDRAW_ALLOWED_HOSTS` exists for.
+
+The guard tests the **bind address**, which is the one thing about a caller that cannot be
+forged. The origin gate beside it tests `Origin` and `Host`, which is a question only a browser
+has to answer honestly, and the token above tests what the caller carries. None of the three
+stands in for the others — a request holding a valid token is still refused off loopback, and
+the bind is the only one of the three still answering wherever `VIBEMAXXING_NO_AUTH` is set.
+[SECURITY.md](SECURITY.md) is all of it in one place, and
+`scripts/check-board-reads-guard.mjs` holds this part.
+
+The writes are not behind the bind guard, and saying so is the point of writing it down: a board
+bound off loopback can still be *drawn on* by anyone holding the token, even though none of them
+can read it back. That is #456.

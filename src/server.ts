@@ -5,7 +5,7 @@ import './core/env.js';
 import { env, settingName } from './core/settings.js';
 import express, { Request, Response, NextFunction } from 'express';
 import { WebSocketServer } from 'ws';
-import { createServer } from 'http';
+import { createServer, IncomingHttpHeaders } from 'http';
 import net from 'net';
 import path from 'path';
 import fs from 'fs/promises';
@@ -15,7 +15,7 @@ import { createRequire } from 'module';
 import logger from './utils/logger.js';
 import {
   files,
-  snapshots,
+  snapshotsFor,
   generateId,
   EXCALIDRAW_ELEMENT_TYPES,
   ServerElement,
@@ -34,6 +34,7 @@ import {
 import { z } from 'zod';
 import WebSocket from 'ws';
 import { isMainModule } from './core/entry.js';
+import { packageVersion, productName } from './core/version.js';
 import { writePidFile, removePidFile, restartLogPath, startupLogPath } from './core/pidfile.js';
 import {
   canvasUrlFor, explicitPort, preferredPort, removeCanvasState, writeCanvasState
@@ -44,6 +45,7 @@ import {
   hasWorkspaceRegistry,
   loadWorkspaces,
   registryPath,
+  removeWorkspace,
   reorderWorkspaces,
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -64,6 +66,7 @@ import {
   ClaudeEnvironmentStatus, readClaudeStatus, STALE_AFTER_SECONDS
 } from './core/claude-status.js';
 import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
+import { referencedFileIds } from './core/board-files.js';
 import {
   readProjectBoard,
   moveCard,
@@ -93,6 +96,7 @@ import {
 import { TOOL_DOC_KEYS } from './core/tool-docs.js';
 import { commentOnIssue, fetchIssue, isIssueUrl } from './core/github-issue.js';
 import { GITHUB_HOST, issueUrlRefusal } from './core/github-host.js';
+import { PushAccess, pushRefusal, readPushAccess } from './core/github-push.js';
 import type { IssueDetail } from './core/github-issue.js';
 import { fetchPullLanding } from './core/github-pull.js';
 import { Landing, landingFor } from './core/implement-landing.js';
@@ -115,6 +119,7 @@ import {
   isImplementing,
   listImplement,
   readImplement,
+  runningImplementCount,
   runningImplements,
   writeImplement
 } from './core/implement-state.js';
@@ -127,6 +132,13 @@ import {
   worktreesHoldingWork
 } from './core/implement-worktree.js';
 import { describeInterrupted, interruptedRuns } from './core/implement-recovery.js';
+import {
+  ReclaimedRun,
+  forgetSighting,
+  goneProcessReclaim,
+  landedReclaim,
+  reclaimDetail
+} from './core/implement-reclaim.js';
 import { layoutLabel, DEFAULT_BOUND_TEXT_FONT_SIZE } from './core/text-layout.js';
 import {
   elementsFor,
@@ -138,7 +150,23 @@ import {
 } from './core/element-store.js';
 import { allowedAuthorities, verifyOrigin } from './core/origin-gate.js';
 import {
+  authRequired,
+  consumeTokenHandover,
+  newToken,
+  removeAuthToken,
+  removeTokenHandover,
+  sameToken,
+  tokenFilePath,
+  writeAuthToken,
+  writeTokenHandover,
+  TOKEN_HEADER,
+  TOKEN_QUERY
+} from './core/auth-token.js';
+import {
+  backupBoardBefore,
+  boardStateExists,
   boardStateFile,
+  dropBoardState,
   flushBoardStateSaves,
   persistBoardFor,
   readBoardState,
@@ -153,6 +181,15 @@ onElementStoreChanged(scheduleBoardStateSave);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * The build this process is, for `/health` to name — read once rather than per request.
+ *
+ * The frontend polls that route, and this is a property of the running process that cannot
+ * change under it: a canvas serving a different build is a different process, which is the whole
+ * of what the field is for.
+ */
+const PACKAGE_VERSION = packageVersion();
 
 const app = express();
 const server = createServer(app);
@@ -171,16 +208,82 @@ function boardAuthorities(): Set<string> {
   return authorities;
 }
 
+/**
+ * Whether this board is behind a secret at all, and what that secret is.
+ *
+ * Two names rather than one so that the gate below can **fail closed**: the token cannot be
+ * chosen up here, because it is per start and per port and `PORT` is resolved at the bottom of
+ * this file, so `startServer` sets it. Anything that reached a route before then — nothing does,
+ * but the shape of the code should not be what says so — is refused rather than let through.
+ *
+ * The gate this feeds is authentication and not authorization: one secret, and holding it is the
+ * whole of being allowed. What it defends against is another *account* and a sandboxed process,
+ * because the file's permissions are the operating system's own boundary. It defends against
+ * nothing already running as the operator, and `docs/SECURITY.md` says so in those words.
+ */
+const AUTH_REQUIRED = authRequired();
+let AUTH_TOKEN: string | null = null;
+
+/**
+ * Whether this exit is a replacement rather than a stop.
+ *
+ * `POST /api/restart` hands the board to a supervisor that brings it back on the same port while
+ * the reader's tab watches. The exit handlers clear the state files, and clearing the token there
+ * would leave that tab holding a secret nothing accepts — a board that reports itself back and
+ * then answers 401 to everything. So a restart writes a handover instead; see `core/auth-token.ts`.
+ */
+let handingOver = false;
+
+/**
+ * The token a caller offered, in the two spellings there are.
+ *
+ * A header for a program, because it stays out of logs and out of an address bar. A query
+ * parameter because a browser's `WebSocket` constructor takes a URL and nothing else, so the
+ * upgrade has no other door — and once it is accepted there it may as well be accepted on an
+ * ordinary request, so that `curl` and a check script have one spelling that works everywhere.
+ */
+function offeredToken(headers: IncomingHttpHeaders, url: string | undefined): string | null {
+  const header = headers[TOKEN_HEADER];
+  if (typeof header === 'string' && header.trim()) return header.trim();
+  try {
+    // A base, because a request URL is a path and `new URL` needs an origin to parse one. Which
+    // origin is irrelevant: nothing but the query is read out of it.
+    const query = new URL(url ?? '/', 'http://board.invalid').searchParams.get(TOKEN_QUERY);
+    if (query && query.trim()) return query.trim();
+  } catch { /* not a URL we can read a query out of */ }
+  return null;
+}
+
 // The socket is the same hole as the routes by a door CORS does not cover at all: it declared
 // no `verifyClient`, so a page at any origin got `initial_elements` and every live shell's
 // scrollback on connect. Both gates have to exist; either one alone leaves the board readable.
 const wss = new WebSocketServer({
   server,
   verifyClient: ({ origin, req }, done) => {
+    // The bind first, because the origin gate cannot see this caller at all. It asks a browser
+    // question, and a program connecting from the network supplies whatever `Host` it likes and
+    // is waved through — so a socket left on a non-loopback bind hands the whole board and every
+    // live shell's scrollback to anyone who reaches the port, which is the same read the routes
+    // below refuse (#366). Guarding the reads and not this one would have made them decorative.
+    if (!boundToLoopback()) {
+      logger.warn('Refused a WebSocket upgrade: the board is served over the socket only while '
+                  + 'the server is bound to loopback.');
+      done(false, 403, 'Forbidden');
+      return;
+    }
     const verdict = verifyOrigin({ origin, host: req.headers.host }, boardAuthorities(), PORT);
     if (!verdict.ok) {
       logger.warn(`Refused a WebSocket upgrade: ${verdict.reason}`);
       done(false, 403, 'Forbidden');
+      return;
+    }
+    // The upgrade streams the scene and every live shell's scrollback the moment it opens, so it
+    // is one of the two things the token has to cover — the other being everything under `/api`.
+    // Refused here rather than after `connection`, because a socket that opens and is then closed
+    // has already been handed `initial_elements`.
+    if (AUTH_REQUIRED && !sameToken(offeredToken(req.headers, req.url), AUTH_TOKEN)) {
+      logger.warn('Refused a WebSocket upgrade: it carried no valid board token.');
+      done(false, 401, 'Unauthorized');
       return;
     }
     done(true);
@@ -206,6 +309,41 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   }
   next();
 });
+
+/**
+ * The token gate, and what it deliberately leaves open.
+ *
+ * `GET /` and the static mounts below stay open, because the page has to be able to bootstrap:
+ * it is the page that reads the token out of the address bar, and it cannot do that before it
+ * has loaded. What they serve is this build's own frontend and Excalidraw's fonts — a bundle
+ * anybody could fetch from npm — so what an unauthenticated caller gets from them is the
+ * software, not the board. `/health` stays open for the same shape of reason and a second one:
+ * it is how `core/port.ts`, `core/spawn.ts` and the restart supervisor find out whether anything
+ * of ours is on a port at all, and it is answered before the token file exists.
+ *
+ * Everything under `/api` requires the token. That is the whole of the reachable surface — the
+ * scene, the files, the terminal, the agents, the registry and the directory picker — and until
+ * #350 every one of them was open to any process on the machine that could open a socket.
+ *
+ * In front of `express.json`, so an unauthenticated caller cannot make this process parse ten
+ * megabytes of body before being turned away.
+ */
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (!AUTH_REQUIRED) return next();
+  if (req.path !== '/api' && !req.path.startsWith('/api/')) return next();
+  if (sameToken(offeredToken(req.headers, req.url), AUTH_TOKEN)) return next();
+
+  // The path, never the token: a refusal that echoed what it was offered would put a near-miss
+  // in the log file, and the log file is not where a secret goes.
+  logger.warn(`Refused ${req.method} ${req.path}: it carried no valid board token.`);
+  res.status(401).json({
+    success: false,
+    error: 'This board requires its token. The launcher puts it in the URL it opens; a program '
+      + `reads it from ${tokenFilePath(PORT)} and sends it as the ${TOKEN_HEADER} header or as `
+      + `?${TOKEN_QUERY}=. See docs/SECURITY.md.`
+  });
+});
+
 app.use(express.json({ limit: '10mb' }));
 
 // Serve static files from the build directory
@@ -613,11 +751,60 @@ const UpdateElementSchema = z.object({
   containerId: z.string().nullable().optional(),
 });
 
+// ─── The loopback guard ───────────────────────────────────────
+//
+// Every route below that answers with something this machine owns asks this first. `HOST` and
+// `LOOPBACK_ADDRESSES` are resolved at the bottom of this file; both functions are called from
+// request handlers, which run long after that.
+
+/** Whether this server was told to bind an address only this machine can reach. */
+function boundToLoopback(): boolean {
+  return LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost';
+}
+
+/**
+ * Refuse a caller that arrived over the network, and say which question was asked.
+ *
+ * Two kinds of route call this, and the second is the one worth explaining. Most of them write
+ * files this machine owns, spawn a process holding the operator's `gh` credentials, or list its
+ * directories — reaching those from the network is obviously worse than reaching a route that
+ * only reads. The rest are **reads of board contents**: the elements, the images, the documents,
+ * the library and the snapshots. They were left open when the writes were guarded, on the
+ * reasoning that a read is the safe half; #366 decided that it is not. A board bound to an
+ * interface was publishing everything on it to whoever reached the port, and the only honest
+ * choice between guarding the reads and writing down that they are open was to guard them.
+ *
+ * The consequence is stated rather than hidden: a non-loopback bind is now useless for
+ * everything, not merely for the GitHub half. #278 had already taken the tab strip and the
+ * picker; this takes the canvas. A reverse proxy is unaffected — it reaches this server on
+ * loopback, which is the configuration `EXCALIDRAW_ALLOWED_HOSTS` exists for.
+ *
+ * Three controls stand in front of these routes and none replaces another. The token (#350) is
+ * what the caller carries, and it is a `VIBEMAXXING_NO_AUTH` away from not being there — which
+ * is the state every check in `scripts/` runs in. The origin gate
+ * (`src/core/origin-gate.ts`) asks a browser question, `Origin` and `Host`, and its own comment
+ * says a program that can set headers can set any header. This asks about the **bind**, which is
+ * the one thing about a caller that nobody can forge, and it answers 403 to a request holding a
+ * perfectly good token.
+ */
+function offLoopback(res: Response, what: string): boolean {
+  if (boundToLoopback()) return false;
+  res.status(403).json({
+    success: false,
+    error: `${what} only while the server is bound to loopback.`
+  });
+  return true;
+}
+
 // API Routes
 
 // Get all elements
-app.get('/api/elements', (req: Request, res: Response) => {
+app.get('/api/elements', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'The board is read')) return;
+
   try {
+    // What is on this board — which cannot be answered until this board has been read back.
+    await whenBoardsRestored();
     const elementsArray = Array.from(elementsFor(workspaceIdFrom(req)).values());
     res.json({
       success: true,
@@ -770,12 +957,26 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
   }
 });
 
-// Clear all elements (must be before /:id route)
-app.delete('/api/elements/clear', (req: Request, res: Response) => {
+/**
+ * Empty one board's store (must be before the `/:id` route, or `clear` reads as an id).
+ *
+ * The copy is taken here rather than in whoever asked, because everything that empties a
+ * board comes through this one route and only one of those callers has a person in front of
+ * it: the header's `Clear Canvas` confirms first, but the MCP `clear_canvas` tool, the CLI's
+ * `clear --yes` and `restore_snapshot` — which clears *before* it restores, and says
+ * `canvas was cleared` when the restore then fails — do not, and must not start to. A
+ * confirmation in front of this route would break an agent-facing contract; a copy behind it
+ * breaks nothing and is what makes any of them recoverable (#345).
+ *
+ * The path it went to is in the response, so the caller can say it. A backup nobody is told
+ * about is a backup nobody restores.
+ */
+app.delete('/api/elements/clear', async (req: Request, res: Response) => {
   try {
     const workspaceId = workspaceIdFrom(req);
     const store = elementsFor(workspaceId);
     const count = store.size;
+    const backup = await backupBoardBefore(workspaceId);
     store.clear();
 
     broadcast({
@@ -783,12 +984,14 @@ app.delete('/api/elements/clear', (req: Request, res: Response) => {
       timestamp: new Date().toISOString()
     }, workspaceId);
 
-    logger.info(`Canvas cleared: ${count} elements removed`);
+    logger.info(`Canvas cleared: ${count} elements removed`
+      + (backup ? `; the board as it was is in ${backup}` : ''));
 
     res.json({
       success: true,
       message: `Cleared ${count} elements`,
-      count
+      count,
+      backup
     });
   } catch (error) {
     logger.error('Error clearing canvas:', error);
@@ -843,8 +1046,15 @@ app.delete('/api/elements/:id', (req: Request, res: Response) => {
 });
 
 // Query elements with filters
-app.get('/api/elements/search', (req: Request, res: Response) => {
+app.get('/api/elements/search', async (req: Request, res: Response) => {
+  // With no query at all this is `GET /api/elements` by another name, so it carries the same
+  // guard. A lock beside an open door is not a decision, it is the shape the routes happened
+  // to have. The wait below is here for the same reason: a search of a board that has not been
+  // read back is a search of an empty board, and it answers "nothing matched".
+  if (offLoopback(res, 'The board is searched')) return;
+
   try {
+    await whenBoardsRestored();
     const { type, x_min, x_max, y_min, y_max, ...filters } = req.query;
     let results = Array.from(elementsFor(workspaceIdFrom(req)).values());
 
@@ -892,7 +1102,9 @@ app.get('/api/elements/search', (req: Request, res: Response) => {
 });
 
 // Get element by ID
-app.get('/api/elements/:id', (req: Request, res: Response) => {
+app.get('/api/elements/:id', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'An element is read')) return;
+
   try {
     const { id } = req.params;
 
@@ -903,6 +1115,10 @@ app.get('/api/elements/:id', (req: Request, res: Response) => {
       });
     }
 
+    // Before the lookup, and it matters more here than on the two reads above: a board that has
+    // not been read back yet answers this one **404**, which says the element does not exist
+    // rather than that the board is empty.
+    await whenBoardsRestored();
     const element = elementsFor(workspaceIdFrom(req)).get(id);
 
     if (!element) {
@@ -1171,7 +1387,10 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
   try {
     const { elements: frontendElements, timestamp } = req.body;
 
-    logger.info(`Sync request received: ${frontendElements.length} elements`, {
+    // `debug`, not `info`: the browser autosyncs whenever anything on the canvas moves, so this
+    // and the reconciliation below were two lines per nudge in a file nothing rotated — the bulk
+    // of the 14 MB a day #348 measured. A sync that goes wrong still says so at `warn`.
+    logger.debug(`Sync request received: ${frontendElements.length} elements`, {
       timestamp,
       elementCount: frontendElements.length
     });
@@ -1257,7 +1476,7 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       }
     });
 
-    logger.info(
+    logger.debug(
       `Sync reconciled: ${successCount} applied (${updatedCount} updates), ` +
       `${deletedCount} deleted, ${staleCount} ignored as stale, ` +
       `${carriedCount} kept their server-authored state, ${store.size} total`
@@ -1296,25 +1515,13 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
 
 // ─── Workspaces API (one project per board) ───────────────────
 
-/**
- * The guard every route in this block shares.
- *
- * Most of these write files this machine owns, and one of them lists its directories, so
- * reaching them from the network would be strictly worse than reaching the routes that only
- * read a project. The read below is guarded for the same reason rather than in spite of being
- * a read: it does not read *a* project, it reads the map of all of them — every registered
- * project's absolute path, and a WSL project's path inside its distro too. Same shape as the
- * issue block's guard, and for the same reason.
- */
-function offLoopback(res: Response, what: string): boolean {
-  if (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost') return false;
-  res.status(403).json({
-    success: false,
-    error: `${what} only while the server is bound to loopback.`
-  });
-  return true;
-}
-
+// Every route in this block calls `offLoopback`, declared above the first route of the file.
+// Most of them write files this machine owns, and one lists its directories, so reaching them
+// from the network would be strictly worse than reaching a route that only reads a project. The
+// read below is guarded for the same reason rather than in spite of being a read: it does not
+// read *a* project, it reads the map of all of them — every registered project's absolute path,
+// and a WSL project's path inside its distro too.
+//
 // Loaded per request rather than cached at boot: a project's board.config.json gets
 // edited while the server runs, and restarting to notice a config change would be silly.
 app.get('/api/workspaces', async (_req: Request, res: Response) => {
@@ -1363,6 +1570,79 @@ app.post('/api/workspaces', async (req: Request, res: Response) => {
     res.status(201).json({ success: true, workspace: result.workspace, workspaces: result.workspaces });
   } catch (error) {
     logger.error('Failed to add a workspace:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/**
+ * Take a project off the board.
+ *
+ * The other half of the `+`, and the thing whose absence made the first mistake a stranger
+ * makes permanent: the wrong folder picked, or a project moved after registering, left a tab
+ * that `loadWorkspace` marks broken rather than dropping, and the only way out was
+ * hand-editing a JSON file whose path the reader has never been told.
+ *
+ * **It removes a line from the registry, and nothing else.** The project directory is not
+ * this board's to delete and neither is its `board.config.json` — which is what the
+ * confirmation in the settings dialog promises, in those words.
+ *
+ * The one thing that is arguably the board's own is the drawing, saved beside the registry
+ * and copied nowhere. It is kept, so a project removed by mistake and added back comes back
+ * drawn, and `?board=delete` is how a caller who means otherwise says so. An opt-in rather
+ * than a side effect, because nothing else has that scene.
+ *
+ * A run in flight is refused rather than orphaned. The worktree, the branch and the pull
+ * request a run is in the middle of all hang off the entry this would delete, and the process
+ * writing to them would carry on against a project the board no longer knows: the refusal
+ * names the runs so the reader knows what to wait for.
+ */
+app.delete('/api/workspaces/:id', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Projects are removed')) return;
+
+  const id = req.params.id ?? '';
+
+  // Spelled out rather than "anything that is not `delete` means keep": a typo in the one
+  // parameter that decides whether a drawing survives should be an error, not a default.
+  const board = typeof req.query.board === 'string' && req.query.board ? req.query.board : 'keep';
+  if (board !== 'keep' && board !== 'delete') {
+    return res.status(400).json({
+      success: false,
+      error: `board must be "keep" or "delete", not "${board}". `
+        + 'Leaving it out keeps the board this project was drawn on.'
+    });
+  }
+
+  const inFlight = runningImplements(normalizeWorkspaceId(id));
+  if (inFlight.length) {
+    return res.status(409).json({
+      success: false,
+      error: `"${id}" still has ${inFlight.length} implementation(s) running, and removing it now `
+        + 'would orphan them: the worktree, the branch and the pull request would outlive the '
+        + `project they belong to. In flight: ${inFlight.map((run) => run.issueUrl).join(', ')}`,
+      running: inFlight.map((run) => run.issueUrl)
+    });
+  }
+
+  try {
+    const result = await removeWorkspace(registryPath(), id);
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, error: result.error });
+    }
+    // After the registry write, never before it: a board forgotten on a removal that then
+    // failed would stop being saved while its project was still on the strip.
+    const dropped = await dropBoardState(result.removed.id, { deleteFile: board === 'delete' });
+    logger.info(
+      `Workspace "${result.removed.id}" removed from the registry; ${result.removed.path} was left alone`
+      + `${dropped.deleted ? `, and its saved board at ${dropped.file} was deleted` : ''}.`
+    );
+    res.json({
+      success: true,
+      removed: result.removed,
+      workspaces: result.workspaces,
+      board: dropped
+    });
+  } catch (error) {
+    logger.error('Failed to remove a workspace:', error);
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 });
@@ -1444,8 +1724,10 @@ app.get('/api/fs/directories', async (req: Request, res: Response) => {
 //
 // Turns an observation written on the board into a researched GitHub issue by running
 // an agent inside the project. This is the most dangerous thing the server does: it
-// spawns a process with full repository access on an API that has no authentication.
-// Hence three guards — opt-in by env var, loopback only, and one run per element.
+// spawns a process with full repository access. Hence three guards — opt-in by env var,
+// loopback only, and one run per element. They outlive the token #350 put in front of every
+// route, because that token is a file this account can read: it shuts out another account and
+// says nothing about a process already running as this one.
 //
 // Two commands rather than one, because a workspace may live in a WSL distro and a command
 // is a path: the host's `claude.exe` is `No such file or directory` inside a distro, and the
@@ -2186,6 +2468,24 @@ const ghStatusMemo = new IssueMemo<GithubStatus>(
 );
 
 /**
+ * And the same for "can this account push", which every run start now asks.
+ *
+ * A second instance rather than a second setting: the two answers have different types, but
+ * they are the same *question* — one `gh` interrogation about this workspace, worth reusing for
+ * a few seconds and worth nothing after that. So it shares `GH_STATUS_MEMO_MS` and holds the
+ * property that matters most here, which is `IssueMemo`'s joining of reads already in flight:
+ * the queue starts runs in a loop, and four starts in one pass are one `gh repo view`.
+ *
+ * `readPushAccess` never rejects, so unlike a status read this memo also remembers "nobody
+ * could say" — which is the answer a board with no `gh` at all gives, on every card, for ever.
+ * Remembering it is what keeps that board from spawning a doomed process per start.
+ */
+const GH_PUSH_KEY = 'gh-push';
+const ghPushMemo = new IssueMemo<PushAccess>(
+  memoWindow(env('GH_STATUS_MEMO_MS'))
+);
+
+/**
  * How many implementations one workspace may have in flight at once.
  *
  * It used to be unlimited, and unlimited by accident: nothing counted runs, because the
@@ -2271,11 +2571,19 @@ function recordImplement(
 function carriedImplement(
   workspaceId: string,
   issueUrl: string
-): Pick<ImplementRecord, 'startedAt' | 'usage' | 'terminal' | 'recovered'> {
+): Pick<ImplementRecord, 'startedAt' | 'usage' | 'terminal' | 'recovered' | 'pid' | 'reclaimed'> {
   const existing = readImplement(workspaceId, issueUrl);
   return {
     startedAt: existing?.startedAt ?? null,
     usage: existing?.usage ?? null,
+    // Carried like the token counts: it arrives in the middle of a run, from the spawn, and a
+    // record rebuilt from literals halfway through would lose the one fact that says whether
+    // anybody is still waiting on this run.
+    pid: existing?.pid ?? null,
+    // And this one is never carried forward as anything but null. A reclaim is a fact about the
+    // record it closed; a run that goes on to report for itself has settled honestly, and
+    // leaving the evidence on it would say the server took a slot back that it did not.
+    reclaimed: null,
     // Carried for the same reason the start time is: the session is opened once, in the
     // middle of the run, and a record rebuilt from literals at the end would forget which
     // tab the run happened in exactly when somebody goes looking for its transcript.
@@ -2327,6 +2635,29 @@ function recordImplementTerminal(
   const existing = readImplement(workspaceId, issueUrl);
   if (!existing || existing.state !== 'running') return;
   writeImplement(workspaceId, issueUrl, { ...existing, terminal });
+}
+
+/**
+ * The process a run is in, onto the record and nowhere else.
+ *
+ * The same door as the token counts and the terminal session, for the same reason: it arrives
+ * in the middle of a run and no block with nothing selected can show it.
+ *
+ * **Both calls matter and the second matters more.** A pid on a `running` record says this
+ * process is still waiting on a child; `null` says the agent has returned and the server is
+ * finishing up — asking GitHub about the pull request, releasing the checkout — which is work
+ * that takes seconds and must never be mistaken for a wedge. The sighting kept in
+ * `implement-reclaim.ts` is dropped alongside it so a record that gets a new process, as a
+ * recovered second attempt does, is not reclaimed on what was seen about the first.
+ *
+ * Ignored once the run has settled, so a spawn reported late cannot resurrect a finished
+ * record — including one this server has just reclaimed.
+ */
+function recordImplementPid(workspaceId: string, issueUrl: string, pid: number | null): void {
+  forgetSighting(workspaceId, issueUrl);
+  const existing = readImplement(workspaceId, issueUrl);
+  if (!existing || existing.state !== 'running') return;
+  writeImplement(workspaceId, issueUrl, { ...existing, pid });
 }
 
 /**
@@ -2406,6 +2737,11 @@ async function beginImplement(
     return { status: 409, body: { success: false, error: interactiveRefusal } };
   }
 
+  // Before the count, and never between it and the claim below. A slot held by a run that is
+  // over is not a slot, and a click refused by one is #357 arriving through the other door: a
+  // board whose queue is off has nothing else that would ever notice.
+  await reclaimStalledRuns(workspaceId);
+
   // A board that can start runs faster than a machine can finish them needs a budget, and a
   // refusal has to say which run is holding the slot to be worth reading. It is not only a
   // budget: a cap that leaks puts two `git worktree add` in the same instant, and they
@@ -2442,7 +2778,11 @@ async function beginImplement(
     terminal: null,
     // This is the one write that starts a run rather than continuing one, so it is where the
     // recovery allowance is handed out. Every record after it carries this forward.
-    recovered: false
+    recovered: false,
+    // Nothing has been spawned yet — the claim is made before the first `await` on purpose —
+    // so there is no process to name until `runImplementation` gets one.
+    pid: null,
+    reclaimed: null
   });
 
   /**
@@ -2484,6 +2824,34 @@ async function beginImplement(
   if (agentRefusal) {
     releaseSlot();
     return { status: 404, body: { success: false, error: agentRefusal } };
+  }
+
+  // The last question asked before anything exists to clean up, and the only one about GitHub:
+  // can this account push? Everything downstream of here assumes it can — the worktree is cut
+  // with no upstream because the agent's own `git push -u` writes one, the prompt demands a
+  // pull request URL as the last line it prints, and `releaseWorktree` deletes the branch with
+  // `git branch -d`, which only succeeds once it has merged. A clone rather than a fork
+  // therefore bought a full run and got `Agent finished without returning a pull request URL`,
+  // with the commits stranded in a worktree that the next server start reports as interrupted.
+  //
+  // Deliberately *after* the claim and behind `releaseSlot`, unlike the interactive refusal:
+  // this one needs the workspace, which is two awaits below where the slot is taken. It is
+  // still before `ensureWorktree`, which is the placement that matters — a refusal here leaves
+  // no directory, no branch and no record behind it.
+  //
+  // 403 rather than 409: this is not a conflict with what the board is doing, it is a
+  // permission the board cannot change.
+  const push = await ghPushMemo.read(workspaceId, GH_PUSH_KEY, () => readPushAccess(workspace));
+  if (push.verdict === 'no') {
+    releaseSlot();
+    return { status: 403, body: { success: false, error: pushRefusal(push) } };
+  }
+  if (push.verdict === 'unknown') {
+    // Info rather than warn: a board whose `origin` is not on github.com, or which has no `gh`
+    // at all, is a supported board and its every run would otherwise raise a warning. The line
+    // exists so that a run which *did* fail at the push can be traced back to the moment the
+    // probe declined to say.
+    logger.info(`Push permission for "${workspaceId}" could not be settled, so the run starts: ${push.why}`);
   }
 
   // Not awaited: the run outlives the answer, which is the whole reason the answer is 202.
@@ -2610,6 +2978,9 @@ async function runImplementation(
         // Reached only when the configured command already streams. Otherwise the agent
         // prints prose at exit, there is nothing to read, and this is never called.
         onUsage: (usage) => recordImplementUsage(workspaceId, issueUrl, usage),
+        // Which process the run is in while it is in one, and null the moment it is not. This
+        // is the whole of what makes a wedged record distinguishable from a working one.
+        onPid: (pid) => recordImplementPid(workspaceId, issueUrl, pid),
         ...(host ? { host } : {})
       });
 
@@ -2644,7 +3015,10 @@ async function runImplementation(
 
     recordImplement(workspaceId, issueUrl, {
       state: landing.state, url: landing.url, error: landing.error, worktree: kept,
-      ...carriedImplement(workspaceId, issueUrl), endedAt: new Date().toISOString()
+      ...carriedImplement(workspaceId, issueUrl), endedAt: new Date().toISOString(),
+      // Said again rather than carried: a settled run is in no process at all, and a stale pid
+      // on it would be a pid the machine is free to hand to somebody else.
+      pid: null
     });
     if (landing.state === 'done') logger.info(`${issueUrl} implemented at ${landing.url}`);
     else logger.warn(`${issueUrl} implementation ${landing.state}: ${landing.error}`);
@@ -2655,7 +3029,8 @@ async function runImplementation(
       error: (error as Error).message,
       worktree: await releaseWorktreeFor(workspace, worktree, issueUrl),
       ...carriedImplement(workspaceId, issueUrl),
-      endedAt: new Date().toISOString()
+      endedAt: new Date().toISOString(),
+      pid: null
     });
   }
 
@@ -2729,6 +3104,122 @@ function slotFree(workspaceId: string): boolean {
 }
 
 /**
+ * How long a run whose process has gone waits before its slot comes back.
+ *
+ * A grace rather than a formality: a run's process ending is not the run ending. The pid is
+ * cleared from the record the instant the agent's promise resolves, so a `running` record still
+ * carrying one has not reached the server's own tidying up — but that clearing is delivered on a
+ * turn of the loop a pass can be ahead of. Waiting for a second sighting closes the window and
+ * costs a wedged run one interval.
+ *
+ * Reused as the floor on the *other* evidence, which is a different thing said with the same
+ * number on purpose: a run that started a moment ago is not what any of this is for, and asking
+ * GitHub about one would spend a `gh` process to be told so.
+ */
+const IMPLEMENT_RECLAIM_MS = (() => {
+  const configured = env('IMPLEMENT_RECLAIM_MS');
+  if (configured === undefined || configured.trim() === '') return 30_000;
+  const parsed = Number(configured);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 30_000;
+})();
+
+/**
+ * Give back every slot held by a run that is over and never said so.
+ *
+ * The two evidences in `implement-reclaim.ts`, gathered in the order they cost. The process
+ * check is one `kill(pid, 0)` per running record and is made every time. Asking GitHub is a
+ * process per record, so it is made only when the cap is full — which is the only state in which
+ * a stale record is costing anything, and is precisely the state #357 was observed in: four
+ * slots, one held by a run whose pull request had merged four hours earlier, and a board that
+ * could say only `cap-full`.
+ *
+ * **Nothing here stops anything.** A reclaim closes a record; the agent, if there somehow still
+ * is one, goes on exactly as it was and its own report — when it comes — overwrites this. That is
+ * the whole reason the evidence has to be positive: the cost of being wrong is another agent
+ * started beside one that is still writing, and no clock can tell those apart.
+ *
+ * Said out loud, once per reclaim, because it is the one thing that happens to a run without
+ * anybody asking for it. The queue reports it as a pass of its own as well; this line is what a
+ * board with no queue on it still gets.
+ */
+async function reclaimStalledRuns(workspaceId: string): Promise<ReclaimedRun[]> {
+  const reclaimed: ReclaimedRun[] = [];
+  // Read before anything is given back, not after. A cheap reclaim below frees a slot, and
+  // asking "is there room now" would then skip the expensive half for the very reason the pass
+  // was worth making — leaving the remaining stale records to be found one interval at a time.
+  // What decides it is the state this pass *arrived* in.
+  const stuck = !slotFree(workspaceId);
+
+  for (const entry of runningImplements(workspaceId)) {
+    const { issueUrl, ...record } = entry;
+    const gone = goneProcessReclaim(workspaceId, issueUrl, record.pid, IMPLEMENT_RECLAIM_MS);
+    if (!gone) continue;
+    recordImplement(workspaceId, issueUrl, {
+      ...record,
+      // The state a restart's inference already uses, and the one **Resume** already offers
+      // back: what is left of this run is a checkout, which is exactly what `interrupted` means.
+      state: 'interrupted',
+      error: gone.detail,
+      endedAt: new Date().toISOString(),
+      pid: null,
+      reclaimed: gone
+    });
+    reclaimed.push({ issueUrl, reclaimed: gone });
+    logger.warn(`Reclaimed the slot held by ${issueUrl}: ${gone.detail}`);
+  }
+
+  // The expensive half buys one thing — a slot — so it is not paid for by a board that had one
+  // to spare when this began.
+  if (!stuck) return reclaimed;
+
+  const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace || workspace.error) return reclaimed;
+
+  for (const entry of runningImplements(workspaceId)) {
+    const { issueUrl, ...record } = entry;
+    const startedAt = record.startedAt ? Date.parse(record.startedAt) : NaN;
+    if (Number.isFinite(startedAt) && Date.now() - startedAt < IMPLEMENT_RECLAIM_MS) continue;
+
+    let issue: IssueDetail;
+    try {
+      // Behind the memo an issue block and a queue pass already read through, so a board stuck
+      // at its cap asks GitHub about each held issue once a window rather than once a pass.
+      issue = await issueMemo.read(workspaceId, issueUrl, () => fetchIssue(workspace, issueUrl));
+    } catch (error) {
+      // A `gh` that will not answer has taught us nothing, which is not the same as a run that
+      // is still going — and treating it as one would invent an ending for a run that has none.
+      logger.warn(`Could not ask GitHub whether ${issueUrl} is over: ${(error as Error).message}`);
+      continue;
+    }
+    if (issue.state.toUpperCase() !== 'CLOSED') continue;
+
+    for (const pull of issue.closedBy) {
+      // Closed is not landed. An issue closed as not planned, or closed by hand, says nothing
+      // about the run — so the pull request GitHub names as having closed it is asked, and only
+      // `merged` counts. `fetchPullLanding` answers null for every failure, which falls through
+      // here as "learned nothing" exactly as it should.
+      if (await fetchPullLanding(workspace, pull.url) !== 'merged') continue;
+      const landed = landedReclaim(pull.url);
+      recordImplement(workspaceId, issueUrl, {
+        ...record,
+        state: 'done',
+        url: pull.url,
+        error: null,
+        endedAt: new Date().toISOString(),
+        pid: null,
+        reclaimed: landed
+      });
+      reclaimed.push({ issueUrl, reclaimed: landed });
+      logger.warn(`Reclaimed the slot held by ${issueUrl}: ${landed.detail}`);
+      break;
+    }
+  }
+
+  return reclaimed;
+}
+
+/**
  * Start as many queued issues as there are free slots, oldest first.
  *
  * The board is read **uncapped**. `projectCardLimit` decides what is *drawn*, and reading the
@@ -2781,6 +3272,16 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
   };
 
   try {
+    // Before the cap is looked at, because a record that is over is exactly what makes the cap
+    // lie. Reported instead of starting anything, so the reader sees the reclaim rather than a
+    // queue that unstuck itself for no stated reason; the next pass, one interval later, fills
+    // the slots it gave back.
+    const reclaimed = await reclaimStalledRuns(workspaceId);
+    if (reclaimed.length > 0) {
+      outcome = { reason: 'reclaimed', detail: reclaimDetail(reclaimed) };
+      return;
+    }
+
     if (!slotFree(workspaceId)) {
       outcome = capFullOutcome(workspaceId);
       return;
@@ -3114,7 +3615,14 @@ async function recoverInterruptedRuns(): Promise<void> {
           // its recovery is not written in the checkout. `false` is the honest reading, and it
           // costs nothing — an `interrupted` run is offered to a person through **Resume**
           // rather than continued automatically, and that offer has never been rationed.
-          recovered: false
+          recovered: false,
+          // Nor this: the process was the previous server's child and went down with it, and a
+          // pid read off a checkout would name whatever the machine has since handed it to.
+          pid: null,
+          // Inferred, not reclaimed. This record was derived from git at startup rather than
+          // taken back from a slot it was holding, and saying otherwise would put evidence on
+          // it that nothing gathered.
+          reclaimed: null
         });
         logger.warn(
           `${run.issueUrl} was being implemented when a previous server stopped; `
@@ -3201,6 +3709,65 @@ function chooseSeed(
 }
 
 /**
+ * The board a project that has never had one comes up on, or nothing.
+ *
+ * `__dirname` is `dist/` once compiled, so the default is this build's own `docs/`, the way
+ * `TOOL_DOCS_DIR` is — the repository's in a checkout and the package's in an installed copy,
+ * where `files` ships it beside the documents its cards point at. A project registered through
+ * the `+` gets a config with a name and possibly a `docsDir` and no `board` at all, which used
+ * to mean a blank canvas: nothing explaining the section keys, the blocks or the tabs, and
+ * `Alt+P` and `Alt+G` doing nothing at all, because those keys are declared by board data and
+ * there was none.
+ *
+ * `undefined`, not falsy, exactly as `DOCS_DIR` and `LIBRARY` are read: an **explicitly empty**
+ * setting is how a board says it wants new projects to come up blank, which is a thing somebody
+ * has to be able to say now that unset no longer means none. Every self-contained check sets it
+ * empty (`scripts/lib/spawn-canvas.mjs`) for the reason that helper deletes the rest of the
+ * machine's configuration — a throwaway project growing a board it never asked for decides
+ * assertions about element counts and about where a click lands, in checks that are about
+ * neither. `scripts/check-welcome-board.mjs` is the one that unsets it again.
+ */
+const WELCOME_BOARD_SETTING = env('WELCOME_BOARD');
+const WELCOME_BOARD_FILE = WELCOME_BOARD_SETTING === undefined
+  ? path.resolve(__dirname, '../docs/welcome.excalidraw')
+  : (WELCOME_BOARD_SETTING ? path.resolve(WELCOME_BOARD_SETTING) : null);
+
+/**
+ * The welcome board, for a project that has nothing else to come up as — or nothing.
+ *
+ * Three conditions, and each of them is a way of saying *nobody has been here yet*:
+ *
+ * - there is a welcome board to seed from at all: `WELCOME_BOARD` set empty is a board saying
+ *   its projects come up blank, and that answer is honoured before anything else is read.
+ * - the project declares no `board`. One that declares a file it cannot read is a project with
+ *   a board and a problem, and it stays empty and says so — putting a welcome board over that
+ *   would answer a broken path with a board the reader never asked for.
+ * - nothing was chosen from the two places a board is kept, which the caller has already
+ *   established by the time this runs.
+ * - and this canvas has never written a state file for it *at all*. That is the strict form of
+ *   "no saved state", and it is what makes this happen once: a board somebody emptied has a
+ *   saved scene with no elements in it, which `readBoardState` reports as nothing to come back
+ *   as — so the looser reading would put the welcome board back over a deliberate clear, every
+ *   start, forever.
+ *
+ * Past the first seed nothing here runs again: the elements land in a store that is already
+ * marked as worth saving, the file appears a second later, and every later start reads that.
+ */
+async function welcomeSeed(
+  workspaceId: string,
+  boardFile: string | null
+): Promise<{ scene: BoardScene; from: string } | null> {
+  if (!WELCOME_BOARD_FILE || boardFile) return null;
+  if (await boardStateExists(workspaceId)) return null;
+
+  const welcome = await readBoardFile(workspaceId, WELCOME_BOARD_FILE);
+  if (!welcome) return null;
+
+  logger.info(`"${workspaceId}" has no board of its own; seeding the welcome board.`);
+  return { scene: welcome.scene, from: WELCOME_BOARD_FILE };
+}
+
+/**
  * Put one registered board's saved scene into its store, and say it is worth saving from now
  * on.
  *
@@ -3210,6 +3777,11 @@ function chooseSeed(
  * every project, in the canvas's own state directory — because a draft on a board that
  * declares no file has even fewer places to survive than one on a board that does.
  *
+ * What it also gains, and only on the very first start, is the welcome board: a project that
+ * declares no `board` and that this canvas has never saved has nothing at all to show, and a
+ * blank canvas is where every one of them used to arrive. `welcomeSeed` is the whole of that
+ * decision, and it still writes nothing into the project.
+ *
  * Seeded by the *normalised* id. `elementsFor` normalises its argument and the registry
  * does not, so the raw id would reach the same store — but `broadcast` compares against
  * what a socket registered, which is normalised, and a project id with a capital letter
@@ -3217,7 +3789,7 @@ function chooseSeed(
  */
 async function seedBoardFromFile(workspace: Workspace): Promise<void> {
   if (workspace.error) return;
-  await seedBoard(normalizeWorkspaceId(workspace.id), workspace.boardFile);
+  await seedBoard(normalizeWorkspaceId(workspace.id), workspace.boardFile, welcomeSeed);
 }
 
 /**
@@ -3229,8 +3801,18 @@ async function seedBoardFromFile(workspace: Workspace): Promise<void> {
  * `Map` that could not have reported a change if anything had. It has no tracked board file
  * and never will: nothing on disk is a project's, so there is nothing to seed it from but the
  * state this canvas keeps of it.
+ *
+ * And no welcome board either, which is why `fallback` is a parameter rather than something
+ * this function decides. `default` is not a project somebody registered and has no directory,
+ * no documents and no settings behind it; a welcome board there would be a canvas somebody
+ * opened to draw on, filled with cards about projects they have not added.
  */
-async function seedBoard(workspaceId: string, boardFile: string | null): Promise<void> {
+async function seedBoard(
+  workspaceId: string,
+  boardFile: string | null,
+  fallback?: (workspaceId: string, boardFile: string | null)
+    => Promise<{ scene: BoardScene; from: string } | null>
+): Promise<void> {
   const store = elementsFor(workspaceId);
   if (store.size) {
     // Empty at startup, which is when this runs. Said out loud rather than assumed, because
@@ -3249,7 +3831,8 @@ async function seedBoard(workspaceId: string, boardFile: string | null): Promise
   // to read before anybody has seen it.
   persistBoardFor(workspaceId);
 
-  const chosen = chooseSeed(workspaceId, boardFile, saved, fromFile);
+  const chosen = chooseSeed(workspaceId, boardFile, saved, fromFile)
+    ?? (fallback ? await fallback(workspaceId, boardFile) : null);
   if (!chosen) return;
   const scene = chosen.scene;
 
@@ -3305,6 +3888,87 @@ async function seedBoardsFromFiles(): Promise<void> {
       logger.warn(`Could not load the board for "${id}": ${(error as Error).message}`);
     }
   }));
+}
+
+/**
+ * The restore above, as something a request can wait for.
+ *
+ * `Promise.resolve()` until `listen` replaces it, and that is not a placeholder standing in
+ * for the real thing: nothing can reach a route before the port accepts, and the seed is
+ * started from inside the callback that opens it.
+ */
+let boardsRestored: Promise<void> = Promise.resolve();
+
+/**
+ * Whether that has already happened, which after the first second or so it always has.
+ *
+ * The wait below costs a promise and a timer, and every read of every board for the rest of the
+ * process would pay it to be told the same thing. This is what makes it a boolean read instead:
+ * the window is the first twenty milliseconds of a start, and nothing reopens it.
+ */
+let boardsAreBack = false;
+
+/**
+ * How long a read of a board's contents waits for that board to have been read back.
+ *
+ * Two orders of magnitude above what it costs — forty saved boards are back in about
+ * twenty-five milliseconds — because the number is not there to bound the normal case. It is
+ * there for the board on the `wsl$` share whose read crosses a distro boundary: refused is
+ * fast, but *hung* is not, and a read of a local board must not wait on that for ever. When it
+ * expires the board is answered as it stands, which is the old behaviour, with the one thing
+ * the old behaviour never had — a line saying the answer may be short.
+ */
+const BOARD_RESTORE_CEILING_MS = 10_000;
+
+/** Said once. A ceiling that has expired once will expire on every read after it. */
+let restoreCeilingSaid = false;
+
+/**
+ * Answer for a board only once it has been read back.
+ *
+ * The saved boards are put into their stores by `seedBoardsFromFiles`, which `listen` starts
+ * and deliberately does not await — a slow read must not sit between the port opening and the
+ * board being usable. The other end of that decision was never closed: for the twenty-odd
+ * milliseconds between the two, the server was up, `/health` said `healthy`, and every read of
+ * a board answered with an empty one. Not "not ready", not an error — a board with nothing on
+ * it, which is indistinguishable from a board somebody lost the contents of. That is what
+ * `scripts/check-notes-column-without-project-browser.mjs` reported as a draft not surviving a
+ * restart, one run in four (#441), and what anything that auto-starts a canvas and reads it the
+ * moment `/health` answers is standing in.
+ *
+ * So the reads that say *what is on this board* wait here, and nothing else does. `/health`
+ * must not: it is the readiness probe the CLI, the MCP server and every check in `scripts/`
+ * poll, and `core/canvas-client.ts` reads a non-200 from it as a foreign service on the port
+ * rather than as a canvas still starting — delaying it, or answering 503 from it, would refuse
+ * the board instead of the request.
+ */
+async function whenBoardsRestored(): Promise<void> {
+  if (boardsAreBack) return;
+
+  let ceiling: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<'expired'>((resolve) => {
+    ceiling = setTimeout(() => resolve('expired'), BOARD_RESTORE_CEILING_MS);
+    // Nothing here is a reason for the process to stay alive.
+    ceiling.unref?.();
+  });
+
+  try {
+    // Caught rather than propagated: a board that could not be read has already said so, one
+    // board at a time, and a read of some *other* board is not the place to raise it again.
+    const outcome = await Promise.race([
+      boardsRestored.then(() => 'restored' as const, () => 'restored' as const),
+      expiry
+    ]);
+    if (outcome === 'expired' && !restoreCeilingSaid) {
+      restoreCeilingSaid = true;
+      logger.warn(
+        `The saved boards were still being read after ${BOARD_RESTORE_CEILING_MS} ms; `
+        + 'answering reads with the boards as they stand. Anything not back yet will look empty.'
+      );
+    }
+  } finally {
+    if (ceiling) clearTimeout(ceiling);
+  }
 }
 
 /** The agent writes to the repository, so every entrance carries the same two guards. */
@@ -4142,6 +4806,8 @@ async function readLibrary(filePath: string): Promise<unknown[]> {
 const packagedLibrary = path.join(__dirname, '..', 'docs', 'blocks.excalidrawlib');
 
 app.get('/api/library', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'The library is read')) return;
+
   const sources: { origin: string; path: string }[] = [];
 
   // `??`, not `||`: an *explicitly empty* `EXCALIDRAW_LIBRARY` is how a board says it wants no
@@ -4503,7 +5169,11 @@ function implementTerminalHost(workspace: Workspace, issueUrl: string): AgentHos
       // Asked of the session rather than of the command a second time: what it actually got
       // is the answer, and a machine with no binary for its platform gets `pipe` from a
       // command line that reads interactive.
-      interactive: started.session.mode === 'pty' && !started.session.readOnly
+      interactive: started.session.mode === 'pty' && !started.session.readOnly,
+      // A pseudoterminal is connected on a thread of its own and reports `0` until it is, so
+      // anything that is not a real pid is `null`: no evidence at all is better than evidence
+      // about process zero.
+      pid: started.session.pid && started.session.pid > 0 ? started.session.pid : null
     };
   };
 }
@@ -4667,6 +5337,8 @@ const NO_DOCS_DIR = 'no-docs-dir';
 const NO_DOC = 'no-doc';
 
 app.get('/api/docs/:key', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Documents are read')) return;
+
   const key = req.params.key ?? '';
   if (!DOC_KEY_PATTERN.test(key) || key.includes('..')) {
     return res.status(400).json({ success: false, error: 'Invalid doc key' });
@@ -4724,14 +5396,10 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
  * needed none of them.
  */
 function filesForWorkspace(workspaceId: string): Record<string, ExcalidrawFile> {
-  const wanted = new Set<string>();
-  for (const element of elementsFor(workspaceId).values()) {
-    const fileId = (element as { fileId?: unknown }).fileId;
-    if (typeof fileId === 'string' && fileId) wanted.add(fileId);
-    for (const id of issueImageIds(element.customData)) wanted.add(id);
-  }
   const scoped: Record<string, ExcalidrawFile> = {};
-  for (const id of wanted) {
+  // The same walk the save uses, so what a board is served can never be a different set from
+  // what it is saved with (#343).
+  for (const id of referencedFileIds(elementsFor(workspaceId).values())) {
     const file = files.get(id);
     if (file) scoped[id] = file;
   }
@@ -4740,6 +5408,8 @@ function filesForWorkspace(workspaceId: string): Record<string, ExcalidrawFile> 
 
 // GET the files this board's elements reference
 app.get('/api/files', (req: Request, res: Response) => {
+  if (offLoopback(res, 'A board\'s images are read')) return;
+
   res.json({ files: filesForWorkspace(workspaceIdFrom(req)) });
 });
 
@@ -4751,6 +5421,8 @@ app.get('/api/files', (req: Request, res: Response) => {
  * of screenshots that is megabytes to render a thumbnail.
  */
 app.get('/api/files/:id', (req: Request, res: Response) => {
+  if (offLoopback(res, 'An image is read')) return;
+
   const file = files.get(req.params.id as string);
   if (!file) {
     return res.status(404).json({ success: false, error: `File with ID ${req.params.id} not found` });
@@ -5085,14 +5757,15 @@ app.post('/api/snapshots', (req: Request, res: Response) => {
       });
     }
 
+    const workspaceId = workspaceIdFrom(req);
     const snapshot: Snapshot = {
       name,
-      elements: Array.from(elementsFor(workspaceIdFrom(req)).values()),
+      elements: Array.from(elementsFor(workspaceId).values()),
       createdAt: new Date().toISOString()
     };
 
-    snapshots.set(name, snapshot);
-    logger.info(`Snapshot saved: "${name}" with ${snapshot.elements.length} elements`);
+    snapshotsFor(workspaceId).set(name, snapshot);
+    logger.info(`Snapshot saved: "${name}" on "${workspaceId}" with ${snapshot.elements.length} elements`);
 
     res.json({
       success: true,
@@ -5111,8 +5784,10 @@ app.post('/api/snapshots', (req: Request, res: Response) => {
 
 // Snapshots: list
 app.get('/api/snapshots', (req: Request, res: Response) => {
+  if (offLoopback(res, 'Snapshots are listed')) return;
+
   try {
-    const list = Array.from(snapshots.values()).map(s => ({
+    const list = Array.from(snapshotsFor(workspaceIdFrom(req)).values()).map(s => ({
       name: s.name,
       elementCount: s.elements.length,
       createdAt: s.createdAt
@@ -5134,14 +5809,17 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
 
 // Snapshots: get by name
 app.get('/api/snapshots/:name', (req: Request, res: Response) => {
+  if (offLoopback(res, 'A snapshot is read')) return;
+
   try {
     const { name } = req.params;
-    const snapshot = snapshots.get(name!);
+    const workspaceId = workspaceIdFrom(req);
+    const snapshot = snapshotsFor(workspaceId).get(name!);
 
     if (!snapshot) {
       return res.status(404).json({
         success: false,
-        error: `Snapshot "${name}" not found`
+        error: `Snapshot "${name}" not found on "${workspaceId}"`
       });
     }
 
@@ -5228,6 +5906,22 @@ app.get('/health', (req: Request, res: Response) => {
     // from a stale pidfile or an unrelated app squatting on the port.
     service: 'mcp-excalidraw-canvas',
     pid: process.pid,
+    // Which build is answering, which `service` and `pid` between them could not say.
+    //
+    // An auto-started canvas is detached and unref'd, so it outlives the session that started
+    // it; on an `npx -y <pkg>@latest` update path the second run of an upgraded tool meets the
+    // first run's server, still holding the port and still serving the previous `dist/frontend`.
+    // That is `docs/trap-stale-server.md` — "the old one keeps answering, silently, with the old
+    // code" — and the reason it was silent is that nothing on the wire named the build. This is
+    // the field `core/spawn.ts` compares before it attaches to a responder.
+    //
+    // Here rather than in `canvasIdentity()`, for the reason `platform` is here: that object is
+    // what a *replacement* must match, and a restart is expressly how a board changes version.
+    version: PACKAGE_VERSION,
+    // What a restart would end, counted across every workspace rather than one. `restart` reads
+    // it before it stops anything: the server hosts the coding agents, so stopping it stops them,
+    // and doing that to somebody mid-implement without saying so is the failure this pre-empts.
+    implementing: runningImplementCount(),
     // Which machine this board is running on, for a page that has to describe it. The Add-a-
     // project dialog's example path is the only concrete path this tool ever shows, and it
     // was a `C:` one everywhere — the wrong syntax for the platform two thirds of readers are
@@ -5284,6 +5978,22 @@ app.post('/api/restart', (_req: Request, res: Response) => {
       success: false,
       error: 'Could not start the process that would bring the server back up; nothing was stopped.'
     });
+  }
+
+  // The board is being replaced rather than stopped, and the reader's tab is watching it happen.
+  // So the secret goes with it: written where the replacement will take it, and kept out of the
+  // exit handlers' cleanup. Without this the tab comes back to a board that reports itself up and
+  // then refuses everything it asks — see `core/auth-token.ts`.
+  handingOver = true;
+  if (AUTH_TOKEN) {
+    try {
+      writeTokenHandover(PORT, AUTH_TOKEN);
+    } catch (error) {
+      // Said, and not fatal: the restart still happens and the board still comes up. What is lost
+      // is the tab, which has to be re-opened with `vibemaxxing` — worth a line, not a refusal.
+      logger.warn(`Could not hand this board's token to its replacement: ${(error as Error).message}. `
+        + 'The open tab will have to be re-opened after the restart.');
+    }
   }
 
   // warn rather than info: on this machine the console is warn and above, and a process about
@@ -5484,6 +6194,19 @@ server.on('error', (error: NodeJS.ErrnoException) => {
 });
 
 async function startServer(): Promise<void> {
+  // Before anything can be served, and here rather than at the declaration because `PORT` is
+  // resolved at the bottom of this file. A restart left its secret for this start (see
+  // `core/auth-token.ts`); any other start makes one, and the handover — if a restart wrote one
+  // and never came back — is taken and deleted either way.
+  if (AUTH_REQUIRED) {
+    AUTH_TOKEN = consumeTokenHandover(PORT) ?? newToken();
+  } else {
+    AUTH_TOKEN = null;
+    // Cleared even here: a board that wants no token must not leave one lying in the directory
+    // for the next start on this port to adopt.
+    removeTokenHandover(PORT);
+  }
+
   if (LOOPBACK_GUARD_HOSTS.has(HOST)) {
     const existingHost = await findExistingLoopbackListener(PORT);
     if (existingHost) {
@@ -5502,12 +6225,40 @@ async function startServer(): Promise<void> {
 
   server.listen(PORT, HOST, () => {
     const hostForUrl = formatHostForUrl(HOST);
-    logger.info(`POC server running on http://${hostForUrl}:${PORT}`);
+    // The product, not the proof of concept this line was named after three years ago, and read
+    // out of `core/version.ts` rather than written here — the same source the CLI's own launch
+    // line prints from, so the next rename lands in `package.json` alone. That old name was the
+    // last of its kind under `src/` and `frontend/`, and `check-startup-brand.mjs` reads the
+    // whole tracked set to keep it that way rather than pinning this one file.
+    logger.info(`${productName()} server running on http://${hostForUrl}:${PORT}`);
     logger.info(`WebSocket server running on ws://${hostForUrl}:${PORT}`);
 
     // Written only after listen succeeds so stale files can't shadow a
     // server that never came up; lets the CLI's `stop` command find us.
     writePidFile(PORT, process.pid);
+    // And the token, on the same terms and for a sharper version of the same reason: a
+    // concurrent-start loser that wrote its own would replace the winner's, and every caller
+    // reading that file would then be refused by the board that is actually running.
+    //
+    // A failure here is fatal rather than a warning. Nothing can drive a board whose token
+    // cannot be read — not the page, not the CLI, not the MCP server — and it would answer
+    // `status: healthy` throughout, which is the failure that is hardest to diagnose from
+    // outside. `warn` when there is no token at all, because a board anything on the machine
+    // can drive is worth one line on the console.
+    if (AUTH_TOKEN) {
+      try {
+        writeAuthToken(PORT, AUTH_TOKEN);
+      } catch (error) {
+        failStartup(`Canvas server cannot write its token to ${tokenFilePath(PORT)}: `
+          + `${(error as Error).message}. Nothing would be able to drive this board.`);
+      }
+    } else {
+      // `info`, so it reaches the log file and not the console. Every check in `scripts/` starts
+      // its board with this set, and one of them asserts that an unconfigured board warns about
+      // nothing at all — a line here on `warn` is a paragraph of stderr under the whole suite.
+      logger.info(`${settingName('NO_AUTH')}=1: this board has no token, so anything that can `
+        + 'reach the port drives it — see docs/SECURITY.md.');
+    }
     // And beside it, the port itself — the one thing a later command cannot work out on its
     // own once the port stopped being a constant. It is written, never trusted: every reader
     // probes /health before believing it.
@@ -5522,7 +6273,15 @@ async function startServer(): Promise<void> {
     // In that order, because recovery writes what it derives from git onto the elements
     // carrying the issue, and it can only write onto elements that are in the store when it
     // looks. The other order leaves a recovered `interrupted` run recorded but undrawn.
-    void seedBoardsFromFiles().then(recoverInterruptedRuns);
+    //
+    // Kept rather than discarded, so a read of a board can wait for the board: not awaiting it
+    // is what makes the port open promptly, and `whenBoardsRestored` is what stops that being
+    // paid for with an empty answer.
+    boardsRestored = seedBoardsFromFiles();
+    // Settled either way: a board that could not be read has said so, and a read waiting on it
+    // has nothing further to wait for.
+    void boardsRestored.then(() => { boardsAreBack = true; }, () => { boardsAreBack = true; });
+    void boardsRestored.then(recoverInterruptedRuns);
 
     // And the one question nothing used to ask: do the agents this board is configured with
     // actually run? Here for the same reason as the line above — a `wsl.exe` round trip must
@@ -5542,7 +6301,7 @@ async function startServer(): Promise<void> {
     // rather than a minute — but a shutdown that discarded the last edit would be the same
     // loss #225 is about, arriving through the one door that could have been closed politely.
     flushBoardStateSaves();
-    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); }
+    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); if (!handingOver) removeAuthToken(PORT); }
     server.close(() => process.exit(0));
     // Force-exit if open sockets keep the server from closing promptly
     setTimeout(() => process.exit(0), 2000).unref();
@@ -5551,7 +6310,7 @@ async function startServer(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('exit', () => {
     flushBoardStateSaves();
-    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); }
+    if (ownsPidFile) { removePidFile(PORT); removeCanvasState(PORT); if (!handingOver) removeAuthToken(PORT); }
   });
 }
 

@@ -23,6 +23,13 @@
  * is exactly the shape of bug a screenshot cannot see. So section 2 saves without expanding
  * anything and reads the file back.
  *
+ * Section 5 is the way back out, added with `DELETE /api/workspaces/:id` (#346). The route is
+ * `check-workspace-remove.mjs`'s subject; what belongs here is the half that only exists in a
+ * browser — that a reader can find the control at all, that the sentence they are asked to
+ * agree to names the folder and says plainly what is *not* deleted, and that the strip, the
+ * registry and the project directory all end up where the confirmation said they would. It
+ * runs last because it takes away the project every section above it was editing.
+ *
  * Chrome is driven over the DevTools protocol through `ws`, which the server already depends
  * on. Self-contained otherwise: a throwaway registry and project, its own canvas server on a
  * port the kernel handed out, both killed at the end. Nothing here talks to GitHub. Run
@@ -333,6 +340,47 @@ try {
         typeof written.agents?.implement?.workflow === 'string'
           && !written.agents.implement.workflow.includes('/'),
         JSON.stringify(written.agents));
+
+  console.log('\n5. and the same dialog is the way back out');
+  // Last, because it takes the project this check has been editing off the board. The route
+  // itself is `check-workspace-remove.mjs`'s subject; what is asserted here is the half that
+  // only exists in a browser — that a reader can reach it, that the sentence they are asked
+  // to agree to names the folder and says what is *not* deleted, and that the strip and the
+  // registry both come back without it.
+  await openSettings();
+  check('the removal is at the foot of the settings dialog',
+        await present('.workspace-config__danger-open'));
+  check('it is behind a press rather than one click from a shipped project',
+        !(await present('.workspace-config__danger-go')));
+  check('the control opens the confirmation', await click('.workspace-config__danger-open'));
+  await waitFor(() => present('.workspace-config__danger-go'), 'the confirmation');
+  await shot('04-remove-confirm');
+
+  const asked = await evaluate(
+    `document.querySelector('.workspace-config__danger')?.textContent ?? ''`);
+  check('the confirmation names the folder on disk, which is what disambiguates two projects',
+        asked.includes(slash(projectDir)) || asked.includes(projectDir),
+        JSON.stringify(asked));
+  check('and says the folder is left as it is',
+        /left exactly as they are/i.test(asked), JSON.stringify(asked));
+  check('naming board.config.json, the file a reader is most afraid of losing',
+        asked.includes('board.config.json'), JSON.stringify(asked));
+  check('and saying the drawing is kept too',
+        /adding the project back brings it/i.test(asked), JSON.stringify(asked));
+
+  check('the confirmed removal is clickable', await click('.workspace-config__danger-go'));
+  await waitFor(async () => !(await present('.workspace-config')), 'the dialog to close');
+  await waitFor(async () => !(await present('.workspace-tab')), 'the tab to go');
+  await shot('05-removed');
+  check('the strip is back to offering the first project',
+        await present('.workspace-tabs__add--labelled'));
+  check('and the registry no longer lists it',
+        JSON.parse(readFileSync(registryPath, 'utf8')).workspaces.length === 0,
+        readFileSync(registryPath, 'utf8'));
+  check('while the project folder is still there',
+        existsSync(projectDir) && existsSync(configPath), projectDir);
+  check('with the board.config.json this check last wrote, byte for byte',
+        JSON.stringify(onDisk()) === JSON.stringify(written), JSON.stringify(onDisk()));
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);

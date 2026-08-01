@@ -120,6 +120,11 @@ export const SETTINGS = [
     description: 'Path to the registry JSON. Unset resolves the per-user default, which is created when the first project is added — see [workspaces.md](workspaces.md)'
   },
   {
+    name: 'WORKSPACE',
+    fallback: 'the one registered project, else `default`',
+    description: 'Which registered project the CLI and the MCP tools draw on when nothing else names one. The singular of `WORKSPACES`, which is the list. `--workspace <id>` and an MCP tool\'s own `workspace` argument both beat it; unset, a board with one project resolves to that project, a board with none to the `default` scratch canvas, and a board with several refuses and names them — see [workspaces.md](workspaces.md)'
+  },
+  {
     name: 'BOARD_STATE',
     fallback: 'beside the registry',
     description: 'Where each registered board is saved between processes. Unset puts them in a directory named after the registry file, default registry included — [element-store.md](element-store.md)'
@@ -128,6 +133,11 @@ export const SETTINGS = [
     name: 'DOCS_DIR',
     fallback: 'the shipped `docs/`',
     description: 'Where `GET /api/docs/:key` reads from for a board with no `docsDir` of its own. Set it **empty** for a setup that wants per-project documents and no fallback — [docs-block.md](docs-block.md)'
+  },
+  {
+    name: 'WELCOME_BOARD',
+    fallback: 'the shipped `docs/welcome.excalidraw`',
+    description: 'The board a project that names none of its own is seeded from, once, the first time this canvas starts with it registered. Set it **empty** for projects that should come up blank — [workspaces.md](workspaces.md)'
   },
   {
     name: 'LIBRARY',
@@ -163,6 +173,11 @@ export const SETTINGS = [
     name: 'IMPLEMENT_QUEUE_MS',
     fallback: '`30000`',
     description: 'How often a workspace with its queue on looks for a free slot. The timer does not exist until a queue is turned on'
+  },
+  {
+    name: 'IMPLEMENT_RECLAIM_MS',
+    fallback: '`30000`',
+    description: 'How long a run whose agent process has gone must sit before its slot is given back. The wait is there because a run\'s process ending is not the run ending — the server still has GitHub to ask and a checkout to release. `0` gives the slot back on the first sighting'
   },
   {
     name: 'ISSUE_MEMO_MS',
@@ -210,6 +225,16 @@ export const SETTINGS = [
     description: '`1` stops the CLI and the MCP server auto-spawning a canvas'
   },
   {
+    name: 'NO_AUTH',
+    fallback: 'unset',
+    description: '`1` starts the board with **no token**, so anything that can reach the port drives it — see [SECURITY.md](SECURITY.md). It is what the checks set, because each of them spawns a server and drives it over plain `fetch`; on a board a person uses, the token costs nothing to keep, since the launcher hands it over and the page remembers it'
+  },
+  {
+    name: 'ALLOW_VERSION_SKEW',
+    fallback: 'unset',
+    description: '`1` attaches to a running canvas built from a different version instead of refusing. For a working copy driving an installed board — otherwise the refusal is what stops a session talking to a server running the previous release\'s code, silently ([trap-stale-server.md](trap-stale-server.md))'
+  },
+  {
     name: 'NO_DOTENV',
     fallback: 'unset',
     description: '`1` stops both configuration files being read — `<cwd>/.env` and `<state-dir>/config.json` alike — leaving only the real environment. The checks set it, because a file layer only ever fills in variables that are *unset*, which is exactly the set a check deleted on purpose — [trap-check-environment.md](trap-check-environment.md)'
@@ -254,12 +279,12 @@ export const PLAIN_SETTINGS = [
   {
     name: 'LOG_LEVEL',
     fallback: '`info`',
-    description: 'The lowest level written to the log file — `error`, `warn`, `info`, `debug`. The console transport is fixed at warn-and-above whatever this says, so `info` here is how a server\'s own account of a start is read back'
+    description: 'The lowest level written to the log file — `error`, `warn`, `info`, `debug`. The console transport is fixed at warn-and-above whatever this says, so `info` here is how a server\'s own account of a start is read back. `debug` adds the per-sync lines, which is a megabyte a minute on a board somebody is drawing on'
   },
   {
     name: 'LOG_FILE_PATH',
     fallback: 'a per-OS log file',
-    description: 'Where that file is. Unset it is `%LOCALAPPDATA%\\VibeMaxxing-MCP\\vibemaxxing.log` on Windows, `~/Library/Logs/vibemaxxing-mcp.log` on macOS and `$XDG_STATE_HOME/vibemaxxing-mcp/vibemaxxing.log` elsewhere. Set and unwritable is a refusal to start; unset and unwritable falls back to the temp directory'
+    description: 'Where that file is — `vibemaxxing status` prints the resolved answer as `logFile`. Unset it is `%LOCALAPPDATA%\\VibeMaxxing-MCP\\vibemaxxing.log` on Windows, `~/Library/Logs/vibemaxxing-mcp.log` on macOS and `$XDG_STATE_HOME/vibemaxxing-mcp/vibemaxxing.log` elsewhere. It rotates at 1 MB across five files, so the whole history is at most 5 MB. Set and unwritable is a refusal to start; unset and unwritable falls back to the temp directory'
   },
   {
     name: 'DEBUG',

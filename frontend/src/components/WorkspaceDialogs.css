@@ -182,3 +182,51 @@
   margin: 0;
   color: var(--color-gray-70, #495057);
 }
+
+/*
+  The way out, cut off from the settings above it by a rule: everything higher up edits a
+  file, and this one takes the project off the strip. Quiet until it is pressed — the danger
+  colour belongs on the confirmed action, not on the sentence that opens the confirmation.
+*/
+.workspace-config__danger {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-gray-30, #ced4da);
+}
+
+.workspace-config__danger-open {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: var(--color-gray-70, #495057);
+  cursor: pointer;
+}
+
+.workspace-config__danger-open:hover {
+  color: var(--color-danger, #e03131);
+}
+
+.workspace-config__danger-ask {
+  margin: 0;
+}
+
+/* The half that says what is *not* deleted, which is the half worth reading twice. */
+.workspace-config__danger-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--color-gray-70, #495057);
+}
+
+/*
+  Reached through its parent on purpose. `.workspace-dialog__actions button` above is a
+  descendant selector and outranks a lone class, which is why `.workspace-config__save` next
+  to it renders as a plain outline; the same would happen here, and the one button in this
+  dialog that cannot be undone would look exactly like Cancel.
+*/
+.workspace-config__danger .workspace-config__danger-go {
+  background: var(--color-danger, #e03131);
+  border-color: var(--color-danger, #e03131);
+  color: #fff;
+}

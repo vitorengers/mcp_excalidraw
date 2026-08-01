@@ -3,15 +3,17 @@ import {
   Excalidraw,
   convertToExcalidrawElements,
   CaptureUpdateAction,
-  ExcalidrawImperativeAPI,
   exportToBlob,
   exportToSvg,
   getCommonBounds,
   sceneCoordsToViewportCoords
 } from '@excalidraw/excalidraw'
-import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
+import type { BinaryFileData, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
+import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/mermaidConverter'
 import { canvasFontsReady } from './canvas-fonts'
+import { withBoardToken } from './auth'
+import { STORAGE_KEYS, readSetting, writeSetting } from './storage'
 import { CollapsibleTarget, CommentPosted, IssueTarget } from './components/DocsPanel'
 import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
 import type { Rect } from '../../src/core/anchored-placement'
@@ -27,6 +29,10 @@ import {
 import { isBoardHotkeyChord, textEntryOwnsKeyboard } from './board-hotkeys'
 import { boardFitOptions, measureBoardChrome } from './board-fit'
 import { referenceImageName } from '../../src/core/pasted-images'
+import {
+  BOARD_IMAGE_BUDGET_BYTES, FILE_UPLOAD_LIMIT_BYTES, megabytes, referencedFileIds, uploadBatches
+} from '../../src/core/board-files'
+import type { BoardFile } from '../../src/core/board-files'
 import { layoutLabel, BOUND_TEXT_PADDING } from '../../src/core/text-layout'
 import {
   layoutMirror,
@@ -41,7 +47,7 @@ import {
   MIRROR_KIND,
   NOTES_OPTION_ID
 } from '../../src/core/project-board-layout'
-import type { CardImplementState, DraftBlock, MirrorColumn } from '../../src/core/project-board-layout'
+import type { CardImplementState, DraftBlock, MirrorAnchor, MirrorColumn } from '../../src/core/project-board-layout'
 import type { ProjectBoard } from '../../src/core/project-board-types'
 import { TerminalPanel } from './components/TerminalPanel'
 import {
@@ -62,6 +68,7 @@ import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
 import { ClaudeStatusHud } from './components/ClaudeStatusHud'
 import { RestartButton } from './components/RestartButton'
+import { ClearCanvasButton } from './components/ClearCanvasButton'
 import type { ClaudeEnvironmentStatus } from './components/ClaudeStatusHud'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
@@ -121,6 +128,11 @@ interface WebSocketMessage {
   mermaidDiagram?: string;
   config?: MermaidConfig;
   requestId?: string;
+  /** `initial_elements` sends a map keyed by file id; `files_added` sends a list. */
+  files?: Record<string, unknown> | unknown[];
+  /** `export_image_request` only: what to render, and whether to paint the background. */
+  format?: string;
+  background?: boolean;
   scrollToContent?: boolean;
   scrollToElementId?: string;
   scrollToElementIds?: string[];
@@ -134,10 +146,13 @@ interface ApiResponse {
   success: boolean;
   elements?: ServerElement[];
   element?: ServerElement;
-  files?: Record<string, unknown>;
+  /** `GET /api/files` answers with Excalidraw's own file records, keyed by file id. */
+  files?: Record<string, BinaryFileData>;
   count?: number;
   error?: string;
   message?: string;
+  /** Where `DELETE /api/elements/clear` put the board before emptying it, or null (#345). */
+  backup?: string | null;
 }
 
 /**
@@ -281,8 +296,11 @@ const FLUSH_POLL_MS = 50;
  * every board. Deliberately **not** `customData` — the block is derived and stripped at
  * both doors, so a size stored there would be dropped on the way to the store and read as
  * the block forgetting it.
+ *
+ * The name it is kept under, old and new, is `frontend/src/storage.ts`'s to say — as it is
+ * for the seven settings beside it.
  */
-const TERMINAL_FONT_STORAGE_KEY = 'excalidraw-terminal-font-size';
+const TERMINAL_FONT_STORAGE_KEY = STORAGE_KEYS.terminalFont;
 
 /**
  * Where the rect a board's terminal block was last left at is kept.
@@ -298,7 +316,7 @@ const TERMINAL_FONT_STORAGE_KEY = 'excalidraw-terminal-font-size';
  * second machine, viewing the same board gets its own arrangement — which is what every
  * other viewing preference here already does.
  */
-const TERMINAL_GEOMETRY_STORAGE_KEY = 'excalidraw-terminal-geometry';
+const TERMINAL_GEOMETRY_STORAGE_KEY = STORAGE_KEYS.terminalGeometry;
 
 interface TerminalRect { x: number; y: number; width: number; height: number }
 
@@ -311,7 +329,7 @@ interface TerminalRect { x: number; y: number; width: number; height: number }
  */
 const readTerminalGeometry = (workspace: string): TerminalRect | null => {
   try {
-    const raw = window.localStorage?.getItem(TERMINAL_GEOMETRY_STORAGE_KEY);
+    const raw = readSetting(TERMINAL_GEOMETRY_STORAGE_KEY);
     const stored = raw ? (JSON.parse(raw) ?? {})[workspace] : null;
     if (!stored || typeof stored !== 'object') return null;
     const { x, y, width, height } = stored as Record<string, unknown>;
@@ -329,10 +347,12 @@ const readTerminalGeometry = (workspace: string): TerminalRect | null => {
 /** Remember one board's rect, leaving every other board's alone. */
 const writeTerminalGeometry = (workspace: string, rect: TerminalRect): void => {
   try {
-    const raw = window.localStorage?.getItem(TERMINAL_GEOMETRY_STORAGE_KEY);
+    // Through the same door the read uses, so a first write after the rename merges into
+    // what the old key holds instead of over it: every other board's rect is in there.
+    const raw = readSetting(TERMINAL_GEOMETRY_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     const stored = parsed && typeof parsed === 'object' ? parsed : {};
-    window.localStorage?.setItem(
+    writeSetting(
       TERMINAL_GEOMETRY_STORAGE_KEY,
       JSON.stringify({ ...stored, [workspace]: rect })
     );
@@ -361,11 +381,11 @@ const writeTerminalGeometry = (workspace: string, rect: TerminalRect): void => {
  * from wherever the content stands rather than from a home it cannot know, and the worst it
  * costs is a documentation that stays where the last session's shells left it.
  */
-const DOCUMENTATION_SHIFT_STORAGE_KEY = 'excalidraw-documentation-shift';
+const DOCUMENTATION_SHIFT_STORAGE_KEY = STORAGE_KEYS.documentationShift;
 
 const readDocumentationShift = (workspace: string): number => {
   try {
-    const raw = window.localStorage?.getItem(DOCUMENTATION_SHIFT_STORAGE_KEY);
+    const raw = readSetting(DOCUMENTATION_SHIFT_STORAGE_KEY);
     const stored = raw ? (JSON.parse(raw) ?? {})[workspace] : null;
     // Validated rather than trusted, like the rect beside it: a key anybody can edit, and a
     // `NaN` here would move every authored shape on the board to nowhere.
@@ -379,10 +399,10 @@ const readDocumentationShift = (workspace: string): number => {
 /** Remember one board's shift, leaving every other board's alone. */
 const writeDocumentationShift = (workspace: string, shift: number): void => {
   try {
-    const raw = window.localStorage?.getItem(DOCUMENTATION_SHIFT_STORAGE_KEY);
+    const raw = readSetting(DOCUMENTATION_SHIFT_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     const stored = parsed && typeof parsed === 'object' ? parsed : {};
-    window.localStorage?.setItem(
+    writeSetting(
       DOCUMENTATION_SHIFT_STORAGE_KEY,
       JSON.stringify({ ...stored, [workspace]: shift })
     );
@@ -401,7 +421,7 @@ const writeDocumentationShift = (workspace: string, shift: number): void => {
  * turned "the board opens too small" into "if I dont zoom in": the correction had to be made
  * again on every refresh.
  */
-const BOARD_VIEWPORT_STORAGE_KEY = 'excalidraw-board-viewports';
+const BOARD_VIEWPORT_STORAGE_KEY = STORAGE_KEYS.boardViewports;
 
 /** How long a camera has to sit still before it is written down. */
 const VIEWPORT_SAVE_MS = 400;
@@ -428,7 +448,7 @@ const rememberedViewports = (): Map<string, BoardViewport> => {
   if (storedViewports) return storedViewports;
   storedViewports = new Map();
   try {
-    const raw = window.localStorage?.getItem(BOARD_VIEWPORT_STORAGE_KEY);
+    const raw = readSetting(BOARD_VIEWPORT_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     if (parsed && typeof parsed === 'object') {
       for (const [workspace, view] of Object.entries(parsed as Record<string, unknown>)) {
@@ -452,10 +472,10 @@ const rememberedViewports = (): Map<string, BoardViewport> => {
  */
 const writeBoardViewports = (views: Map<string, BoardViewport>): void => {
   try {
-    const raw = window.localStorage?.getItem(BOARD_VIEWPORT_STORAGE_KEY);
+    const raw = readSetting(BOARD_VIEWPORT_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     const stored = parsed && typeof parsed === 'object' ? parsed : {};
-    window.localStorage?.setItem(
+    writeSetting(
       BOARD_VIEWPORT_STORAGE_KEY,
       JSON.stringify({ ...stored, ...Object.fromEntries(views) })
     );
@@ -468,6 +488,17 @@ type CustomData = Record<string, unknown> | null | undefined;
 
 const customDataOf = (element: { customData?: CustomData } | undefined): Record<string, unknown> =>
   (element?.customData ?? {}) as Record<string, unknown>;
+
+/**
+ * The block a label is bound to, off a scene element of any kind, or null.
+ *
+ * `ExcalidrawElement` is a union of twelve exact element types and only the text member
+ * declares `containerId`, so a scene read as the union does not offer it — but every caller
+ * here is asking the same question of an element it has deliberately not narrowed: *is this
+ * a label, and whose?* The sibling of `customDataOf`, and there for the same reason.
+ */
+const containerIdOf = (element: unknown): string | null =>
+  (element as { containerId?: string | null } | null | undefined)?.containerId ?? null;
 
 /** Elements the mirror owns. Everything else on the canvas is the board's own drawing. */
 const isMirrorElement = (element: { customData?: CustomData }): boolean =>
@@ -810,7 +841,11 @@ const cleanElementForExcalidraw = (element: ServerElement): Partial<ExcalidrawEl
     syncTimestamp,
     ...cleanElement
   } = element;
-  return cleanElement;
+  // `ServerElement` is the wire shape and `ExcalidrawElement` is a union of twelve exact
+  // element types; nothing structural connects them, which is why every call site in this
+  // file already crosses that gap with a cast. See `validateAndFixBindings` for the other
+  // half of it.
+  return cleanElement as unknown as Partial<ExcalidrawElement>;
 }
 
 // Helper function to validate and fix element binding data
@@ -818,7 +853,14 @@ const validateAndFixBindings = (elements: Partial<ExcalidrawElement>[]): Partial
   const elementMap = new Map(elements.map(el => [el.id!, el]));
 
   return elements.map(element => {
-    const fixedElement = { ...element };
+    // `Partial<ExcalidrawElement>` distributes over Excalidraw's element union, so
+    // `containerId` — which only the bound-text member carries — is not readable off it, and
+    // `boundElements` is declared read-only on the members that do. The elements here came off
+    // the wire and are this function's own copies: repairing them in place is the point.
+    const fixedElement = { ...element } as Partial<ExcalidrawElement> & {
+      containerId?: string | null;
+      boundElements?: { id: string; type: string }[] | null;
+    };
 
     // Validate and fix boundElements
     if (fixedElement.boundElements) {
@@ -1069,7 +1111,7 @@ const convertElementsPreservingImageProps = (
 }
 
 /** Where the board a browser was last looking at is kept. */
-const WORKSPACE_STORAGE_KEY = 'excalidraw-canvas-workspace'
+const WORKSPACE_STORAGE_KEY = STORAGE_KEYS.workspace
 
 /**
  * The board this load should open, decided before anything connects.
@@ -1098,7 +1140,7 @@ function resolveInitialWorkspace(list: WorkspaceSummary[]): string | null {
     console.warn('Could not read the workspace from the URL:', error)
   }
   try {
-    hints.push(window.localStorage?.getItem(WORKSPACE_STORAGE_KEY) ?? null)
+    hints.push(readSetting(WORKSPACE_STORAGE_KEY))
   } catch (error) {
     console.warn('Could not read the last workspace:', error)
   }
@@ -1115,7 +1157,7 @@ function resolveInitialWorkspace(list: WorkspaceSummary[]): string | null {
  */
 function rememberWorkspace(workspaceId: string): void {
   try {
-    window.localStorage?.setItem(WORKSPACE_STORAGE_KEY, workspaceId)
+    writeSetting(WORKSPACE_STORAGE_KEY, workspaceId)
   } catch (error) {
     console.warn('Could not remember the workspace:', error)
   }
@@ -1195,7 +1237,17 @@ interface WarmBoard {
 }
 
 /** Where this browser remembers whether Excalidraw's own menus are hidden. */
-const CHROME_STORAGE_KEY = 'excalidraw-canvas-chrome'
+const CHROME_STORAGE_KEY = STORAGE_KEYS.chrome
+
+/**
+ * Where this browser remembers the board's palette.
+ *
+ * A constant because it was not one: the theme was the oldest of these settings and the only
+ * one written as a bare literal, the read at the top of `App` and the write in the hamburger
+ * five thousand lines below it. Two spellings of the same string is a key a rename pass can
+ * catch one half of, which is the shape of defect this whole set is now arranged against.
+ */
+const THEME_STORAGE_KEY = STORAGE_KEYS.theme
 
 function App(): JSX.Element {
   const [excalidrawAPI, setExcalidrawAPI] = useState<ExcalidrawAPIRefValue | null>(null)
@@ -1220,10 +1272,31 @@ function App(): JSX.Element {
   /** Set when the socket's own initial message already delivered this board's files. */
   const filesFromSocketRef = useRef<string | null>(null)
 
+  /**
+   * The file ids this page knows the server is holding for the board it is looking at.
+   *
+   * The autosync uploads what the board points at and the server has not seen, and this is
+   * the "has not seen" half. Everything the server *tells* us it has goes in — the socket's
+   * `initial_elements`, a `files_added` broadcast, the loader's own `GET /api/files` — and so
+   * does everything a `POST` of ours succeeded with. Naming a board rather than a bare set is
+   * what makes the two failure modes impossible: carried across a board switch it would skip
+   * uploading files the new board needs, and carried across a *reconnect to a restarted
+   * server* it would claim a store that no longer exists holds them. Both reset themselves,
+   * because both change `sceneKey()`.
+   */
+  const serverFilesRef = useRef<{ key: string; ids: Set<string> }>({ key: '', ids: new Set() })
+
+  /**
+   * Images this board has been told about and will not try again: one too large to post at
+   * all, or a board over its saved-image budget. Said once per board, not once per second.
+   */
+  const refusedFilesRef = useRef<Set<string>>(new Set())
+  const budgetSaidForRef = useRef<string | null>(null)
+
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window === 'undefined') return 'light'
     try {
-      const saved = window.localStorage?.getItem('excalidraw-canvas-theme')
+      const saved = readSetting(THEME_STORAGE_KEY)
       if (saved === 'light' || saved === 'dark') return saved
     } catch (error) {
       console.warn('Failed to read theme from localStorage:', error)
@@ -1248,7 +1321,7 @@ function App(): JSX.Element {
   const [chromeHidden, setChromeHidden] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false
     try {
-      return window.localStorage?.getItem(CHROME_STORAGE_KEY) === 'hidden'
+      return readSetting(CHROME_STORAGE_KEY) === 'hidden'
     } catch (error) {
       console.warn('Failed to read the menu setting from localStorage:', error)
       return false
@@ -2378,7 +2451,7 @@ function App(): JSX.Element {
    * board's content still cannot decide this one's placement, which is what the reset was
    * actually for. A reload is still what re-measures, the way it is for the terminal.
    */
-  const mirrorOriginsRef = useRef<Map<string, { x: number; y: number }>>(new Map())
+  const mirrorOriginsRef = useRef<Map<string, MirrorAnchor>>(new Map())
 
   const clearMirror = (): void => {
     projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, signature: '' }
@@ -2623,12 +2696,12 @@ function App(): JSX.Element {
     // reader's.
     const nextOwn = own.map((element) => {
       if (isTerminalElement(element)) return element
-      if (frozen && (element.id === frozen || element.containerId === frozen)) return element
-      const slot = placed.get(element.containerId ?? '') ?? placed.get(element.id)
+      if (frozen && (element.id === frozen || containerIdOf(element) === frozen)) return element
+      const slot = placed.get(containerIdOf(element) ?? '') ?? placed.get(element.id)
       if (!slot) return element
       // A label moves with its container, and keeps its own centring.
-      const isLabel = Boolean(element.containerId)
-      const container = isLabel ? drafts.find((draft) => draft.id === element.containerId) : element
+      const isLabel = Boolean(containerIdOf(element))
+      const container = isLabel ? drafts.find((draft) => draft.id === containerIdOf(element)) : element
       if (!container) return element
       return {
         ...element,
@@ -2706,7 +2779,7 @@ function App(): JSX.Element {
     const untouched = new Map(
       frozen
         ? own
-          .filter((element) => element.id === frozen || element.containerId === frozen)
+          .filter((element) => element.id === frozen || containerIdOf(element) === frozen)
           .map((element) => [element.id, element] as const)
         : []
     )
@@ -2775,7 +2848,8 @@ function App(): JSX.Element {
 
     const doomed = new Set(done.map((element) => element.id))
     for (const element of scene) {
-      if (element.containerId && doomed.has(element.containerId)) doomed.add(element.id)
+      const container = containerIdOf(element)
+      if (container && doomed.has(container)) doomed.add(element.id)
     }
 
     // Deleted on the server too: the sync never treats absence as a deletion, so a block
@@ -3481,7 +3555,7 @@ function App(): JSX.Element {
   const [terminalFont, setTerminalFont] = useState<number>(() => {
     if (typeof window === 'undefined') return TERMINAL_FONT_SIZE
     try {
-      return clampTerminalFont(window.localStorage?.getItem(TERMINAL_FONT_STORAGE_KEY))
+      return clampTerminalFont(readSetting(TERMINAL_FONT_STORAGE_KEY))
     } catch (error) {
       console.warn('Failed to read the terminal font size from localStorage:', error)
       return TERMINAL_FONT_SIZE
@@ -3570,7 +3644,8 @@ function App(): JSX.Element {
     // reads the container off the scene, so an orphan label would stop looking derived and
     // start being stored.
     for (const element of scene) {
-      if (element.containerId && dropped.has(element.containerId)) dropped.add(element.id)
+      const container = containerIdOf(element)
+      if (container && dropped.has(container)) dropped.add(element.id)
     }
 
     let changed = added.length > 0 || dropped.size > 0
@@ -4446,7 +4521,7 @@ function App(): JSX.Element {
   useEffect(() => {
     terminalFontRef.current = terminalFont
     try {
-      window.localStorage?.setItem(TERMINAL_FONT_STORAGE_KEY, String(terminalFont))
+      writeSetting(TERMINAL_FONT_STORAGE_KEY, String(terminalFont))
     } catch (error) {
       console.warn('Failed to save the terminal font size to localStorage:', error)
     }
@@ -5153,6 +5228,10 @@ function App(): JSX.Element {
 
     if (warm.files.length > 0) {
       api.addFiles(warm.files as Parameters<ExcalidrawImperativeAPI['addFiles']>[0])
+      // They came from the server on this board's own socket, so they are the server's.
+      noteServerFiles((warm.files as { id?: string }[])
+        .map((file) => file?.id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0))
     }
     applySceneUpdateWithoutAutoSync(api, {
       elements: [
@@ -5258,6 +5337,25 @@ function App(): JSX.Element {
     // could ship.
     setWorkspaceDialog(null)
     switchWorkspace(workspace.id)
+  }
+
+  /**
+   * A project the settings dialog has just taken off the registry.
+   *
+   * The mirror of `adoptWorkspace`, and it has the same reason not to reload: the registry is
+   * read per request, so the list the route answered with is already the truth, and a reload
+   * here would throw away every unsynced shape on whatever board is open.
+   *
+   * The tab that was removed is by construction the active one — the gear that opens this
+   * dialog is only drawn on the tab in front — so the board has to go somewhere. The first of
+   * what is left, and `default` when nothing is: that is the board of somebody who has
+   * registered nothing, which is exactly what removing the last project makes them again.
+   */
+  const forgetWorkspace = (removedId: string, list: WorkspaceSummary[]): void => {
+    setWorkspaces(list)
+    setWorkspaceDialog(null)
+    if (removedId !== activeWorkspaceRef.current) return
+    switchWorkspace(list[0]?.id ?? 'default')
   }
 
   /**
@@ -5394,7 +5492,7 @@ function App(): JSX.Element {
         const convertedElements = convertElementsPreservingImageProps(cleanedElements)
         if (excalidrawAPI) {
           applySceneUpdateWithoutAutoSync(excalidrawAPI, {
-            elements: convertedElements,
+            elements: convertedElements as ExcalidrawElement[],
             captureUpdate: CaptureUpdateAction.NEVER
           })
           // The store holds no terminal block — they are derived and never synced — and this
@@ -5413,6 +5511,7 @@ function App(): JSX.Element {
           const filesResult = await filesResponse.json() as ApiResponse
           if (filesResult.files) {
             excalidrawAPI?.addFiles(Object.values(filesResult.files))
+            noteServerFiles(Object.keys(filesResult.files))
           }
         }
       }
@@ -5535,9 +5634,12 @@ function App(): JSX.Element {
     // The socket declares its board once: the server then filters events to it, so a
     // tab never redraws with another board's shapes. And who it is, so that a write this
     // page sends over HTTP is not read back to it over here — see `CLIENT_ID`.
-    const wsUrl = `${protocol}//${window.location.host}`
+    // And the board token, because the upgrade is gated on it exactly as `/api` is — it streams
+    // the scene and every live shell's scrollback the moment it opens. On the URL rather than in
+    // a header because the `WebSocket` constructor has nowhere to put one; see ./auth.ts.
+    const wsUrl = withBoardToken(`${protocol}//${window.location.host}`
       + `?workspace=${encodeURIComponent(activeWorkspaceRef.current)}`
-      + `&client=${encodeURIComponent(CLIENT_ID)}`
+      + `&client=${encodeURIComponent(CLIENT_ID)}`)
 
     connectionGenerationRef.current += 1
     const socket = new WebSocket(wsUrl)
@@ -5636,7 +5738,7 @@ function App(): JSX.Element {
 
         const convertedElements = convertElementsPreservingImageProps(mergedElements)
         applySceneUpdateWithoutAutoSync(excalidrawAPI, {
-          elements: convertedElements,
+          elements: convertedElements as ExcalidrawElement[],
           captureUpdate: CaptureUpdateAction.NEVER
         })
       }
@@ -5663,7 +5765,7 @@ function App(): JSX.Element {
             } else {
               const convertedElements = convertElementsPreservingImageProps(cleanedElements)
               applySceneUpdateWithoutAutoSync(excalidrawAPI, {
-                elements: convertedElements,
+                elements: convertedElements as ExcalidrawElement[],
                 captureUpdate: CaptureUpdateAction.NEVER
               })
             }
@@ -5678,6 +5780,9 @@ function App(): JSX.Element {
           if ((data as any).files) {
             excalidrawAPI.addFiles(Object.values((data as any).files))
             filesFromSocketRef.current = sceneKey()
+            // And this is the server saying which files it holds — the only statement of it
+            // this page gets on a fresh connection, and therefore what the upload skips.
+            noteServerFiles(Object.keys((data as any).files))
           }
           if (landingOnANewBoard) finishBoardSwitch()
           // The scene was just replaced wholesale, and the terminal's blocks are derived, so
@@ -5689,6 +5794,9 @@ function App(): JSX.Element {
         case 'files_added':
           if (Array.isArray((data as any).files)) {
             excalidrawAPI.addFiles((data as any).files)
+            noteServerFiles(((data as any).files as { id?: string }[])
+              .map((file) => file?.id)
+              .filter((id): id is string => typeof id === 'string' && id.length > 0))
           }
           break
 
@@ -6092,6 +6200,103 @@ function App(): JSX.Element {
   }
 
   /**
+   * What the server is known to hold for the board on screen, reset when that board changes.
+   *
+   * A reconnect changes it too, and deliberately: the socket that just came back may belong
+   * to a process that was restarted, whose file store is whatever it read off disk. Starting
+   * from nothing there costs one re-upload of a board's images on a reconnect and buys the
+   * case where the store really did lose them — an image is an upsert by id, so the redundant
+   * half is cheap and the missing half is the whole feature.
+   */
+  const knownServerFiles = (): Set<string> => {
+    const key = sceneKey()
+    if (serverFilesRef.current.key !== key) {
+      serverFilesRef.current = { key, ids: new Set() }
+      refusedFilesRef.current = new Set()
+    }
+    return serverFilesRef.current.ids
+  }
+
+  /** The server holds these — because it said so, or because a POST of ours landed. */
+  const noteServerFiles = (ids: Iterable<string>): void => {
+    const held = knownServerFiles()
+    for (const id of ids) held.add(id)
+  }
+
+  /**
+   * Put the bytes behind this board's images on the server, before the elements that name
+   * them.
+   *
+   * This is the half of the file store that was never built. `POST /api/files` existed for
+   * the issue block's picker and nothing else ever called it, so an image pasted on the
+   * canvas synced as an element with a `fileId` and no bytes anywhere but this tab: reload,
+   * and the board came back with a hole in it (#343).
+   *
+   * Three things it is careful about, all of them the naive version's cost:
+   *
+   *  - **only what is new.** A board with ten screenshots would otherwise re-post megabytes
+   *    on every debounce, which is a second of the machine's time per drag.
+   *  - **only what fits.** `express.json` refuses a body over ten megabytes, so the upload is
+   *    split into requests that will land, and an image too large to be posted at all is said
+   *    out loud rather than retried into a 413 forever.
+   *  - **never fatal.** A failed upload leaves the ids out of the known set so the next change
+   *    tries again; it does not take the element sync down with it, because a board that
+   *    cannot post one image must still be able to save the sentence somebody just typed.
+   */
+  const syncSceneFiles = async (
+    api: ExcalidrawImperativeAPI,
+    elements: readonly ExcalidrawElement[]
+  ): Promise<void> => {
+    const wanted = referencedFileIds(elements as unknown as { fileId?: unknown }[])
+    if (!wanted.length) return
+
+    const held = (api.getFiles() ?? {}) as Record<string, BoardFile | undefined>
+    const carried = wanted.map((id) => held[id]).filter((file): file is BoardFile => Boolean(file?.dataURL))
+
+    // Said where the reader is, because the alternative is a board that looks complete today
+    // and comes back short tomorrow. The cap is the save's, so the sentence is about the save.
+    const total = carried.reduce((sum, file) => sum + file.dataURL.length, 0)
+    if (total > BOARD_IMAGE_BUDGET_BYTES && budgetSaidForRef.current !== sceneKey()) {
+      budgetSaidForRef.current = sceneKey()
+      sayOnCanvas(api, `This board is carrying more than ${megabytes(BOARD_IMAGE_BUDGET_BYTES)}`
+        + ' of images. They are all on the canvas, but the ones over that line are not saved,'
+        + ' so they will not come back after a restart.')
+    }
+
+    const known = knownServerFiles()
+    const pending = carried.filter((file) => !known.has(file.id) && !refusedFilesRef.current.has(file.id))
+    if (!pending.length) return
+
+    const { batches, refused } = uploadBatches(pending)
+    for (const file of refused) {
+      refusedFilesRef.current.add(file.id)
+      sayOnCanvas(api, `An image on this board is larger than ${megabytes(FILE_UPLOAD_LIMIT_BYTES)}`
+        + ' once encoded, which is more than the board can store. It stays on the canvas and'
+        + ' will not survive a reload.')
+    }
+
+    for (const batch of batches) {
+      try {
+        // No workspace on the path: the file store is content-addressed and process-wide, so
+        // the same id is the same image on every board — which is the same reasoning
+        // `attachIssueImages` posts under.
+        const response = await fetch('/api/files', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files: batch })
+        })
+        if (!response.ok) {
+          console.warn(`Could not store ${batch.length} image(s): HTTP ${response.status}`)
+          continue
+        }
+        noteServerFiles(batch.map((file) => file.id))
+      } catch (error) {
+        console.warn('Could not store this board\'s images:', error)
+      }
+    }
+  }
+
+  /**
    * Main sync function. Answers whether the scene actually reached the server.
    *
    * The answer matters to one caller — the flush a reconnect makes before it accepts a scene
@@ -6138,9 +6343,17 @@ function App(): JSX.Element {
       // would be a text element whose container the store has never heard of.
       const scene = api.getSceneElementsIncludingDeleted()
       const derivedIds = new Set(scene.filter(isDerivedElement).map((element) => element.id))
-      const currentElements = scene.filter((element) => !isDerivedElement(element)
-        && !(element.containerId && derivedIds.has(element.containerId)))
+      const currentElements = scene.filter((element) => {
+        if (isDerivedElement(element)) return false
+        const container = containerIdOf(element)
+        return !(container && derivedIds.has(container))
+      })
       console.log(`Syncing ${currentElements.length} elements to backend`)
+
+      // 2. The bytes behind this board's images, before the elements that name them — so the
+      // store never takes in an element whose file it has never seen, which is the state a
+      // second window and every future reload read as a hole in the board (#343).
+      await syncSceneFiles(api, currentElements)
 
       // 3. Convert to backend format
       const backendElements = currentElements.map(convertToBackendFormat)
@@ -6274,7 +6487,7 @@ function App(): JSX.Element {
     setChromeHidden((hidden) => {
       const next = !hidden
       try {
-        window.localStorage?.setItem(CHROME_STORAGE_KEY, next ? 'hidden' : 'visible')
+        writeSetting(CHROME_STORAGE_KEY, next ? 'hidden' : 'visible')
       } catch (error) {
         console.warn('Failed to save the menu setting to localStorage:', error)
       }
@@ -6282,33 +6495,58 @@ function App(): JSX.Element {
     })
   }
 
+  /**
+   * What the tab in front says this board is called.
+   *
+   * The id is the fallback, and it is a real state rather than padding: before
+   * `/api/workspaces` has answered there is no list to look the name up in, and a canvas
+   * nobody has registered a project on has no name but `default`. A dialog that has to name
+   * the board it is about would rather say `default` than say nothing.
+   */
+  const activeBoardName = workspaces.find((workspace) => workspace.id === activeWorkspace)?.name?.trim()
+    || activeWorkspace
+
+  /** What the confirmation counts: the store, which is the half that gets emptied and saved. */
+  const countOnBoard = async (): Promise<number> => {
+    const result: ApiResponse = await (await fetch(apiUrl('/api/elements'))).json()
+    if (!result.success) throw new Error(result.error ?? 'the board did not answer')
+    return result.elements?.length ?? 0
+  }
+
+  /**
+   * Empty this board, having asked.
+   *
+   * One request rather than one `DELETE` per element. That is not only fewer round trips: the
+   * copy that makes this recoverable is taken by `DELETE /api/elements/clear` itself, and a
+   * loop of per-id deletes walks straight past it — as well as leaving the board half emptied
+   * if it fails in the middle, which is the worst of the three outcomes.
+   *
+   * A failure leaves the canvas alone now. It used to clear the scene anyway, on the reasoning
+   * that the reader asked for an empty board; with boards that are saved, that shows an empty
+   * canvas over a full store and invites the next sync to make the lie true.
+   */
   const clearCanvas = async (): Promise<void> => {
-    if (excalidrawAPI) {
-      try {
-        // Get all current elements and delete them from backend
-        const response = await fetch(apiUrl('/api/elements'))
-        const result: ApiResponse = await response.json()
+    if (!excalidrawAPI) return
+    try {
+      const response = await fetch(apiUrl('/api/elements/clear'), { method: 'DELETE' })
+      const result: ApiResponse = await response.json()
 
-        if (result.success && result.elements) {
-          const deletePromises = result.elements.map(element =>
-            fetch(apiUrl(`/api/elements/${element.id}`), { method: 'DELETE' })
-          )
-          await Promise.all(deletePromises)
-        }
-
-        // Clear the frontend canvas
-        applySceneUpdateWithoutAutoSync(excalidrawAPI, {
-          elements: [],
-          captureUpdate: CaptureUpdateAction.IMMEDIATELY
-        })
-      } catch (error) {
-        console.error('Error clearing canvas:', error)
-        // Still clear frontend even if backend fails
-        applySceneUpdateWithoutAutoSync(excalidrawAPI, {
-          elements: [],
-          captureUpdate: CaptureUpdateAction.IMMEDIATELY
-        })
+      if (!response.ok || !result.success) {
+        sayOnCanvas(excalidrawAPI, `The board was not cleared: ${result.error ?? `the server answered ${response.status}`}. Nothing was deleted.`)
+        return
       }
+
+      applySceneUpdateWithoutAutoSync(excalidrawAPI, {
+        elements: [],
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY
+      })
+
+      sayOnCanvas(excalidrawAPI, result.backup
+        ? `Cleared ${result.count ?? 0} elements. The board as it was is in ${result.backup}.`
+        : `Cleared ${result.count ?? 0} elements. No copy was kept: this board has nowhere to save.`)
+    } catch (error) {
+      console.error('Error clearing canvas:', error)
+      sayOnCanvas(excalidrawAPI, `The board was not cleared: ${(error as Error).message}. Nothing was deleted.`)
     }
   }
 
@@ -6327,10 +6565,12 @@ function App(): JSX.Element {
       {workspaceDialog === 'config' && (
         <WorkspaceConfigDialog
           workspaceId={activeWorkspace}
+          workspacePath={workspaces.find((workspace) => workspace.id === activeWorkspace)?.path ?? ''}
           onClose={() => setWorkspaceDialog(null)}
           // Only the list is replaced: the board is already showing this project, so
           // switching to it again would empty the scene and reconnect for nothing.
           onSaved={(_workspace, list) => { setWorkspaces(list); setWorkspaceDialog(null) }}
+          onRemoved={forgetWorkspace}
         />
       )}
 
@@ -6376,7 +6616,7 @@ function App(): JSX.Element {
           <div className="sync-controls">
             <button
               className={`btn-primary ${syncStatus === 'syncing' ? 'btn-loading' : ''}`}
-              onClick={syncToBackend}
+              onClick={() => { void syncToBackend() }}
               disabled={syncStatus === 'syncing' || !excalidrawAPI}
             >
               {syncStatus === 'syncing' && <span className="spinner"></span>}
@@ -6417,7 +6657,22 @@ function App(): JSX.Element {
             {chromeHidden ? 'Show Menus' : 'Hide Menus'}
           </button>
 
-          <button className="btn-secondary" onClick={clearCanvas}>Clear Canvas</button>
+          {/*
+            Beside the restart button, which is the other one whose press cannot be taken
+            back, and behind a confirmation for the same reason. The board it names is the
+            one whose tab is in front, because on a bar that carries every project the
+            question "which board is this" is the one a reader most needs answered before
+            they answer this one.
+          */}
+          <ClearCanvasButton
+            boardName={activeBoardName}
+            readCount={countOnBoard}
+            onClear={clearCanvas}
+            onNothingToClear={(board) => {
+              if (excalidrawAPI) sayOnCanvas(excalidrawAPI, `There is nothing on ${board} to clear.`)
+            }}
+            disabled={!excalidrawAPI}
+          />
 
           {/*
             The one control here that acts on the server rather than on the canvas, so it sits
@@ -6472,7 +6727,7 @@ function App(): JSX.Element {
               if (appState?.theme && appState.theme !== theme) {
                 setTheme(appState.theme)
                 try {
-                  window.localStorage?.setItem('excalidraw-canvas-theme', appState.theme)
+                  writeSetting(THEME_STORAGE_KEY, appState.theme)
                 } catch (error) {
                   console.warn('Failed to save theme to localStorage:', error)
                 }

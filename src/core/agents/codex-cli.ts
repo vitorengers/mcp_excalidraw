@@ -124,6 +124,18 @@ export const codexCliAdapter: AgentAdapter = {
     }
   },
 
+  /**
+   * Codex's own vocabulary, silent members included — see `AgentAdapter.claimedTypes`.
+   *
+   * The four silent ones are named rather than left out, because #325's rule is that an
+   * envelope this backend has never heard of is printed rather than dropped, and a
+   * `thread.started` printed verbatim would open every Codex transcript with a line of JSON.
+   */
+  claimedTypes: new Set([
+    'thread.started', 'turn.started', 'turn.completed', 'turn.failed', 'error',
+    'item.started', 'item.updated', 'item.completed',
+  ]),
+
   actionOf: codexAction,
 };
 

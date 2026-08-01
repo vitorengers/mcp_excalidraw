@@ -25,7 +25,7 @@ import {
   type AgentAdapter, type AgentInvocation, type AgentInvokeSpec,
 } from '../agent-adapter.js';
 import { readClaudeUsage } from '../agent-usage.js';
-import { renderClaudeEvent } from '../agent-stream-render.js';
+import { CLAUDE_CLAIMED_TYPES, renderClaudeEvent } from '../agent-stream-render.js';
 import { agentAction } from '../terminal-palette.js';
 
 /** What a headless run has to say to print an answer, exit, and speak while it works. */
@@ -77,5 +77,6 @@ export const claudeCodeAdapter: AgentAdapter = {
 
   readUsage: readClaudeUsage,
   renderEvent: renderClaudeEvent,
+  claimedTypes: CLAUDE_CLAIMED_TYPES,
   actionOf: agentAction,
 };

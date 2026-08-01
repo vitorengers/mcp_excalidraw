@@ -61,7 +61,7 @@ async function importDist(relative, what) {
 
 const { runImplementAgent, IMPLEMENT_AGENT_PROMPT } =
   await importDist(join('core', 'implement-agent.js'), 'the implement agent');
-const { runIssueAgent, ISSUE_AGENT_PROMPT, workflowSection } =
+const { runIssueAgent, ISSUE_AGENT_PROMPT, workflowSection, issueTargetSection } =
   await importDist(join('core', 'issue-agent.js'), 'the issue agent');
 const { loadWorkspaces, loadAgentWorkflow, validateWorkspaceConfigPatch, AGENT_WORKFLOW_DIR } =
   await importDist(join('core', 'workspaces.js'), 'the workspace registry');
@@ -192,11 +192,19 @@ async function issueRun(id) {
   });
 }
 
-/** The prompt each agent sends when nothing at all has been selected. */
+/**
+ * The prompt each agent sends when nothing at all has been selected.
+ *
+ * The issue side composes in `issueTargetSection` because every project here names a `repo`,
+ * and since #335 a board that names one says so in the prompt. That is not this check's
+ * subject: what it asserts is that selecting no *workflow* adds nothing, so the baseline is
+ * the same board with no workflow rather than a constant that would drift from it.
+ */
 const IMPLEMENT_BASELINE =
   `${IMPLEMENT_AGENT_PROMPT}\n\n---\n\nThe issue to implement:\n\n${ISSUE_URL}`;
 const ISSUE_BASELINE =
-  `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${OBSERVATION}`;
+  `${ISSUE_AGENT_PROMPT}\n\n---\n\nObservation:\n\n${OBSERVATION}`
+  + issueTargetSection(workspaceOf('plain'));
 
 /**
  * Where the missing project's file would have been, as the error has to name it.

@@ -15,12 +15,17 @@ The board itself is cut into two halves, each with a key that scrolls onto it �
 
 | Document | What it covers |
 |---|---|
-| [running.md](running.md) | How to start the board: the build, the port, and what every `EXCALIDRAW_*` variable means |
+| [architecture.md](architecture.md) | How the pieces fit: every directory, and one press on an issue block traced to the agent it spawns |
+| [install.md](install.md) | Getting a board up on Windows, macOS or Linux — the one command, the launchers, and from source |
+| [running.md](running.md) | The operator and development procedure: the build, the port, and what every `EXCALIDRAW_*` variable means |
 | [launchers.md](launchers.md) | The three double-click launchers, and why not a SEA, an Electron shell or a signed app |
 | [configuration.md](configuration.md) | Where those values are read from: `config.json` in the state directory, a `<cwd>/.env`, the environment |
 | [workspaces.md](workspaces.md) | One project per board — the registry, `board.config.json`, and the settings dialog |
+| [agents.md](agents.md) | Choosing the coding agent — a Claude Code recipe, a Codex CLI recipe, and the rules that hold for the third one |
 | [without-github.md](without-github.md) | The four levels of absent GitHub, and what each one keeps and loses |
+| [SECURITY.md](SECURITY.md) | The trust model: what the tool runs as, which switches spawn code, the bind and the origin gate, and where to report a vulnerability |
 | [board-sections.md](board-sections.md) | The two halves of the board and the keys that reach them |
+| [faq.md](faq.md) | The questions the front page used to answer at length, and the failures worth recognising on sight |
 | [whats-next.md](whats-next.md) | What has not shipped |
 | [development-log.md](development-log.md) | One dated entry per merged pull request: the issue, the pull request, and what was decided |
 
@@ -44,7 +49,7 @@ The board itself is cut into two halves, each with a key that scrolls onto it �
 ## The blocks on the canvas
 
 A shape's `customData` decides what it is: a `docKey` makes it a documentation card, and a
-`kind` makes it one of the four functional blocks.
+`kind` makes it either a functional block or one of the marks a key aims at.
 
 | Document | What it covers |
 |---|---|
@@ -55,8 +60,9 @@ A shape's `customData` decides what it is: a `docKey` makes it a documentation c
 | [terminal.md](terminal.md) | `customData.kind = "terminal"` — real shells, as tabs, on the board |
 | [shared-library.md](shared-library.md) | The `.excalidrawlib` shapes every board gets |
 
-`customData.kind = "board-section"` is the fourth kind; it is a mark rather than a block, and
-[board-sections.md](board-sections.md) covers it.
+`customData.kind = "board-section"` and `customData.kind = "board-subsection"` are marks rather
+than blocks — a half of the board and a part of that half — and
+[board-sections.md](board-sections.md) covers both.
 
 ## Traps already paid for
 

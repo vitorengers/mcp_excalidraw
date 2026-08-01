@@ -16,6 +16,12 @@ client than an attack.
 
 Ids are normalised to `^[a-z0-9][a-z0-9._-]{0,63}$` before they are compared or logged.
 
+That is what a request carries; how each client decides *what to carry* is its own question. The
+browser appends the active tab (`apiUrl` in `frontend/src/App.tsx`); the CLI and the MCP tools
+resolve one in `src/core/canvas-client.ts` from `--workspace`, a tool's `workspace` argument or
+`EXCALIDRAW_WORKSPACE`, and refuse rather than guess when a board has several projects and
+nothing named one — [workspaces.md](workspaces.md).
+
 ## Two deliberate choices
 
 **Stores are created on first use.** There is no registration step: an unknown workspace id
@@ -85,10 +91,43 @@ and not a minute.
 mirror is rebuilt from GitHub on every read, and the terminal's block exists for as long as its
 shell does. The browser already keeps both out of the autosync and `scripts/export-board.mjs` keeps
 them out of the export; this is the third door, and it needs to be, because the store is reachable
-from the REST API too. Files are not saved, exactly as the export does not save them: an image
-pasted onto a board comes back as an element whose file the process no longer holds.
+from the REST API too.
 
-`scripts/export-board.mjs` is still the only path into the tracked board file, and still run by hand.
+**Images are saved too**, since #343, and that is the one thing here with a ceiling on it. Until then
+the save wrote `files: {}` and the autosync uploaded no bytes at all, so an image pasted on a board
+was an element whose file existed only in the tab it was pasted into — every reload came back with a
+hole where the picture was, and a second window never saw it. Both halves are closed: the browser
+posts the bytes its scene names to `POST /api/files` before the elements that name them, and the
+save writes the files its own saved elements point at. A dataURL is base64 and this file is
+rewritten on a one-second debounce, so a board's images are written up to
+`BOARD_IMAGE_BUDGET_BYTES` — 32 MB, which is a save of 60 to 100 ms and about twenty full-screen
+screenshots. Past that line the board still shows every image and the ones over it are named in a
+warning and said on the canvas; what they lose is surviving the process.
+
+`scripts/export-board.mjs` is still the only path into the tracked board file, and still run by hand,
+and it still writes no files — so a *tracked* board carries none.
+
+## What is kept when a board is emptied
+
+`DELETE /api/elements/clear` writes the store out first, to
+`<workspace>.cleared-<when>.excalidraw` in the same directory as the saved board, and answers with
+that path in `backup`. Nothing reads it back automatically — `readBoardState` opens
+`<workspace>.excalidraw` by name, so a copy beside it is never mistaken for the board — and
+nothing deletes it either. It is a file for a person, or for the agent that has just been told
+where it is.
+
+The copy is taken **in the route** rather than in the callers. Everything that empties a board
+comes through there, and only one of those callers has a person in front of it: the header's
+`Clear Canvas` confirms first, but the MCP `clear_canvas` tool, the CLI's `clear --yes` and
+`restore_snapshot` — which clears *before* it restores — do not, and must not start to. A
+confirmation in front of the route would break an agent-facing contract; a copy behind it breaks
+nothing.
+
+It is not gated on whether the board is one of the saved ones. That gate is there so a request
+naming a workspace nobody registered cannot create a file per typo, and it cannot here either: a
+store nobody has written to has no elements, and a board with no elements is not copied. What
+the gate would cost instead is the case the copy exists for — an unregistered board holding the
+only copy of something, emptied by a tool call (#345).
 
 ## Which of the two a board comes back from
 
@@ -124,6 +163,8 @@ which is the only participant that was still there.
 A tombstone (`isDeleted`) is dropped rather than stored: it travels through a live sync so a client
 can be told about a removal it has not seen, and a board read from cold has nobody to tell.
 
-`scene.files` is read into the process-wide file store. Nothing comes back through it today —
-`scripts/export-board.mjs` writes an empty `files` object unconditionally — and it is what keeps the
-first export that does save them from seeding image elements as broken references.
+`scene.files` is read into the process-wide file store, and since #343 this is how a board gets its
+pictures back: the save writes the files its elements point at, and without this door the seed would
+put those elements back as references to bytes nobody holds. A tracked board file still carries none
+— `scripts/export-board.mjs` writes an empty `files` object unconditionally — so the read is lenient
+about the object being absent rather than treating it as a malformed scene.

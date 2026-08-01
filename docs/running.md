@@ -1,8 +1,13 @@
 # Running the board
 
-How to start VibeMaxxing. Until #151 this was written down nowhere in the repository: four
-tracked documents cited a PowerShell start script that has never been in `git ls-files`, and the
-only start instruction a clone actually got was the upstream README's port 3000 — which
+**This is the operator and development procedure** — the environment a configured board runs
+with, restarting it, and running the checks. If you are trying to get a board up for the first
+time, [install.md](install.md) is that document and it is shorter: one command, or one
+double-click, on whichever platform you are on.
+
+Until #151 the procedure was written down nowhere in the repository: four tracked documents
+cited a PowerShell start script that has never been in `git ls-files`, and the only start
+instruction a clone actually got was the upstream README's port 3000 — which
 [trap-port-3000.md](trap-port-3000.md) explains can never work on the machine this fork is
 developed on.
 
@@ -24,14 +29,72 @@ npm run build            # vite build, then tsc — the server serves the built 
 node dist/server.js      # with the environment below
 ```
 
-Then open `http://127.0.0.1:<PORT>`. A tab has to be open for anything that renders: screenshots,
-PNG/SVG export, viewport control and Mermaid conversion all happen in the frontend.
+Then open the board. **Not the bare address**: since #350 everything under `/api` is behind a
+secret the server writes to its state directory at startup, so `http://127.0.0.1:<PORT>` typed by
+hand loads a page and leaves it empty. `vibemaxxing` opens it correctly against a board that is
+already running, and [install.md](install.md#opening-the-board-yourself) has the address written
+out for a machine where that is not an option. A tab has to be open for anything that renders:
+screenshots, PNG/SVG export, viewport control and Mermaid conversion all happen in the frontend.
 
 An installed copy does all three of those in one word — `vibemaxxing`, with no arguments, starts
 the board, opens the tab and prints `VibeMaxxing <version> — <url>`. That is the path a user
-takes; the procedure above is the one an operator takes, because it is the environment below that
-this document exists for. See [cli.md](cli.md) for when a bare invocation means the MCP stdio
-server instead, and for `--no-open`.
+takes and [install.md](install.md) is where it is written out, for each platform; the procedure
+above is the one an operator takes, because it is the environment below that this document
+exists for. See [cli.md](cli.md) for when a bare invocation means the MCP stdio server instead,
+and for `--no-open`.
+
+## The first run: register the clone as its own project
+
+**A clone that has just been built and started comes up on a blank canvas, and that is not a
+broken build.** No tabs, no cards, no blocks. The board on screen is `default` — the board of
+somebody who has registered no project — and nothing on disk is behind it. The tracked
+`board.config.json` at the root of this repository does name a board file, but that field
+belongs to a *project*, and until a registry names one there is no project for it to belong to.
+Which is why the registry is the first thing to set rather than an optional extra: it is what
+turns this clone into a board that shows its own documentation cards and its own map of itself.
+
+1. **Write a registry file** wherever you keep configuration — `workspaces.json` beside your
+   `.env` will do — with one entry pointing at this clone. Write the path with forward slashes,
+   on Windows too:
+
+   ```json
+   {
+     "workspaces": [
+       { "id": "vibemaxxing", "path": "C:/Users/you/Documents/Projects/vibemaxxing" }
+     ]
+   }
+   ```
+
+2. **Point `EXCALIDRAW_WORKSPACES` at that file, and start the board** as in the short version
+   above. The boards are read from disk once, at startup, so the variable has to be there before
+   the server is:
+
+   ```bash
+   EXCALIDRAW_WORKSPACES=/path/to/workspaces.json node dist/server.js
+   ```
+
+   ```powershell
+   $env:EXCALIDRAW_WORKSPACES = 'C:/path/to/workspaces.json'
+   node dist/server.js
+   ```
+
+   The prefix form is one line and runs in no Windows shell;
+   [install.md](install.md#setting-a-variable-in-three-shells) is the same variable in all
+   three, `cmd` included.
+
+3. **Open the board**, with `vibemaxxing` or the tokenised address above. There is now one
+   project tab, holding the elements of `docs/board.excalidraw`: the two maps this repository
+   keeps of itself, and the cards that open every document in `docs/`. `Alt+P` and `Alt+G` are
+   the keys that scroll to each — [board-sections.md](board-sections.md).
+
+The `+` at the end of the tab strip does step 1 for you, against the per-user registry the
+variable table below resolves to when nothing is set, and it is the right way to add the
+*second* project. It is not a shortcut past this section: adding a project registers it
+immediately, but the board file behind it is only read at startup, so a tab added that way
+stays empty until the server is restarted.
+
+[workspaces.md](workspaces.md) is the rest of the registry — the fields an entry may carry, what
+a project's own `board.config.json` may say, and how a project inside a WSL distro is named.
 
 ## What it requires: github.com
 
@@ -61,14 +124,53 @@ This is the trap that costs the most, because everything looks like it worked �
 [trap-stale-server.md](trap-stale-server.md). A second server fails to bind and exits; the first
 one keeps answering, silently, with the old code.
 
+**A launch mostly does this step for you.** `vibemaxxing` takes the default 3737, or the next
+free port above it if something already holds that one, and prints the port it got;
+`vibemaxxing stop` asks `/health` who is answering and signals that pid ([cli.md](cli.md)).
+What neither can do is the case this section is really about: `stop` refuses anything that does
+not answer as a canvas, so a service that is not this tool — or a canvas wedged past answering —
+is still killed by hand, and so is a `node dist/server.js` on a port the CLI was never told
+about.
+
+**The port in them is an example.** 3737 is the default the launch path tries first and the one
+this repository's own board is started on, for the reason
+[trap-port-3000.md](trap-port-3000.md) gives; put the port your board listens on in its place.
+
+### Windows
+
 ```powershell
-$busy = Get-NetTCPConnection -LocalPort $env:PORT -State Listen -ErrorAction SilentlyContinue
+$busy = Get-NetTCPConnection -LocalPort 3737 -State Listen -ErrorAction SilentlyContinue
 foreach ($processId in ($busy.OwningProcess | Select-Object -Unique)) {
   Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
 }
 ```
 
 `$processId`, never `$pid`: `$PID` is a read-only automatic variable and the loop throws on it.
+
+### macOS
+
+```bash
+pids=$(lsof -ti tcp:3737)
+if [ -n "$pids" ]; then kill $pids; fi
+```
+
+### Linux
+
+The same two lines, and `lsof` is the part of them a minimal install may not have — `fuser`,
+from `psmisc`, does the whole job in one word where it does:
+
+```bash
+pids=$(lsof -ti tcp:3737)
+if [ -n "$pids" ]; then kill $pids; fi
+
+fuser -k 3737/tcp                      # if lsof is not installed
+```
+
+**Not `lsof -ti tcp:<port> | xargs kill`.** With nothing listening `lsof` prints nothing and exits
+1, and GNU `xargs` runs `kill` with no arguments at all: the usage message and exit 123, from
+the step whose success case is finding nothing. `xargs -r` suppresses that on GNU systems and
+BSD `xargs` never had the behaviour, so it is a Linux-only noise — but the two lines above are
+the same sentence on both platforms, which is why they are what is written here.
 
 `GET /health` returns the `pid` of whatever is answering. When a change seems to have had no
 effect, compare that against the process you believe you started.
@@ -202,8 +304,10 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_CANVAS_PORT` | `3737` | The port the launch path tries first. A preference, not a pin: with `PORT` unset the search walks past it to the next free port |
 | `EXCALIDRAW_STATE_HOME` | per-OS state directory | The parent of the directory holding `config.json`, the pidfile, the restart log and the running board's state file. For a check that needs a throwaway one |
 | `EXCALIDRAW_WORKSPACES` | `workspaces.json` in the state directory | Path to the registry JSON. Unset resolves the per-user default, which is created when the first project is added — see [workspaces.md](workspaces.md) |
+| `EXCALIDRAW_WORKSPACE` | the one registered project, else `default` | Which registered project the CLI and the MCP tools draw on when nothing else names one. The singular of `WORKSPACES`, which is the list. `--workspace <id>` and an MCP tool's own `workspace` argument both beat it; unset, a board with one project resolves to that project, a board with none to the `default` scratch canvas, and a board with several refuses and names them — see [workspaces.md](workspaces.md) |
 | `EXCALIDRAW_BOARD_STATE` | beside the registry | Where each registered board is saved between processes. Unset puts them in a directory named after the registry file, default registry included — [element-store.md](element-store.md) |
 | `EXCALIDRAW_DOCS_DIR` | the shipped `docs/` | Where `GET /api/docs/:key` reads from for a board with no `docsDir` of its own. Set it **empty** for a setup that wants per-project documents and no fallback — [docs-block.md](docs-block.md) |
+| `EXCALIDRAW_WELCOME_BOARD` | the shipped `docs/welcome.excalidraw` | The board a project that names none of its own is seeded from, once, the first time this canvas starts with it registered. Set it **empty** for projects that should come up blank — [workspaces.md](workspaces.md) |
 | `EXCALIDRAW_LIBRARY` | the shipped `docs/blocks.excalidrawlib` | An `.excalidrawlib` served to every board, alongside each project's own. Set it **empty** for a board that wants no shared shapes at all — [shared-library.md](shared-library.md) |
 | `EXCALIDRAW_ISSUE_AGENT` | unset | The command line that researches an observation and opens the issue. Unset means issue blocks do nothing |
 | `EXCALIDRAW_IMPLEMENT_AGENT` | unset | The command line that implements one. Unset means the button is not offered |
@@ -211,6 +315,7 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_IMPLEMENT_AGENT_TIMEOUT` | none | The same, for implementing |
 | `EXCALIDRAW_IMPLEMENT_CONCURRENCY` | `4` | Runs at once. `0` is no cap, `1` serialises. Each one is a whole coding agent building on this machine |
 | `EXCALIDRAW_IMPLEMENT_QUEUE_MS` | `30000` | How often a workspace with its queue on looks for a free slot. The timer does not exist until a queue is turned on |
+| `EXCALIDRAW_IMPLEMENT_RECLAIM_MS` | `30000` | How long a run whose agent process has gone must sit before its slot is given back. The wait is there because a run's process ending is not the run ending — the server still has GitHub to ask and a checkout to release. `0` gives the slot back on the first sighting |
 | `EXCALIDRAW_ISSUE_MEMO_MS` | `30000` | How long one `gh` read of an issue is reused. `0` turns the memo off |
 | `EXCALIDRAW_GH_STATUS_MEMO_MS` | `30000` | How long one answer about `gh` *itself* — installed, logged in, which scopes — is reused before `GET /api/github-status` asks again. `0` turns the memo off. The canvas asks on a failing poll, so without it a board whose `gh` is broken would spawn two processes every twenty seconds to be told the same thing |
 | `EXCALIDRAW_GH_COMMAND` | `gh` | The GitHub CLI on **this machine**, when it is not on `PATH` — [trap-gh-path.md](trap-gh-path.md) |
@@ -220,20 +325,31 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_EXPORT_DIR` | working dir | The base directory MCP file exports may write to |
 | `EXCALIDRAW_ALLOWED_HOSTS` | loopback names only | Extra `Host` authorities the origin gate accepts, comma-separated, for a real alias or a proxy in front of the board. The refusal names the authority it expected, so a lockout says what to put here |
 | `EXCALIDRAW_NO_AUTOSTART` | unset | `1` stops the CLI and the MCP server auto-spawning a canvas |
+| `EXCALIDRAW_NO_AUTH` | unset | `1` starts the board with **no token**, so anything that can reach the port drives it — see [SECURITY.md](SECURITY.md). It is what the checks set, because each of them spawns a server and drives it over plain `fetch`; on a board a person uses, the token costs nothing to keep, since the launcher hands it over and the page remembers it |
+| `EXCALIDRAW_ALLOW_VERSION_SKEW` | unset | `1` attaches to a running canvas built from a different version instead of refusing. For a working copy driving an installed board — otherwise the refusal is what stops a session talking to a server running the previous release's code, silently ([trap-stale-server.md](trap-stale-server.md)) |
 | `EXCALIDRAW_NO_DOTENV` | unset | `1` stops both configuration files being read — `<cwd>/.env` and `<state-dir>/config.json` alike — leaving only the real environment. The checks set it, because a file layer only ever fills in variables that are *unset*, which is exactly the set a check deleted on purpose — [trap-check-environment.md](trap-check-environment.md) |
 | `EXCALIDRAW_ENV_FILE` | `<cwd>/.env` | Read this file instead. Ignored when `EXCALIDRAW_NO_DOTENV=1`, and it does not move `config.json` |
 
 <!-- /generated: settings-table -->
 
-**Pin the agents' model and effort.** Without `--model` and `--effort` on those two command
-lines the agent inherits whatever `~/.claude/settings.json` says, so changing the model of an
-interactive session silently changes who writes the issues.
+**Those two are command lines, not a vendor** — [agents.md](agents.md) is where a working one
+comes from, with a recipe for Claude Code and one for Codex CLI side by side, what each flag
+buys, and the rules that hold whatever the binary is. Three of them decide whether a board works
+at all:
 
-**`--allowedTools` is mandatory** for a `-p` agent: without it the run investigates fine, is
-refused the moment it needs `gh`, and exits 0 with nothing to show — see
-[trap-allowed-tools.md](trap-allowed-tools.md) and the configuration section of
-[issue-block.md](issue-block.md#configuration), which is where the full shape of both command
-lines lives.
+- **the command must run non-interactively and exit** — `-p`/`--print` for Claude Code,
+  `codex exec` for Codex CLI, and note that `-p` means `--profile` to the second of those;
+- **it must be permitted to run `gh` and `git` without asking.** There is no prompt to answer in
+  a non-interactive run, so a tool that would need approval is refused instead, and the run
+  exits 0 with nothing to show — see [trap-allowed-tools.md](trap-allowed-tools.md);
+- **it must print the issue or pull request URL on stdout.**
+
+**Pin the agents' model and effort** while you are there. Without them the agent inherits
+whatever an interactive session last configured, so changing the model you work in silently
+changes who writes the issues.
+
+The configuration section of [issue-block.md](issue-block.md#configuration) is where the rest of
+the shape of both command lines lives.
 
 A per-project `board.config.json` can override the model, the effort and the time limit for
 either agent. It cannot override the command itself; that boundary and its reasoning are in
@@ -300,14 +416,37 @@ from the real environment only: exporting them works, putting them in `config.js
 
 | Variable | Default | What it does |
 |---|---|---|
-| `LOG_LEVEL` | `info` | The lowest level written to the log file — `error`, `warn`, `info`, `debug`. The console transport is fixed at warn-and-above whatever this says, so `info` here is how a server's own account of a start is read back |
-| `LOG_FILE_PATH` | a per-OS log file | Where that file is. Unset it is `%LOCALAPPDATA%\VibeMaxxing-MCP\vibemaxxing.log` on Windows, `~/Library/Logs/vibemaxxing-mcp.log` on macOS and `$XDG_STATE_HOME/vibemaxxing-mcp/vibemaxxing.log` elsewhere. Set and unwritable is a refusal to start; unset and unwritable falls back to the temp directory |
+| `LOG_LEVEL` | `info` | The lowest level written to the log file — `error`, `warn`, `info`, `debug`. The console transport is fixed at warn-and-above whatever this says, so `info` here is how a server's own account of a start is read back. `debug` adds the per-sync lines, which is a megabyte a minute on a board somebody is drawing on |
+| `LOG_FILE_PATH` | a per-OS log file | Where that file is — `vibemaxxing status` prints the resolved answer as `logFile`. Unset it is `%LOCALAPPDATA%\VibeMaxxing-MCP\vibemaxxing.log` on Windows, `~/Library/Logs/vibemaxxing-mcp.log` on macOS and `$XDG_STATE_HOME/vibemaxxing-mcp/vibemaxxing.log` elsewhere. It rotates at 1 MB across five files, so the whole history is at most 5 MB. Set and unwritable is a refusal to start; unset and unwritable falls back to the temp directory |
 | `DEBUG` | unset | `true` writes one line saying debug mode is on. Nothing else reads it — `LOG_LEVEL=debug` is what turns the detail on |
 
 <!-- /generated: settings-plain-table -->
 
 `LOG_LEVEL=info` with a `LOG_FILE_PATH` of your own is how a check reads back what a server said
 about itself; several in `scripts/` do exactly that.
+
+**The file is bounded.** Until #348 nothing truncated it: on the machine this was measured on it
+had reached 70 MB over five days of ordinary use, roughly 14 MB a day, most of it two `info`
+lines per autosync — and a board's browser autosyncs every time a shape moves. Those two lines
+are `debug` now, and the file rotates at 1 MB across five files, so the whole history on disk is
+at most 5 MB. `vibemaxxing.log` always holds the newest lines and `vibemaxxing1.log` upwards are
+the older ones, so the path below is the one to open and not merely the one to find. An
+oversized log left behind by an earlier build is rotated out of that window rather than kept
+beside the new ones. `node scripts/check-log-rotation.mjs` holds the ceiling and the two demoted
+lines together.
+
+**Ask for the path rather than working it out.** `status` prints it, and prints it whether or not
+the board is answering — which is the case that matters, because a board that will not come up is
+exactly when somebody is asked for a log:
+
+```
+$ vibemaxxing status
+{
+  "running": true,
+  "logFile": "C:\\Users\\you\\AppData\\Local\\VibeMaxxing-MCP\\vibemaxxing.log",
+  ...
+}
+```
 
 ## What a running board looks like
 
@@ -340,11 +479,18 @@ about itself; several in `scripts/` do exactly that.
 ## Verifying a change
 
 ```
-./node_modules/.bin/tsc          # the server
-./node_modules/.bin/vite build   # the frontend
+./node_modules/.bin/tsc             # the server
+./node_modules/.bin/tsc -p frontend # the canvas — vite builds it and checks nothing
+./node_modules/.bin/vite build      # the frontend
 node scripts/check-<name>.mjs
 node scripts/check-board-map.mjs
 ```
+
+The second line is the one that is easy to leave out, and `frontend/tsconfig.json` says why it
+has to be there: the root `tsconfig.json` excludes `frontend/`, and `vite build` strips types
+without reading them, so for a long time nothing type-checked the canvas half of this
+repository at all. `npm run type-check:frontend` is the same command, and
+`scripts/check-frontend-types.mjs` is what runs it in the suite.
 
 That is the singular form, and it is what you want while a change is being written: one check,
 its output on the terminal, run against the old code first. **`npm test` is the whole suite** —
@@ -405,11 +551,11 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 121 | yes |
-| `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 73 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 146 | yes |
+| `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 79 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
-| `repo` | the full history, and this repository's own board | anywhere with a full clone | 7 | no |
+| `repo` | the full history, and this repository's own board | anywhere with a full clone | 8 | no |
 
 The gate is `fast` plus `browser`. `repo` is off it because it cannot be satisfied from a
 contributor's fork — `check-board-map.mjs` reads `docs/board.excalidraw` and the merge history
@@ -418,7 +564,7 @@ of *this* fork — and `wsl` is off it because a hosted runner has no distro.
 A tier whose tool is not on the machine is reported as **EXPECTED-SKIP** and the run still
 exits 0, so `--tier wsl` on a Linux box is honest rather than green. `browser` is the one
 exception: with no Chrome it *fails*, because a runner that was meant to have one and does not
-would otherwise hide sixty-seven checks behind a green tick that never ran them.
+would otherwise hide seventy-seven checks behind a green tick that never ran them.
 
 The tiers are held to the source by `node scripts/check-tiers.mjs`: a check added with no
 `Tier:` line fails it, as does one that spawns `wsl.exe` while calling itself `fast`.
@@ -482,6 +628,34 @@ half of it with evidence. The matrix used to carry a third combination, 18 on ub
 find out whether the `>=18` the manifest claimed held; Node 18 went end of life in April 2025,
 so the answer worth buying was raising the floor rather than going on measuring it (#281).
 `check-ci-workflow.mjs` fails if the manifest and the matrix disagree again.
+
+### The versions a consumer installs
+
+Everything above runs against `package-lock.json`, because `npm ci` is what installs it. **A
+consumer never sees that lockfile.** `npx -y <pkg>` and `npm i -g <pkg>` resolve the ranges in
+`package.json` fresh against the registry, so what a reader of the README installs is decided by
+the manifest alone, on the day they run it.
+
+`"@modelcontextprotocol/sdk": "latest"` was therefore a version nobody had run. The lockfile held
+1.15.1 and hid it from every check here, while a new user got whatever the SDK's `latest` was
+that morning — up to and including a new major, under three deep import paths that have moved
+before (`src/index.ts:7-14`). A product that breaks with no change to this repository, and no way
+to reproduce the report.
+
+**The standing policy is a caret on a version the check suite has been run against**, bumped
+deliberately rather than on a schedule, with the resolved version in
+[development-log.md](development-log.md) so a bug report has a tree to reproduce against. A caret
+keeps what `latest` was for — a patch or a minor still arrives without a commit here — and gives
+up only the major, which is the one bump that should not be taken unreviewed. The alternative,
+an exact pin re-reviewed each release, buys a reproducibility the lockfile already gives this
+repository and costs every consumer the security patches. A scheduled bump was rejected for the
+narrower reason that a calendar cannot read a red suite.
+
+`node scripts/check-dependency-ranges.mjs` holds it: no spec in any of the four dependency blocks
+may be a dist-tag or a wildcard, the lockfile's root block has to ask for what the manifest
+declares — the agreement `npm ci` refuses to install without — and every locked version has to
+sit inside its declared range. It reads `engines.node` against the CI matrix from the manifest's
+side as well, which `check-ci-workflow.mjs` already does from the workflow's.
 
 **`scripts/check-smoke-start.mjs` is what makes the two new images mean anything.** It is a
 `fast` check, so it runs in that job on all three: it starts a real `dist/server.js` on a port

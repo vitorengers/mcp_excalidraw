@@ -23,7 +23,7 @@ import {
   type AgentAdapter, type AgentInvocation, type AgentInvokeSpec,
 } from '../agent-adapter.js';
 import { readClaudeUsage, streamsUsage } from '../agent-usage.js';
-import { renderClaudeEvent } from '../agent-stream-render.js';
+import { CLAUDE_CLAIMED_TYPES, renderClaudeEvent } from '../agent-stream-render.js';
 import { agentAction } from '../terminal-palette.js';
 
 /**
@@ -82,5 +82,6 @@ export const rawAdapter: AgentAdapter = {
   // treat prose as nothing to report rather than as an error.
   readUsage: readClaudeUsage,
   renderEvent: renderClaudeEvent,
+  claimedTypes: CLAUDE_CLAIMED_TYPES,
   actionOf: agentAction,
 };
