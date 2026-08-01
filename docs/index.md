@@ -20,6 +20,7 @@ The board itself is cut into two halves, each with a key that scrolls onto it �
 | [launchers.md](launchers.md) | The three double-click launchers, and why not a SEA, an Electron shell or a signed app |
 | [configuration.md](configuration.md) | Where those values are read from: `config.json` in the state directory, a `<cwd>/.env`, the environment |
 | [workspaces.md](workspaces.md) | One project per board — the registry, `board.config.json`, and the settings dialog |
+| [agents.md](agents.md) | Choosing the coding agent — a Claude Code recipe, a Codex CLI recipe, and the rules that hold for the third one |
 | [without-github.md](without-github.md) | The four levels of absent GitHub, and what each one keeps and loses |
 | [board-sections.md](board-sections.md) | The two halves of the board and the keys that reach them |
 | [whats-next.md](whats-next.md) | What has not shipped |
