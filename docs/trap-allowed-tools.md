@@ -16,7 +16,8 @@ EXCALIDRAW_ISSUE_AGENT='<agent-binary> -p --allowedTools "Bash(gh:*) Bash(git:*)
 
 The list is deliberately narrow: `gh` and `git`, plus reading. **No `Write`, no `Edit`, no open
 `Bash`.** The agent opens issues; it does not touch the repository. This is not a formality —
-the block spawns a process with full repository access from an API that has no authentication.
+the block spawns a process with full repository access, and the token in front of that API (#350)
+is a file this account can read — no boundary at all against a process running as this account.
 
 ## The same trap, one tool along
 

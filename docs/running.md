@@ -29,8 +29,12 @@ npm run build            # vite build, then tsc — the server serves the built 
 node dist/server.js      # with the environment below
 ```
 
-Then open `http://127.0.0.1:<PORT>`. A tab has to be open for anything that renders: screenshots,
-PNG/SVG export, viewport control and Mermaid conversion all happen in the frontend.
+Then open the board. **Not the bare address**: since #350 everything under `/api` is behind a
+secret the server writes to its state directory at startup, so `http://127.0.0.1:<PORT>` typed by
+hand loads a page and leaves it empty. `vibemaxxing` opens it correctly against a board that is
+already running, and [install.md](install.md#opening-the-board-yourself) has the address written
+out for a machine where that is not an option. A tab has to be open for anything that renders:
+screenshots, PNG/SVG export, viewport control and Mermaid conversion all happen in the frontend.
 
 An installed copy does all three of those in one word — `vibemaxxing`, with no arguments, starts
 the board, opens the tab and prints `VibeMaxxing <version> — <url>`. That is the path a user
@@ -78,10 +82,10 @@ turns this clone into a board that shows its own documentation cards and its own
    [install.md](install.md#setting-a-variable-in-three-shells) is the same variable in all
    three, `cmd` included.
 
-3. **Open `http://127.0.0.1:<PORT>`.** There is now one project tab, holding the elements of
-   `docs/board.excalidraw`: the two maps this repository keeps of itself, and the cards that
-   open every document in `docs/`. `Alt+P` and `Alt+G` are the keys that scroll to each —
-   [board-sections.md](board-sections.md).
+3. **Open the board**, with `vibemaxxing` or the tokenised address above. There is now one
+   project tab, holding the elements of `docs/board.excalidraw`: the two maps this repository
+   keeps of itself, and the cards that open every document in `docs/`. `Alt+P` and `Alt+G` are
+   the keys that scroll to each — [board-sections.md](board-sections.md).
 
 The `+` at the end of the tab strip does step 1 for you, against the per-user registry the
 variable table below resolves to when nothing is set, and it is the right way to add the
@@ -320,6 +324,7 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_EXPORT_DIR` | working dir | The base directory MCP file exports may write to |
 | `EXCALIDRAW_ALLOWED_HOSTS` | loopback names only | Extra `Host` authorities the origin gate accepts, comma-separated, for a real alias or a proxy in front of the board. The refusal names the authority it expected, so a lockout says what to put here |
 | `EXCALIDRAW_NO_AUTOSTART` | unset | `1` stops the CLI and the MCP server auto-spawning a canvas |
+| `EXCALIDRAW_NO_AUTH` | unset | `1` starts the board with **no token**, so anything that can reach the port drives it — see [SECURITY.md](SECURITY.md). It is what the checks set, because each of them spawns a server and drives it over plain `fetch`; on a board a person uses, the token costs nothing to keep, since the launcher hands it over and the page remembers it |
 | `EXCALIDRAW_ALLOW_VERSION_SKEW` | unset | `1` attaches to a running canvas built from a different version instead of refusing. For a working copy driving an installed board — otherwise the refusal is what stops a session talking to a server running the previous release's code, silently ([trap-stale-server.md](trap-stale-server.md)) |
 | `EXCALIDRAW_NO_DOTENV` | unset | `1` stops both configuration files being read — `<cwd>/.env` and `<state-dir>/config.json` alike — leaving only the real environment. The checks set it, because a file layer only ever fills in variables that are *unset*, which is exactly the set a check deleted on purpose — [trap-check-environment.md](trap-check-environment.md) |
 | `EXCALIDRAW_ENV_FILE` | `<cwd>/.env` | Read this file instead. Ignored when `EXCALIDRAW_NO_DOTENV=1`, and it does not move `config.json` |
@@ -539,7 +544,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
 | `fast` | nothing | Linux, macOS, Windows | 140 | yes |
-| `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 78 | yes |
+| `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 79 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
 | `repo` | the full history, and this repository's own board | anywhere with a full clone | 8 | no |

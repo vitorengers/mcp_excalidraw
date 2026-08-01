@@ -28,14 +28,18 @@
  * any header. A network caller with `curl` supplies whatever `Host` it likes and is waved
  * through, which is why the socket case below connects with no browser anywhere near it.
  *
- * Four sections, two servers over one registry and one seeded project:
+ * Three servers over one registry and one seeded project:
  *
  *   1. bound to loopback — every read answers exactly as it does today, carrying the seeded
- *      board, the image, the document and the library shape. This is what the guard has to keep
- *      working, and it is half the check.
- *   2. bound off loopback — every one answers 403, the refusal names the bind, and none of the
- *      seeded strings is anywhere in the body.
- *   3. the socket, both ways — `initial_elements` on loopback, a refused upgrade off it.
+ *      board, the image, the document and the library shape, and the socket hands over the
+ *      scene. This is what the guard has to keep working, and it is half the check.
+ *   2. bound off loopback — every one answers 403, the refusal names the bind, none of the
+ *      seeded strings is anywhere in the body, and the upgrade is refused.
+ *   3. **bound off loopback with the token on**, which is the shipped configuration since #350:
+ *      a caller carrying this start's own secret, read out of the state directory the server
+ *      wrote it to, is refused all the same. The bind guard is a second answer rather than the
+ *      token's shadow — and it is the only one left where `VIBEMAXXING_NO_AUTH` is set, which
+ *      is every check in this directory.
  *   4. read off `src/server.ts` rather than off a server: each of those routes carries an
  *      `offLoopback` call, so a tenth read added beside them cannot be the next one left out.
  *
@@ -57,7 +61,7 @@
  */
 
 import { createServer } from 'node:net';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -255,13 +259,31 @@ const READS = [
 
 const SECRETS = [SECRET_TEXT, SECRET_DOC, SECRET_SHAPE, SECRET_IMAGE_DATA.slice(-40)];
 
-const [loopbackPort, offPort] = await freePorts(2);
+const [loopbackPort, offPort, authedPort] = await freePorts(3);
 // The library is the project's own alone: the packaged one would be served here too, and a
 // shape this check did not put on the board is not evidence about this check's board.
 const env = { EXCALIDRAW_WORKSPACES: registryPath, EXCALIDRAW_LIBRARY: '', LOG_LEVEL: 'error' };
 
+/** The home the token-carrying server below is told it has, so its secret lands in here. */
+const fakeHome = join(workdir, 'home');
+mkdirSync(fakeHome, { recursive: true });
+
+/**
+ * Where that server writes its token, spelled out from the platform rather than asked of the
+ * code under test — the same three answers `stateDir()` gives, as `check-token-auth.mjs` spells
+ * them.
+ */
+function conventionalTokenFile(port) {
+  const leaf = process.platform === 'win32' ? 'Excalidraw-Canvas' : 'excalidraw-canvas';
+  const home = process.platform === 'darwin'
+    ? join(fakeHome, 'Library', 'Application Support')
+    : fakeHome;
+  return join(home, leaf, `server-${port}.token`);
+}
+
 let loopback;
 let off;
+let authed;
 
 try {
   const offHost = await offLoopbackHost();
@@ -356,21 +378,66 @@ try {
         String(refusedSocket.text ?? '').slice(0, 200));
 
   off.stop();
+
+  // ─── The bind guard is not the token's shadow ───
+
+  console.log('\n5. and a caller holding this start\'s token is refused there just the same');
+  authed = startCanvas({
+    port: authedPort,
+    cwd: workdir,
+    env: {
+      ...env,
+      HOST: offHost,
+      // `canvasEnvironment` turns the token off for every check in this directory; this is the
+      // one server here that has to take it back on, because the question of this section is
+      // whether the bind guard survives the control that was supposed to make it unnecessary.
+      EXCALIDRAW_NO_AUTH: undefined,
+      HOME: fakeHome,
+      USERPROFILE: fakeHome,
+      LOCALAPPDATA: fakeHome,
+      XDG_STATE_HOME: fakeHome,
+    },
+  });
+  const authedBase = `http://${offHost}:${authedPort}`;
+  await waitForHealth(authedBase, authed.child);
+
+  const tokenFile = conventionalTokenFile(authedPort);
+  const token = existsSync(tokenFile) ? readFileSync(tokenFile, 'utf8').trim() : '';
+  check('this start wrote a token, so the caller below is an entitled one', token.length > 0,
+        tokenFile);
+
+  const entitled = await fetch(`${authedBase}/api/elements`, {
+    headers: { ...BOARD, 'x-vibemaxxing-token': token },
+  });
+  const entitledText = await entitled.text();
+  check('GET /api/elements answers 403 even with the token', entitled.status === 403,
+        `got ${entitled.status} — ${entitledText.slice(0, 160)}`);
+  check('and the board is not in that answer', !entitledText.includes(SECRET_TEXT),
+        entitledText.slice(0, 160));
+
+  const entitledSocket = await socketVerdict(
+    `ws://${offHost}:${authedPort}/?workspace=reads&token=${encodeURIComponent(token)}`);
+  check('and so is the socket it could have opened', entitledSocket.outcome === 'refused',
+        JSON.stringify(entitledSocket).slice(0, 240));
+
+  authed.stop();
 } catch (error) {
   failures++;
   console.error(`  FAIL  ${error instanceof Error ? error.message : String(error)}`);
   if (loopback && process.env.DEBUG_BOARD_READS_GUARD) console.error(loopback.read());
   if (off && process.env.DEBUG_BOARD_READS_GUARD) console.error(off.read());
+  if (authed && process.env.DEBUG_BOARD_READS_GUARD) console.error(authed.read());
 } finally {
   if (loopback) loopback.stop();
   if (off) off.stop();
+  if (authed) authed.stop();
   await new Promise((resolve) => setTimeout(resolve, 200));
   rmSync(workdir, { recursive: true, force: true });
 }
 
-// ─── 5. A tenth read cannot be the next one left out ──────────
+// ─── 6. A tenth read cannot be the next one left out ──────────
 
-console.log('\n5. every one of those routes carries the guard in src/server.ts');
+console.log('\n6. every one of those routes carries the guard in src/server.ts');
 
 const source = readFileSync(join(repoRoot, 'src', 'server.ts'), 'utf8');
 const declarations = [...source.matchAll(/^app\.(get|post|put|delete|patch)\((['"])([^'"]+)\2/gm)];

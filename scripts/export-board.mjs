@@ -66,10 +66,32 @@ const DERIVED_KINDS = new Set(['project-board', 'terminal']);
 // A server that is not there is an ordinary thing to get wrong — the board has to be running
 // and it has to be the one meant — so it is reported rather than thrown. An unhandled
 // rejection here reads as a defect in the script and buries the one line that matters.
+/**
+ * This board's token, from the build, or nothing at all.
+ *
+ * Wanted because this is the only reader of a *live, configured* board in `scripts/` — everything
+ * else here starts a server of its own with the token off — and since #350 a configured board
+ * refuses a request that does not carry one.
+ *
+ * Imported here rather than at the top, and forgiven when it fails, for one reason:
+ * `check-shallow-clone.mjs` runs this script inside a clone that has no `node_modules`, to prove
+ * the two flags are required. `core/auth-token.js` reaches the settings layers and through them
+ * `dotenv`, so a top-level import would turn that check's subject — a missing flag, reported —
+ * into a module-resolution stack trace. A clone with no build has no board to export either.
+ */
+async function boardToken(base) {
+  try {
+    const { authHeaders } = await import('../dist/core/auth-token.js');
+    return authHeaders(base);
+  } catch {
+    return {};
+  }
+}
+
 const url = `${BASE}/api/elements?workspace=${encodeURIComponent(WORKSPACE)}`;
 let response;
 try {
-  response = await fetch(url);
+  response = await fetch(url, { headers: await boardToken(BASE) });
 } catch (error) {
   console.error(`GET ${url} failed: ${error?.message ?? error}`);
   console.error('Is the board running, and is --url the port it was started on?');

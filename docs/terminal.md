@@ -5,10 +5,11 @@ board's own documentation**, one gap left of the documentation. Type into one an
 arrives as it is produced. A block carries a **strip of tabs**, one per shell, and a tab can be
 given a block of its own — to the right, with the documentation stepping aside to make the room.
 
-This spawns a process that runs **whatever arrives over an API with no authentication**. The
-issue block, which `docs/issue-block.md` calls the most dangerous thing this server does, at
-least only ever runs one fixed prompt. This is strictly worse, so it copies that feature's
-guards and the copy is deliberate:
+This spawns a process that runs **whatever arrives over the API**. The issue block, which
+`docs/issue-block.md` calls the most dangerous thing this server does, at least only ever runs
+one fixed prompt. This is strictly worse, so it copies that feature's guards and the copy is
+deliberate — and it kept them after #350 put a token in front of every route, because a secret
+your own account can read is not a boundary against anything already running as you:
 
 - it only exists when `EXCALIDRAW_TERMINAL` is set — unset, every route is a 404, not a 403 and
   not an empty session;

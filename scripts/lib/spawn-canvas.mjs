@@ -64,6 +64,16 @@ export function canvasEnvironment(overrides = {}) {
   delete env.PORT;
   delete env.HOST;
   env.EXCALIDRAW_NO_DOTENV = '1';
+  // No board token, for the checks and for nothing else (#350). Every check in this directory
+  // drives its throwaway server over plain `fetch` — around a hundred and fifty call sites, plus
+  // the browser ones, which navigate a real Chrome at the board and would each need the token in
+  // the URL. The choice the issue put was between that and one switch here; a hundred and fifty
+  // call sites is a hundred and fifty chances to write a check that passes because it forgot the
+  // header, and this is one line in one file that a reader of any check can find.
+  //
+  // A check that is *about* the token deletes it again — `{ EXCALIDRAW_NO_AUTH: undefined }` —
+  // and `check-token-auth.mjs` is the one that does.
+  env.EXCALIDRAW_NO_AUTH = '1';
   // Before the overrides, so a check that stubs `gh` itself still wins. Quoted and with forward
   // slashes because the server tokenizes this string and spawns argv[0] directly — there is no
   // shell to forgive a space in the path.
