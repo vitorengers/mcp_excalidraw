@@ -10,6 +10,10 @@ repository's own board is pointed at, which port it is started on, how a merge i
 maintainer's checkout — is in [MAINTAINERS.md](MAINTAINERS.md), and it is nobody else's to
 follow.
 
+Before changing any of the pieces, [docs/architecture.md](docs/architecture.md) is one page on
+how they fit: every directory, and one press on an issue block followed to the coding agent it
+spawns. [docs/index.md](docs/index.md) indexes everything else.
+
 ## The short version
 
 1. Open an issue, or find one, so there is something to point the change at.
