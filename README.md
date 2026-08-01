@@ -54,12 +54,21 @@ catalogue and a configuration block for each MCP client.
 A shape's `customData.kind` decides what it is; a `docKey` instead makes it a documentation card
 that opens the matching markdown in a panel ([docs/docs-block.md](docs/docs-block.md)).
 
+**Blocks** — a shape that does something:
+
 | `customData.kind` | What it is |
 |---|---|
 | `issue` | Write an observation into the shape; an agent investigates the repository, opens the issue, and the URL lands back on the block — [docs/issue-block.md](docs/issue-block.md) |
 | `project-board` | Your GitHub project, mirrored on the canvas and redrawn from GitHub on every read, with two-way moves and a queue that implements issues — [docs/project-board.md](docs/project-board.md) |
 | `terminal` | Real shells on the canvas, as tabs — [docs/terminal.md](docs/terminal.md) |
-| `board-section` | The mark a hotkey aims at — [docs/board-sections.md](docs/board-sections.md) |
+
+**Marks** — a shape drawn *around* part of the board, which does nothing but say where a key
+lands:
+
+| `customData.kind` | What it is |
+|---|---|
+| `board-section` | A half of the board, carrying the key that reaches it — [docs/board-sections.md](docs/board-sections.md) |
+| `board-subsection` | A part of a section, with no key of its own: `Alt+Left` and `Alt+Right` step between the parts of the half being read — [docs/board-sections.md](docs/board-sections.md) |
 
 An implementation started from the board is given a git worktree of its own before the agent is
 spawned: `<project>-worktrees/issue-<n>`, on a branch of the same name, cut from the default
