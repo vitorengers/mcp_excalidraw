@@ -231,15 +231,24 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 
 <!-- /generated: settings-table -->
 
-**Pin the agents' model and effort.** Without `--model` and `--effort` on those two command
-lines the agent inherits whatever `~/.claude/settings.json` says, so changing the model of an
-interactive session silently changes who writes the issues.
+**Those two are command lines, not a vendor** — [agents.md](agents.md) is where a working one
+comes from, with a recipe for Claude Code and one for Codex CLI side by side, what each flag
+buys, and the rules that hold whatever the binary is. Three of them decide whether a board works
+at all:
 
-**`--allowedTools` is mandatory** for a `-p` agent: without it the run investigates fine, is
-refused the moment it needs `gh`, and exits 0 with nothing to show — see
-[trap-allowed-tools.md](trap-allowed-tools.md) and the configuration section of
-[issue-block.md](issue-block.md#configuration), which is where the full shape of both command
-lines lives.
+- **the command must run non-interactively and exit** — `-p`/`--print` for Claude Code,
+  `codex exec` for Codex CLI, and note that `-p` means `--profile` to the second of those;
+- **it must be permitted to run `gh` and `git` without asking.** There is no prompt to answer in
+  a non-interactive run, so a tool that would need approval is refused instead, and the run
+  exits 0 with nothing to show — see [trap-allowed-tools.md](trap-allowed-tools.md);
+- **it must print the issue or pull request URL on stdout.**
+
+**Pin the agents' model and effort** while you are there. Without them the agent inherits
+whatever an interactive session last configured, so changing the model you work in silently
+changes who writes the issues.
+
+The configuration section of [issue-block.md](issue-block.md#configuration) is where the rest of
+the shape of both command lines lives.
 
 A per-project `board.config.json` can override the model, the effort and the time limit for
 either agent. It cannot override the command itself; that boundary and its reasoning are in
