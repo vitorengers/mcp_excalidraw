@@ -22,6 +22,7 @@ import {
   commandLineInvocation, commandLineValue, withCommandLineFlags, withoutPrintFlags,
   type AgentAdapter, type AgentInvocation, type AgentInvokeSpec,
 } from '../agent-adapter.js';
+import { CLAUDE_CODE_EFFORTS } from './claude-code.js';
 import { readClaudeUsage, streamsUsage } from '../agent-usage.js';
 import { CLAUDE_CLAIMED_TYPES, renderClaudeEvent } from '../agent-stream-render.js';
 import { agentAction } from '../terminal-palette.js';
@@ -76,6 +77,12 @@ export const rawAdapter: AgentAdapter = {
    * appends it: silently rewriting somebody's command line is a decision, not a lookup.
    */
   streams: (invocation) => streamsUsage(invocation.line),
+
+  // Claude Code's levels, for the same reason `tunedCommandLine` writes Claude Code's flag: a
+  // passthrough cannot know what a different CLI would want, and accepting a level this backend
+  // would then spell `--effort ultra` at a binary that has never heard of it would be refusing
+  // nothing. The honest limit of a passthrough, on the way in as well as on the way out.
+  efforts: CLAUDE_CODE_EFFORTS,
 
   // A command line that streams is a command line streaming Claude Code's shapes — that is what
   // `--output-format stream-json` names. Anything else it prints is prose, and both of these

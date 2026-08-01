@@ -53,6 +53,23 @@ const EXEC = 'exec';
 /** The argument that says the prompt is arriving on stdin rather than beside it. */
 const STDIN_MARKER = '-';
 
+/**
+ * The levels `model_reasoning_effort` names, from `ReasoningEffort::from_str` in
+ * `codex-rs/protocol/src/openai_models.rs` rather than from memory or from a blog post.
+ *
+ * It is not Claude Code's list and it is not a superset of it by accident: `minimal`, `none` and
+ * `ultra` are Codex's own, and the CLI takes `xhigh` and `max` as well — which corrects the issue
+ * this came from, where Codex was thought to refuse those two. What it genuinely cannot take is
+ * a `--effort` flag, which is why the value is written as `-c` above.
+ *
+ * The last arm of that `from_str` is `Custom(String)` — an unknown word parses, and is sent to
+ * the model, which may then refuse it per model. So this list is narrower than what the CLI will
+ * swallow, deliberately: a word the CLI keeps and the model rejects fails a run minutes later in
+ * a process nobody is watching, which is the whole reason the setting is a list rather than free
+ * text.
+ */
+const CODEX_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
+
 export const codexCliAdapter: AgentAdapter = {
   id: 'codex-cli',
 
@@ -79,7 +96,7 @@ export const codexCliAdapter: AgentAdapter = {
       command,
       args,
       // The prompt is a positional argument, and stdin beside one is *context*. The dash is
-      // honoured where the operator wrote it and never written for them — see `pinnedStdin`.
+      // honoured where the operator wrote it and never written for them — see `pinned` above.
       prompt: headless && pinned
         ? { via: 'stdin', stdin: 'prompt', marker: STDIN_MARKER }
         // Closed rather than left alone, both ways round. `codex exec <prompt>` handed an
@@ -92,6 +109,8 @@ export const codexCliAdapter: AgentAdapter = {
   },
 
   streams: (invocation) => invocation.args.includes('--json'),
+
+  efforts: CODEX_EFFORTS,
 
   /**
    * The turn's own accounting, which is the only place Codex reports figures.

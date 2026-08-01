@@ -49,11 +49,10 @@ Four things, and they are properties of the run rather than of a product.
    **Whichever it is, the child's stdin is closed.** For a stdin-delivering agent that is the
    end of file it is waiting for. For an argv-delivering one it is the emptiness it needs to
    start at all: a pipe with no writer is not an absence, it is a `read()` that never returns,
-   and `codex exec "<prompt>"` handed one blocks for ever ([openai/codex#20919], whose own
-   workaround is `< /dev/null`). The one exception is a run given a pseudoterminal, where stdin
-   is the reader's — the [interactive path](#watching-a-run-instead).
-
-[openai/codex#20919]: https://github.com/openai/codex/issues/20919
+   and `codex exec "<prompt>"` handed one blocks for ever
+   ([openai/codex#20919](https://github.com/openai/codex/issues/20919), whose own workaround is
+   `< /dev/null`). The one exception is a run given a pseudoterminal, where stdin is the
+   reader's — the [interactive path](#watching-a-run-instead).
 3. **It is permitted to run the `gh` and `git` sub-commands its prompt names, without asking.**
    No prompt can be answered, so a tool that would need approval is not approved — it is
    refused, and the refusal is silent. That cuts both ways, which is why the grant is stated as
@@ -170,18 +169,32 @@ you wrote, which is the same assumption from the other end.
 |---|---|---|
 | `-p` / `--print` | Whether the run gets a pseudoterminal, and whether the prompt travels on stdin or as the last argument | `runsHeadless`, `src/core/issue-agent.ts` |
 | `--output-format stream-json` | Whether a token meter runs, and whether the tab renders a transcript instead of raw NDJSON | `streamsUsage`, `src/core/agent-usage.ts` |
-| `--model`, `--effort` | Appended, per project, from `board.config.json` — the last flag is the one the CLI keeps | `agentCommandFor`, `src/core/issue-agent.ts` |
+| a model and an effort | Written onto what you wrote, per project, from `board.config.json` — in the spelling of the backend that will run it | `AgentAdapter.invoke`, `src/core/agents/` |
 
-**Every one of them is Claude Code's spelling**, and that is the honest state of it: a Codex run has
-`--json` available and the board does not read it, so a Codex board gets a clock and no token
-figures. Widening the sniffing so that another agent's flags are understood is a change to the
-agent runtime, not to this document — it belongs with the backend adapter that
-`agent-preflight.ts` describes as *"where a command stops being an opaque string"*.
+**The first two are Claude Code's spelling**, and that is the honest state of the passthrough
+backend: a Codex run has `--json` available and the board does not read it off an operator's own
+command line, so a Codex board configured as free text gets a clock and no token figures.
+Widening that sniffing is a change to the agent runtime rather than to this document.
 
-The `--model` and `--effort` line is the one to watch when a project overrides them: those two
-are appended in Claude Code's spelling, so a project-level model or effort on a board running
-Codex would append a flag Codex does not have. Leave `agents.<kind>.model` and
-`agents.<kind>.effort` unset there and pin the model in the command line instead — see
+**The third is no longer one spelling.** A project's `agents.<kind>.model` and
+`agents.<kind>.effort` arrive at a backend as *values*, and the backend writes them: `--model X
+--effort Y` for `claude-code`, `--model X -c model_reasoning_effort="Y"` for `codex-cli`, and the
+Claude Code spelling appended to your own line for the passthrough, which is what a board
+configured as free text has always had. A project on a Codex board may therefore pin both; it
+used to append `--effort` to a CLI with no such flag, which exits on an unknown argument before
+doing any work.
+
+The levels each backend takes are its own, and a project's settings are held to the one that will
+run them:
+
+| Backend | Reasoning-effort levels | Read from |
+|---|---|---|
+| `claude-code` | `low`, `medium`, `high`, `xhigh`, `max` | `claude --help` |
+| `codex-cli` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` | `ReasoningEffort::from_str`, `codex-rs/protocol/src/openai_models.rs` |
+| `raw` | Claude Code's, because it writes Claude Code's flag | — |
+
+A level outside that list is refused when the settings are saved, with the backend named — the
+message has to separate a typo from a level that belongs to the other backend. See
 [issue-block.md](issue-block.md#what-is-per-project-and-what-stays-global) for what a project
 may and may not say.
 

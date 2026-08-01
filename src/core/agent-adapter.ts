@@ -200,6 +200,21 @@ export interface AgentAdapter {
   invoke(spec: AgentInvokeSpec): AgentInvocation;
 
   /**
+   * The reasoning-effort levels this backend accepts, in its own spelling.
+   *
+   * Per backend rather than one list, because a level is not a portable word. It used to be one
+   * — `AGENT_EFFORTS` in `workspaces.ts`, documented as *"as `claude --help` states them"* — and
+   * that list is wrong for any backend that is not Claude Code in both directions at once: it
+   * refuses `minimal`, `none` and `ultra`, which Codex takes, while a board pointed at Codex
+   * that wrote one of them had it silently dropped on the way in and refused with a message
+   * naming no backend on the way out. The operator could not tell a typo from a mismatch.
+   *
+   * Empty is a legitimate answer and means "this backend has no effort to set", which is not
+   * the same as "any word will do": a value offered to a backend that names none is refused.
+   */
+  readonly efforts: readonly string[];
+
+  /**
    * Whether this invocation speaks while it works, rather than printing prose at exit.
    *
    * Asked of the invocation rather than of the backend, because for `raw` it is the operator's
