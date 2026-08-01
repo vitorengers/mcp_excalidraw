@@ -262,10 +262,17 @@ difference — `TerminalSessionOptions` in `src/core/terminal-session.ts`:
 
 ### Two kinds of agent tab, decided by the operator's own command line — or by the click
 
-`EXCALIDRAW_IMPLEMENT_AGENT` is read for its *shape*, exactly the way `streamsUsage()` reads it
-for `--output-format stream-json`. Nothing is appended to it, there is no second variable, and
-nothing here assumes the command is Claude Code — `runsHeadless()` in `src/core/issue-agent.ts`
-looks for one thing, `-p` or `--print` as a whole argument.
+What decides is `AgentInvocation.prompt.via` — where the backend running this tab says the prompt
+goes. A prompt on stdin ends there, so the session is on pipes; a prompt on argv leaves stdin
+free, so the session keeps its pseudoterminal.
+
+For the `raw` backend, which is what every board configured today resolves to, that answer is
+still read out of `EXCALIDRAW_IMPLEMENT_AGENT`'s *shape*: `-p` or `--print` as a whole argument,
+in `src/core/agents/raw.ts`, beside the same file's reading of `--output-format stream-json` for
+the token counts. Nothing is appended to the command line and there is no second variable. What
+changed with #330 is that those two readings are that backend's own and nobody else's: a named
+backend spells its own flags, so `codex exec --json` is known to be non-interactive and streaming
+without a regular expression that could only ever have said no to it.
 
 **The shape decides the default; the board can say "not this one".** The panel of an issue that
 has not been started offers **Implement, and let me answer** beside **Implement / Fix**, and
@@ -273,16 +280,19 @@ has not been started offers **Implement, and let me answer** beside **Implement 
 time it had been asked for — #174 was the first, and both had been answered with documentation
 about a variable and a server restart, which is a setting nobody reading the board could find.
 
-It works by *removing*, never adding. `withoutPrintFlags()` takes `-p` and `--print` off, and
-with them `--output-format`, `--input-format` and `--include-partial-messages`, which
-`claude --help` documents as working only with `--print` and which the CLI would refuse the
-moment the print flag went. Everything else the operator wrote — a `--model`, an `--add-dir` —
-survives untouched, and a command with no print flags in it comes back byte for byte. Nothing
-downstream learns a new setting: `runsHeadless` still decides the pseudoterminal,
-`buildAgentCommand` still decides how the prompt travels, `streamsUsage` still decides whether
-there are token counts. The asymmetry is deliberate — a board cannot invent
-`--output-format stream-json` for a command it does not own, so it cannot make an interactive
-command headless, and the queue keeps the one it is configured with.
+It is a *mode* the backend is asked for — `invoke({ mode: 'interactive' })` — and for `raw` that
+mode is implemented by *removing*, never adding. `-p` and `--print` come off, and with them
+`--output-format`, `--input-format` and `--include-partial-messages`, which `claude --help`
+documents as working only with `--print` and which the CLI would refuse the moment the print flag
+went. Everything else the operator wrote — a `--model`, an `--add-dir` — survives untouched, and
+a command with no print flags in it comes back byte for byte. Nothing downstream learns a new
+setting: the invocation that comes back says where the prompt goes and whether it streams, and
+that is what decides the pseudoterminal, the delivery and the token counts. The asymmetry is
+deliberate — a board cannot invent `--output-format stream-json` for a command it does not own,
+so it cannot make an interactive command headless, and the queue keeps the one it is configured
+with. A *named* backend has no such asymmetry: it writes the flags for a headless run and does
+not write them for this one, and for `codex-cli` the two differ by the `exec` subcommand, which
+is a thing no removal could express.
 
 **And it refuses rather than degrades.** This is the one place a missing tab stops a run. With
 the terminal off, with no PTY binding, with `EXCALIDRAW_TERMINAL_PTY=0` or with all eight tabs
