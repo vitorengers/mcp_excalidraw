@@ -108,6 +108,11 @@ branch. Several run at once (`EXCALIDRAW_IMPLEMENT_CONCURRENCY`, four by default
 opens and merges its own pull request. That is why the convention exists rather than a shared
 checkout: four agents building in one working tree is four agents overwriting each other.
 
+**Which coding agent does that work is a command line you supply**, and not a vendor this tool
+picks: [docs/agents.md](docs/agents.md) has a Claude Code recipe and a Codex CLI recipe side by
+side, what each flag buys, and the rules that hold whatever the binary is — it must run
+non-interactively, it must be permitted to run `gh` and `git`, and it must print the URL last.
+
 ### Starting it
 
 The workbench half reads **github.com and only github.com** — issue blocks, the project mirror,

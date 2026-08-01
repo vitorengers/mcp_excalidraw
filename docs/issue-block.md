@@ -587,8 +587,12 @@ anyone would have made on purpose. So it has its own variable and is **off until
 set**:
 
 ```
-EXCALIDRAW_IMPLEMENT_AGENT='<agent-binary> -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
+EXCALIDRAW_IMPLEMENT_AGENT='claude -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
 ```
+
+Claude Code's spelling of it; [agents.md](agents.md) has Codex CLI's, which is
+`--dangerously-bypass-approvals-and-sandbox`, and what makes the grant the same decision either
+way.
 
 `--dangerously-skip-permissions` rather than a list of tools, because an enumerated list is
 also a *deny* list: in `-p` mode there is no prompt to answer, so a tool outside the list is
@@ -1217,8 +1221,16 @@ rather than assumed, in `scripts/check-issue-progress.mjs`.
 
 ## Configuration
 
+**Which agent, and how its flags are spelled, is [agents.md](agents.md)** — a Claude Code recipe
+and a Codex CLI recipe side by side, what each flag buys, and the rules that hold whatever the
+binary is. Everything below is Claude Code's spelling, because that is what this board runs and
+what the reasoning was worked out against: it is one shape rather than the shape, and a reader
+substituting another binary should take the requirement from that document and the flag from
+their own CLI. `-p` is the case worth carrying across on its own — it is `--print` here and
+`--profile` to Codex CLI, which takes an argument.
+
 ```
-EXCALIDRAW_ISSUE_AGENT='<agent-binary> -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob WebFetch WebSearch"'
+EXCALIDRAW_ISSUE_AGENT='claude -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob WebFetch WebSearch"'
 EXCALIDRAW_IMPLEMENT_CONCURRENCY=4
 EXCALIDRAW_ISSUE_MEMO_MS=30000
 ```
