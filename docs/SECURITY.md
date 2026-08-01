@@ -1,7 +1,8 @@
 # Security policy
 
 The trust model this tool asks you to accept, written down, because the strongest statement of
-it used to be a sentence five levels into [terminal.md](terminal.md).
+it used to be a paragraph inside [terminal.md](terminal.md) — a page nobody reads before
+installing.
 
 **VibeMaxxing is a local canvas server that can spawn coding agents and real shells, and its
 API has no authentication.** Everything below is what that means and what stands in front of
@@ -54,9 +55,9 @@ command grants.
 | Switch | What turning it on grants |
 |---|---|
 | `EXCALIDRAW_ISSUE_AGENT` | `POST /api/issue-block/:id` spawns this command line to research an observation and open a GitHub issue with your `gh` credentials. One fixed prompt, one run at a time per block. Deliberately a read-and-`gh` agent — [issue-block.md](issue-block.md) |
-| `EXCALIDRAW_ISSUE_AGENT_WSL` | The same, inside a WSL-backed project's distro. A separate variable rather than a fallback, so granting a distro research does not thereby grant it the host's |
+| `EXCALIDRAW_ISSUE_AGENT_WSL` | The same, inside a WSL-backed project's distro. Unset, it falls back to `EXCALIDRAW_ISSUE_AGENT`, which resolves inside a distro only if it was written without an absolute path |
 | `EXCALIDRAW_IMPLEMENT_AGENT` | `POST /api/issue-block/:id/implement` spawns this command line **with repository write access**: a git worktree of its own, commits, a push, a pull request, and — where the project's own memory says so, as this one's does — the merge. Up to `EXCALIDRAW_IMPLEMENT_CONCURRENCY` (default 4) at once |
-| `EXCALIDRAW_IMPLEMENT_AGENT_WSL` | The same, inside the distro. Separate for the same reason: enabling research must not enable writes |
+| `EXCALIDRAW_IMPLEMENT_AGENT_WSL` | The same, inside the distro, with the same fallback. It is the *research/implement* split that never crosses: enabling research must not thereby enable repository writes, which is why these are four variables and not two |
 | `EXCALIDRAW_TERMINAL` | `POST /api/terminal` starts a **real shell** and `POST /api/terminal/input` types into it — whatever arrives over the API, run as you. At most eight sessions per board; the ninth is a 409. Unset, every terminal route is a 404 rather than a 403 — [terminal.md](terminal.md) |
 
 Two more are worth knowing about even though they grant nothing on their own:
@@ -112,10 +113,11 @@ there is a gate in front of every route, refusing with 403 before the route runs
 
 `scripts/check-cross-origin.mjs` holds both sides of this.
 
-**What the gate does not defend against is a local program.** Any process running as you can
-send no `Origin` at all and drive the whole API, including the switches above. On a machine you
-share, a board with agents or the terminal enabled is a shell for everybody with an account on
-it.
+**What the gate does not defend against is a local program.** Any process that can open a
+socket to the port — yours, or another account's on a machine you share — sends no `Origin` at
+all and drives the whole API, including the switches above. Loopback is not a permission
+boundary between users. On a shared machine, a board with the agents or the terminal enabled is
+a shell for everybody with a login on it.
 
 ## What a run does to your repository
 
