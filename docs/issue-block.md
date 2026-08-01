@@ -1172,13 +1172,17 @@ a plain `claude -p` prints prose at exit and no figures at all. Usage can only c
 agent reporting it in a machine-readable stream, which the operator's command line has to ask
 for.
 
-So the server looks for `--output-format stream-json` in the configured command
-(`streamsUsage`, `src/core/agent-usage.ts`). Without it nothing is parsed, nothing is
-recorded, no figures appear, and the spawn path is byte for byte what it was — the same
+So the meter runs only when the backend says its invocation streams (`AgentAdapter.streams`).
+For `raw` — every board configured today — that answer is `--output-format stream-json` in the
+operator's own command, read in `src/core/agents/raw.ts`. Without it nothing is parsed, nothing
+is recorded, no figures appear, and the spawn path is byte for byte what it was — the same
 "nothing at all" half that `worktreeSection` and `imageReferenceSection` are careful about.
-The prompt is not touched either: whether an agent reports usage is a property of the command
-line, so there is nothing worth telling the agent. **The server never appends the flag
-itself** — silently rewriting somebody's command line is a decision, not a lookup.
+The prompt is not touched either: whether an agent reports usage is a property of the run, so
+there is nothing worth telling the agent. **The server never appends the flag to a command line
+it does not own** — silently rewriting somebody's command is a decision, not a lookup. A named
+backend is the other case and not an exception to it: it *builds* the argv, so writing
+`--output-format stream-json` or `--json` into it is spelling its own flags rather than editing
+anybody's.
 
 With it, stdout is read line by line as it arrives and the totals go onto the record, not onto
 the elements: they change throughout a run, so writing them to shapes would churn the board
@@ -1305,8 +1309,9 @@ already had a panel polling it every four seconds and discarding both. One `RunP
 all three runs — a second copy of it would be a second answer to *what is worth saying about a
 run in flight*, and the first one to drift would be the one nobody was looking at.
 
-Opt-in works out the same way it does above and for the same reason: the figures come from
-`streamsUsage` reading the operator's own command line, so a board configured with a plain
+Opt-in works out the same way it does above and for the same reason: the figures come from the
+backend saying its invocation streams, which for `raw` is the operator's own command line, so a
+board configured with a plain
 `claude -p` gets a clock, no token figures, and the prompt and spawn it had before — asserted
 rather than assumed, in `scripts/check-issue-progress.mjs`.
 `scripts/check-issue-progress-browser.mjs` does the half only a browser can answer.
