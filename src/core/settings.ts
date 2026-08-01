@@ -145,14 +145,24 @@ export const SETTINGS = [
     description: 'An `.excalidrawlib` served to every board, alongside each project\'s own. Set it **empty** for a board that wants no shared shapes at all — [shared-library.md](shared-library.md)'
   },
   {
+    name: 'AGENT_BACKEND',
+    fallback: 'unset',
+    description: 'Which coding agent both agents run — `claude-code`, `codex-cli` or `raw`, the passthrough. The name alone is enough: the binary is looked up on `PATH`, and the backend writes the flags that make a run print, stream and stay inside its permission posture. Several names, comma-separated, enable a set a project may pick among with `agents.<kind>.backend`, and the first is what a project that picks none runs. Unset, a board is whatever its command lines say, under `raw` — [agents.md](agents.md)'
+  },
+  {
+    name: 'AGENT_ARGS',
+    fallback: 'unset',
+    description: 'Arguments pinned onto every agent run, appended after everything the backend and the project write. For an `--add-dir` or an `--mcp-config` no backend knows about. A full-access flag written here never reaches the issue agent'
+  },
+  {
     name: 'ISSUE_AGENT',
     fallback: 'unset',
-    description: 'The command line that researches an observation and opens the issue. Unset means issue blocks do nothing'
+    description: 'The command line that researches an observation and opens the issue. Unset with no backend named means issue blocks do nothing; written beside `EXCALIDRAW_AGENT_BACKEND` it is where that backend\'s binary and the operator\'s own arguments come from'
   },
   {
     name: 'IMPLEMENT_AGENT',
     fallback: 'unset',
-    description: 'The command line that implements one. Unset means the button is not offered. The shipped default grants an enumerated list — `Write`, `Edit`, reading, the web, and `git`, `gh`, `npm`, `npx` and `node` — and **not** `--dangerously-skip-permissions`: the prompt it is handed is built from issue text anybody can write ([trap-allowed-tools.md](trap-allowed-tools.md))'
+    description: 'The command line that implements one. Unset with no backend named means the button is not offered. The shipped default grants an enumerated list — `Write`, `Edit`, reading, the web, and `git`, `gh`, `npm`, `npx` and `node` — and **not** `--dangerously-skip-permissions`: the prompt it is handed is built from issue text anybody can write ([trap-allowed-tools.md](trap-allowed-tools.md))'
   },
   {
     name: 'IMPLEMENT_FULL_ACCESS',
@@ -248,6 +258,11 @@ export const SETTINGS = [
     name: 'ENV_FILE',
     fallback: '`<cwd>/.env`',
     description: 'Read this file instead. Ignored when `EXCALIDRAW_NO_DOTENV=1`, and it does not move `config.json`'
+  },
+  {
+    name: 'AGENT_BACKEND_WSL',
+    fallback: '`EXCALIDRAW_AGENT_BACKEND`',
+    description: 'The backend a **WSL-backed** project runs, when the distro has a different agent installed from the machine. Unset is the machine\'s answer, which is right whenever the same agent is in both. Its binary is never a host path — the distro\'s own shell looks the bare name up'
   },
   {
     name: 'ISSUE_AGENT_WSL',

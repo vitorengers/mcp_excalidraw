@@ -28,7 +28,10 @@ import { githubProjectRefusal, parseProjectUrl } from './project-board-types.js'
 // backend's answer given to all of them: a board pointed at Codex had `minimal` refused, though
 // Codex takes it. Kept as a list rather than free text because a level nothing checks is only
 // discovered when a run fails minutes later, in a process nobody is watching.
-import { DEFAULT_AGENT_BACKEND, type AgentBackendId } from './agent-adapter.js';
+import { DEFAULT_AGENT_BACKEND, agentBackendId, type AgentBackendId } from './agent-adapter.js';
+import {
+  KNOWN_BACKEND_NAMES, backendNames, boardAgentBackend, enabledAgentBackends,
+} from './agent-backend.js';
 import { agentEfforts } from './agents/index.js';
 
 /** What the registry is called when nobody has named a file for it. */
@@ -134,6 +137,36 @@ export const DEFAULT_AGENT_BACKENDS: AgentBackends = {
 };
 
 /**
+ * The backends a project may name, which is only ever a subset of what the operator enabled.
+ *
+ * Choosing which binary runs is *granting*, not retuning — the rule this whole file is built on
+ * — so the set comes from the operator's environment and a project picks within it. A board
+ * that enabled one backend has a project that can name that one and nothing else, which is the
+ * ordinary case and the safe one.
+ *
+ * Read from the environment where no caller supplies it, because the callers here are a
+ * registry read and a settings write, neither of which has a board around it.
+ */
+export type AgentBackendChoices = readonly AgentBackendId[];
+
+/**
+ * Why a `backend` was refused, in the words the settings dialog will show.
+ *
+ * Two different mistakes, and a message that could not tell them apart would send an operator
+ * to fix the wrong thing: a name no backend has is a typo, and a name that exists but was never
+ * enabled is a board that has not granted it. Both name the value, the way an unknown agent
+ * field already does.
+ */
+function refuseBackend(kind: string, value: string, choices: AgentBackendChoices): string {
+  const known = agentBackendId(value)
+    ? `"${value}" is a backend this board knows, but nothing in this board's environment enabled it.`
+    : `"${value}" is not a backend at all — the names are ${KNOWN_BACKEND_NAMES}.`;
+  return `"agents.${kind}.backend" must be one of ${backendNames(choices)} — the backends this `
+    + `board's operator enabled. ${known} A project picks among the agents the operator granted; `
+    + 'it cannot grant one.';
+}
+
+/**
  * Why an effort was refused, in the words the settings dialog will show.
  *
  * The backend is named because without it the message cannot tell the two mistakes apart. A
@@ -191,6 +224,18 @@ export function agentWorkflowFile(slug: string): string {
  * allowed one. A project may retune what the operator granted; it may never grant it.
  */
 export interface WorkspaceAgentConfig {
+  /**
+   * Which of the backends the operator enabled this agent runs under.
+   *
+   * The one field here that looks like a capability and is not one. It cannot name a binary,
+   * cannot name a command and cannot reach a backend the board's own environment did not
+   * enable — `EXCALIDRAW_AGENT_BACKEND` is the grant, and this is a choice among what it
+   * granted. A project that names something outside that set is refused with the name in the
+   * message, on the way in and again on the way out.
+   *
+   * Unset is the board's own, which is the first backend the operator named.
+   */
+  backend?: string;
   /** Passed through as `--model`. Unset means the board's own default. */
   model?: string;
   /** Passed through as `--effort`. Unset means the board's own default. */
@@ -215,6 +260,13 @@ export interface WorkspaceAgentsConfig {
 
 /** One agent's settings, resolved. Null everywhere means "whatever the board does". */
 export interface AgentSettings {
+  /**
+   * The backend this project picked, or null for the board's own.
+   *
+   * Resolved on the way in — a name the operator did not enable is dropped here rather than
+   * carried to a run — so anything non-null is a backend this board is allowed to spawn.
+   */
+  backend: AgentBackendId | null;
   model: string | null;
   effort: string | null;
   timeoutMs: number | null;
@@ -377,7 +429,7 @@ async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
 }
 
 const NO_AGENT_SETTINGS: AgentSettings = {
-  model: null, effort: null, timeoutMs: null, workflow: null,
+  backend: null, model: null, effort: null, timeoutMs: null, workflow: null,
 };
 
 /**
@@ -392,25 +444,45 @@ function readAgentSettings(
   kind: string,
   id: string,
   raw: unknown,
-  backend: AgentBackendId
+  backend: AgentBackendId,
+  choices: AgentBackendChoices
 ): AgentSettings {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return NO_AGENT_SETTINGS;
   const config = raw as WorkspaceAgentConfig;
+
+  // Read first, because everything else about a run is judged against the backend that will
+  // *run* it: an effort is the backend's own vocabulary, and judging a picked backend's level
+  // against the board's would refuse a word the CLI takes.
+  let picked: AgentBackendId | null = null;
+  if (typeof config.backend === 'string' && config.backend.trim()) {
+    const candidate = config.backend.trim();
+    const named = agentBackendId(candidate);
+    if (named && choices.includes(named)) picked = named;
+    // Dropped rather than obeyed, and said out loud: a project that named a backend nobody
+    // granted is asking this board to run a binary it was never allowed to run, and the run it
+    // gets instead is the board's own.
+    else {
+      logger.warn(`Workspace "${id}": ignoring agents.${kind}.backend "${candidate}" — this board enabled ${backendNames(choices)}`);
+    }
+  } else if (config.backend !== undefined && config.backend !== null) {
+    logger.warn(`Workspace "${id}": ignoring agents.${kind}.backend — it must be a backend name, not ${typeof config.backend}`);
+  }
+  const running = picked ?? backend;
 
   const model = typeof config.model === 'string' && config.model.trim() ? config.model.trim() : null;
 
   let effort: string | null = null;
   if (typeof config.effort === 'string' && config.effort.trim()) {
     const candidate = config.effort.trim();
-    const levels = agentEfforts(backend);
+    const levels = agentEfforts(running);
     if (levels.includes(candidate)) effort = candidate;
     // The backend is named here for the same reason the refusal names it: dropped silently, a
     // level meant for the other backend is indistinguishable from a typo, and this warning is
     // the only record a run has that its project asked for something it did not get.
     else if (levels.length) {
-      logger.warn(`Workspace "${id}": ignoring agents.${kind}.effort "${candidate}" — the "${backend}" backend takes ${levels.join(', ')}`);
+      logger.warn(`Workspace "${id}": ignoring agents.${kind}.effort "${candidate}" — the "${running}" backend takes ${levels.join(', ')}`);
     } else {
-      logger.warn(`Workspace "${id}": ignoring agents.${kind}.effort "${candidate}" — the "${backend}" backend has no reasoning effort to set`);
+      logger.warn(`Workspace "${id}": ignoring agents.${kind}.effort "${candidate}" — the "${running}" backend has no reasoning effort to set`);
     }
   }
 
@@ -434,21 +506,22 @@ function readAgentSettings(
     logger.warn(`Workspace "${id}": ignoring agents.${kind}.workflow — it must be a workflow name, not ${typeof config.workflow}`);
   }
 
-  return { model, effort, timeoutMs, workflow };
+  return { backend: picked, model, effort, timeoutMs, workflow };
 }
 
 function readAgents(
   id: string,
   config: WorkspaceConfig,
-  backends: AgentBackends
+  backends: AgentBackends,
+  choices: AgentBackendChoices
 ): WorkspaceAgents {
   const agents = config.agents;
   if (!agents || typeof agents !== 'object' || Array.isArray(agents)) {
     return { issue: NO_AGENT_SETTINGS, implement: NO_AGENT_SETTINGS };
   }
   return {
-    issue: readAgentSettings('issue', id, agents.issue, backends.issue),
-    implement: readAgentSettings('implement', id, agents.implement, backends.implement),
+    issue: readAgentSettings('issue', id, agents.issue, backends.issue, choices),
+    implement: readAgentSettings('implement', id, agents.implement, backends.implement, choices),
   };
 }
 
@@ -466,7 +539,8 @@ function idFromPath(resolved: ResolvedPath): string {
  */
 async function loadWorkspace(
   entry: RegistryEntry,
-  backends: AgentBackends
+  backends: AgentBackends | null,
+  choices: AgentBackendChoices | null
 ): Promise<Workspace | null> {
   if (!entry?.path) {
     logger.warn('Workspace entry without a path, skipping', { entry });
@@ -475,6 +549,16 @@ async function loadWorkspace(
 
   const resolved = resolveWorkspacePath(entry.path, entry.distro);
   const id = entry.id?.trim() || idFromPath(resolved);
+
+  // Per workspace rather than per registry, because a distro may have been granted a different
+  // agent from the machine: the environment this project lives in decides both which backend it
+  // runs by default and which ones it may name.
+  const environment = resolved.environment.kind === 'wsl' ? 'wsl' : 'native';
+  const board = backends ?? {
+    issue: boardAgentBackend(environment),
+    implement: boardAgentBackend(environment),
+  };
+  const enabled = choices ?? enabledAgentBackends(environment);
 
   const base: Workspace = {
     id,
@@ -575,7 +659,7 @@ async function loadWorkspace(
       : null,
     projectInProgressColumn: config.projectInProgressColumn?.trim() || null,
     projectTodoColumn: config.projectTodoColumn?.trim() || null,
-    agents: readAgents(id, config, backends),
+    agents: readAgents(id, config, board, enabled),
     error: escaped.length
       ? `Config field(s) outside the workspace, ignored: ${escaped.join(', ')}`
       : null,
@@ -668,15 +752,22 @@ export async function loadAgentWorkflow(
  * logged at debug, the same reading `readRegistry` takes on the write side. A file that is
  * there and cannot be read is a different thing and still an error.
  *
- * `backends` is which agent each project's two roles will be run under, and it is only ever
- * read to decide which reasoning-effort levels a config may name. It has a default because the
- * caller that knows the answer is the server, and the dozen other callers — the CLI, the checks,
- * a health probe — are asking about paths and repositories rather than about agents; the default
- * is what every board resolves to today, so those callers read what they have always read.
+ * `backends` is which agent each project's two roles will be run under, and `choices` is which
+ * ones a project may name for itself. Both are read only to judge what a config may say — a
+ * reasoning-effort level is the backend's own vocabulary, and a backend a project names has to
+ * be one the operator enabled.
+ *
+ * Both default to **the environment this process was started with**, per workspace, rather than
+ * to a constant: the dozen callers here — the CLI, the checks, a health probe — are asking about
+ * paths and repositories and have no board around them, and answering them with `raw` on a
+ * board whose operator named Codex would refuse levels that board takes. A caller that knows
+ * better passes them; a check with no agent variables set reads exactly what it read before
+ * backends existed, because that environment enables nothing and resolves to `raw`.
  */
 export async function loadWorkspaces(
   registryPath: string,
-  backends: AgentBackends = DEFAULT_AGENT_BACKENDS
+  backends: AgentBackends | null = null,
+  choices: AgentBackendChoices | null = null
 ): Promise<Workspace[]> {
   if (!registryPath) return [];
 
@@ -698,7 +789,7 @@ export async function loadWorkspaces(
   }
 
   const loaded = await Promise.all(
-    registry.workspaces.map((entry) => loadWorkspace(entry, backends))
+    registry.workspaces.map((entry) => loadWorkspace(entry, backends, choices))
   );
 
   // Two spellings of one project would otherwise register twice; the canonical path
@@ -1156,7 +1247,7 @@ const STRING_FIELDS = [
   'githubProject', 'projectField', 'projectInProgressColumn', 'projectTodoColumn',
 ] as const;
 
-const AGENT_FIELDS = ['model', 'effort', 'timeoutSeconds', 'workflow'] as const;
+const AGENT_FIELDS = ['backend', 'model', 'effort', 'timeoutSeconds', 'workflow'] as const;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -1192,10 +1283,18 @@ function refuseGithubProject(value: string): string {
  * is what an `effort` is judged against: the levels are the backend's own vocabulary, so a list
  * that does not come from the backend can only refuse a level one CLI takes or accept one
  * another would exit on. Defaulted for the callers that have no board around them.
+ *
+ * `choices` is the other half of the same rule, and it is what makes a `backend` field safe to
+ * accept at all: a project picks among the backends the operator enabled, so a name outside
+ * that set is refused here by name rather than written and silently ignored later. Defaulted
+ * from the environment, which for a board that enabled nothing is the empty set — every
+ * `backend` a project could write is refused, which is the correct answer for a board that
+ * granted no agent.
  */
 export function validateWorkspaceConfigPatch(
   patch: unknown,
-  backends: AgentBackends = DEFAULT_AGENT_BACKENDS
+  backends: AgentBackends = DEFAULT_AGENT_BACKENDS,
+  choices: AgentBackendChoices = enabledAgentBackends()
 ): { ok: true; patch: Record<string, unknown> } | { ok: false; error: string } {
   if (!isPlainObject(patch)) return { ok: false, error: 'The config must be a JSON object.' };
 
@@ -1240,6 +1339,25 @@ export function validateWorkspaceConfigPatch(
       if (!isPlainObject(settings)) {
         return { ok: false, error: `"agents.${kind}" must be a JSON object, or null to clear it.` };
       }
+      // Settled before the loop, because an effort is judged against the backend that will run
+      // it and `Object.entries` gives no order to rely on: a patch naming `codex-cli` and
+      // `minimal` together has to be judged as the pair it is, whichever key was typed first.
+      let running = backends[kind as AgentKind];
+      if (settings.backend !== undefined && settings.backend !== null) {
+        if (typeof settings.backend !== 'string') {
+          return {
+            ok: false,
+            error: `"agents.${kind}.backend" must be a backend name, or null to use the board's own.`,
+          };
+        }
+        const named = settings.backend.trim();
+        const picked = named ? agentBackendId(named) : null;
+        if (named && (!picked || !choices.includes(picked))) {
+          return { ok: false, error: refuseBackend(kind, named, choices) };
+        }
+        if (picked) running = picked;
+      }
+
       for (const [field, setting] of Object.entries(settings)) {
         if (!(AGENT_FIELDS as readonly string[]).includes(field)) {
           return {
@@ -1258,12 +1376,11 @@ export function validateWorkspaceConfigPatch(
         if (typeof setting !== 'string') {
           return { ok: false, error: `"agents.${kind}.${field}" must be text, or null to use the board default.` };
         }
+        // Already settled above, and settled first: it is what `running` was read from.
+        if (field === 'backend') continue;
         if (field === 'effort' && setting.trim()
-            && !agentEfforts(backends[kind as AgentKind]).includes(setting.trim())) {
-          return {
-            ok: false,
-            error: refuseEffort(kind, backends[kind as AgentKind], setting.trim()),
-          };
+            && !agentEfforts(running).includes(setting.trim())) {
+          return { ok: false, error: refuseEffort(kind, running, setting.trim()) };
         }
         // A name, not a path. Refused here as well as per run because this is the surface a
         // person types into, and "agent-workflows/x.md" is exactly what somebody would write.
@@ -1413,9 +1530,10 @@ export async function writeWorkspaceConfig(
   registryPath: string,
   id: string,
   patch: unknown,
-  backends: AgentBackends = DEFAULT_AGENT_BACKENDS
+  backends: AgentBackends = DEFAULT_AGENT_BACKENDS,
+  choices: AgentBackendChoices = enabledAgentBackends()
 ): Promise<WorkspaceWriteResult> {
-  const valid = validateWorkspaceConfigPatch(patch, backends);
+  const valid = validateWorkspaceConfigPatch(patch, backends, choices);
   if (!valid.ok) return { ok: false, status: 400, error: valid.error };
 
   const found = await configFileOf(registryPath, id);
@@ -1447,7 +1565,7 @@ export async function writeWorkspaceConfig(
 
   // The same backends the patch was judged against, so that what is written and what is read
   // back cannot disagree about whether an effort survived.
-  const workspaces = await loadWorkspaces(registryPath, backends);
+  const workspaces = await loadWorkspaces(registryPath, backends, choices);
   const workspace = workspaces.find((candidate) => candidate.id === id);
   if (!workspace) {
     return { ok: false, status: 500, error: `"${id}" did not load back after its config was written.` };

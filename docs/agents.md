@@ -1,18 +1,39 @@
 # Choosing the agent
 
-`EXCALIDRAW_ISSUE_AGENT` and `EXCALIDRAW_IMPLEMENT_AGENT` are **command lines**, not a vendor.
-The board spawns what they say, hands it a prompt and reads a URL back out of what it printed.
-`src/core/agent-preflight.ts` already names nine binaries it recognises at startup, and the only
-reason it holds a list at all is that `/health` must not echo somebody's command line back over
-an unauthenticated socket.
+There are two ways to configure an agent, and the short one is new.
 
-Since #326 `src/` *can* name a backend — `src/core/agent-adapter.ts` and `src/core/agents/`,
-where a backend builds the argv, says whether the run streams and reads its own events — but
-the agent variables above, which `docs/running.md` lists, are still read as a command line and
-nothing more. Every board is the
-`raw` backend: an arbitrary command line, spawned byte for byte, which streams if and only if it
-says `--output-format stream-json`. So the recipes below are what an operator writes, and they
-are unchanged by that seam existing.
+**Name the backend.** One variable, one word:
+
+```
+EXCALIDRAW_AGENT_BACKEND=claude-code
+```
+
+That is a whole configuration. The binary is looked up on `PATH` — `claude` for `claude-code`,
+`codex` for `codex-cli` — and the backend writes everything the recipes further down spell by
+hand: the flag that makes the run print and exit, the flags that make it stream, and a
+permission posture per role (reading for the issue agent, writing for the implement agent). Both
+agents come from the one word, in both environments: inside a WSL distro the binary stays a bare
+name for the distro's own shell to look up, since a path found on this machine is precisely what
+cannot resolve there. `EXCALIDRAW_AGENT_BACKEND_WSL` is there for the board whose distro has a
+different agent installed, and is not needed otherwise.
+
+Two optional keys sit beside it. `EXCALIDRAW_AGENT_ARGS` pins arguments onto every run — an
+`--add-dir`, an `--mcp-config`, anything no backend knows about — appended after everything the
+backend and the project write, so what you pinned is the last word on the line. And writing
+`EXCALIDRAW_ISSUE_AGENT` or `EXCALIDRAW_IMPLEMENT_AGENT` *beside* a backend name is the override
+for an install `PATH` does not reach: the command line is where the binary and your own
+arguments come from, and the backend still writes what is missing.
+
+**Or write the command lines.** `EXCALIDRAW_ISSUE_AGENT` and `EXCALIDRAW_IMPLEMENT_AGENT` are
+**command lines**, not a vendor: the board spawns what they say, hands it a prompt and reads a
+URL back out of what it printed. With no backend named, a board is the `raw` backend — an
+arbitrary command line, spawned byte for byte, which streams if and only if it says
+`--output-format stream-json`. That is what every board configured before backends existed has,
+and it is unchanged; the recipes below are exactly those command lines, and they are worth
+reading even if you never write one, because they are what a named backend writes for you.
+`src/core/agent-preflight.ts` names nine binaries it recognises at startup, and the only reason
+it holds a list at all is that `/health` must not echo somebody's command line back over an
+unauthenticated socket.
 
 The documentation was the part that assumed. The command was specified once, in the
 configuration section of [issue-block.md](issue-block.md#configuration), with the binary
@@ -191,6 +212,31 @@ A level outside that list is refused when the settings are saved, with the backe
 message has to separate a typo from a level that belongs to the other backend. See
 [issue-block.md](issue-block.md#what-is-per-project-and-what-stays-global) for what a project
 may and may not say.
+
+## Letting one project run a different agent
+
+`EXCALIDRAW_AGENT_BACKEND` takes more than one name, comma-separated:
+
+```
+EXCALIDRAW_AGENT_BACKEND=claude-code,codex-cli
+```
+
+The first is what the board runs. The rest are what a project may switch to, by writing
+`agents.<kind>.backend` in its own `board.config.json`:
+
+```json
+{ "agents": { "implement": { "backend": "codex-cli" } } }
+```
+
+**A project picks; it never grants.** Choosing which binary runs is granting, so a name outside
+the set the operator enabled is refused when the settings are saved — with the name in the
+message, and with the list of what this board did enable — and dropped with a warning if it
+reaches the loader anyway. A board that named one backend is a board whose projects can name
+that one and nothing else, which is the ordinary case. It is the same boundary that refuses
+`agents.<kind>.command` by name: a project retunes the agent the board already allows.
+
+A project that picks a backend has its `effort` judged against *that* backend's levels rather
+than the board's, since the levels are the CLI's own vocabulary.
 
 ## Watching a run instead
 

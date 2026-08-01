@@ -56,10 +56,13 @@ import {
 import { BoardScene, parseBoardScene } from './core/board-seed.js';
 import { listDirectories } from './core/directory-browse.js';
 import {
-  AgentCommands, AgentHost, AgentRun, agentCommandFor, agentCommandSpec, runIssueAgent,
-  runReviseAgent
+  AgentCommands, AgentHost, AgentRun, agentCommandFor, agentCommandsOf, agentGrantFor,
+  agentGrantsFromEnv, runIssueAgent, runReviseAgent
 } from './core/issue-agent.js';
 import { DEFAULT_AGENT_BACKEND, type AgentCommandSpec } from './core/agent-adapter.js';
+import {
+  KNOWN_BACKEND_NAMES, enabledAgentBackends, parseAgentBackends, type AgentGrants
+} from './core/agent-backend.js';
 import {
   AgentRoleCommands, AgentsHealth, agentRoles, initialAgents, preflightAgents, preflightLines
 } from './core/agent-preflight.js';
@@ -1705,7 +1708,8 @@ app.put('/api/workspaces/:id/config', async (req: Request, res: Response) => {
       registryPath(),
       id,
       req.body?.config,
-      workspace ? agentBackendsFor(workspace) : DEFAULT_AGENT_BACKENDS
+      workspace ? agentBackendsFor(workspace) : DEFAULT_AGENT_BACKENDS,
+      workspace ? agentBackendChoicesFor(workspace) : enabledAgentBackends()
     );
     if (!result.ok) {
       return res.status(result.status).json({ success: false, error: result.error });
@@ -1745,15 +1749,14 @@ app.get('/api/fs/directories', async (req: Request, res: Response) => {
 // back to the native one, which is what keeps a command written without an absolute path
 // working in both.
 //
-// Each half carries the backend it runs under as well as the command, and today both say
-// `raw` — the passthrough backend, which is an arbitrary command line spawned byte for byte.
-// That is deliberate and it is the whole of what a board configured before backends existed
-// has ever had: naming a *different* backend needs a variable to name it in, and the four
-// variables here belong to a separate change. `core/agents/` is where the others live.
-const ISSUE_AGENT_COMMANDS: AgentCommands = {
-  native: agentCommandSpec(env('ISSUE_AGENT'), DEFAULT_AGENT_BACKEND),
-  wsl: agentCommandSpec(env('ISSUE_AGENT_WSL'), DEFAULT_AGENT_BACKEND),
-};
+// Each half carries the backend it runs under as well as the command, and both come from
+// `agentGrantsFromEnv`: `EXCALIDRAW_AGENT_BACKEND` names the agent, the adapter supplies its
+// binary, its permission posture and its stream flags, and the two command variables below stay
+// exactly what they were — the `raw` backend, an arbitrary command line spawned byte for byte,
+// which is what every board configured before backends existed has. `core/agent-backend.ts` is
+// where the three keys are read and `core/agents/` is where the backends live.
+const ISSUE_AGENT_GRANTS: AgentGrants = agentGrantsFromEnv('issue');
+const ISSUE_AGENT_COMMANDS: AgentCommands = agentCommandsOf(ISSUE_AGENT_GRANTS);
 
 /** Whether any board at all may research. A workspace's own answer comes later. */
 const ISSUE_AGENT_CONFIGURED = Boolean(ISSUE_AGENT_COMMANDS.native || ISSUE_AGENT_COMMANDS.wsl);
@@ -1777,20 +1780,32 @@ function agentCommandRefusal(
   const where = workspace.environment.kind === 'wsl'
     ? { wanted: `${variable}_WSL or ${variable}`, names: `the WSL distro "${workspace.environment.distro}" names it` }
     : { wanted: variable, names: 'this machine names it' };
+  // The backend variable first, because it is the answer for a board that has an agent
+  // installed and no command line anywhere — which is every first run.
   return `${what} is not enabled for workspace "${workspace.id}". `
-    + `Set ${where.wanted} to the agent command as ${where.names}.`;
+    + `Set ${settingName('AGENT_BACKEND')} to one of ${KNOWN_BACKEND_NAMES}, `
+    + `or ${where.wanted} to the agent command as ${where.names}.`;
 }
 
-/** The same answer, for the routes that write their own response. */
+/**
+ * The spec a run is spawned from, or a refusal written to the response.
+ *
+ * `grants` rather than `commands`, because a project may have picked one of the backends the
+ * operator enabled and the command that reaches its binary travels with the backend. The
+ * refusal is still asked of `commands`: what it is answering is "did this board grant this
+ * role anything at all", which is a question about the operator and not about the project.
+ */
 function agentCommandOrRefuse(
   res: Response,
   workspace: Workspace,
-  commands: AgentCommands,
+  grants: AgentGrants,
+  role: 'issue' | 'implement',
   what: string,
   variable: string
 ): AgentCommandSpec | null {
+  const commands = agentCommandsOf(grants);
   const refusal = agentCommandRefusal(workspace, commands, what, variable);
-  if (!refusal) return agentCommandFor(workspace, commands);
+  if (!refusal) return agentGrantFor(workspace, grants, role);
   res.status(404).json({ success: false, error: refusal });
   return null;
 }
@@ -1971,7 +1986,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   if (!ISSUE_AGENT_CONFIGURED) {
     return res.status(404).json({
       success: false,
-      error: `Issue blocks are disabled. Set ${settingName('ISSUE_AGENT')} to the agent command to enable them.`
+      error: `Issue blocks are disabled. Set ${settingName('AGENT_BACKEND')} to one of ${KNOWN_BACKEND_NAMES}, or ${settingName('ISSUE_AGENT')} to the agent command, to enable them.`
     });
   }
 
@@ -2064,7 +2079,7 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
   }
 
   const agent = agentCommandOrRefuse(
-    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching', settingName('ISSUE_AGENT')
+    res, workspace, ISSUE_AGENT_GRANTS, 'issue', 'Researching', settingName('ISSUE_AGENT')
   );
   if (!agent) return;
 
@@ -2362,10 +2377,8 @@ const issueMemo = new IssueMemo<IssueDetail>(memoWindow(env('ISSUE_MEMO_MS')));
 // issue blocks must not quietly enable repository writes. That separation is why the WSL
 // half is a pair rather than one variable: a board that granted a distro an agent for
 // research must not thereby have granted it one that writes.
-const IMPLEMENT_AGENT_COMMANDS: AgentCommands = {
-  native: agentCommandSpec(env('IMPLEMENT_AGENT'), DEFAULT_AGENT_BACKEND),
-  wsl: agentCommandSpec(env('IMPLEMENT_AGENT_WSL'), DEFAULT_AGENT_BACKEND),
-};
+const IMPLEMENT_AGENT_GRANTS: AgentGrants = agentGrantsFromEnv('implement');
+const IMPLEMENT_AGENT_COMMANDS: AgentCommands = agentCommandsOf(IMPLEMENT_AGENT_GRANTS);
 
 /** Whether any board at all may implement. A workspace's own answer comes later. */
 const IMPLEMENT_AGENT_CONFIGURED = Boolean(
@@ -2381,15 +2394,21 @@ const IMPLEMENT_AGENT_CONFIGURED = Boolean(
  * saved, because a reasoning effort is the backend's own vocabulary and the write path has to
  * refuse a level *this* project's agent could not be handed.
  *
- * Every board resolves both halves to the same passthrough today — nothing names a backend yet —
- * so this returns the default for every setup that exists. It is the seam a named backend
- * arrives through, not a change of behaviour.
+ * The board's own answer, deliberately, not the project's pick: this is what a project that
+ * names no backend of its own runs, and what the settings dialog judges against when the patch
+ * in front of it names none either. A patch that *does* name one is judged against that —
+ * `validateWorkspaceConfigPatch` reads it before it reads anything else.
  */
 function agentBackendsFor(workspace: Workspace): AgentBackends {
   return {
     issue: agentCommandFor(workspace, ISSUE_AGENT_COMMANDS)?.backend ?? DEFAULT_AGENT_BACKEND,
     implement: agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS)?.backend ?? DEFAULT_AGENT_BACKEND,
   };
+}
+
+/** The backends a project in this environment may name for itself, and no others. */
+function agentBackendChoicesFor(workspace: Workspace) {
+  return enabledAgentBackends(workspace.environment.kind === 'wsl' ? 'wsl' : 'native');
 }
 
 // ─── Do the agents actually run? ──────────────────────────────
@@ -2425,6 +2444,18 @@ let AGENT_PREFLIGHT: AgentsHealth = initialAgents(AGENT_ROLES);
  * replaces.
  */
 async function runAgentPreflight(): Promise<void> {
+  // Said once, here, rather than inside the parser: a value that names nothing leaves the board
+  // with no agent at all, and every other symptom of that — no buttons, a run that never starts
+  // — reads as something else entirely. `parseAgentBackends` drops what it cannot read silently
+  // because it is called on every registry load; this is the one call that happens once.
+  for (const variable of ['AGENT_BACKEND', 'AGENT_BACKEND_WSL'] as const) {
+    const written = env(variable)?.trim();
+    if (written && parseAgentBackends(written).length === 0) {
+      logger.warn(`${settingName(variable)}="${written}" names no backend this board knows. `
+        + `The names are ${KNOWN_BACKEND_NAMES}; nothing was enabled by it.`);
+    }
+  }
+
   try {
     // `registryPath()` rather than the raw variable, since #399: the registry has a per-OS
     // default now, and a board whose only projects come from that default has projects like
@@ -2999,7 +3030,7 @@ async function runImplementation(
         // backend that is still the operator's own command with its print flags removed, which
         // is the same request they make by leaving them out of `EXCALIDRAW_IMPLEMENT_AGENT`,
         // made once instead of forever; a command with none in it comes back byte for byte.
-        agent: agentCommandFor(workspace, IMPLEMENT_AGENT_COMMANDS) as AgentCommandSpec,
+        agent: agentGrantFor(workspace, IMPLEMENT_AGENT_GRANTS, 'implement') as AgentCommandSpec,
         ...(options.interactive ? { interactive: true } : {}),
         notFoundVariable: settingName('IMPLEMENT_AGENT_WSL'),
         worktree,
@@ -4037,7 +4068,7 @@ function implementingRefused(res: Response): boolean {
   if (!IMPLEMENT_AGENT_CONFIGURED) {
     res.status(404).json({
       success: false,
-      error: `Implementing is disabled. Set ${settingName('IMPLEMENT_AGENT')} to the agent command to enable it.`
+      error: `Implementing is disabled. Set ${settingName('AGENT_BACKEND')} to one of ${KNOWN_BACKEND_NAMES}, or ${settingName('IMPLEMENT_AGENT')} to the agent command, to enable it.`
     });
     return true;
   }
@@ -4481,7 +4512,8 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
   }
 
   const agent = agentCommandOrRefuse(
-    res, workspace, ISSUE_AGENT_COMMANDS, 'Researching an issue again', settingName('ISSUE_AGENT')
+    res, workspace, ISSUE_AGENT_GRANTS, 'issue', 'Researching an issue again',
+    settingName('ISSUE_AGENT')
   );
   if (!agent) return;
 
