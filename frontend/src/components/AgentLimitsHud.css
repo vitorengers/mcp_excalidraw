@@ -1,5 +1,5 @@
 /*
- * The Claude Code usage HUD, at the right-hand end of the header.
+ * The coding-agent usage HUD, at the right-hand end of the header.
  *
  * **In the header, not on the canvas.** "Top right" has two answers here and only one of
  * them is ours: the canvas viewport's top-right corner is `layer-ui__wrapper__top-right`,
@@ -12,7 +12,7 @@
  * way every other overlay on this board is, so it follows the canvas into dark mode instead
  * of keeping a light card's colours over a dark board.
  */
-.claude-status {
+.agent-limits {
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -34,7 +34,7 @@
   max-width: 420px;
 }
 
-.claude-status__row {
+.agent-limits__row {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
@@ -44,7 +44,7 @@
 
 /* The machine's own name — `Windows`, or the distro's. The one part of the row a reader
    scans for, so it is the one part that gets the full-strength colour. */
-.claude-status__env {
+.agent-limits__env {
   font-weight: 600;
   color: var(--text-primary-color, #1b1b1f);
 }
@@ -57,19 +57,19 @@
  * than the figures because it is the answer to "whose", not to "how much", and it truncates
  * rather than wrapping so that a long address cannot cost the windows their line.
  */
-.claude-status__account {
+.agent-limits__account {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 150px;
 }
 
-.claude-status__window {
+.agent-limits__window {
   color: var(--text-primary-color, #1b1b1f);
 }
 
 /* What the window has left before it resets. A percentage on its own does not say whether
    it matters in ten minutes or in three days. */
-.claude-status__resets {
+.agent-limits__resets {
   color: var(--color-gray-60, #7a7a7a);
 }
 
@@ -81,7 +81,7 @@
  * an empty corner and a board without this feature are the same picture, and the operator
  * whose HUD never appeared has no way from there to the document that would explain it.
  */
-.claude-status__off {
+.agent-limits__off {
   color: var(--color-gray-70, #5c5c5c);
   white-space: nowrap;
   overflow: hidden;
@@ -89,8 +89,8 @@
 }
 
 /* Nothing said. Not `0%`, which would be a claim that nothing has been spent. */
-.claude-status__unknown,
-.claude-status__silent {
+.agent-limits__unknown,
+.agent-limits__silent {
   color: var(--color-gray-60, #7a7a7a);
   font-style: italic;
 }
@@ -103,12 +103,12 @@
  * row is amber and says how old it is — the age is not decoration, it is the part that stops
  * the number being a lie.
  */
-.claude-status__row--stale .claude-status__env,
-.claude-status__row--stale .claude-status__window {
+.agent-limits__row--stale .agent-limits__env,
+.agent-limits__row--stale .agent-limits__window {
   color: #8a5a00;
 }
 
-.claude-status__age {
+.agent-limits__age {
   color: #8a5a00;
   font-weight: 600;
 }
@@ -120,8 +120,8 @@
  * against that header is 8.0:1, and the light theme's `#8a5a00` on `#fff` is 6.2:1, so both
  * clear AA for the small text this is.
  */
-.app[data-theme="dark"] .claude-status__row--stale .claude-status__env,
-.app[data-theme="dark"] .claude-status__row--stale .claude-status__window,
-.app[data-theme="dark"] .claude-status__age {
+.app[data-theme="dark"] .agent-limits__row--stale .agent-limits__env,
+.app[data-theme="dark"] .agent-limits__row--stale .agent-limits__window,
+.app[data-theme="dark"] .agent-limits__age {
   color: #e8a33d;
 }

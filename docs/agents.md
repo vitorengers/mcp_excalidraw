@@ -14,6 +14,11 @@ nothing more. Every board is the
 says `--output-format stream-json`. So the recipes below are what an operator writes, and they
 are unchanged by that seam existing.
 
+One thing a backend may decline to do at all: `AgentAdapter.readLimits` is **optional**, and a
+backend that has no way to report what it has spent simply does not carry it. Claude Code does;
+`codex-cli` and `raw` do not, so on those the usage HUD draws nothing rather than a row of
+dashes — [agent-limits.md](agent-limits.md).
+
 The documentation was the part that assumed. The command was specified once, in the
 configuration section of [issue-block.md](issue-block.md#configuration), with the binary
 genericised to `<agent-binary>` and Claude Code's flags left around it — `-p`, `--model`,
@@ -37,12 +42,22 @@ Four things, and they are properties of the run rather than of a product.
    `EXCALIDRAW_IMPLEMENT_CONCURRENCY` until somebody closes the tab. (Leaving the print flag off
    *on purpose* is a supported thing to do — see [Watching a run instead](#watching-a-run-instead)
    — but it is a choice about one board, not a default.)
-2. **It takes its instructions on stdin.** `runAgent` in `src/core/issue-agent.ts` writes the
-   whole prompt to the child's stdin and closes it, with no shell in between, because the prompt
-   is several hundred words with quotes and backticks in it and passing that as an argument
-   breaks on Windows long before the agent sees it. An agent that only accepts a prompt as an
-   argument cannot be driven this way. There is exactly one exception, and it is the
-   [interactive path](#watching-a-run-instead).
+2. **It takes its instructions on one of two channels, and its backend says which.** A prompt
+   goes to the child's stdin, closed behind it, or to the end of its argv — `AgentInvocation.
+   prompt` in `src/core/agent-adapter.ts` is where a backend declares it, and `runAgent` and the
+   terminal session both obey that declaration rather than choosing for themselves. Either way
+   there is no shell in between: the prompt is several hundred words with quotes, backticks and
+   a `$` in them, and it reaches the process as one argv element or one byte stream, never as
+   something `cmd.exe` gets to take apart. An agent that accepts a prompt on neither channel
+   cannot be driven this way.
+
+   **Whichever it is, the child's stdin is closed.** For a stdin-delivering agent that is the
+   end of file it is waiting for. For an argv-delivering one it is the emptiness it needs to
+   start at all: a pipe with no writer is not an absence, it is a `read()` that never returns,
+   and `codex exec "<prompt>"` handed one blocks for ever
+   ([openai/codex#20919](https://github.com/openai/codex/issues/20919), whose own workaround is
+   `< /dev/null`). The one exception is a run given a pseudoterminal, where stdin is the
+   reader's — the [interactive path](#watching-a-run-instead).
 3. **It is permitted to run the `gh` and `git` sub-commands its prompt names, without asking.**
    No prompt can be answered, so a tool that would need approval is not approved — it is
    refused, and the refusal is silent. That cuts both ways, which is why the grant is stated as
@@ -104,10 +119,19 @@ EXCALIDRAW_IMPLEMENT_AGENT='codex exec --dangerously-bypass-approvals-and-sandbo
 
 `codex exec` is the non-interactive subcommand — bare `codex` is the interface — and its usage
 is `codex exec [OPTIONS] [PROMPT]`, where the help for the positional says: *"If not provided as
-an argument (or if `-` is used), instructions are read from stdin."* That is rule 2 satisfied
-without a flag, and it is why the recipe carries **no** trailing `-`: the interactive path hands
-the prompt as an argument instead, and a command line that insists on stdin would then wait for
-an end of file that a pseudoterminal cannot give.
+an argument (or if `-` is used), instructions are read from stdin."* Both readings satisfy rule
+2, and the `codex-cli` backend takes the first: the prompt is the argument, and stdin is closed
+empty beside it.
+
+**That is why the recipe carries no trailing `-`, and why the backend never writes one for
+you.** The two forms are not equivalent when the reading is wrong. Codex's own documentation
+says that *"if stdin is piped and you also provide a prompt argument, Codex treats the prompt as
+the instruction and the piped content as additional context"* — so a prompt sent down stdin with
+no `-` in front of it is not refused, it is read as background material beside an instruction
+that does not exist, and the run does something nobody asked for. Writing `-` for you would also
+spend stdin, which is the one thing an [interactive tab](#watching-a-run-instead) needs left
+alone. Write it yourself and it is honoured, in the position you put it in, and the prompt is
+delivered on stdin and closed there.
 
 Four things about the flags are worth stating, because each one is a way this recipe could have
 been plausible and wrong:
@@ -213,9 +237,16 @@ with the flag is the token counts, the ending (a session ends when you end it) a
 runs. [issue-block.md](issue-block.md) has the trade in full, and [terminal.md](terminal.md) has
 the measurement that rules out the alternatives.
 
-For Codex this matters twice: `codex exec` still exits on its own, so it settles either way, but
-because the prompt then arrives as an argument, a recipe written as `codex exec -` would be
-waiting on a stdin nobody is going to close.
+That paragraph is the `raw` backend reading your command line. A **named** backend answers the
+same question without reading anything: `claude-code` asks for a terminal in its interactive mode
+and nowhere else, and `codex-cli` asks for one only for bare `codex`, because `codex exec --json`
+takes its prompt on argv but is still a stream something is parsing — and a pseudoterminal wraps
+its output at the column count, which turns a JSON envelope into two halves of one.
+
+For Codex under `raw` this matters twice: `codex exec` still exits on its own, so it settles
+either way, but because the prompt then arrives as an argument, a recipe written as `codex exec -`
+would be waiting on a stdin nobody is going to close. Under `codex-cli` it does not arise — the
+backend knows the dash is yours and delivers the prompt to it.
 
 ## Before you trust a new recipe
 

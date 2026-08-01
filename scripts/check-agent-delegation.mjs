@@ -18,8 +18,8 @@
  *
  * **A lint over instructions, not a test of behaviour** — it cannot show an agent obeys.
  * What it catches is the guidance being dropped or reworded away, which for prose is the
- * regression that actually happens. It captures each prompt as the agent receives it, over
- * stdin, through the real composition path.
+ * regression that actually happens. It captures each prompt as the agent receives it, on
+ * whichever channel the backend declared, through the real composition path.
  *
  * Usage: node scripts/check-agent-delegation.mjs
  *
@@ -59,12 +59,17 @@ mkdirSync(workDir, { recursive: true });
 const stub = join(workDir, 'agent-stub.mjs');
 const captured = join(workDir, 'prompt.txt');
 
+// Whichever channel the backend declared, which since #329 is the adapter's answer and not
+// always stdin: this command line says no `-p`, so `raw` reads it as one that would draw an
+// interface and the prompt travels as the last argument. What is asserted below is the prompt's
+// *content*, so the stub takes it from wherever it arrived rather than pinning the channel.
 writeFileSync(stub, `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
+const onArgv = process.argv[process.argv.length - 1] ?? '';
 let input = '';
 process.stdin.on('data', (chunk) => { input += chunk.toString(); });
 process.stdin.on('end', () => {
-  writeFileSync(process.env.CAPTURE_TO, input, 'utf8');
+  writeFileSync(process.env.CAPTURE_TO, input || onArgv, 'utf8');
   process.stdout.write('https://github.com/vitorengers/vibemaxxing/issues/1\\n');
 });
 `, 'utf8');

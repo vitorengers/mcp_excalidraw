@@ -1,7 +1,7 @@
-# Claude Code status on the board
+# Agent limits on the board
 
-The top right of the header shows, one row per environment on this machine, what Claude Code
-has spent against its 5-hour and 7-day windows and which account spent it:
+The top right of the header shows, one row per environment on this machine, what your coding
+agent has spent against its 5-hour and 7-day windows and which account spent it:
 
 ```
 Windows        me@example.com        5h 24% (1h 04m)   7d 41% (5d 23h)
@@ -20,11 +20,12 @@ Where the accounts *match*, the rows merge:
 Windows + Ubuntu-22.04   me@example.com   5h 24% (1h 04m)   7d 41% (5d 23h)
 ```
 
-The windows are per Claude.ai subscription, so two environments signed in as the same person
-are not two quotas. They are one quota reported twice, differing only in how stale each copy
-is — and drawn as two rows that is two percentages for the same number, where a reader has to
-know which reading is the later one to know which of them is true. So a merged row draws the
-figures from the **freshest** reading in the group and names every environment behind it.
+The windows are per account — per Claude.ai subscription, for the one backend that can report
+them today — so two environments signed in as the same person are not two quotas. They are one
+quota reported twice, differing only in how stale each copy is, and drawn as two rows that is
+two percentages for the same number, where a reader has to know which reading is the later one
+to know which of them is true. So a merged row draws the figures from the **freshest** reading
+in the group and names every environment behind it.
 
 The argument above still holds and is what bounds this: merging is safe **only** when the
 account matches, because that is the only thing that makes the two readings claims about the
@@ -34,7 +35,7 @@ same subscription. Nothing else is a key.
 machines can have in common, and a board that merged two silent environments would be claiming
 they are the same person on no evidence at all.
 
-`GET /api/claude-status` is untouched by this: it still answers one record per environment,
+`GET /api/agent-limits` is untouched by this: it still answers one record per environment,
 because that is what it knows. The merge is presentation, decided at each render out of the
 response the page already has — so an account that changes mid-session splits or joins a row on
 the next poll, with no state to keep in step and nothing to go stale.
@@ -47,23 +48,36 @@ happened.
 
 ## Off unless configured
 
-Unset `EXCALIDRAW_CLAUDE_STATUS` and `GET /api/claude-status` answers 404. The header then shows
-one muted line and nothing else:
+Unset `VIBEMAXXING_AGENT_LIMITS` and `GET /api/agent-limits` answers 404, as does a build whose
+backends cannot read limits at all. The header then shows one muted line and nothing else:
 
 ```
-Claude usage off · docs/claude-status.md
+Agent usage off · docs/agent-limits.md
 ```
 
 It used to show nothing, and that was the one state this HUD could not tell anybody about: an
 empty header corner is exactly what a board without the feature looks like, so an operator whose
-figures never appeared had no way from there to this page. The route's own sentence — which
-names the setting — is the line's `title`, for a reader who hovers.
+figures never appeared had no way from there to this page. The route's own sentence — which says
+*which* of the two refusals it is, the unset setting or the missing reader — is the line's
+`title`, for a reader who hovers.
 
 The 404 also ends the polling loop rather than retrying every minute for the life of the page:
-the directory is read once, when the server starts, so nothing short of a restart changes the
-answer. A **403** is a different refusal and is not drawn — that is the loopback guard on a
+both halves of that answer are settled when the server starts, so nothing short of a restart
+changes it. A **403** is a different refusal and is not drawn — that is the loopback guard on a
 board bound to a LAN address, where whether this is configured is itself not something to
 answer.
+
+## Which agent can answer this
+
+**Reading limits is a backend's capability, not the board's.** `AgentAdapter.readLimits` is
+optional and is absent on every backend that cannot answer — see [agents.md](agents.md) — so the
+board asks whoever can read rather than asking one vendor by name.
+
+Today that is **Claude Code**, and the rest of this document is its half of the arrangement: the
+file layout below is the shape of the document Claude Code hands a status line command. A board
+whose agent is Codex CLI has nothing to write those files, so the directory stays empty and the
+HUD stays dark. Nothing about the route, the component or the variable has to change on the day a
+second backend can answer; it grows a `readLimits` and joins.
 
 ## Why a file, and not a lookup
 
@@ -102,7 +116,7 @@ its account and two dashes.
 ### 1. Point the board at a directory
 
 ```
-EXCALIDRAW_CLAUDE_STATUS=C:\Users\you\.claude\board-status
+VIBEMAXXING_AGENT_LIMITS=C:\Users\you\.claude\board-status
 ```
 
 A **directory**, not a file, and one directory for the whole machine. The alternative was to
@@ -167,7 +181,7 @@ publish anything else. It is still the operator's directory: do not write a toke
 
 ## What the board does with it
 
-`GET /api/claude-status` — **global, not workspace-scoped**, because it describes machines
+`GET /api/agent-limits` — **global, not workspace-scoped**, because it describes machines
 rather than projects, and it sits with `/health` rather than with `/api/elements` for that
 reason. **Loopback only**, because it serves an email address, and the guard comes before the
 404: on a board bound to a LAN address, whether this is configured is itself not something to
@@ -211,7 +225,7 @@ a PNG export, and survives **Hide Menus** — which is about Excalidraw's chrome
 
 Polled once a minute while the tab is on screen, and not at all while it is hidden. A minute is
 what the observation asked for and is a ceiling rather than a promise: the figures underneath are
-only as fresh as the last session. `?claudeStatusPollMs=` on the board's URL overrides the
+only as fresh as the last session. `?agentLimitsPollMs=` on the board's URL overrides the
 cadence, clamped to 200 ms – 10 minutes, and the interval in use is on the element as
 `data-poll-ms`.
 
@@ -222,8 +236,8 @@ for it would mean nothing.
 
 | Script | What it pins down |
 |---|---|
-| `scripts/check-claude-status.mjs` | Two environments kept apart, an absent window staying `null`, a stale reading flagged, malformed input skipped, the 404 and the 403, and that nothing else from the file comes back |
-| `scripts/check-claude-status-browser.mjs` | The HUD in a real browser: both rows top right, clear of Excalidraw's island, surviving `Hide Menus`, one poll a minute and none while hidden, both themes judged on rendered pixels, one row where the account matches and two where it does not, a `null` account merged with nobody, a changed account splitting the row on the next poll, and the off line on a board nothing configured |
+| `scripts/check-agent-limits.mjs` | Two environments kept apart, an absent window staying `null`, a stale reading flagged, malformed input skipped, the 404 and the 403, and that nothing else from the file comes back |
+| `scripts/check-agent-limits-browser.mjs` | The HUD in a real browser: both rows top right, clear of Excalidraw's island, surviving `Hide Menus`, one poll a minute and none while hidden, both themes judged on rendered pixels, one row where the account matches and two where it does not, a `null` account merged with nobody, a changed account splitting the row on the next poll, and the off line on a board nothing configured |
 
 Related: [running.md](running.md) for the variable, [rest-api.md](rest-api.md) for the route,
 [workspaces.md](workspaces.md) for where a distro is declared.

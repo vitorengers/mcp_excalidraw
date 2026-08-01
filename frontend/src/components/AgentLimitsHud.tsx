@@ -1,19 +1,19 @@
-import './ClaudeStatusHud.css'
+import './AgentLimitsHud.css'
 
-/** One rate-limit window, exactly as `GET /api/claude-status` reports it. */
-export interface ClaudeRateWindow {
+/** One rate-limit window, exactly as `GET /api/agent-limits` reports it. */
+export interface AgentRateWindow {
   usedPercent: number
   /** Unix epoch seconds, or null when the reading did not say. */
   resetsAt: number | null
 }
 
 /** One machine's reading. Every field is independently nullable, and null is "not said". */
-export interface ClaudeEnvironmentStatus {
+export interface AgentLimitsReading {
   label: string
   environment: { kind: string; distro?: string }
   account: string | null
-  fiveHour: ClaudeRateWindow | null
-  sevenDay: ClaudeRateWindow | null
+  fiveHour: AgentRateWindow | null
+  sevenDay: AgentRateWindow | null
   observedAt: number | null
   ageSeconds: number | null
   stale: boolean
@@ -47,18 +47,18 @@ function ageLabel(ageSeconds: number): string {
   return `${Math.max(1, Math.floor(ageSeconds / 60))}m old`
 }
 
-function windowText(name: string, window: ClaudeRateWindow | null, nowSeconds: number): JSX.Element {
+function windowText(name: string, window: AgentRateWindow | null, nowSeconds: number): JSX.Element {
   // An em dash, not `0%`. A window "appears only for Claude.ai subscribers (Pro/Max) after
   // the first API response in the session", each of the two independently — so absent is the
   // ordinary case, and reporting it as zero would be a claim that nothing has been spent.
   if (!window) {
-    return <span className="claude-status__silent">{name} —</span>
+    return <span className="agent-limits__silent">{name} —</span>
   }
   const resets = untilReset(window.resetsAt, nowSeconds)
   return (
-    <span className="claude-status__window">
+    <span className="agent-limits__window">
       {name} {Math.round(window.usedPercent)}%
-      {resets && <span className="claude-status__resets"> ({resets})</span>}
+      {resets && <span className="agent-limits__resets"> ({resets})</span>}
     </span>
   )
 }
@@ -69,7 +69,7 @@ interface HudRow {
   /** Every environment in the group, in the order the route listed them. */
   labels: string[]
   /** The reading the figures come from: the freshest in the group. */
-  reading: ClaudeEnvironmentStatus
+  reading: AgentLimitsReading
 }
 
 /**
@@ -83,7 +83,7 @@ function accountKey(account: string | null): string | null {
 }
 
 /** Which of two readings a merged row should draw. A reading with no age has none to beat. */
-function fresher(candidate: ClaudeEnvironmentStatus, incumbent: ClaudeEnvironmentStatus): boolean {
+function fresher(candidate: AgentLimitsReading, incumbent: AgentLimitsReading): boolean {
   if (candidate.ageSeconds === null) return false
   if (incumbent.ageSeconds === null) return true
   return candidate.ageSeconds < incumbent.ageSeconds
@@ -92,14 +92,15 @@ function fresher(candidate: ClaudeEnvironmentStatus, incumbent: ClaudeEnvironmen
 /**
  * One row per *account*, not per machine — where the machines agree about whose account it is.
  *
- * The windows are per Claude.ai subscription, so two environments signed in as the same person
- * are not two quotas: they are one quota, reported twice, differing only in how stale each copy
- * is. Drawn as two rows that is two percentages for the same number, and a reader has to know
- * which is the later one to know which is true. Merged, the figures come from the freshest
- * reading and the label names every machine behind it.
+ * The windows are per account — per Claude.ai subscription, for the one backend that can report
+ * them today — so two environments signed in as the same person are not two quotas: they are one
+ * quota, reported twice, differing only in how stale each copy is. Drawn as two rows that is two
+ * percentages for the same number, and a reader has to know which is the later one to know which
+ * is true. Merged, the figures come from the freshest reading and the label names every machine
+ * behind it.
  *
  * Safe only when the account matches, which is why the key is the account and nothing else.
- * `docs/claude-status.md` argues the other direction for the case this does not cover — two
+ * `docs/agent-limits.md` argues the other direction for the case this does not cover — two
  * homes are two credential stores and frequently two subscriptions, and a percentage attributed
  * to the wrong account is worse than no percentage at all. **A `null` account joins nobody**,
  * including another `null`: "not said" is not something two machines can have in common.
@@ -109,7 +110,7 @@ function fresher(candidate: ClaudeEnvironmentStatus, incumbent: ClaudeEnvironmen
  * the whole reason this lives here and not in the route, where a merged record would have to
  * be a record of something the server does not know.
  */
-function rowsByAccount(environments: ClaudeEnvironmentStatus[]): HudRow[] {
+function rowsByAccount(environments: AgentLimitsReading[]): HudRow[] {
   const rows: HudRow[] = []
   const byAccount = new Map<string, HudRow>()
 
@@ -133,26 +134,28 @@ function rowsByAccount(environments: ClaudeEnvironmentStatus[]): HudRow[] {
 }
 
 /**
- * One row per Claude Code account on this machine: what it has spent and which machines spent it.
+ * One row per coding-agent *account* on this machine: what it has spent and which environments
+ * spent it.
  *
- * Off unless the board was configured to look — `EXCALIDRAW_CLAUDE_STATUS` unset makes the
- * route a 404. That used to render nothing at all, which is the one state this HUD could not
- * tell a reader about: an empty header corner is exactly what a board without the feature
- * looks like, and the answer to "why is there no usage on my board" was in a document nobody
- * had been given a reason to open. So `off` is one muted line naming that document, and the
- * server's own sentence — which names the setting — is on it for a reader who hovers.
+ * Off unless the board was configured to look — `VIBEMAXXING_AGENT_LIMITS` unset makes the
+ * route a 404, as does a build whose backends cannot read limits at all. That used to render
+ * nothing at all, which is the one state this HUD could not tell a reader about: an empty
+ * header corner is exactly what a board without the feature looks like, and the answer to "why
+ * is there no usage on my board" was in a document nobody had been given a reason to open. So
+ * `off` is one muted line naming that document, and the server's own sentence — which says
+ * which of the two refusals this is — is on it for a reader who hovers.
  *
  * `data-poll-ms` is the interval the page is actually using, reflected onto the element so
  * that "one poll a minute" is something a reader — and
- * `scripts/check-claude-status-browser.mjs` — can see rather than take on trust.
+ * `scripts/check-agent-limits-browser.mjs` — can see rather than take on trust.
  */
-export function ClaudeStatusHud({
+export function AgentLimitsHud({
   environments,
   pollMs,
   off = null,
   now = Date.now(),
 }: {
-  environments: ClaudeEnvironmentStatus[]
+  environments: AgentLimitsReading[]
   pollMs: number
   /** The server's reason the route is off, or null while it is on. */
   off?: string | null
@@ -161,8 +164,8 @@ export function ClaudeStatusHud({
 }): JSX.Element | null {
   if (off) {
     return (
-      <div className="claude-status" title={off}>
-        <span className="claude-status__off">Claude usage off · docs/claude-status.md</span>
+      <div className="agent-limits" title={off}>
+        <span className="agent-limits__off">Agent usage off · docs/agent-limits.md</span>
       </div>
     )
   }
@@ -171,9 +174,9 @@ export function ClaudeStatusHud({
 
   return (
     <div
-      className="claude-status"
+      className="agent-limits"
       data-poll-ms={pollMs}
-      title="Claude Code usage, as each environment's status line last reported it"
+      title="Coding agent usage, as each environment last reported it"
     >
       {rowsByAccount(environments).map((row) => {
         const reading = row.reading
@@ -188,27 +191,27 @@ export function ClaudeStatusHud({
         return (
           <div
             key={row.key}
-            className={`claude-status__row${reading.stale ? ' claude-status__row--stale' : ''}`}
+            className={`agent-limits__row${reading.stale ? ' agent-limits__row--stale' : ''}`}
           >
             {/* Joined into one span rather than one each: the flex row wraps between its
                 children, so a label in two pieces could wrap and read as two machines —
                 which is the mistake this row exists to stop, arriving from the other side. */}
-            <span className="claude-status__env" title={row.labels.join(', ')}>
+            <span className="agent-limits__env" title={row.labels.join(', ')}>
               {row.labels.join(' + ')}
             </span>
             {reading.account && (
-              <span className="claude-status__account" title={reading.account}>
+              <span className="agent-limits__account" title={reading.account}>
                 {reading.account}
               </span>
             )}
             {silent ? (
-              <span className="claude-status__unknown">not seen</span>
+              <span className="agent-limits__unknown">not seen</span>
             ) : (
               <>
                 {windowText('5h', reading.fiveHour, nowSeconds)}
                 {windowText('7d', reading.sevenDay, nowSeconds)}
                 {reading.stale && reading.ageSeconds !== null && (
-                  <span className="claude-status__age">{ageLabel(reading.ageSeconds)}</span>
+                  <span className="agent-limits__age">{ageLabel(reading.ageSeconds)}</span>
                 )}
               </>
             )}
@@ -219,4 +222,4 @@ export function ClaudeStatusHud({
   )
 }
 
-export default ClaudeStatusHud
+export default AgentLimitsHud

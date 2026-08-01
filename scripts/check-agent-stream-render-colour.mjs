@@ -57,6 +57,8 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { CODEX_CAPTURE_STREAM } from './lib/codex-capture.mjs';
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const rendererModule = join(repoRoot, 'dist', 'core', 'agent-stream-render.js');
@@ -71,6 +73,9 @@ for (const built of [rendererModule, issueModule]) {
 
 const { AgentStreamRenderer, stripFoldMarks } = await import(pathToFileURL(rendererModule).href);
 const { extractGithubUrl } = await import(pathToFileURL(issueModule).href);
+const { adapterFor } = await import(
+  pathToFileURL(join(repoRoot, 'dist', 'core', 'agents', 'index.js')).href
+);
 
 let failures = 0;
 function check(name, condition, detail = '') {
@@ -325,6 +330,63 @@ check('the URL is in the transcript unbroken', announced.includes(URL),
       JSON.stringify(announced));
 check('and extractGithubUrl still finds it', extractGithubUrl(announced, 'pull') === URL,
       String(extractGithubUrl(announced, 'pull')));
+
+// ─── 8. The second backend's names, in the same five slots ────
+
+console.log('\n8. a second CLI\'s step names land in the same categories, not in the fallback ink');
+
+// `ACTION_TOOLS` enumerated Claude Code's tool names, and Codex's are not near-misses of them —
+// `command_execution`, `file_change`, `mcp_tool_call`, `web_search`, and even `web_search` is not
+// `websearch`. Every one of them would therefore have fallen to the default ink, collapsing the
+// five-hue vocabulary #242 added back to one colour on the second backend.
+//
+// So the map is per backend now, and what is asserted here is that the two backends **agree
+// about the categories** while spelling them differently: a category is a fact about the picture,
+// and a name is a fact about one CLI. Driven through the real capture in
+// `scripts/lib/codex-capture.mjs` rather than through invented events, for the reason that file's
+// header gives.
+
+const codexRendered = new AgentStreamRenderer(adapterFor('codex-cli')).feed(CODEX_CAPTURE_STREAM);
+
+/** The slot the row naming this step is drawn in, out of a whole rendered transcript. */
+const stepSlot = (transcript, name) => slotAt(lineWith(transcript, `⏺ ${name}`), `⏺ ${name}`);
+
+/** Codex's word for a kind, and Claude Code's, which have to come out the same colour. */
+const SAME_KIND = [
+  ['execution', 'command_execution', 'Bash'],
+  ['mutation', 'file_change', 'Write'],
+  ['delegation', 'mcp_tool_call', 'Agent'],
+  ['network', 'web_search', 'WebFetch'],
+];
+
+const fallback = slotOfTool('ExitPlanMode').slot;
+for (const [kind, codexName, claudeName] of SAME_KIND) {
+  const codexSlot = stepSlot(codexRendered, codexName);
+  const claudeSlot = slotOfTool(claudeName).slot;
+  console.log(`     ${kind.padEnd(11)} ${codexName}:${codexSlot ?? 'plain'} `
+    + `${claudeName}:${claudeSlot ?? 'plain'}`);
+  check(`a Codex ${codexName} row is drawn in the ${kind} slot rather than the fallback ink`,
+        Boolean(codexSlot) && codexSlot !== fallback,
+        `${codexSlot ?? 'plain'} — the same ink an uncategorised tool gets`);
+  check(`and it is the same slot ${claudeName} lands in, because it is the same kind of thing`,
+        codexSlot === claudeSlot, `${codexSlot ?? 'plain'} against ${claudeSlot ?? 'plain'}`);
+}
+
+// The other direction of the same claim: the categories stay told apart on this backend too, so
+// a reader scanning a Codex run reads a column of kinds rather than a column of one colour.
+const codexSlots = SAME_KIND.map(([, codexName]) => stepSlot(codexRendered, codexName));
+check('and the four kinds are four colours on this backend as well',
+      new Set(codexSlots).size === 4, codexSlots.join(', '));
+
+// Claude Code's own names are held to their answers here rather than only to each other's, so
+// "the second backend is coloured" cannot be bought by moving the first one's hues about.
+check('every Claude Code tool name still maps to the slot it maps to today',
+      drawn.inspection === slotOfTool('Read').slot
+      && drawn.mutation === slotOfTool('Edit').slot
+      && drawn.execution === slotOfTool('Bash').slot
+      && drawn.network === slotOfTool('WebSearch').slot
+      && drawn.delegation === slotOfTool('Task').slot,
+      JSON.stringify(drawn));
 
 // ─── Done ─────────────────────────────────────────────────────
 

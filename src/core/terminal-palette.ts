@@ -556,10 +556,11 @@ export function agentAction(toolName: string): AgentAction {
   return 'other';
 }
 
-/** The slot a tool's name is drawn in. */
-export function agentToolSlot(toolName: string): TerminalSlot {
-  return AGENT_ACTION_SLOT[agentAction(toolName)];
-}
+// There was an `agentToolSlot(name)` here, which is where the two halves above used to be joined.
+// It had one call site, and that call site is now `AGENT_ACTION_SLOT[step.action]` in
+// `agent-stream-render.ts`: a step arrives already carrying its kind, because *which* kind a name
+// is is the backend's answer — `command_execution` is Codex's word for what Claude Code calls
+// `Bash` — while what colour a kind is drawn in is this file's, and is the same for both.
 
 /**
  * The same palette as custom properties, for the half of the frame a stylesheet draws.

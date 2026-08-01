@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Checks the Claude Code usage HUD in a real browser: what it says, where it sits, how often
+ * Checks the coding-agent usage HUD in a real browser: what it says, where it sits, how often
  * it asks, and whether either theme can be read.
  *
  * Compiling is not working, and this repository has paid for that three times in the UI
@@ -33,12 +33,12 @@
  *  - **Off says so.** An unset directory makes the route a 404, and a header corner that then
  *    draws nothing is indistinguishable from a board that does not have the feature.
  *
- * Self-contained: it writes its own status directory, starts its own canvas server on a free
+ * Self-contained: it writes its own limits directory, starts its own canvas server on a free
  * port and drives its own headless Chrome. Nothing here talks to the board, to GitHub, to
  * WSL or to the network. Run `./node_modules/.bin/tsc` and `./node_modules/.bin/vite build`
  * first — it loads the built frontend.
  *
- * Usage: node scripts/check-claude-status-browser.mjs [--chrome <path>] [--shots <dir>]
+ * Usage: node scripts/check-agent-limits-browser.mjs [--chrome <path>] [--shots <dir>]
  *
  * Tier: browser
  */
@@ -150,14 +150,14 @@ function decodePng(buffer) {
   return { header, lanes, stride, out };
 }
 
-// ─── A status directory with two environments in it ───────────
+// ─── A limits directory with two environments in it ──────────
 
-const workDir = mkdtempSync(join(tmpdir(), 'check-claude-status-browser-'));
-const statusDir = join(workDir, 'claude-status');
+const workDir = mkdtempSync(join(tmpdir(), 'check-agent-limits-browser-'));
+const limitsDir = join(workDir, 'agent-limits');
 const projectDir = join(workDir, 'hud-project');
 const profileDir = join(workDir, 'chrome-profile');
 const shotDir = argOf('--shots') ?? join(workDir, 'shots');
-for (const dir of [statusDir, projectDir, profileDir, shotDir]) mkdirSync(dir, { recursive: true });
+for (const dir of [limitsDir, projectDir, profileDir, shotDir]) mkdirSync(dir, { recursive: true });
 
 const WORKSPACE = 'hud-project';
 writeFileSync(join(projectDir, 'board.config.json'), JSON.stringify({
@@ -180,7 +180,7 @@ const WSL_ACCOUNT = 'ubuntu-user@example.com';
 // Whose account it says is a parameter, because half of what is under test below is what the
 // HUD does when the two files name the same one — and that is a rewrite of these two files
 // and a poll, with nothing else moving.
-const writeHost = (account) => writeFileSync(join(statusDir, 'native.json'), JSON.stringify({
+const writeHost = (account) => writeFileSync(join(limitsDir, 'native.json'), JSON.stringify({
   ...(account === null ? {} : { account }),
   fiveHour: { usedPercent: 23.5, resetsAt: NOW + 3600 + 4 * 60 + 30 },
   sevenDay: { usedPercent: 41.2, resetsAt: NOW + 5 * 86400 + 23 * 3600 },
@@ -188,7 +188,7 @@ const writeHost = (account) => writeFileSync(join(statusDir, 'native.json'), JSO
 }), 'utf8');
 
 // The distro: ninety minutes old, and no five-hour window at all.
-const writeDistro = (account) => writeFileSync(join(statusDir, 'wsl-Ubuntu-22.04.json'), JSON.stringify({
+const writeDistro = (account) => writeFileSync(join(limitsDir, 'wsl-Ubuntu-22.04.json'), JSON.stringify({
   ...(account === null ? {} : { account }),
   rate_limits: { seven_day: { used_percentage: 12, resets_at: NOW + 2 * 86400 + 5 * 3600 } },
   observedAt: NOW - 90 * 60,
@@ -208,7 +208,7 @@ const serverEnv = {
   HOST: '127.0.0.1',
   LOG_LEVEL: 'error',
   EXCALIDRAW_WORKSPACES: registryPath,
-  EXCALIDRAW_CLAUDE_STATUS: statusDir,
+  EXCALIDRAW_AGENT_LIMITS: limitsDir,
 };
 // Nothing this machine exports reaches the child: `scripts/lib/spawn-canvas.mjs` strips every
 // `EXCALIDRAW_*` before the check's own values go in, so there is no terminal block over the
@@ -363,24 +363,24 @@ const PROBE = `(() => {
       text: (node.textContent || '').replace(/\\s+/g, ' ').trim(),
     };
   };
-  const hud = document.querySelector('.claude-status');
-  const rows = Array.from(document.querySelectorAll('.claude-status__row')).map((row) => ({
-    label: (row.querySelector('.claude-status__env') || {}).textContent || '',
-    stale: row.classList.contains('claude-status__row--stale'),
+  const hud = document.querySelector('.agent-limits');
+  const rows = Array.from(document.querySelectorAll('.agent-limits__row')).map((row) => ({
+    label: (row.querySelector('.agent-limits__env') || {}).textContent || '',
+    stale: row.classList.contains('agent-limits__row--stale'),
     box: boxOf(row),
-    env: boxOf(row.querySelector('.claude-status__env')),
-    account: boxOf(row.querySelector('.claude-status__account')),
+    env: boxOf(row.querySelector('.agent-limits__env')),
+    account: boxOf(row.querySelector('.agent-limits__account')),
     // The count matters as much as the box: one row carrying an account twice is two
     // readings drawn on one line rather than the one quota they share.
-    accounts: Array.from(row.querySelectorAll('.claude-status__account')).map(boxOf),
-    windows: Array.from(row.querySelectorAll('.claude-status__window')).map(boxOf),
-    silent: Array.from(row.querySelectorAll('.claude-status__silent')).map(boxOf),
-    age: boxOf(row.querySelector('.claude-status__age')),
+    accounts: Array.from(row.querySelectorAll('.agent-limits__account')).map(boxOf),
+    windows: Array.from(row.querySelectorAll('.agent-limits__window')).map(boxOf),
+    silent: Array.from(row.querySelectorAll('.agent-limits__silent')).map(boxOf),
+    age: boxOf(row.querySelector('.agent-limits__age')),
   }));
   return {
     hud: boxOf(hud),
     hudTitle: hud ? hud.title : null,
-    off: boxOf(document.querySelector('.claude-status__off')),
+    off: boxOf(document.querySelector('.agent-limits__off')),
     pollMs: hud ? hud.dataset.pollMs : null,
     rows,
     header: boxOf(document.querySelector('.header')),
@@ -390,7 +390,7 @@ const PROBE = `(() => {
     toolbar: boxOf(document.querySelector('.shapes-section')),
     theme: (document.querySelector('.app') || { dataset: {} }).dataset.theme || null,
     viewport: { w: window.innerWidth, h: window.innerHeight },
-    polls: (window.__claudeStatusCalls || []).length,
+    polls: (window.__agentLimitsCalls || []).length,
   };
 })()`;
 
@@ -401,12 +401,12 @@ const PROBE = `(() => {
  * made itself; what has to be true is about *this page's* timer.
  */
 const COUNTER = `(() => {
-  window.__claudeStatusCalls = [];
+  window.__agentLimitsCalls = [];
   const original = window.fetch;
   window.fetch = function (...args) {
     const first = args[0];
     const url = String(first && first.url ? first.url : first || '');
-    if (url.includes('/api/claude-status')) window.__claudeStatusCalls.push(Date.now());
+    if (url.includes('/api/agent-limits')) window.__agentLimitsCalls.push(Date.now());
     return original.apply(this, args);
   };
   window.__hideTab = () => {
@@ -618,7 +618,7 @@ try {
 
   // The same page, told to poll fast, so the cases below take seconds rather than minutes.
   // The cadence itself was settled above; what is under test here is the visibility gate.
-  await send('Page.navigate', { url: `${BASE}/?workspace=${WORKSPACE}&claudeStatusPollMs=400` });
+  await send('Page.navigate', { url: `${BASE}/?workspace=${WORKSPACE}&agentLimitsPollMs=400` });
   await waitFor(() => evaluate(GRAB_API), 'the Excalidraw API handle after the reload');
   seen = await waitFor(async () => {
     const now = await evaluate(PROBE);
@@ -649,7 +649,7 @@ try {
   writeDistro(HOST_ACCOUNT);
 
   // The tab above was told it was hidden; a fresh document is one that is really visible.
-  await send('Page.navigate', { url: `${BASE}/?workspace=${WORKSPACE}&claudeStatusPollMs=400` });
+  await send('Page.navigate', { url: `${BASE}/?workspace=${WORKSPACE}&agentLimitsPollMs=400` });
   await waitFor(() => evaluate(GRAB_API), 'the Excalidraw API handle after the accounts met');
   seen = await probeUntil((now) => now.rows.length === 1);
   await shot('04-merged');
@@ -740,7 +740,7 @@ try {
   const OFF_BASE = `http://127.0.0.1:${OFF_PORT}`;
   await waitFor(async () => (await fetch(`${OFF_BASE}/health`)).ok, 'the unconfigured canvas server');
 
-  const refused = await fetch(`${OFF_BASE}/api/claude-status`);
+  const refused = await fetch(`${OFF_BASE}/api/agent-limits`);
   check('the route really is a 404 there', refused.status === 404, `status ${refused.status}`);
 
   await send('Page.navigate', { url: `${OFF_BASE}/?workspace=${WORKSPACE}` });
@@ -751,11 +751,11 @@ try {
   check('the header says the HUD is off rather than leaving an empty corner',
     quiet.off?.visible === true, JSON.stringify(quiet.off));
   check('and points at the document that explains how to turn it on',
-    /docs\/claude-status\.md/.test(quiet.off?.text ?? ''), quiet.off?.text);
+    /docs\/agent-limits\.md/.test(quiet.off?.text ?? ''), quiet.off?.text);
   check('no row is drawn, because there is nothing to draw',
     quiet.rows.length === 0, JSON.stringify(quiet.rows.map((row) => row.label)));
   check('the server’s own sentence is there for a reader who hovers',
-    /CLAUDE_STATUS/.test(quiet.hudTitle ?? ''), JSON.stringify(quiet.hudTitle));
+    /AGENT_LIMITS/.test(quiet.hudTitle ?? ''), JSON.stringify(quiet.hudTitle));
   check('and it is still in the header’s controls, where the rows were',
     quiet.hud !== null && quiet.hud.x >= quiet.controls.x - 1
     && quiet.hud.right <= quiet.controls.right + 1,
