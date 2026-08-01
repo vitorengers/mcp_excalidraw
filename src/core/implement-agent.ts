@@ -2,11 +2,14 @@
  * Runs a coding agent inside a workspace to implement an issue the board already opened.
  *
  * This is the issue block's opposite number and its opposite in permissions. The issue
- * agent is deliberately powerless — `gh`, `git` and reading, nothing that writes — and
- * that narrowness is the guard. An agent that implements has to write code, so it cannot
- * share that command, and it must not inherit the issue block's opt-in either: enabling
- * issue blocks would otherwise enable repository writes, which is not a decision anyone
- * made. Hence its own variable, off unless explicitly set.
+ * agent's documented allowlist is scoped by sub-command — five `gh issue` verbs, one
+ * `gh project` verb, four read-only `git` verbs and reading — so it writes issues and
+ * project items and nothing else: no commit, no push, no branch, no `gh api`
+ * (`docs/trap-allowed-tools.md` has both halves as tables). That narrowness is the guard.
+ * An agent that implements has to write code, so it cannot share that command, and it must
+ * not inherit the issue block's opt-in either: enabling issue blocks would otherwise enable
+ * repository writes, which is not a decision anyone made. Hence its own variable, off
+ * unless explicitly set.
  *
  * The rest of the guards carry over — loopback only, one run per element — plus one more:
  * only a block that already has an issue has anything to implement.

@@ -42,23 +42,26 @@ Four things, and they are properties of the run rather than of a product.
    breaks on Windows long before the agent sees it. An agent that only accepts a prompt as an
    argument cannot be driven this way. There is exactly one exception, and it is the
    [interactive path](#watching-a-run-instead).
-3. **It is permitted to run `gh` and `git` without asking.** No prompt can be answered, so a
-   tool that would need approval is not approved — it is refused, and the refusal is silent.
-   Both agents also need the network: `gh` talks to github.com.
+3. **It is permitted to run the `gh` and `git` sub-commands its prompt names, without asking.**
+   No prompt can be answered, so a tool that would need approval is not approved — it is
+   refused, and the refusal is silent. That cuts both ways, which is why the grant is stated as
+   verbs: too little and the run exits 0 having quietly not looked, too much and an issue agent
+   can push. Both agents also need the network: `gh` talks to github.com.
 4. **It prints the URL on stdout, and last.** `extractGithubUrl` reads raw stdout, so NDJSON,
    prose and a progress spinner around it are all fine; what matters is that the issue or pull
    request URL is in there. The prompt the board writes already orders the agent to print it
    last, so this is a requirement on the agent's *output reaching stdout at all*.
 
 The board holds these of both agents. What differs between the two is power, and deliberately:
-the issue agent gets `gh`, `git` and reading and nothing that writes, so that turning on issue
-blocks cannot quietly turn on repository writes. The implement agent has to write code, run the
-build and run the checks, so it gets everything.
+the issue agent gets reading, and the handful of `gh` and `git` sub-commands the prompt actually
+names, and nothing that writes, so that turning on issue blocks cannot quietly turn on
+repository writes. The implement agent has to write code, run the build and run the checks, so
+it gets everything.
 
 ## Claude Code
 
 ```
-EXCALIDRAW_ISSUE_AGENT='claude -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh:*) Bash(git:*) Read Grep Glob WebFetch WebSearch"'
+EXCALIDRAW_ISSUE_AGENT='claude -p --model claude-opus-5[1m] --effort high --allowedTools "Bash(gh issue list:*) Bash(gh issue view:*) Bash(gh issue create:*) Bash(gh issue edit:*) Bash(gh issue comment:*) Bash(gh project item-add:*) Bash(git log:*) Bash(git show:*) Bash(git diff:*) Bash(git blame:*) Read Grep Glob WebFetch WebSearch"'
 EXCALIDRAW_IMPLEMENT_AGENT='claude -p --model claude-opus-5[1m] --effort high --dangerously-skip-permissions'
 ```
 
@@ -69,6 +72,15 @@ anything it did. The narrow list on the issue side is the point of the split, an
 `WebSearch` are in it because the prompt orders the agent to research what the repository does
 not settle — see [trap-allowed-tools.md](trap-allowed-tools.md) for both halves of that,
 observed rather than reasoned about.
+
+**Every `Bash` rule in it names a sub-command rather than a binary**, which is why the list is
+ten rules long instead of two. A rule naming `gh` or `git` with no verb after it grants every
+verb the binary has: `gh repo delete` and `gh api -X DELETE`, `git commit`, `git push --force`
+and `git config` — the whole write reach of the account behind `gh`, handed to an agent whose
+prompt sends it to read the open web and act on what it finds.
+[trap-allowed-tools.md](trap-allowed-tools.md) is the list rule by rule, what each one is for,
+and what the narrowing costs: a verb nobody predicted is refused just as silently, so **widen it
+by verb, never by binary**.
 
 Add `--output-format stream-json --verbose` to either command to get token counts and a
 transcript that arrives as the run goes. Nothing else turns them on, and nothing else is needed.
@@ -123,7 +135,7 @@ is the difference between this document and a second source of exit-0 failures.
 | Non-interactive | `-p` / `--print` | `codex exec` | The run never ends; the block sits in `running` and holds a concurrency slot |
 | A pinned model | `--model <id>` | `-m <id>` | The agent inherits whatever an interactive session last configured, so changing your own model silently changes who writes the issues |
 | Pinned effort | `--effort <level>` | `-c model_reasoning_effort="<level>"` | The same, one setting along |
-| `gh` and `git`, no writes | `--allowedTools "Bash(gh:*) Bash(git:*) …"` | `--sandbox workspace-write` plus `network_access` | Either the agent is refused silently, or the issue agent can write to the repository — this is the one degradation worth refusing to accept |
+| The `gh` and `git` verbs it needs, no writes | `--allowedTools "Bash(gh issue create:*) Bash(git log:*) …"` — one rule per sub-command, never `Bash(<binary>:*)` | `--sandbox workspace-write` plus `network_access` | Either the agent is refused silently, or the issue agent can write to the repository — this is the one degradation worth refusing to accept |
 | `gh`, `git` and everything | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` | An implementation that cannot build, test or commit |
 | Token counts and a live transcript | `--output-format stream-json --verbose` | — (see below) | The run is timed but not counted, and its output arrives at exit. Not a degraded state; it is the default |
 

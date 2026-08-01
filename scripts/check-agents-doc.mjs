@@ -65,16 +65,22 @@ const BACKENDS = {
     /**
      * An enumerated list is also a deny list: in print mode a tool outside it is refused
      * silently and the run exits 0. So a recipe that enumerates must enumerate both.
+     *
+     * `Bash(gh` and not `Bash(gh:*)`, because a rule may name a sub-command — `Bash(gh issue
+     * create:*)` — and since #328 the shipped list does exactly that. What this demand is for
+     * is a list with no `gh` in it at all; how narrowly `gh` is granted is
+     * `check-issue-agent-allowlist.mjs`, which holds the list against every claim made about
+     * it. Pinning the wide spelling here would have made that narrowing fail this check.
      */
     demands: [
       {
         when: /--allowedTools/,
-        then: /--allowedTools\s+"[^"]*Bash\(gh:\*\)[^"]*"/,
+        then: /--allowedTools\s+"[^"]*Bash\(gh[ :][^"]*"/,
         why: 'an --allowedTools list that omits gh refuses it silently and exits 0',
       },
       {
         when: /--allowedTools/,
-        then: /--allowedTools\s+"[^"]*Bash\(git:\*\)[^"]*"/,
+        then: /--allowedTools\s+"[^"]*Bash\(git[ :][^"]*"/,
         why: 'an --allowedTools list that omits git refuses it silently and exits 0',
       },
     ],
