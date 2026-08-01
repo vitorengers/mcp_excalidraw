@@ -1,7 +1,7 @@
-# Claude Code status on the board
+# Agent limits on the board
 
-The top right of the header shows, one row per environment on this machine, what Claude Code
-has spent against its 5-hour and 7-day windows and which account spent it:
+The top right of the header shows, one row per environment on this machine, what your coding
+agent has spent against its 5-hour and 7-day windows and which account spent it:
 
 ```
 Windows        me@example.com        5h 24% (1h 04m)   7d 41% (5d 23h)
@@ -12,8 +12,20 @@ Windows and WSL are separate homes, so they are separate credential stores and f
 separate subscriptions. That is the reason there is a row each rather than one figure: a
 percentage attributed to the wrong account is worse than no percentage at all.
 
-Off unless configured. Unset `EXCALIDRAW_CLAUDE_STATUS` and `GET /api/claude-status` answers
+Off unless configured. Unset `VIBEMAXXING_AGENT_LIMITS` and `GET /api/agent-limits` answers
 404 and nothing renders.
+
+## Which agent can answer this
+
+**Reading limits is a backend's capability, not the board's.** `AgentAdapter.readLimits` is
+optional and is absent on every backend that cannot answer — see [agents.md](agents.md) — so the
+board asks whoever can read rather than asking one vendor by name.
+
+Today that is **Claude Code**, and the rest of this document is its half of the arrangement: the
+file layout below is the shape of the document Claude Code hands a status line command. A board
+whose agent is Codex CLI has nothing to write those files, so the directory stays empty and the
+HUD stays dark. Nothing about the route, the component or the variable has to change on the day a
+second backend can answer; it grows a `readLimits` and joins.
 
 ## Why a file, and not a lookup
 
@@ -52,7 +64,7 @@ its account and two dashes.
 ### 1. Point the board at a directory
 
 ```
-EXCALIDRAW_CLAUDE_STATUS=C:\Users\you\.claude\board-status
+VIBEMAXXING_AGENT_LIMITS=C:\Users\you\.claude\board-status
 ```
 
 A **directory**, not a file, and one directory for the whole machine. The alternative was to
@@ -117,7 +129,7 @@ publish anything else. It is still the operator's directory: do not write a toke
 
 ## What the board does with it
 
-`GET /api/claude-status` — **global, not workspace-scoped**, because it describes machines
+`GET /api/agent-limits` — **global, not workspace-scoped**, because it describes machines
 rather than projects, and it sits with `/health` rather than with `/api/elements` for that
 reason. **Loopback only**, because it serves an email address, and the guard comes before the
 404: on a board bound to a LAN address, whether this is configured is itself not something to
@@ -161,7 +173,7 @@ a PNG export, and survives **Hide Menus** — which is about Excalidraw's chrome
 
 Polled once a minute while the tab is on screen, and not at all while it is hidden. A minute is
 what the observation asked for and is a ceiling rather than a promise: the figures underneath are
-only as fresh as the last session. `?claudeStatusPollMs=` on the board's URL overrides the
+only as fresh as the last session. `?agentLimitsPollMs=` on the board's URL overrides the
 cadence, clamped to 200 ms – 10 minutes, and the interval in use is on the element as
 `data-poll-ms`.
 
@@ -172,8 +184,8 @@ for it would mean nothing.
 
 | Script | What it pins down |
 |---|---|
-| `scripts/check-claude-status.mjs` | Two environments kept apart, an absent window staying `null`, a stale reading flagged, malformed input skipped, the 404 and the 403, and that nothing else from the file comes back |
-| `scripts/check-claude-status-browser.mjs` | The HUD in a real browser: both rows top right, clear of Excalidraw's island, surviving `Hide Menus`, one poll a minute and none while hidden, and both themes judged on rendered pixels |
+| `scripts/check-agent-limits.mjs` | Two environments kept apart, an absent window staying `null`, a stale reading flagged, malformed input skipped, the 404 and the 403, and that nothing else from the file comes back |
+| `scripts/check-agent-limits-browser.mjs` | The HUD in a real browser: both rows top right, clear of Excalidraw's island, surviving `Hide Menus`, one poll a minute and none while hidden, and both themes judged on rendered pixels |
 
 Related: [running.md](running.md) for the variable, [rest-api.md](rest-api.md) for the route,
 [workspaces.md](workspaces.md) for where a distro is declared.

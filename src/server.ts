@@ -59,14 +59,15 @@ import {
   AgentCommands, AgentHost, AgentRun, agentCommandFor, agentCommandSpec, runIssueAgent,
   runReviseAgent
 } from './core/issue-agent.js';
-import { DEFAULT_AGENT_BACKEND, type AgentCommandSpec } from './core/agent-adapter.js';
+import {
+  DEFAULT_AGENT_BACKEND, type AgentAdapter, type AgentCommandSpec
+} from './core/agent-adapter.js';
+import { limitsReaders } from './core/agents/index.js';
 import {
   AgentRoleCommands, AgentsHealth, agentRoles, initialAgents, preflightAgents, preflightLines
 } from './core/agent-preflight.js';
 import { AgentUsage } from './core/agent-usage.js';
-import {
-  ClaudeEnvironmentStatus, readClaudeStatus, STALE_AFTER_SECONDS
-} from './core/claude-status.js';
+import { AgentLimitsReading, STALE_AFTER_SECONDS } from './core/agent-limits.js';
 import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
 import { referencedFileIds } from './core/board-files.js';
 import {
@@ -6090,13 +6091,22 @@ app.post('/api/restart', (_req: Request, res: Response) => {
 });
 
 /**
- * Where the operator's status line command writes what Claude Code told it.
+ * Where the operator's own script writes what their coding agent told it.
  *
- * Unset is off, and off is a 404 rather than an empty list: nothing on this board reads
- * Claude Code by default, and a route that answered `[]` would look like a board whose
+ * Unset is off, and off is a 404 rather than an empty list: nothing on this board reads an
+ * agent's limits by default, and a route that answered `[]` would look like a board whose
  * sessions had never run rather than one that was never asked to look.
  */
-const CLAUDE_STATUS_DIR = (env('CLAUDE_STATUS') ?? '').trim();
+const AGENT_LIMITS_DIR = (env('AGENT_LIMITS') ?? '').trim();
+
+/**
+ * The backend that reads it, or none.
+ *
+ * Resolved once, at startup, because the answer cannot change while the process lives — see
+ * `limitsReaders`, which is also where the reason it is not the board's *configured* backend
+ * is written down.
+ */
+const AGENT_LIMITS_READER = limitsReaders()[0] ?? null;
 
 /**
  * One read of that directory, however many tabs asked.
@@ -6106,12 +6116,12 @@ const CLAUDE_STATUS_DIR = (env('CLAUDE_STATUS') ?? '').trim();
  * all four want the same handful of files. Five seconds is long enough to collapse that
  * burst and short enough that it can never be the reason a reading looks stale.
  */
-const CLAUDE_STATUS_MEMO_MS = 5000;
-let claudeStatusMemo: { reading: Promise<ClaudeEnvironmentStatus[]>; at: number } | null = null;
+const AGENT_LIMITS_MEMO_MS = 5000;
+let agentLimitsMemo: { reading: Promise<AgentLimitsReading[]>; at: number } | null = null;
 
-function readClaudeStatusMemoized(): Promise<ClaudeEnvironmentStatus[]> {
-  if (claudeStatusMemo && Date.now() - claudeStatusMemo.at < CLAUDE_STATUS_MEMO_MS) {
-    return claudeStatusMemo.reading;
+function readAgentLimitsMemoized(reader: AgentAdapter): Promise<AgentLimitsReading[]> {
+  if (agentLimitsMemo && Date.now() - agentLimitsMemo.at < AGENT_LIMITS_MEMO_MS) {
+    return agentLimitsMemo.reading;
   }
   const reading = (async () => {
     const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
@@ -6119,40 +6129,47 @@ function readClaudeStatusMemoized(): Promise<ClaudeEnvironmentStatus[]> {
       .map((workspace) => workspace.environment)
       .filter((environment): environment is { kind: 'wsl'; distro: string } => environment.kind === 'wsl')
       .map((environment) => environment.distro);
-    return readClaudeStatus(CLAUDE_STATUS_DIR, distros);
+    // Non-null: a reader is one that has the method, which is what put it in the list.
+    return reader.readLimits!(AGENT_LIMITS_DIR, distros);
   })();
   const entry = { reading, at: Date.now() };
-  claudeStatusMemo = entry;
+  agentLimitsMemo = entry;
   // A failed read is never remembered, for the reason `IssueMemo` gives: one bad moment
   // must not be five seconds of a blank HUD.
-  reading.catch(() => { if (claudeStatusMemo === entry) claudeStatusMemo = null; });
+  reading.catch(() => { if (agentLimitsMemo === entry) agentLimitsMemo = null; });
   return reading;
 }
 
 /**
- * What each Claude Code environment on this machine has spent, and who spent it.
+ * What each coding-agent environment on this machine has spent, and who spent it.
  *
  * Global rather than workspace-scoped, because it describes machines rather than projects —
  * the `/health` family, not the `/api/elements` one. Loopback only, and the guard comes
  * before the 404: this serves an email address, so whether it is configured is itself
  * something a board on a LAN address should not be answering.
+ *
+ * A build with no backend that can read limits answers the same 404 as one that was never
+ * configured, and deliberately: both are "there is nothing here to show", and a reader who has
+ * set the variable is told which of the two it is by the sentence rather than by the code.
  */
-app.get('/api/claude-status', async (req: Request, res: Response) => {
-  if (offLoopback(res, 'Claude Code status is read')) return;
+app.get('/api/agent-limits', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Agent limits are read')) return;
 
-  if (!CLAUDE_STATUS_DIR) {
+  if (!AGENT_LIMITS_DIR || !AGENT_LIMITS_READER) {
     return res.status(404).json({
       success: false,
-      error: `Claude Code status is off. Set ${settingName('CLAUDE_STATUS')} to the directory your `
-        + 'status line command writes into.'
+      error: !AGENT_LIMITS_READER
+        ? 'No coding agent this board knows can report what it has spent.'
+        : `Agent limits are off. Set ${settingName('AGENT_LIMITS')} to the directory your `
+          + 'agent writes its usage files into.'
     });
   }
 
   try {
-    const environments = await readClaudeStatusMemoized();
+    const environments = await readAgentLimitsMemoized(AGENT_LIMITS_READER);
     res.json({ success: true, staleAfterSeconds: STALE_AFTER_SECONDS, environments });
   } catch (error) {
-    logger.error('Failed to read the Claude Code status directory:', error);
+    logger.error('Failed to read the agent limits directory:', error);
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 });

@@ -96,7 +96,7 @@ const hex = ([r, g, b]) => `#${[r, g, b].map((v) => v.toString(16).padStart(2, '
 
 /**
  * Enough of a PNG decoder to read a clipped screenshot back. Eight-bit, colour type 2 or 6,
- * which is all Chrome emits; all five row filters. Lifted from `check-claude-status-browser`.
+ * which is all Chrome emits; all five row filters. Lifted from `check-agent-limits-browser`.
  */
 function decodePng(buffer) {
   let at = 8;
