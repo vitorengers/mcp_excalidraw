@@ -97,7 +97,7 @@ product controls. `scripts/check-clear-canvas-guard.mjs` drives all of it in a b
 `Hide Menus`, beside `Clear Canvas`, takes away the three pieces of chrome Excalidraw draws over
 the board: the hamburger at the top left, the properties island that appears beside a selected
 shape, and the toolbar across the top. Pressing it again brings them back. The setting is one per
-browser, kept in `localStorage` under `excalidraw-canvas-chrome` the way the theme is, so it
+browser, kept in `localStorage` under `vibemaxxing-canvas-chrome` the way the theme is, so it
 holds across a reload and is the same on every project tab — and never reaches the store or
 anybody else's tab, because it is what one reader is looking at rather than board state.
 
@@ -119,6 +119,35 @@ light/dark switch lives in the hamburger, as do Export and Save as image. Showin
 is how you reach them.
 
 `scripts/check-chrome-toggle-browser.mjs` drives a real Chrome over all of it.
+
+## What the browser remembers
+
+Eight settings live in `localStorage`, and `frontend/src/storage.ts` is the only module that
+reaches into it. The list is `STORAGE_KEYS`, one entry per setting:
+
+| setting | key |
+| --- | --- |
+| the theme | `vibemaxxing-canvas-theme` |
+| whether Excalidraw's own menus are hidden | `vibemaxxing-canvas-chrome` |
+| the board last open | `vibemaxxing-canvas-workspace` |
+| the terminal's font size | `vibemaxxing-terminal-font-size` |
+| the terminal's rect, per board | `vibemaxxing-terminal-geometry` |
+| how far the documentation stands pushed, per board | `vibemaxxing-documentation-shift` |
+| each board's camera | `vibemaxxing-board-viewports` |
+| which transcript rows are open, per session | `vibemaxxing.terminal.folds:<session>` |
+
+**Every entry carries the name it used to have beside the name it has now.** They were all
+`excalidraw-*` until #353, because the board began as a wrapper around Excalidraw; the rename
+was free only because `readSetting` reads the current name, falls back to the legacy one, and
+writes the value forward on that first read. Without it a rename is a silent reset of all eight
+on the first load after an upgrade — an absent key and a reader who never chose anything are the
+same thing to every one of these call sites. The legacy key is left where it is rather than
+deleted, so a reader who goes back to an older build still finds their theme.
+
+None of these is board state. They are what one reader is looking at, so none of them reaches
+the store, another tab or anybody else — which is the whole reason they are here rather than in
+`customData` or on the server. `scripts/check-storage-migration-browser.mjs` seeds a profile
+holding only the legacy names and asks a real browser whether all eight came back.
 
 ## Opening a board
 

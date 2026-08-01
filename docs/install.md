@@ -152,21 +152,29 @@ being written in it. The other two are two lines and run everywhere.
 
 ### Opening the board yourself
 
-A launch opens the tab for you. When you started the server directly, or passed `--no-open`,
-this is the same job per platform:
+**The short answer is to run `vibemaxxing` again.** Against a board that is already running it
+starts nothing and simply opens the tab, and it is the thing that knows the board's secret: since
+the board answers `401` to any request that does not carry it, the bare address opens a page that
+loads and then stays empty ([SECURITY.md](SECURITY.md)).
+
+If you have to build the address yourself — a desktopless machine, a browser that is not the
+registered handler — it is the URL with `?t=` and the contents of `server-<port>.token` from the
+state directory in [configuration.md](configuration.md):
 
 ```powershell
-Start-Process http://127.0.0.1:3737
-```
-
-```bat
-start "" http://127.0.0.1:3737
+$secret = Get-Content "$env:LOCALAPPDATA\Excalidraw-Canvas\server-3737.token"
+Start-Process "http://127.0.0.1:3737/?t=$secret"
 ```
 
 ```bash
-open http://127.0.0.1:3737     # macOS
-xdg-open http://127.0.0.1:3737 # Linux
+# macOS
+open "http://127.0.0.1:3737/?t=$(cat ~/Library/Application\ Support/excalidraw-canvas/server-3737.token)"
+# Linux
+xdg-open "http://127.0.0.1:3737/?t=$(cat "${XDG_STATE_HOME:-$HOME/.local/state}/excalidraw-canvas/server-3737.token")"
 ```
+
+The page takes the secret back out of the address bar as soon as it has read it, so what is left
+on screen, and in your history, is the plain address.
 
 `VIBEMAXXING_OPEN_COMMAND` replaces the one the tool picks, for a machine that has none of
 these — a desktopless Linux box, or a browser that is not the registered handler.
