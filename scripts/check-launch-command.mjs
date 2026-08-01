@@ -37,6 +37,9 @@
  * way. The platform's browser opener is likewise
  * stood in for — `VIBEMAXXING_OPEN_COMMAND` names a recorder that writes down the URL it was
  * handed — because a check that opened a real browser would be a check nobody could run twice.
+ * That recorder is a process of its own and the launcher does not wait for it, so nothing here
+ * reads its log the moment a run resolves: every assertion about what was opened waits for the
+ * count it expects, deadline and all. See `openedAwaiting`.
  *
  * Section 0 drives the pure functions over fixtures, including the two platforms this machine is
  * not, so the Windows and macOS openers are asserted wherever the suite runs.
@@ -117,6 +120,40 @@ writeFileSync(recorder, [
 const openCommand = `"${process.execPath}" "${recorder}"`;
 
 const opened = () => readFileSync(openedLog, 'utf8').split('\n').filter((line) => line.trim());
+
+/**
+ * How long a line has to fail to turn up before it counts as never having been written.
+ *
+ * Long enough for a cold `node` process to start and append under a machine running several
+ * agents at once, and short enough that the cases expecting nothing — which pay it in full — do
+ * not dominate the run.
+ */
+const OPEN_DEADLINE_MS = 5_000;
+
+/**
+ * The log once it holds `count` lines, or once the deadline has passed and it never will.
+ *
+ * The recorder is a process of its own: the launcher spawns it detached and exits the moment it
+ * has, which is the feature under test, so nothing sequences its `appendFileSync` against a read
+ * taken here the instant `run()` resolves. #437 caught that in the act — the URL section 2 had
+ * opened turned up in section 3's read, so section 2 saw no open and section 3 saw one that was
+ * not its own.
+ *
+ * Every assertion about the log goes through here, the ones expecting nothing included. A case
+ * expecting an open reaches its count as soon as the recorder writes, and fails on the deadline
+ * if it never does. A case expecting none waits that same deadline out before saying so, because
+ * "no line yet" and "no line ever" are one read taken at two times: reading early is how those
+ * cases passed before, and it is how they would have gone on passing with a suppression broken.
+ */
+async function openedAwaiting(count) {
+  const deadline = Date.now() + OPEN_DEADLINE_MS;
+  let lines = opened();
+  while (lines.length < count && Date.now() < deadline) {
+    await sleep(50);
+    lines = opened();
+  }
+  return lines;
+}
 
 /**
  * A shim standing in for the way a command reaches this entry point.
@@ -387,8 +424,9 @@ try {
   check('a board is answering there', coldHealth?.status === 'healthy',
         `nothing answered on ${coldPort}\n${cold.err.trim().slice(-600)}`);
 
-  check('and the browser was pointed at it', opened().includes(coldUrl),
-        JSON.stringify(opened()));
+  const coldOpened = await openedAwaiting(1);
+  check('and the browser was pointed at it', coldOpened.includes(coldUrl),
+        `${JSON.stringify(coldOpened)} — nothing was recorded within ${OPEN_DEADLINE_MS} ms`);
 
   // ─── 2. a second launch focuses the board that is there ────────
 
@@ -404,9 +442,10 @@ try {
         JSON.stringify(warmLines).slice(0, 300));
   check('not a JSON document saying it did nothing',
         !warm.out.includes('spawned'), warm.out.trim().slice(0, 200));
+  const warmOpened = await openedAwaiting(before + 1);
   check('and the browser was pointed at the board that was already there',
-        opened().length === before + 1 && opened().at(-1) === coldUrl,
-        JSON.stringify(opened().slice(before)));
+        warmOpened.length === before + 1 && warmOpened.at(-1) === coldUrl,
+        `${JSON.stringify(warmOpened.slice(before))} — waited ${OPEN_DEADLINE_MS} ms for it`);
 
   // ─── 3. the open is suppressed where it would be unwanted ──────
 
@@ -420,7 +459,9 @@ try {
         quiet.code === 0 && stdoutLines(quiet.out).length === 1
         && stdoutLines(quiet.out)[0].includes(coldUrl),
         `exit ${quiet.code} ${JSON.stringify(stdoutLines(quiet.out))}`);
-  check('and opened nothing', opened().length === quietBefore, JSON.stringify(opened().slice(quietBefore)));
+  const quietOpened = await openedAwaiting(quietBefore + 1);
+  check('and opened nothing', quietOpened.length === quietBefore,
+        JSON.stringify(quietOpened.slice(quietBefore)));
 
   const pipedBefore = opened().length;
   // A terminal on stdin and a pipe on stdout: somebody typed the command and redirected it.
@@ -432,8 +473,9 @@ try {
         piped.code === 0 && stdoutLines(piped.out).length === 1
         && stdoutLines(piped.out)[0].includes(coldUrl),
         `exit ${piped.code} ${JSON.stringify(stdoutLines(piped.out))}`);
-  check('and opened nothing either', opened().length === pipedBefore,
-        JSON.stringify(opened().slice(pipedBefore)));
+  const pipedOpened = await openedAwaiting(pipedBefore + 1);
+  check('and opened nothing either', pipedOpened.length === pipedBefore,
+        JSON.stringify(pipedOpened.slice(pipedBefore)));
 
   const flagBefore = opened().length;
   const flagged = await run(process.execPath, [makeShim(binNames[0], { stdinTty: true, stdoutTty: true }), '--no-open'],
@@ -442,8 +484,9 @@ try {
         flagged.code === 0 && stdoutLines(flagged.out).length === 1
         && stdoutLines(flagged.out)[0].includes(coldUrl),
         `exit ${flagged.code} ${JSON.stringify(stdoutLines(flagged.out))}\n${flagged.err.trim().slice(-300)}`);
-  check('and it opened nothing', opened().length === flagBefore,
-        JSON.stringify(opened().slice(flagBefore)));
+  const flaggedOpened = await openedAwaiting(flagBefore + 1);
+  check('and it opened nothing', flaggedOpened.length === flagBefore,
+        JSON.stringify(flaggedOpened.slice(flagBefore)));
 
   // ─── 4. the names an old client configuration still uses ───────
 
@@ -468,8 +511,11 @@ try {
     check(`${name} does not exit`, spoke.alive === true,
           'the transport has to stay attached — a client that gets an exit gets a dead server');
   }
-  check('and no browser was opened for any of them', opened().every((line) => !line.includes(`:${legacyPort}`)),
-        JSON.stringify(opened()));
+  // Another "nothing was opened", and it waits for the same reason the three above do: a legacy
+  // name that had started launching would spawn its recorder and be killed before the line landed.
+  const legacyOpened = await openedAwaiting(opened().length + 1);
+  check('and no browser was opened for any of them',
+        legacyOpened.every((line) => !line.includes(`:${legacyPort}`)), JSON.stringify(legacyOpened));
 
   // ─── 5. the shapes an installed shim really leaves ─────────────
 
