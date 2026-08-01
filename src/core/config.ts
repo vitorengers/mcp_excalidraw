@@ -27,5 +27,11 @@ export const ENABLE_CANVAS_SYNC = process.env.ENABLE_CANVAS_SYNC !== 'false'; //
 // Opt-out for auto-starting the canvas server from the CLI / MCP server
 export const EXCALIDRAW_NO_AUTOSTART = env('NO_AUTOSTART') === '1';
 
+// Opt-out for the refusal to drive a canvas built from another version (see core/spawn.ts).
+// It exists for one real setup and not as a general escape hatch: a working copy's `dist/` driving
+// a globally installed canvas — the maintainer's own arrangement, and the one case where the two
+// versions differing is intended rather than stale.
+export const EXCALIDRAW_ALLOW_VERSION_SKEW = env('ALLOW_VERSION_SKEW') === '1';
+
 // Safe file path validation base directory (see sanitizeFilePath)
 export const ALLOWED_EXPORT_DIR = env('EXPORT_DIR') || process.cwd();

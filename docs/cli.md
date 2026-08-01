@@ -1,7 +1,7 @@
 # CLI
 
 `src/bin.ts`, published as `@vitorengers/vibemaxxing` and installed as `vibemaxxing`, with
-`vibemax` beside it as a shorter alias. 22 commands. It is
+`vibemax` beside it as a shorter alias. 23 commands. It is
 the interface the bundled agent skill actually uses, because a shell command is cheaper for an
 agent to reach for than a tool definition it has to be handed first.
 
@@ -65,7 +65,8 @@ Labels and arrow bindings take the agent-friendly spelling everywhere: `"text"` 
 | Command | What it does |
 |---|---|
 | *(no arguments)* / `launch` | Start the board, open it in a browser, print one line |
-| `start` / `stop` / `status` | Manage the canvas server; `stop` identity-checks the live server via `/health` before signalling |
+| `start` / `stop` / `status` | Manage the canvas server; `stop` identity-checks the live server via `/health` before signalling, and `status` prints the running version beside the installed one |
+| `restart` | Replace the running canvas with this build, on the same port — see below |
 | `mcp` | Run the MCP stdio server by name |
 | `doctor` | Ask the board whether each agent can actually run — see below |
 | `add` | Batch-create elements from a JSON array, given as a file or on stdin; `--one` for a single element |
@@ -120,6 +121,73 @@ what an adapter is for.
 Any command that needs the canvas will start it if nothing is listening — there is no separate
 setup step. `start` runs it detached and records a pidfile (`src/core/pidfile.ts`) so `stop`
 knows what to kill.
+
+## …but not one from another version
+
+An auto-started canvas is detached and unref'd: it outlives the session that started it, and it
+goes on holding the port and serving its own `dist/frontend`. So on an update path of
+`npx -y @vitorengers/vibemaxxing@latest`, the second use of an upgraded tool meets the first
+one's server — and every request succeeds against the code of the release before. That is
+[trap-stale-server.md](trap-stale-server.md), "the old one keeps answering, silently, with the
+old code".
+
+`GET /health` now carries the package version, and every command that drives the canvas compares
+it against its own before attaching. When they differ, the command **refuses** and says so:
+
+```
+$ vibemaxxing describe
+Error: The canvas server at http://127.0.0.1:3737 is version 0.1.0; this one is 0.2.0. It is
+serving that build's code and frontend, so this command would act on software that is not the
+one you installed. Replace it with `vibemaxxing restart`, or set
+VIBEMAXXING_ALLOW_VERSION_SKEW=1 to use it as it is.
+```
+
+Refusing rather than restarting on your behalf, because a restart discards whatever the running
+board holds — the scene as the browser has it, its terminal sessions, its coding agents mid-run.
+A canvas that reports no version at all is treated the same way and named as such: the field has
+been in `/health` since #347, so a server without it is from a build older than the one asking.
+
+`VIBEMAXXING_ALLOW_VERSION_SKEW=1` attaches anyway. It exists for one real arrangement — a
+working copy's `dist/` driving a globally installed board — and not as a general escape hatch.
+
+`status` is the exception: it reports instead of refusing, because it is the command you run to
+find out.
+
+```
+$ vibemaxxing status
+{
+  "running": true,
+  "url": "http://127.0.0.1:3737",
+  "pid": 24680,
+  "version": "0.1.0",
+  "installedVersion": "0.2.0",
+  "versionMismatch": true,
+  ...
+}
+```
+
+## `restart` — the same port, a newer build
+
+`restart` stops the running canvas and starts one from *this* install on the port it held.
+
+It is deliberately not `POST /api/restart`. That route hands the work to a supervisor which
+starts `dist/server.js` resolved relative to the dying process's own module URL — the *old*
+install — which is exactly wrong for the case this command exists for. What the route gets for
+free and this cannot is the environment: the supervisor carries the old server's, and the CLI can
+only carry the shell's. A board configured through `config.json` in the state directory is
+unaffected; one configured by exported variables comes back as whatever the current shell holds.
+
+Stopping the server stops every coding agent it is hosting, so `restart` asks `/health` how many
+runs are in flight — across every workspace, not just `default` — and refuses while any are:
+
+```
+$ vibemaxxing restart
+Error: The canvas server at http://127.0.0.1:3737 is implementing 2 issues right now, and
+stopping it would end those runs where they stand. Wait for them, or pass --force to restart
+anyway.
+```
+
+`scripts/check-canvas-version-skew.mjs` holds all of it, `restart` included.
 
 ## Which project board a command draws on
 

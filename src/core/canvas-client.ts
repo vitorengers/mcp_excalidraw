@@ -522,6 +522,16 @@ export interface HealthStatus {
   service?: string;
   pid?: number;
   /**
+   * The package version the answering build was made from.
+   *
+   * Optional because a canvas started from an older build answers everything above and none of
+   * this — and that absence is itself the answer `core/spawn.ts` acts on: a responder that
+   * cannot name its build is by construction older than the one asking.
+   */
+  version?: string;
+  /** Runs in flight on that server, across every workspace. Absent on a build before #347. */
+  implementing?: number;
+  /**
    * What the agent preflight found, per role and per environment. Optional because a canvas
    * from an older build answers everything above and none of this — `doctor` says so rather
    * than reading `undefined` as "no agents".

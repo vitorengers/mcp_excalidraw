@@ -36,7 +36,7 @@ Results are JSON on stdout — except `describe` (plain text) and raw-content ou
 
 | Task | Command |
 |------|---------|
-| Start / stop / inspect server | `start`, `stop`, `status` |
+| Start / stop / inspect server | `start`, `stop`, `restart`, `status` |
 | Create elements (batch) | `add elements.json` or `echo '[...]' \| add` or `add --one '{...}'` |
 | Multi-op patch in one call | `apply patch.json` — `{"create":[...],"update":[{"id":"a","set":{...}}],"delete":[...]}` |
 | Read one / query many | `get <id>`, `query [--type t] [--bbox x0,y0,x1,y1] [--filter k=v] [--filter-json '{...}']` |
@@ -273,6 +273,7 @@ Round-trips are safe: text-element block references follow the plugin's own id r
 ## Error Recovery
 
 - **Exit code 3 (canvas unreachable)?** Auto-start is disabled (`EXCALIDRAW_NO_AUTOSTART=1`) or a non-loopback `EXPRESS_SERVER_URL` is set. Run `start` explicitly or fix the env.
+- **Exit code 3 naming two version numbers?** A canvas from an older install is still holding the port and serving its own code. `restart` replaces it with the current build on the same port (it refuses while issues are being implemented — `--force` overrides); `status` shows both versions; `VIBEMAXXING_ALLOW_VERSION_SKEW=1` attaches to the old one anyway.
 - **Exit code 4 (browser required)?** Open the canvas URL (`status` prints it) in a browser, then retry — screenshots, image export, viewport, and mermaid conversion render in the frontend.
 - **"nothing said which one to draw on"?** The canvas has several project boards registered. Re-run with `--workspace <id>` (MCP: a `workspace` argument) using one of the ids the refusal listed — see Step 0.5.
 - **Drew something and the user cannot see it?** It probably went on `default`, which has no tab when projects are registered. `describe --workspace <id>` on each id tells you where it landed; redraw on the right board.

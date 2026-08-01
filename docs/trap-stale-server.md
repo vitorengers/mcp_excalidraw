@@ -9,6 +9,17 @@ debug it is reasoning about source that is not running.
 
 ## What to do
 
+**The tool now refuses rather than letting this happen quietly.** `GET /health` carries the
+package `version`, and every command that drives the canvas — CLI or MCP — compares it against
+its own before attaching to a responder. A canvas from another build is named, with both version
+numbers and the remedy, instead of being used; `vibemaxxing restart` replaces it on the same port
+with one from the current install, and `vibemaxxing status` prints the two versions side by side.
+See [cli.md](cli.md). That closes the case this trap is mostly met in — an `npx -y <pkg>@latest`
+update whose second run finds the first run's server still there.
+
+It does not close the case below, where the *same* version is running from source you have since
+changed. For that the kill is still the answer.
+
 Kill by PID before starting. [running.md](running.md) carries this as the step before the
 build:
 

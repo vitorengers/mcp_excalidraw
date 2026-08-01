@@ -6,6 +6,7 @@
 - Canvas health: `GET /health` or `npx -y @vitorengers/vibemaxxing status`
 - Auto-start: any canvas-touching CLI command starts the server if it's down (opt out with `EXCALIDRAW_NO_AUTOSTART=1`)
 - Project board: `--workspace <id>` (CLI, any command), a `workspace` argument (any MCP canvas tool), `?workspace=<id>` or an `x-workspace-id` header (REST), or `EXCALIDRAW_WORKSPACE=<id>` for the whole session. Name none and a canvas with one registered project uses it, one with none uses `default`, one with several refuses and lists the ids (exit 2). `GET /api/workspaces` is the list.
+- Version skew: a canvas from another build is refused, not used — `/health` carries the version and the command compares it. `restart` replaces it; `VIBEMAXXING_ALLOW_VERSION_SKEW=1` attaches anyway
 
 ## CLI Reference
 
@@ -18,7 +19,8 @@ JSON results on stdout — except `describe` (plain text) and raw-content output
 |---------|-------------|
 | `start` | Start the canvas server (detached); prints URL + pid |
 | `stop` | Stop the canvas server (identity-checked via `/health` — never signals foreign services) |
-| `status` | Health, element count, connected browser tabs |
+| `restart` | Replace a running canvas with this build on the same port; refuses while issues are being implemented unless `--force` |
+| `status` | Health, running vs installed version, element count, connected browser tabs |
 
 ### Elements
 

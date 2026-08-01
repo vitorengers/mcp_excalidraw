@@ -34,6 +34,7 @@ import {
 import { z } from 'zod';
 import WebSocket from 'ws';
 import { isMainModule } from './core/entry.js';
+import { packageVersion } from './core/version.js';
 import { writePidFile, removePidFile, restartLogPath, startupLogPath } from './core/pidfile.js';
 import {
   canvasUrlFor, explicitPort, preferredPort, removeCanvasState, writeCanvasState
@@ -63,6 +64,7 @@ import {
   ClaudeEnvironmentStatus, readClaudeStatus, STALE_AFTER_SECONDS
 } from './core/claude-status.js';
 import { issueImageIds, materializeIssueImages, MaterializedImages, NO_IMAGES } from './core/issue-images.js';
+import { referencedFileIds } from './core/board-files.js';
 import {
   readProjectBoard,
   moveCard,
@@ -114,6 +116,7 @@ import {
   isImplementing,
   listImplement,
   readImplement,
+  runningImplementCount,
   runningImplements,
   writeImplement
 } from './core/implement-state.js';
@@ -152,6 +155,15 @@ onElementStoreChanged(scheduleBoardStateSave);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * The build this process is, for `/health` to name — read once rather than per request.
+ *
+ * The frontend polls that route, and this is a property of the running process that cannot
+ * change under it: a canvas serving a different build is a different process, which is the whole
+ * of what the field is for.
+ */
+const PACKAGE_VERSION = packageVersion();
 
 const app = express();
 const server = createServer(app);
@@ -4726,14 +4738,10 @@ app.get('/api/docs/:key', async (req: Request, res: Response) => {
  * needed none of them.
  */
 function filesForWorkspace(workspaceId: string): Record<string, ExcalidrawFile> {
-  const wanted = new Set<string>();
-  for (const element of elementsFor(workspaceId).values()) {
-    const fileId = (element as { fileId?: unknown }).fileId;
-    if (typeof fileId === 'string' && fileId) wanted.add(fileId);
-    for (const id of issueImageIds(element.customData)) wanted.add(id);
-  }
   const scoped: Record<string, ExcalidrawFile> = {};
-  for (const id of wanted) {
+  // The same walk the save uses, so what a board is served can never be a different set from
+  // what it is saved with (#343).
+  for (const id of referencedFileIds(elementsFor(workspaceId).values())) {
     const file = files.get(id);
     if (file) scoped[id] = file;
   }
@@ -5230,6 +5238,22 @@ app.get('/health', (req: Request, res: Response) => {
     // from a stale pidfile or an unrelated app squatting on the port.
     service: 'mcp-excalidraw-canvas',
     pid: process.pid,
+    // Which build is answering, which `service` and `pid` between them could not say.
+    //
+    // An auto-started canvas is detached and unref'd, so it outlives the session that started
+    // it; on an `npx -y <pkg>@latest` update path the second run of an upgraded tool meets the
+    // first run's server, still holding the port and still serving the previous `dist/frontend`.
+    // That is `docs/trap-stale-server.md` — "the old one keeps answering, silently, with the old
+    // code" — and the reason it was silent is that nothing on the wire named the build. This is
+    // the field `core/spawn.ts` compares before it attaches to a responder.
+    //
+    // Here rather than in `canvasIdentity()`, for the reason `platform` is here: that object is
+    // what a *replacement* must match, and a restart is expressly how a board changes version.
+    version: PACKAGE_VERSION,
+    // What a restart would end, counted across every workspace rather than one. `restart` reads
+    // it before it stops anything: the server hosts the coding agents, so stopping it stops them,
+    // and doing that to somebody mid-implement without saying so is the failure this pre-empts.
+    implementing: runningImplementCount(),
     // Which machine this board is running on, for a page that has to describe it. The Add-a-
     // project dialog's example path is the only concrete path this tool ever shows, and it
     // was a `C:` one everywhere — the wrong syntax for the platform two thirds of readers are

@@ -1,0 +1,48 @@
+name: Feature request
+description: Something the tool should do and does not
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This project keeps its record on a board rather than in a backlog, so a request that
+        lands here becomes an issue on the board and is worked from there — or it does not,
+        and the issue says why. Either way it is written down.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you were trying to do
+      description: >-
+        The situation rather than the fix. A request phrased as a problem can be answered in
+        ways nobody thought of; one phrased as a solution can only be accepted or refused.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you think should happen
+      description: What the tool would do instead, as concretely as you can put it.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: >-
+        The workaround you are using, if there is one, and why it is not enough. An existing
+        workaround that is merely awkward is useful information either way.
+    validations:
+      required: false
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface
+      description: The three ways in are documented separately, and they rarely change together.
+      options:
+        - The canvas and its blocks
+        - The CLI
+        - The MCP server
+        - The documentation
+        - Something else, or more than one
+    validations:
+      required: true

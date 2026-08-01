@@ -122,4 +122,11 @@ One branch per issue, a body that says `Closes #N`, and a description of what wa
 the same thing the log entry says. Pull requests are reviewed and merged by a maintainer.
 
 Bug reports and pull requests belong on
-[this repository's issue tracker](https://github.com/vitorengers/vibemaxxing/issues).
+[this repository's issue tracker](https://github.com/vitorengers/vibemaxxing/issues), which has
+a form for each; `.github/pull_request_template.md` is the rules above as a checklist.
+
+Two documents sit beside this one. [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) is what is expected
+of everyone taking part. [docs/SECURITY.md](docs/SECURITY.md) is the trust model of a tool that
+spawns coding agents and real shells — read it before you enable either, and report a
+vulnerability there rather than on the issue tracker, where it would be public from the moment
+you filed it.

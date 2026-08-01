@@ -2,8 +2,10 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
-import { EXPRESS_SERVER_URL, ENABLE_CANVAS_SYNC, EXCALIDRAW_NO_AUTOSTART } from './config.js';
-import { BIN_NAME } from './version.js';
+import {
+  EXPRESS_SERVER_URL, ENABLE_CANVAS_SYNC, EXCALIDRAW_NO_AUTOSTART, EXCALIDRAW_ALLOW_VERSION_SKEW
+} from './config.js';
+import { BIN_NAME, packageVersion } from './version.js';
 import { getHealth, CANVAS_SERVICE_NAME, foreignServiceError, markCanvasIdentityVerified } from './canvas-client.js';
 import { isAcceptedCanvasService } from './identity.js';
 import { DEFAULT_CANVAS_PORT, removeCanvasState, whatIsOn } from './port.js';
@@ -99,6 +101,63 @@ function startupLogTail(file: string, limit = 900): string {
   }
 }
 
+export interface VersionSkew {
+  /** What the running canvas says it was built from, or null when it cannot say at all. */
+  running: string | null;
+  /** What this process was built from. */
+  installed: string;
+  /** Whether the two are different — a canvas that names no version counts as different. */
+  mismatch: boolean;
+}
+
+/**
+ * Which build is answering, against which build is asking.
+ *
+ * A responder with no `version` at all is a **mismatch**, not an unknown. The field has been in
+ * `/health` since #347, so a canvas that omits it is by construction from a build older than any
+ * that could be reading this — which is precisely the case the comparison exists for, and the
+ * one that would otherwise pass unnoticed for exactly as long as it mattered most.
+ */
+export function versionSkew(health: { version?: string } | null): VersionSkew {
+  const installed = packageVersion();
+  const running = typeof health?.version === 'string' ? health.version : null;
+  return { running, installed, mismatch: running !== installed };
+}
+
+/** How a canvas of another build is named — the same sentence wherever it is said. */
+export function describeSkew(skew: VersionSkew): string {
+  return skew.running === null
+    ? `The canvas server at ${EXPRESS_SERVER_URL} does not report a version, so it is from a `
+      + `build older than this one (${skew.installed}).`
+    : `The canvas server at ${EXPRESS_SERVER_URL} is version ${skew.running}; this one is `
+      + `${skew.installed}.`;
+}
+
+/**
+ * The refusal, and the reason it is a refusal rather than an automatic restart.
+ *
+ * Replacing the server would discard whatever the running board holds — the scene as the browser
+ * has it, every terminal session, every coding agent mid-run — so it is the operator's decision
+ * and not this function's. What is not acceptable is the third option the old code took: going
+ * ahead against the old build, which is `docs/trap-stale-server.md` and is silent by definition.
+ */
+export function versionSkewError(skew: VersionSkew): Error {
+  const error = new Error(
+    // Neutral about which way the two run, because both happen: the ordinary case is a server
+    // left behind by the previous release, and the other is a working copy older than what is
+    // installed globally. Neither is the software the caller thinks it is driving.
+    `${describeSkew(skew)} It is serving that build's code and frontend, so this command would `
+    + `act on software that is not the one you installed. Replace it with `
+    + `\`${BIN_NAME} restart\`, or set ${settingName('ALLOW_VERSION_SKEW')}=1 to use it as it is.`
+  );
+  // The same code an unreachable canvas gets, and for the same reason a caller cares about: from
+  // this build's point of view there is no canvas here it can safely drive. A code of its own
+  // would be a fifth number in an exit-code table documented in four places, bought for a
+  // distinction no caller acts on differently.
+  (error as any).code = 'CANVAS_UNREACHABLE';
+  return error;
+}
+
 export interface EnsureResult {
   url: string;
   spawned: boolean;
@@ -124,6 +183,13 @@ export async function ensureCanvasRunning(options: { timeoutMs?: number; force?:
   if (existing) {
     if (!isCanvasHealth(existing)) {
       throw foreignServiceError();
+    }
+    // Ours, and answering — but "ours" was never the same question as "this build". Attaching
+    // here is what makes a stale server invisible: every request succeeds, against the code of
+    // whatever release last held the port.
+    const skew = versionSkew(existing);
+    if (skew.mismatch && !EXCALIDRAW_ALLOW_VERSION_SKEW) {
+      throw versionSkewError(skew);
     }
     markCanvasIdentityVerified();
     return { url: EXPRESS_SERVER_URL, spawned: false };

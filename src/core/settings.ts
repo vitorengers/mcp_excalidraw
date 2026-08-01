@@ -215,6 +215,11 @@ export const SETTINGS = [
     description: '`1` stops the CLI and the MCP server auto-spawning a canvas'
   },
   {
+    name: 'ALLOW_VERSION_SKEW',
+    fallback: 'unset',
+    description: '`1` attaches to a running canvas built from a different version instead of refusing. For a working copy driving an installed board — otherwise the refusal is what stops a session talking to a server running the previous release\'s code, silently ([trap-stale-server.md](trap-stale-server.md))'
+  },
+  {
     name: 'NO_DOTENV',
     fallback: 'unset',
     description: '`1` stops both configuration files being read — `<cwd>/.env` and `<state-dir>/config.json` alike — leaving only the real environment. The checks set it, because a file layer only ever fills in variables that are *unset*, which is exactly the set a check deleted on purpose — [trap-check-environment.md](trap-check-environment.md)'
