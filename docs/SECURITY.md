@@ -73,26 +73,35 @@ that command. The rest of this document is about who that is.
 `HOST` defaults to **`127.0.0.1`**, and `PORT` to 3737 — a preference the launch path walks
 past to the next free port, not a pin ([running.md](running.md)).
 
-`HOST=0.0.0.0` publishes the board on **every network interface**, and the API has no built-in
+`HOST=0.0.0.0` puts the board on **every network interface**, and the API has no built-in
 authentication of any kind: no token, no password, no session. Everyone who can route a packet
-to that port is the operator as far as this server is concerned. What such a board costs you is
-the workbench: off loopback every GitHub-backed route answers **403**, and so do the agents and
-the terminal, so what is published is a drawing canvas and nothing else. Do not do it on a
-network you do not control, and put access control in front of it if you do it at all.
+to that port is the operator as far as this server is concerned. So off loopback the answer is
+**403** to every route worth reaching: not only the GitHub half, the agents and the terminal, but
+since #366 every read of what the board holds. There is nothing left to publish that way. Do not
+do it on a network you do not control, and put access control in front of it if you do it at all.
 
-What a non-loopback bind actually exposes, because the dangerous half refuses to run there:
+What a non-loopback bind actually leaves, now that the reads are behind the same guard:
 
 - **Refused with 403 off loopback** — the issue block and the implement run, the terminal, the
   workspace registry and project settings, the directory picker, the GitHub project mirror and
-  card moves, `/api/github-status`, `/api/claude-status`, and the restart route. The board says
-  so on itself rather than drawing an empty region.
-- **Still answered** — the drawing canvas: elements, files, image export, viewport, snapshots
-  and `GET /api/docs/:key`. Read and write, by anyone who can reach the port. Treat everything
-  on a board bound that way as public and as anybody's to change.
+  card moves, `/api/github-status`, `/api/claude-status`, the restart route, and the board's own
+  contents: `GET /api/elements`, `/api/elements/search`, `/api/elements/:id`, `/api/files`,
+  `/api/files/:id`, `/api/docs/:key`, `/api/library` and both snapshot reads. The **WebSocket
+  upgrade** is refused there too, because it sends the whole scene on connect and an HTTP guard
+  cannot see it.
+- **Still answered** — the writes, and `/health`. A board bound that way can be drawn on by
+  anyone who can reach the port even though none of them can read it back. Treat everything on
+  one as anybody's to change.
 
-The guard is a test of the **bind address**, not of the caller's address: a server on
-`0.0.0.0` refuses those routes for the loopback client too. That is the intended trade — a
-board published on an interface is a drawing canvas and nothing else.
+Before #366 the second list was the whole drawing canvas — elements, files, documents, the
+library and the snapshots, read by anyone who could reach the port. The two honest options were
+to guard them or to write down that such a board publishes its contents; they are guarded, and
+what that costs is the last thing a non-loopback bind was good for.
+
+The guard is a test of the **bind address**, not of the caller's address: a server bound to an
+interface refuses those routes for the loopback client on the same machine too. A reverse proxy
+is the configuration that still works, because a proxy reaches this server on loopback and
+`EXCALIDRAW_ALLOWED_HOSTS` is what tells the origin gate about the name in front of it.
 
 ## The origin gate, and why a bind test is not enough
 
@@ -111,9 +120,13 @@ there is a gate in front of every route, refusing with 403 before the route runs
   can see them. `EXCALIDRAW_ALLOWED_HOSTS` is the escape hatch for a real alias or a proxy, and
   a refusal names the authority it expected so a lockout says what to put there.
 - The **WebSocket upgrade** goes through the same gate. It streams the scene and every live
-  shell's scrollback on connect, and it is a door CORS never covered at all.
+  shell's scrollback on connect, and it is a door CORS never covered at all. Since #366 it is
+  asked about the bind first, because a program on the network sends no `Origin` and names
+  whatever `Host` it likes — the case this gate deliberately allows, and therefore the one only
+  a bind test can turn away.
 
-`scripts/check-cross-origin.mjs` holds both sides of this.
+`scripts/check-cross-origin.mjs` holds both sides of this, and
+`scripts/check-board-reads-guard.mjs` holds the bind side of the same two doors.
 
 **What the gate does not defend against is a local program.** Any process that can open a
 socket to the port — yours, or another account's on a machine you share — sends no `Origin` at

@@ -101,11 +101,13 @@ container path — it was deleted rather than half-supported
 on a server whose API has no authentication, and carried neither `gh` nor `git`, so most of what
 this tool is could not have run inside it.
 
-**Security note:** the canvas server binds `127.0.0.1` only by default, and the GitHub half is
-bound to that — off loopback every GitHub-backed route answers `403`, so what you get on a
-network interface is a drawing canvas and nothing else, and the board says so on itself rather
-than showing you an empty region. If you expose it on a network interface (`HOST=0.0.0.0`)
-anyway, put network-level access controls in front: the API has no built-in authentication.
+**Security note:** the canvas server binds `127.0.0.1` only by default, and the whole tool is
+bound to that — off loopback every GitHub-backed route answers `403`, and so does every read of
+what the board holds, down to the WebSocket that would have streamed the scene. A board on a
+network interface therefore answers nothing worth having, and says so on itself rather than
+showing you an empty region. If you expose it on a network interface (`HOST=0.0.0.0`) anyway,
+put network-level access controls in front: the API has no built-in authentication, and the
+writes are not behind the bind guard, so anyone who reaches the port can still draw on it.
 **[docs/SECURITY.md](docs/SECURITY.md) is the whole of it** — what the tool runs as, which
 switches spawn a coding agent or a real shell and what each one grants, the origin gate in front
 of every route, and where to report a vulnerability.
