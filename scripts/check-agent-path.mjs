@@ -78,6 +78,19 @@ mkdirSync(workDir, { recursive: true });
 /** The POSIX home this check invents, so no case depends on where the host keeps its own. */
 const HOME = '/home/checker';
 
+/** The variable this check puts into its own environment to watch it reach a child. */
+const WITNESS = 'AGENT_PATH_CHECK_WITNESS';
+
+/**
+ * The two names `agentEnv` removes on purpose, which the environment case therefore exempts.
+ *
+ * `CLAUDE_CODE_CHILD_SESSION` unconditionally, `NO_COLOR` when `CLAUDECODE` is beside it —
+ * both are asserted by `check-child-session-env.mjs` and `check-no-color-env.mjs`, and both
+ * are listed here so that this file's "nothing else is filtered" case says nothing about
+ * whether they went.
+ */
+const DELIBERATELY_STRIPPED = ['CLAUDE_CODE_CHILD_SESSION', 'NO_COLOR'];
+
 /** A candidate directory as it lands under a planted root, drive letter and all. */
 function under(root, candidate) {
   return join(root, candidate.replace(/^[A-Za-z]:/, ''));
@@ -203,14 +216,36 @@ try {
 
   console.log('\n4. agentEnv carries the repair, on POSIX as on Windows');
 
+  // A key this check plants in its own environment, so the case that asserts the environment
+  // survives does not depend on what the invoking shell happens to have set — nor on how it
+  // spelled it. `process.env` on Windows is case-insensitive and the plain object `agentEnv`
+  // spreads it into is not, so naming a real variable asserts the shell rather than the code:
+  // Git Bash exports `SYSTEMROOT` and PowerShell exports `SystemRoot`, and a case written
+  // against either spelling flips on which one ran it. This one has a single spelling on all
+  // three platforms because nothing but this file ever sets it.
+  process.env[WITNESS] = 'planted by check-agent-path';
+
   const env = agentEnv({ platform: 'linux', path: minimalPath(posixRoot), home: HOME, root: posixRoot });
   check('the PATH it hands a child is not the one the server inherited',
         env.PATH !== process.env.PATH && env.PATH !== minimalPath(posixRoot), brief(env.PATH));
   check('and it holds the planted directory', entriesOf(env.PATH ?? '').includes(under(posixRoot, '/opt/homebrew/bin')),
         brief(env.PATH));
+  check('a variable this check planted reaches the child with its value',
+        env[WITNESS] === process.env[WITNESS], `${WITNESS}=${String(env[WITNESS])}`);
+
+  // Every other key too, compared by name and case-insensitively: the point of the case is
+  // that `agentEnv` corrects keys rather than filtering the environment, and one witness
+  // would still pass if it dropped everything around it. Only the two names it strips on
+  // purpose are exempt, and those belong to `check-child-session-env.mjs` and
+  // `check-no-color-env.mjs` rather than to this file.
+  const upper = (name) => name.toUpperCase();
+  const arrived = new Set(Object.keys(env).map(upper));
+  const missing = Object.keys(process.env).map(upper)
+    .filter((name) => !DELIBERATELY_STRIPPED.includes(name))
+    .filter((name) => !arrived.has(name));
   check('the rest of the environment is still the process\'s',
-        env.SystemRoot === process.env.SystemRoot && env.HOME === process.env.HOME,
-        'agentEnv corrects keys, it does not filter the environment');
+        missing.length === 0,
+        `agentEnv corrects keys, it does not filter the environment — ${missing.join(', ')} did not arrive`);
 
   // Called the way every caller in `src/` calls it: with nothing at all.
   const live = agentPath();
@@ -223,6 +258,7 @@ try {
     console.error(`  FAIL  the check itself threw — ${error?.stack ?? error}`);
   }
 } finally {
+  delete process.env[WITNESS];
   rmSync(workDir, { recursive: true, force: true, maxRetries: 5 });
 }
 
