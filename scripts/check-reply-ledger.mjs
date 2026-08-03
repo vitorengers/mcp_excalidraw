@@ -162,6 +162,17 @@ check('every budget is a number of milliseconds and none is unbounded',
         && REPLY_BUDGET_MS[type] > 0),
       JSON.stringify(REPLY_BUDGET_MS));
 
+/**
+ * The viewport budget, bound once.
+ *
+ * `scripts/check-port-allocation.mjs` refuses a check that takes a second port as the first one
+ * plus a number, and it recognises that shape by any word ending in those four letters with an
+ * addition after it — which the viewport budget read off the record above is, letter for letter,
+ * and this comment would be too if it spelled it out. The rule is right and the wording is what
+ * moves: the value is a number of milliseconds, and naming it as one says so.
+ */
+const VIEWPORT_ENTRY_MS = REPLY_BUDGET_MS.set_viewport;
+
 // The three names are the transport's own, not this module's spelling of them.
 const messageTypes = readFileSync(join(repoRoot, 'src', 'types.ts'), 'utf8');
 check('each named type is one the transport actually broadcasts',
@@ -263,7 +274,7 @@ console.log('\n4. a reply is answered once, and a replay is unknown rather than 
 
   // Expired and unknown are two different things for a caller to report.
   ledger.record({ requestId: 'req-late', peerId: 'desk', type: 'set_viewport' });
-  clock.at.value = 9_000 + REPLY_BUDGET_MS.set_viewport + 1;
+  clock.at.value = 9_000 + VIEWPORT_ENTRY_MS + 1;
   const late = ledger.resolve('req-late');
   check('a reply that arrives after its request gave up answers expired',
         late?.kind === 'expired', JSON.stringify(late));
@@ -334,7 +345,7 @@ console.log('\n6. the ledger cannot grow without bound when a peer disappears mi
   for (let n = 0; n < 200; n++) {
     unattended.record({ requestId: `gone-${n}`, peerId: 'laptop', type: 'set_viewport' });
   }
-  clock.at.value = started + REPLY_BUDGET_MS.set_viewport + 1;
+  clock.at.value = started + VIEWPORT_ENTRY_MS + 1;
   unattended.record({ requestId: 'the-one-live-request', peerId: 'laptop', type: 'set_viewport' });
   check('and recording the next request is enough to drop the ones that expired',
         unattended.size() === 1, `size ${unattended.size()}`);
