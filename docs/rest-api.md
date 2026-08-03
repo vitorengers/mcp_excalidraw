@@ -1,6 +1,6 @@
 # REST API
 
-`src/server.ts`. 58 routes, and the only surface that is workspace-aware — everything the
+`src/server.ts`. 62 routes, and the only surface that is workspace-aware — everything the
 browser does, and everything this board was built with, goes through here.
 
 The table below is the whole set, one row per route. It used to be a summary of thirty, under a
@@ -16,6 +16,9 @@ only ([configuration.md](configuration.md)), and a caller sends it either as the
 `X-VibeMaxxing-Token` header or as `?token=` — the second because a browser's `WebSocket`
 constructor has nowhere to put a header. `GET /` and `GET /health` are outside the gate, so that
 a page can load before it has read anything and so that a tool can find out what is on a port.
+`POST /api/pair/request` and `GET /api/pair/status` are outside it for the same shape of reason
+— asking for a credential is what they are, so requiring one would be a circle — and they are
+the only two routes under `/api` that are. See [Pairing a second machine](#pairing-a-second-machine).
 [SECURITY.md](SECURITY.md) is what the secret is for and what it does not do.
 
 ```bash
@@ -144,6 +147,44 @@ a caller resolving somebody else's pending export by guessing a request id.
 | `POST /api/export/image/result` | The tab answering back |
 | `POST /api/viewport` | Ask the open tab to move the camera |
 | `POST /api/viewport/result` | The tab answering back |
+
+## Pairing a second machine
+
+| Route | What it does |
+|---|---|
+| `POST /api/pair/request` | A device with no credential asks to pair, proposing a name for itself; answers a `requestId` and a **code**, and nothing secret. Bounded — 429 for a second live request from the same address or once the board is holding its ceiling of eight, 400 for a request that proposes no name |
+| `GET /api/pair/status` | What became of a `requestId`: `pending`, or `approved` **once**, carrying the device's `credential` — the `id.secret` string `verifyDevice` takes. Every poll after that answers `unknown`, which is also what a `requestId` nobody issued answers |
+| `GET /api/pair/pending` | Every live request, with the code, the name it proposed, the `Host` it reached this board under and the address it arrived from (loopback **caller** only) |
+| `POST /api/pair/approve` | Approve one of them by `requestId` **and** `code`; `addDevice` mints the secret and writes the record, and the answer carries neither (loopback **caller** only) |
+
+The gesture is: open the board on the second machine, read the code off it, approve it on the
+machine running the board. The rules that make that a gesture rather than a hole are in
+`src/core/pairing.ts` — the code is compared rather than merely displayed, so the operator is
+choosing between requests instead of confirming that one exists; the credential is handed over on
+exactly one poll and the record dies with it; and the open routes are bounded, because the whole
+of their effect is a row on the operator's screen.
+
+**Nothing here mints.** `src/core/pairing.ts` decides *when* a device is approved and
+`src/core/device-registry.ts` is what makes the secret and writes the record — it is handed to
+the desk as `mint` rather than imported, so a check can drive the expiry and the ceiling without
+pairing devices into the state directory of whoever ran it. The registry throws rather than
+warning if it cannot write, and it throws before the pending record is touched: a board whose
+state directory has gone read-only answers 500 and leaves the request still approvable.
+
+**Loopback here is the caller, not the bind.** `notTheHost()` reads `req.socket.remoteAddress`
+and nothing else — `X-Forwarded-For` is deliberately not consulted, because a header any caller
+can set would turn the one property of a request nobody can forge into one everybody can, and a
+remote caller would approve itself by asking politely. A reverse proxy reaches this server *on*
+loopback, so a proxied board is unaffected.
+
+The two open routes are also outside the `Host` pin, and only those two: a device that has not
+been approved yet reaches this board under a name it does not answer for, which is what pairing
+*is*. The pending record carries that name for the operator to recognise rather than pinning it.
+`Origin`, when a browser sends one, still has to name the same authority as `Host`, so a page at
+some other origin cannot put rows on the operator's screen.
+
+`scripts/check-pairing-handshake.mjs` drives the whole exchange, including an approval attempted
+from a genuinely non-loopback socket.
 
 ## Snapshots and health
 
