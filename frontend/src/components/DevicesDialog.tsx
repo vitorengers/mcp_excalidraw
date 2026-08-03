@@ -33,6 +33,13 @@ import './DevicesDialog.css'
  * Beside the project settings rather than on the canvas: this is the board's own
  * configuration and not something drawn on it, and it opens on a board with no project
  * registered at all, which is the state a fresh clone is in.
+ *
+ * **It is operable without a mouse**, and that is not free here. This dialog is drawn over the
+ * board but sits *before* the bar in the document, so a caret left on the control that opened it
+ * walks forward into Clear Canvas and Restart — controls the reader cannot see, under a modal
+ * they believe they are inside. So the frame takes the focus when it opens, Tab is trapped
+ * between the stops inside it, the confirmation takes the focus when it appears, and the control
+ * that opened the dialog gets the focus back when it closes.
  */
 
 interface Device {
@@ -75,6 +82,17 @@ function when(iso: string | null): string {
 const exact = (iso: string | null): string =>
   (iso !== null && Number.isFinite(Date.parse(iso)) ? iso : '')
 
+/**
+ * Everything inside the frame a Tab can land on.
+ *
+ * Queried afresh on every press rather than captured: the stops here change as the dialog is
+ * used — a row swaps Rename for a field and two buttons, a Revoke becomes a confirmation, a
+ * revoked row takes its own controls with it — and a list captured when the dialog opened would
+ * send the caret at something that is no longer drawn.
+ */
+const TAB_STOPS = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), '
+  + 'textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+
 export const DevicesDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [devices, setDevices] = useState<Device[] | null>(null)
   /** Which entry is the caller, when the caller is one of them. Null on the host's own board. */
@@ -89,8 +107,67 @@ export const DevicesDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
   /** Said after a revocation, because the row it describes is gone by the time it is read. */
   const [said, setSaid] = useState<string | null>(null)
   const gone = useRef(false)
+  /** The frame, which takes the focus on open and bounds the Tab order while it is up. */
+  const frame = useRef<HTMLDivElement | null>(null)
+  /** The safe answer in a confirmation, and the one a key pressed by reflex should give. */
+  const keepIt = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => () => { gone.current = true }, [])
+
+  /**
+   * The frame takes the focus, and the control that opened it takes it back.
+   *
+   * Not the first button inside: a reader arriving here has been given a dialog, and what should
+   * be read to them is what it is — its label and its lede — rather than whichever control the
+   * markup happens to start with. Tab from the frame reaches that control on the next press.
+   *
+   * Handing it back on the way out is the other half. Focus that is dropped on the floor lands on
+   * `<body>`, and the next Tab starts the reader at the top of a board they had already walked
+   * halfway across.
+   */
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    frame.current?.focus()
+    return () => { if (opener?.isConnected) opener.focus() }
+  }, [])
+
+  /**
+   * Tab is trapped between the stops inside the frame.
+   *
+   * Bound on the document in the capturing phase, like `PairingApproval`'s: the caret can be on
+   * the frame itself, on a field inside a row, or — for the moment after a row redraws — on
+   * nothing at all, and a handler hung on the frame would miss the last of those. `at === -1` is
+   * that case, and it is answered by entering the list from whichever end the press was going.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Tab' || !frame.current) return
+      const stops = Array.from(frame.current.querySelectorAll<HTMLElement>(TAB_STOPS))
+        .filter(stop => stop.getClientRects().length > 0)
+      if (stops.length === 0) return
+      event.preventDefault()
+      const at = stops.indexOf(document.activeElement as HTMLElement)
+      const step = event.shiftKey ? -1 : 1
+      const next = at === -1
+        ? (event.shiftKey ? stops.length - 1 : 0)
+        : (at + step + stops.length) % stops.length
+      stops[next].focus()
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => { document.removeEventListener('keydown', onKeyDown, true) }
+  }, [])
+
+  /**
+   * A confirmation takes the focus the moment it opens.
+   *
+   * The press that opened it removed the button that was under the caret, so without this the
+   * focus is on `<body>` and the destructive control the reader just asked for is somewhere they
+   * have to go looking. Keep it rather than Revoke, for the reason `PairingApproval` focuses
+   * Refuse: the reflex answer should be the one that costs nothing.
+   */
+  useEffect(() => {
+    if (confirming) keepIt.current?.focus()
+  }, [confirming])
 
   const load = useCallback((): Promise<void> => fetch('/api/devices', { cache: 'no-store' })
     .then(async (response) => ({ ok: response.ok, body: await response.json().catch(() => ({})) }))
@@ -176,6 +253,10 @@ export const DevicesDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
         role="dialog"
         aria-modal="true"
         aria-label="Paired devices"
+        ref={frame}
+        // Focusable by script and not by Tab: the frame is where a reader arrives, and it is not
+        // a stop they should have to walk back through afterwards.
+        tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
         <h2 className="workspace-dialog__title">Paired devices</h2>
@@ -277,7 +358,11 @@ export const DevicesDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                           + 'open is disconnected.'}
                     </p>
                     <div className="devices-dialog__actions">
-                      <button className="devices-dialog__keep" onClick={() => setConfirming(null)}>
+                      <button
+                        className="devices-dialog__keep"
+                        ref={keepIt}
+                        onClick={() => setConfirming(null)}
+                      >
                         Keep it
                       </button>
                       <button
