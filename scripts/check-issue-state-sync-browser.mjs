@@ -321,7 +321,7 @@ const INSTRUMENT = `(() => {
 const PROBE = `(() => {
   const api = window.__stateCheckApi;
   if (!api) return { error: 'no api handle' };
-  const out = { drafts: [], add: null };
+  const out = { drafts: [], add: null, mirror: { columns: 0, cards: 0 } };
   for (const element of api.getSceneElements()) {
     const custom = element.customData || {};
     if (custom.projectBoardDraft && !element.containerId) {
@@ -335,6 +335,11 @@ const PROBE = `(() => {
     if (custom.kind === 'project-board' && custom.role === 'add') {
       out.add = { x: element.x, y: element.y, w: element.width, h: element.height };
     }
+    // How much of the mirror is there, which is not the same question as whether the \`+\` is
+    // there: the notes column and its \`+\` are the canvas's own and are drawn before
+    // \`/api/project-board\` has answered. See \`aimAtAdd\`.
+    if (custom.kind === 'project-board' && custom.role === 'section') out.mirror.columns++;
+    if (custom.kind === 'project-board' && custom.role === 'card') out.mirror.cards++;
   }
   const state = api.getAppState();
   out.view = { scrollX: state.scrollX, scrollY: state.scrollY, zoom: state.zoom.value,
@@ -397,18 +402,88 @@ async function record(label, id) {
   return both;
 }
 
+/**
+ * What a press at this point would land on: the canvas, something over it, or nothing at all.
+ *
+ * `elementFromPoint` answers `null` for a point outside the window, and that third answer is
+ * the whole of #473 — a coordinate off the page is not a press, and Chrome reports nothing
+ * for one. Handed back on every aim so a swallowed press names what swallowed it.
+ */
+const atPoint = (x, y) => `(() => {
+  const target = document.elementFromPoint(${x}, ${y});
+  const canvas = document.querySelector('canvas.excalidraw__canvas.interactive')
+    || document.querySelector('canvas.excalidraw__canvas');
+  const box = canvas ? canvas.getBoundingClientRect() : null;
+  const named = (element) => element.tagName.toLowerCase()
+    + (element.getAttribute('class') ? '.' + element.getAttribute('class') : '');
+  return {
+    onCanvas: Boolean(target) && target.tagName === 'CANVAS',
+    over: target ? named(target) : 'nothing at all — the point is outside the window',
+    canvas: box ? { left: Math.round(box.left), top: Math.round(box.top),
+                    right: Math.round(box.right), bottom: Math.round(box.bottom) } : null,
+  };
+})()`;
+
+/**
+ * Where to press the `+`, on a point a press can actually reach.
+ *
+ * The fit above is a snapshot, and the region it fitted moves. The mirror is pinned by its
+ * **right** edge (#200), so a column arriving from GitHub grows it leftwards and carries the
+ * notes column — the first one, and the only one the `+` is drawn on — one column-width with
+ * it. Nothing re-runs the fit when that happens.
+ *
+ * That is #473, measured: Alt+B pressed while the board was still notes-only fitted 348 scene
+ * units of mirror into 1384 px of canvas, at zoom 3.8; the project's one column then landed,
+ * the `+` moved 324 units left, and the press computed from it went to **x = -53** — outside
+ * the window, where `elementFromPoint` is null and there is nothing to deliver a click to.
+ * Four attempts at a coordinate off the page are four attempts at the same nothing, which is
+ * why raising the attempt count would have changed nothing either.
+ *
+ * So the aim is inspected before the press, and a fit that has gone stale is re-run — with
+ * Alt+B, the reader's own gesture for exactly this — rather than pressed through. The wait
+ * before the fit is the other half: it waits for the project's columns, not merely for a `+`.
+ */
+async function aimAtAdd() {
+  let point = null;
+  let at = null;
+  for (let tries = 0; tries < 3; tries++) {
+    const scene = await evaluate(PROBE);
+    point = toViewport(scene, scene.add.x + scene.add.w / 2, scene.add.y + scene.add.h / 2);
+    at = await evaluate(atPoint(Math.round(point.x), Math.round(point.y)));
+    if (at.onCanvas) return { point, at };
+    await pressKey('KeyB', 'b', 1, 66);
+    await sleep(1200);
+  }
+  return { point, at };
+}
+
 /** Drop a block with the `+` and write an observation into it. */
 async function dropAndWrite(observation) {
+  // Nothing selected before the press either, and for the reason the deselect below already
+  // gives: a selected block puts Excalidraw's properties island and this project's own panel
+  // over the canvas. The second drop here happens with the run's block still selected, and its
+  // press was measured landing **29 px** left of `.element-docs` and vertically inside it — the
+  // panel is pinned to a block that has just been nudged fourteen times, so how much clearance
+  // there is is a fact about the arithmetic rather than a margin anybody chose.
+  await evaluate('window.__stateCheckApi.updateScene({ appState: { selectedElementIds: {} } })');
+  await sleep(400);
+
   let scene = await evaluate(PROBE);
   const before = scene.drafts.length;
+  let aim = null;
   for (let attempt = 0; attempt < 4 && scene.drafts.length === before; attempt++) {
-    scene = await evaluate(PROBE);
-    const plus = toViewport(scene, scene.add.x + scene.add.w / 2, scene.add.y + scene.add.h / 2);
-    await click(plus.x, plus.y);
+    aim = await aimAtAdd();
+    await click(aim.point.x, aim.point.y);
     await sleep(700);
     scene = await evaluate(PROBE);
   }
-  if (scene.drafts.length === before) throw new Error('the + dropped no block');
+  if (scene.drafts.length === before) {
+    // Where the press went and what took it, because "the + dropped no block" describes the
+    // feature and the failure was never in it.
+    throw new Error('the + dropped no block — the last press went to '
+      + `(${aim.point.x.toFixed(0)}, ${aim.point.y.toFixed(0)}) and landed on ${aim.at.over}`
+      + `; the canvas is at ${JSON.stringify(aim.at.canvas)}`);
+  }
   // Newest first at the top of the column, so the one just dropped is the one that is new.
   const known = new Set();
   const block = scene.drafts.find((draft) => !known.has(draft.id) && draft.state === null
@@ -448,7 +523,13 @@ try {
   await send('Page.enable');
   await send('Runtime.enable');
   await waitFor(() => evaluate(GRAB_API), 'the Excalidraw API handle');
-  await waitFor(async () => Boolean((await evaluate(PROBE)).add), 'the mirror to render');
+  // The project's mirror, not merely a `+`. The notes column is the canvas's own and is drawn
+  // as soon as the page has a board at all — before `/api/project-board` has answered, and on
+  // the 404 the first poll gets while the active board is still `default`. Fitting the viewport
+  // to *that* region and then pressing is #473: the fixture puts one item on the board, so a
+  // card is the mirror having read the project, and by then the columns have stopped arriving.
+  await waitFor(async () => (await evaluate(PROBE)).mirror.cards > 0,
+                "the project's columns to reach the mirror");
   await evaluate(INSTRUMENT);
 
   // Alt+B fits the mirror to the viewport, the way a reader brings it into view.
