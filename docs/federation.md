@@ -184,6 +184,7 @@ src/core/peer-liveness.ts          the four answers above, and which refusal you
 src/core/remote-workspace-id.ts    what this board calls a peer's project, and the inverse
 src/core/remote-workspace-view.ts  which fields of a project cross, and what replaces the path
 src/core/peer-registry.ts          what this board keeps about a board that approved it
+src/core/reply-ledger.ts           which machine a reply belongs to, when it names only a request
 src/core/peer-client.ts            one board's HTTP call to another, and what each failure means
 src/core/peer-request-rewrite.ts   what a request says by the time it belongs to the peer
 src/core/peer-proxy.ts             the seam that sends a request to the machine that owns the board
@@ -211,6 +212,19 @@ files, and nothing yet adds a row to it or presents what a row holds. What it se
 asymmetry above — the record here keeps the secret rather than a hash, so the file is owner-only
 and every update swaps it whole rather than rewriting it in place, and a reader looking at it
 while a peer is renamed or forgotten never finds it missing or half-written.
+
+The reply ledger is the answer to a question the section above does not raise and the wire does:
+a reply that names only the request it answers. Five `POST /api/export/image/result` sites and two
+`POST /api/viewport/result` sites in `frontend/src/App.tsx` carry a `requestId` and no workspace,
+which is exactly right on one machine — the server that asked is the server that is answered — and
+unroutable once the request came down a link. The ledger is what a forwarder consults instead of
+the parameter that is not there, and it is a separate module from both transports so that the HTTP
+forwarder and the socket forwarder cannot each keep their own and disagree. Three properties make
+it something a forwarder can rely on: it is keyed by the request id, because that is the only
+thing the reply carries and everything else is a key two live requests can share; resolving
+**consumes** the id, so a duplicate post is not delivered a second time; and an entry expires no
+later than the request it describes, on that request's own budget, so a peer that sleeps mid-render
+leaves nothing behind. It has no caller either.
 
 The client is the thing that performs the call, and it too has no route and no caller yet. Two
 decisions give it its shape. **The header discipline is the whole of its security**: the outgoing
