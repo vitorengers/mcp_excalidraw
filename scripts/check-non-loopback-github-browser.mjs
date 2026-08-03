@@ -14,9 +14,10 @@
  * non-loopback bind is still *offered* — `HOST=0.0.0.0` is in the README's security note as a
  * way to expose the board — and what it costs is the whole GitHub half of the product. Since
  * #366 it costs the other half too: the reads of board contents and the WebSocket are behind the
- * same bind guard (`check-board-reads-guard.mjs`), so what is left on such a bind is a page that
- * can still say why it is empty. Rule 2 below is unchanged by that — a passage offering the bind
- * has to name the cost — and the cost it now names is larger.
+ * same bind guard (`check-board-reads-guard.mjs`), and since #456 the writes are as well
+ * (`check-board-writes-guard.mjs`), so what is left on such a bind is a page that can still say
+ * why it is empty. Rule 2 below is unchanged by that — a passage offering the bind has to name
+ * the cost — and the cost it now names is larger.
  *
  * That is the decision this check holds, in three places, because it can be undone in three:
  *
@@ -462,8 +463,9 @@ try {
     await send('Page.navigate', { url: `${board.base}/?workspace=off-loopback` });
     await waitFor(() => evaluate(GRAB_API), 'the Excalidraw API handle');
     // Not "the canvas half still works" any more — since #366 the reads and the socket are
-    // refused there too, so nothing fills this scene. What matters is that the page mounts at
-    // all: one that never finished loading could not say why the board is empty either.
+    // refused there too and since #456 so are the writes, so nothing fills this scene and
+    // nothing it draws locally is saved. What matters is that the page mounts at all: one that
+    // never finished loading could not say why the board is empty either.
     check('the page itself came up, which is what lets it say why it is empty', true);
 
     const spoke = await waitFor(async () => {
