@@ -466,7 +466,10 @@ try {
 } finally {
   for (const server of [loopback, off, reRead, authed]) if (server) server.stop();
   await new Promise((resolve) => setTimeout(resolve, 200));
-  rmSync(workdir, { recursive: true, force: true });
+  // Guarded, because a teardown is not a verdict (#472): Windows releases a killed server's
+  // handles on its state directory asynchronously, and `run-checks.mjs` reaps what is left.
+  try { rmSync(workdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
+  catch { /* the directory outlives the run and costs nothing else */ }
 }
 
 // ─── 4. A fifteenth write cannot be the next one left out ──────
