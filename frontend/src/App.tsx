@@ -399,7 +399,12 @@ const readDocumentationShift = (workspace: string): number => {
     const stored = raw ? (JSON.parse(raw) ?? {})[workspace] : null;
     // Validated rather than trusted, like the rect beside it: a key anybody can edit, and a
     // `NaN` here would move every authored shape on the board to nowhere.
-    return typeof stored === 'number' && Number.isFinite(stored) && stored >= 0 ? stored : 0;
+    //
+    // Finite is the whole test since #494. It used to also require `>= 0`, which was true of
+    // every shift a clamped `documentationClearance` could produce; now that the gap is a
+    // distance rather than a floor, a region standing left of the content is a negative one,
+    // and rejecting it would read a pushed board back as a board at rest and push it again.
+    return typeof stored === 'number' && Number.isFinite(stored) ? stored : 0;
   } catch (error) {
     console.warn('Failed to read the documentation shift from localStorage:', error);
     return 0;
@@ -3764,13 +3769,22 @@ function App(): JSX.Element {
     const documentation = documentationElements(next as unknown as ExcalidrawElement[])
     const standing = settle ? boxOf(documentation) : null
     const exact = standing ? documentationClearance(region, standing.minX - applied) : applied
-    // Downwards only on the reconcile path, and only where this pass dropped a block. Both
-    // halves are load-bearing: `Math.min` is what keeps a dragged block from pushing the
-    // board, and `dropped` is what keeps a board switched to — where the scene arrives with
-    // no blocks at all and they are added back — from reading an empty region as "no room
-    // needed" and pulling that board's content left. See the note on `settle`.
+    // Downwards only on the reconcile path, and only where there is a region to measure.
+    //
+    // `Math.min` is the half that keeps a dragged block from pushing the board: this path
+    // runs on a poll, on a socket message and on a scene replaced, none of which are a
+    // decision about the geometry, so it may give room back and never ask for more.
+    //
+    // What it is guarded on changed with #494. It used to be `dropped.size > 0` — only a
+    // pass that took a block away could give room back — and that made `TERMINAL_GAP` a
+    // floor rather than a distance: a gap that was already too wide stayed too wide until
+    // something was closed. The hazard that guard was really about is an *empty* region,
+    // which is what a board switched to looks like for the instant before its blocks are
+    // added back; read as "no room needed", it would pull that board's content left. So the
+    // guard is now that hazard by name. `region` is measured over `[...next, ...added]`, so
+    // the blocks put back in this same pass are already in it.
     const wanted = settle === 'shrink'
-      ? (dropped.size > 0 ? Math.min(applied, exact) : applied)
+      ? (region ? Math.min(applied, exact) : applied)
       : exact
     const shift = wanted - applied
     const moving = new Set(shift === 0 ? [] : documentation.map((element) => element.id))
