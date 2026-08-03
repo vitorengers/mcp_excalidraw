@@ -16,6 +16,13 @@ client than an attack.
 
 Ids are normalised to `^[a-z0-9][a-z0-9._-]{0,63}$` before they are compared or logged.
 
+`WORKSPACE_QUERY_KEYS` is that same list of query spellings, exported beside the reader for the
+one route that has to know it: `GET /api/elements/search` reads its unrecognised query
+parameters as exact-match filters over element fields, so without this it spent `?workspace=`
+twice — once to pick the board and once to demand every element on it carry a `workspace`
+property (#457). It is one name today and the export exists so that a second one arrives at both
+ends at once.
+
 That is what a request carries; how each client decides *what to carry* is its own question. The
 browser appends the active tab (`apiUrl` in `frontend/src/App.tsx`); the CLI and the MCP tools
 resolve one in `src/core/canvas-client.ts` from `--workspace`, a tool's `workspace` argument or
