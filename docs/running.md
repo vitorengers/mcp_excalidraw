@@ -256,6 +256,45 @@ nothing else is watching.
 still a failure: the block is a child of the server, so the kill kills the shell running it and
 the port goes to whatever auto-starts first.
 
+## Which addresses it answers on
+
+`HOST` decides that, and it defaults to `127.0.0.1` — this machine and nothing else. Widening it
+has two shapes, and they are not equally wide:
+
+- **`HOST=0.0.0.0`** offers the port on *every* interface the machine has: the Wi-Fi it joined,
+  the Ethernet it is plugged into, every VPN, and every virtual adapter a container runtime left
+  behind. It is the value most tutorials print. Off loopback the routes that read or write a
+  board answer 403, so what this actually publishes to all of those networks is a server that
+  refuses.
+- **`HOST=100.x.y.z`**, one address rather than all of them — a Tailscale address, or the address
+  of a single physical interface — offers it on that one network and nowhere else. A laptop on
+  the same tailnet can reach the port; the café Wi-Fi the machine is also on cannot. It is much
+  the narrower of the two, and it is what somebody who wants their own board from their own
+  second machine actually means. The 403 is identical, because the guard asks which address the
+  server *bound* and not which address the caller came from, so loopback is still the only bind
+  that serves anything.
+
+**So the recipe today is: do not set `HOST`.** A board bound anywhere else refuses those routes
+for everybody, the browser on the host machine included — it is on loopback, and it is refused
+along with everyone, so the page loads and the board stays empty.
+[SECURITY.md](SECURITY.md#where-it-listens) names the handful of routes that do still answer
+there, and none of them is a board.
+
+The difference between the two is written down here anyway, because it is about to be the whole
+question. The pairing milestone replaces the bind test with a question about the **caller** —
+#502 and #503 have already built the credential a remote caller answers it with, and #501 is the
+seam that will ask for it. On the day that lands, `HOST=0.0.0.0` and a single interface address
+stop being equally
+useless, and the second one is the one to choose: it is the difference between offering the port
+to one network you control and offering it to every network the machine happens to be on. Until
+then both are the same 403 — anything but a loopback bind refuses the guarded routes to
+everybody, so this section is a warning rather than a recipe, and
+[SECURITY.md](SECURITY.md#where-it-listens) is the longer version of it.
+
+**A reverse proxy is the configuration that works now**, and none of the above touches it: a
+proxy reaches this server on loopback, which is where the guard wants every caller, and
+`EXCALIDRAW_ALLOWED_HOSTS` is what tells the origin gate about the name in front of it.
+
 ## The environment
 
 `PORT` and `HOST` decide where it listens. Everything else is `EXCALIDRAW_*`, and every one of
@@ -555,7 +594,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 162 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 163 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 82 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
