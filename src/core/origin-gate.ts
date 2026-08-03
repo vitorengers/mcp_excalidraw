@@ -117,3 +117,39 @@ export function verifyOrigin(
 
   return { ok: true };
 }
+
+/**
+ * The same question, asked of the two routes that cannot be pinned to an authority.
+ *
+ * A device asking to pair (#503) has not been approved yet, so the authority it reached this
+ * board under — `mac.tailnet.ts.net:3737`, whatever the operator's network calls this machine —
+ * is by definition not one this server answers for. Pinning `Host` on `POST /api/pair/request`
+ * and `GET /api/pair/status` would make the handshake reachable only from a name the operator
+ * had already added to `EXCALIDRAW_ALLOWED_HOSTS`, which is the configuration step the gesture
+ * exists to replace. The pending record **records** that name instead, and shows it to the
+ * operator at approval; recognising it is a person's job, not a pin's.
+ *
+ * What is still refused is the thing the pin was there to stop being *useful*: a page at some
+ * other origin driving this board. Those two routes read nothing and change nothing an
+ * unapproved caller can see — the whole of their effect is a row on the operator's screen, which
+ * is bounded in `core/pairing.ts` — but a page at `evil.example` filling that screen with rows
+ * is still not something to allow. So `Origin`, when the browser sends one, has to name the same
+ * authority as `Host`: the device's own page is served by this board, so those agree, and a
+ * cross-origin page cannot make them.
+ */
+export function verifySameAuthority(
+  headers: { origin?: string; host?: string },
+  port: number,
+): OriginVerdict {
+  if (!headers.origin) return { ok: true };
+  const origin = authorityOf(headers.origin, port);
+  const host = authorityOf(headers.host, port);
+  if (origin && host && origin === host) return { ok: true };
+  return {
+    ok: false,
+    reason:
+      `A page at ${headers.origin} tried to ask this board to pair a device, and this board was `
+      + `reached as ${headers.host ?? 'nothing in particular'}. Only a page this board served `
+      + 'may ask.',
+  };
+}
