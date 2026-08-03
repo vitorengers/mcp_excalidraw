@@ -479,6 +479,41 @@ export function markFounderActionPublished(
 }
 
 /**
+ * Replace a record's fields with a revision that has already been agreed.
+ *
+ * The one door that changes what a card *says* after it has been written, and it exists because
+ * a chat turn can end in "I did it, what now?" — an answer that is worth nothing if the steps in
+ * front of the reader still describe what they have already done.
+ *
+ * **The register is enforced here, exactly as it is at `recordFounderAction`.** That is the whole
+ * of why this is a door and not a field a caller could set: a revision arrives from a coding
+ * agent's output, which is the least trustworthy text this file will ever be offered, and a store
+ * that took it on the caller's word would put the validator behind an `if` somebody can forget.
+ * The fields are read as the merged whole they are, and a record that fails is not written at all.
+ *
+ * Nothing else moves. Not `kind`, which is what the verifier re-probes against; not `createdAt`,
+ * `evidence` or `publishedItemId`, which are the machine's record of what happened; and not the
+ * state, because a revision is a card saying something different rather than a card being done.
+ */
+export function reviseFounderAction(
+  workspaceId: string,
+  key: string,
+  fields: FounderActionFields
+): FounderActionWrite {
+  const id = normalizeWorkspaceId(workspaceId);
+  const records = forWorkspace(id);
+  const record = records.get(key);
+  if (!record) return { ok: false, record: null, faults: [] };
+
+  const { faults } = validateFounderAction(fields);
+  if (faults.length > 0) return { ok: false, record: copy(record), faults };
+
+  record.fields = copy(fields);
+  saveWorkspace(id, records);
+  return { ok: true, record: copy(record), faults: [] };
+}
+
+/**
  * Add a turn to a record's conversation.
  *
  * Nothing here is measured against the register. See `FounderChatTurn`: the card is fields and
