@@ -82,6 +82,7 @@ async function importDist(relative, what) {
 console.log('0. the founder chat has a way to run one turn');
 
 const agentModule = await importDist(join('core', 'issue-agent.js'), 'the agent runtime');
+const adapterModule = await importDist(join('core', 'agent-adapter.js'), 'the agent adapter');
 const runFounderChatAgent = agentModule?.runFounderChatAgent;
 
 check('`runFounderChatAgent` is exported from core/issue-agent.ts',
@@ -125,6 +126,7 @@ const workspace = {
  * repository's own board hits, and the copy is what a founder action for it says.
  */
 const KEY = `${WORKSPACE}:gh-billing`;
+const KIND = 'gh-billing';
 const FIELDS = {
   title: 'GitHub cannot run any job until a payment is settled',
   what: 'Every job on this repository fails within seconds without starting.',
@@ -320,6 +322,7 @@ async function turn(agent, { stub = reporterStub, extra = {} } = {}) {
     result = await runFounderChatAgent(workspace, FIELDS, EVIDENCE, TRANSCRIPT, MESSAGE, {
       agent: { ...agent, command: agent.command.replace('<stub>', `node "${slash(stub)}"`) },
       key: KEY,
+      kind: KIND,
       timeoutMs: 30000,
       ...extra,
     });
@@ -452,8 +455,11 @@ try {
 
   console.log('\n3. the realised argv carries an allow-list with the GitHub writes taken out');
 
-  /** Every verb a founder chat may not be granted. A future addition is one row here. */
-  const FORBIDDEN = ['gh issue create', 'gh issue edit', 'gh issue comment', 'gh project'];
+  // Every verb a founder chat may not be granted, read off the narrowing's own list rather than
+  // copied: a verb added there is then one line, and this check goes red until it comes off.
+  const FORBIDDEN = adapterModule?.GH_WRITE_COMMANDS ?? [];
+  check('the narrowing names the verbs it takes away, so this check can iterate them',
+        FORBIDDEN.length >= 4, JSON.stringify(FORBIDDEN));
   /** And the reads it still needs, which a narrowing that swung too far would have taken. */
   const KEPT = ['gh issue list', 'gh issue view', 'git log', 'git show', 'git diff', 'git blame'];
 

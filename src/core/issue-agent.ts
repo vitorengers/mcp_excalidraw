@@ -26,10 +26,9 @@ import os from 'os';
 import path from 'path';
 import logger from '../utils/logger.js';
 import {
-  AGENT_PERMISSIONS, deliverStdin, hasArgument, invocationArgs, quotedLine, singleQuoted,
-  tokenizeCommand, withoutAnyFullAccess,
-  type AgentAdapter, type AgentBackendId, type AgentCommandSpec, type AgentInvocation,
-  type AgentRole,
+  deliverStdin, invocationArgs, quotedLine, singleQuoted, tokenizeCommand, withoutAnyFullAccess,
+  withoutGhWrites,
+  type AgentAdapter, type AgentCommandSpec, type AgentInvocation, type AgentRole,
 } from './agent-adapter.js';
 import {
   KNOWN_BACKEND_NAMES, agentGrants, agentSpecFor, parseAgentBackends, type AgentGrants,
@@ -1604,128 +1603,21 @@ export async function runReviseAgent(
 // ─── One founder chat turn ────────────────────────────────────
 
 /**
- * The `gh` verbs a founder chat may not be granted, whatever list it was handed.
+ * Why a `raw` board is refused before `withoutGhWrites` is even asked.
  *
- * Verbs rather than the binary, because the chat's whole value is that it can *read* — the run
- * that answers "did my payment go through" wants `gh issue list` and `gh issue view` — and a
- * board that took `gh` away wholesale would leave an agent guessing about the thing it was
- * asked. `gh project` is here with no verb after it because every one of them writes: the
- * product's own habit is to move a created issue into Todo, and a chat that could do that is a
- * chat that can put work into the queue a person never asked for.
- *
- * A future addition is one row. `scripts/check-founder-chat-agent.mjs` iterates the same list.
+ * That helper would refuse such a board anyway in every ordinary case — a raw command line
+ * carries no posture this board wrote — but "anyway" is not the guarantee that is wanted here.
+ * `raw` is `DEFAULT_AGENT_BACKEND`, its whole contract is that the operator's string is spawned
+ * byte for byte, and a line that happened to contain this board's own list would be narrowed by
+ * argv while the string a WSL run is handed went on saying what it said. So the backend is the
+ * question, asked first.
  */
-const FOUNDER_CHAT_FORBIDDEN = [
-  'gh issue create',
-  'gh issue edit',
-  'gh issue comment',
-  'gh project',
-];
+const FOUNDER_CHAT_RAW = 'a "raw" board spawns the command line it was given, exactly as it was '
+  + 'given, so there is no grant of this board\'s here to narrow';
 
 /** Said after the refusal below, because "not enabled" alone sends a reader to the wrong knob. */
-const FOUNDER_CHAT_UNNARROWED = 'The founder chat runs only where the agent’s permissions can '
-  + 'be narrowed, and they cannot be on a "raw" backend or on a command line that already '
-  + 'states its own --allowedTools, --permission-mode or sandbox.';
-
-/**
- * The rules of an allow-list, split on the whitespace *between* them.
- *
- * A plain split on spaces would tear `Bash(gh issue list:*)` into three, which is how a
- * narrowing comes to drop a rule it never meant to touch. Parenthesis depth is the whole of it:
- * the grammar has no nesting and no quoting inside a rule.
- */
-function toolRules(list: string): string[] {
-  const rules: string[] = [];
-  let current = '';
-  let depth = 0;
-  for (const character of list) {
-    if (character === '(') depth += 1;
-    else if (character === ')') depth -= 1;
-    else if (/\s/.test(character) && depth === 0) {
-      if (current) rules.push(current);
-      current = '';
-      continue;
-    }
-    current += character;
-  }
-  if (current) rules.push(current);
-  return rules;
-}
-
-/**
- * Whether one rule's command space touches a verb the chat may not run.
- *
- * Both directions, and the second is the one that matters: `Bash(gh:*)` names none of the four
- * verbs and grants every one of them. So a rule goes when it is at least as wide as a forbidden
- * verb *or* narrower than one — `Bash(gh project item-add:*)` is inside `gh project` — and stays
- * only when the two cannot overlap at all.
- */
-function grantsGhWrite(rule: string): boolean {
-  const inner = /^Bash\((.*)\)$/.exec(rule)?.[1];
-  if (inner === undefined) return false;
-  const command = inner.replace(/:\*$/, '').trim().replace(/\s+/g, ' ');
-  if (!command) return false;
-  return FOUNDER_CHAT_FORBIDDEN.some((verb) => command === verb
-    || command.startsWith(`${verb} `) || verb.startsWith(`${command} `));
-}
-
-/** The same list with those rules removed, and nothing else changed. It only ever shortens. */
-function withoutGhWriteRules(value: string): string {
-  return toolRules(value).filter((rule) => !grantsGhWrite(rule)).join(' ');
-}
-
-/**
- * The same invocation with the GitHub writes taken out of it, or null when they cannot be.
- *
- * Null is an answer rather than a failure to look, and it has two causes, both of which are
- * boards a chat must be refused on rather than run:
- *
- *  - the `raw` backend, which has no `AGENT_PERMISSIONS` entry and writes no posture flags at
- *    all. What such a board grants is whatever its operator typed into a variable, and nothing
- *    here can narrow a string it did not write.
- *  - an operator who already stated a posture, where `permissionArgs` deliberately appends
- *    nothing. Their grant is theirs; a narrowing bolted onto it would be this board overruling
- *    a decision it was handed.
- *
- * Both are recognised the same way, off the **realised argv** rather than off the constants: the
- * board's own read-only posture has to be in there, exactly once, and it has to be the only
- * posture in there. A second `--allowedTools` further along — an operator's pinned arguments are
- * appended last, and last is the word a CLI keeps — is a list this one is not narrowing, so the
- * answer is null there too.
- */
-function narrowedInvocation(
-  backend: AgentBackendId,
-  invocation: AgentInvocation
-): AgentInvocation | null {
-  const permissions = AGENT_PERMISSIONS[backend as 'claude-code' | 'codex-cli'];
-  if (!permissions) return null;
-
-  const posture = permissions.flags['read-only'];
-  const found: number[] = [];
-  for (let index = 0; index + posture.length <= invocation.args.length; index += 1) {
-    if (posture.every((one, offset) => invocation.args[index + offset] === one)) found.push(index);
-  }
-  const start = found.length === 1 ? found[0] ?? -1 : -1;
-  if (start === -1) return null;
-
-  // And it is the only posture on the line. Counted rather than searched, so that a flag this
-  // backend spells in two ways is still one statement whichever way it was written.
-  const stated = invocation.args.filter(
-    (one) => hasArgument([one], ...permissions.decided)
-  ).length;
-  const inPosture = posture.filter((one) => hasArgument([one], ...permissions.decided)).length;
-  if (stated !== inPosture) return null;
-
-  const args = invocation.args.map((one, index) => (
-    index >= start && index < start + posture.length ? withoutGhWriteRules(one) : one
-  ));
-  // A backend whose read-only posture is a sandbox rather than a list has nothing to take out,
-  // and is already the posture this chat wants. Handing back the same object says so.
-  if (args.every((one, index) => one === invocation.args[index])) return invocation;
-  // The line is derived from argv for every named backend — see the note at the top of
-  // `agent-adapter.ts` — so it is re-derived here rather than left describing the old argv.
-  return { ...invocation, args, line: quotedLine(invocation.command, args) };
-}
+const FOUNDER_CHAT_UNNARROWED = 'The founder chat runs only where this board can narrow the '
+  + 'agent\'s permissions, and here it could not';
 
 /** What one turn needs beyond the conversation itself. */
 export interface FounderChatAgentOptions {
@@ -1738,6 +1630,8 @@ export interface FounderChatAgentOptions {
    * has to name it so that an answer about this card can be told from an answer about another.
    */
   key: string;
+  /** The item's kind, which the prompt names so the agent knows which blocker it is about. */
+  kind: string;
   timeoutMs?: number;
   /** Named when the command turns out not to exist where it was run. See RunAgentOptions. */
   notFoundVariable?: string | null;
@@ -1789,19 +1683,34 @@ export async function runFounderChatAgent(
     const settings = workspace.agents?.issue ?? null;
     const { adapter, invocation } = agentRunFor(options.agent, 'issue', settings);
 
-    const narrowed = narrowedInvocation(options.agent.backend, invocation);
-    if (!narrowed) {
+    // The backend first, then the argv. See `FOUNDER_CHAT_RAW` for why the order matters.
+    const narrowing = options.agent.backend === 'raw'
+      ? { args: [...invocation.args], narrowed: false, reason: FOUNDER_CHAT_RAW }
+      : withoutGhWrites(invocation.args);
+    if (!narrowing.narrowed) {
       return {
         ok: false,
         issueUrl: null,
         output: '',
         error: `${agentNotEnabledRefusal(workspace, 'Founder chat', settingName('ISSUE_AGENT'))} `
-          + FOUNDER_CHAT_UNNARROWED,
+          + `${FOUNDER_CHAT_UNNARROWED}: ${narrowing.reason}.`,
       };
     }
+    // Only where something actually came off. The line is derived from argv for a named
+    // backend — see the note at the top of `agent-adapter.ts` — so re-deriving it when nothing
+    // changed would be a rewrite for its own sake.
+    const narrowed: AgentInvocation = narrowing.args.every(
+      (one, index) => one === invocation.args[index]
+    )
+      ? invocation
+      : {
+          ...invocation,
+          args: narrowing.args,
+          line: quotedLine(invocation.command, narrowing.args),
+        };
 
     const prompt = founderChatPrompt(
-      { key: options.key, fields }, evidence, transcript, message
+      { key: options.key, kind: options.kind, fields }, evidence, transcript, message
     );
     const timeoutMs = options.timeoutMs !== undefined
       ? options.timeoutMs
