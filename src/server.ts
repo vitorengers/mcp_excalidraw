@@ -89,7 +89,6 @@ import {
   NotOnThisBoard
 } from './core/project-board.js';
 import type { FounderCard } from './core/project-board-types.js';
-import { openFounderActions } from './core/founder-store.js';
 import {
   GithubHealth, GithubStatus, githubHealth, githubPreflightLine, initialGithub, readGithubStatus
 } from './core/github-status.js';
