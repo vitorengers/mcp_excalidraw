@@ -1,0 +1,195 @@
+# Two machines, one tab strip
+
+Your desktop runs a board. Your laptop runs one too. This page is about the arrangement where
+the laptop's tab strip carries the desktop's projects beside its own: what it is, what you
+approve to get it, and what becomes of those tabs when the desktop goes to sleep.
+
+It states the shape rather than the route list. Which call is made where is
+[rest-api.md](rest-api.md), and what a project is at all is
+[workspaces.md](workspaces.md).
+
+## What is here today, and what is not
+
+The half a person can perform is **pairing**, and it is documented from the host's end: a second
+machine asks, you approve it on the machine the board is actually running on, and it holds a
+credential of its own afterwards. [SECURITY.md](SECURITY.md#pairing-a-second-machine) is the
+gesture and [devices.md](devices.md) is the list it writes into.
+
+The half this page describes — a strip that answers for two machines — is being built, and this
+document was written before it rather than after it. What follows is the design it is being
+built to, and the parts that are not running yet say so where it matters. If a sentence here and
+the board in front of you disagree, the board is right and this page is the defect;
+[development-log.md](development-log.md) is the dated record of what actually landed.
+
+## Each machine runs its own board
+
+The second machine is not a browser pointed at the first machine's server. It runs a board of
+its own — its own process, its own state directory, its own registry of projects — and its page
+is served by it, talks to it, and to nothing else. When a tab on that strip belongs to the
+desktop, it is the laptop's **server** that asks the desktop, over a connection between the two
+servers, and the answer comes back to the page down the one connection it already had.
+
+That is a single decision, and three things this design would otherwise have to solve are paid
+for by it.
+
+**There is no cross-origin request to allow.** Every call the page makes is same-origin and
+always was: `apiUrlOn` in `frontend/src/App.tsx` decorates a *relative* path with the board a
+request is about, so a request naming another machine's project is the same shape, to the same
+server, as a request naming a local one. Nothing in the frontend learns a second address, and no
+policy is widened for a peer.
+
+**The origin gate's invariant survives intact** — only a board's own page may drive it.
+`src/core/origin-gate.ts` refuses a request whose `Origin` is some other board's and whose
+`Host` is not an authority this server answers for, which is what closes DNS rebinding and what
+makes a page at any origin harmless. A page fetching a peer directly is precisely the shape that
+gate exists to turn away, so a federation built in the browser would have to argue that gate
+down. This one does not touch it.
+
+**The peer credential never enters a browser.** The secret this machine presents to another one
+is read from a file by this process and used by this process. `frontend/src/auth.ts` attaches a
+credential to same-origin requests only and deliberately sends nothing across origins — so a
+page talking to a peer would either send no credential and be refused, or be taught to carry a
+second machine's secret in a tab. Neither is a thing worth building, and neither has to be.
+
+## What you approve is a machine, not a URL
+
+A peer link starts as an approval, and the approval is the one already written down: the board
+that will be reached raises a dialog naming what asked, the code is compared on the two screens,
+and refusing is as available as approving.
+
+Three properties of that credential are what make a peer link something you can reason about
+six months later.
+
+- **The host mints it.** The machine being reached is the machine that makes the secret;
+  `src/core/device-registry.ts` is the only thing there that writes one, and what it keeps is a
+  hash. The asking machine holds the secret, the host only ever verifies one, so the list on the
+  host is a list of devices rather than a set of keys.
+- **It survives a restart.** The board's own token is per start — a restart hands it on, a fresh
+  start replaces it — and that is exactly the property that makes it unusable as a way to let a
+  second machine in. An approved device is on a list on disk instead, and is still on it
+  tomorrow.
+- **It is revocable one at a time**, and a revocation bites on that machine's next request
+  rather than at the next restart. Taking one link away is not taking them all away.
+
+So what is on the list is a machine you looked at, on a day you were at both keyboards, with a
+code you compared. The address is how this board finds that machine again, not what you
+approved: a peer that moves to a new address is the same approval, and a second machine is a
+second row rather than a second URL under the first.
+
+## Where the link crosses
+
+By default a board answers on loopback only, and that default is a decision rather than an
+oversight: `HOST` is `127.0.0.1`, and everything the guards below do is written for the day it
+is not. [running.md](running.md#which-addresses-it-answers-on) is the operator's half — which of
+the two shapes to write, and what each is worth — and it is worth reading before either machine
+is put where the other can reach it.
+
+Two guards stand between the machines, and they refuse for different reasons. **Who is calling**
+is `src/core/caller-gate.ts`: a request that did not arrive from the machine the server runs on
+is answered **403** by nearly every route worth reaching. That guard is what a paired device has
+to get past, and today it does not — the credential is minted, the token gate accepts it, and
+the caller guard still refuses a remote socket whether or not one is held. Until that lands
+(#522), the two machines can complete the whole approval and reach nothing with it. **What the
+caller asked for** is the origin gate's `Host` pin, and it is the trap in this design that looks
+like a credential failure and is not: a board reached under its name on a private overlay is
+being asked for an authority it does not answer for, and refuses with a 403 that has nothing to
+do with any secret. `EXCALIDRAW_ALLOWED_HOSTS` is what tells it about that name. A link that is
+refused for that reason and reported as a credential problem sends its operator to fix something
+that was never broken, which is why the states in the next section separate the two.
+
+## What stops when the laptop sleeps
+
+A machine that is asleep does not refuse a connection — it hangs, which reads as nothing at all
+until something gives up waiting. So a peer's tabs carry a state of their own, and it has four
+values:
+
+| State | What it means |
+|---|---|
+| `checking` | Nothing has been heard from that machine yet this round. A real state, not the absence of an answer, so the first reading after a start is honest rather than a guess |
+| `online` | It answered, and it accepted this board's credential |
+| `unreachable` | Nothing answered inside the budget: the machine is asleep, off, or not on the network you are both on |
+| `refused` | Something answered and would not have this board: a credential that is no longer on its list, or a name it does not answer for. The reason says which |
+
+**A machine that stops answering is not a broken project.** When the desktop sleeps its projects
+stop being tabs, and what is left is the peer itself, labelled and carrying the reason. Nothing
+local changes: your own projects are untouched, and no run refuses because a laptop somewhere is
+shut.
+
+That sentence is the whole reason the state is a separate field. A project already has an
+`error`, and it means one thing — its configuration could not be resolved. It is drawn with a
+warning marker on the tab, and it **gates behaviour**: an implement run refuses outright on a
+project carrying one, and the implementation queue treats that board as unusable. Writing *the
+laptop is asleep* into that field would be a transient fact about a network wearing the clothes
+of a permanent fact about a configuration, and the cost of the confusion is runs refusing on
+projects that have nothing to do with any laptop. The two are rendered together and neither
+displaces the other: a project can be misconfigured on a machine that is answering perfectly,
+and a well-configured one can be on a machine nobody can reach.
+
+What stops with the machine is everything that needed it: its boards, its shells, its agent
+runs. A tab you cannot open is telling you something true about a machine, and the state and its
+reason are there so that it reads as that rather than as a fault in the board in front of you.
+
+## The asymmetry
+
+There are two registries, one on each machine, and **they are independent**. This is the part a
+reader has to be told rather than left to discover.
+
+- The machine that **approves** keeps a device record: what it let in. That is `devices.json`,
+  written by `src/core/device-registry.ts`, and it is what [devices.md](devices.md) lists.
+- The machine that **asks** keeps a peer record: which board approved it, where that board
+  answers, and the secret to present. It holds the secret rather than a hash, because this end
+  has to present one rather than check one, and the file's permissions are the whole of its
+  defence.
+
+Neither writes to the other, and neither is told when the other changes. So:
+
+- **Forgetting a peer** removes the secret from this machine. The device record on the other
+  machine is untouched, and it stays on that operator's list until they revoke it. The link is
+  dead from here; from there it is a row that has stopped being used.
+- **Revoking a device** stops that machine's requests on the next one it makes. The peer record
+  on the other side is untouched, so that board goes on trying and its tabs settle on `refused`
+  with a reason naming the credential.
+
+To be rid of a link altogether, do both: forget the peer on the machine that asks, and revoke
+the device on the machine that answers. Doing one and assuming the other is what leaves a row
+nobody recognises on a list somebody reads in six months, which is the failure
+[devices.md](devices.md) is written against.
+
+## What does not cross
+
+**No absolute path, no path inside a WSL distro, no distro name.** A project appearing on
+another machine's strip carries what a tab strip needs — a name, an id, and enough to tell it
+apart from a project of the same name on another machine — and nothing about the disk it lives
+on. The projection is built by naming the fields it includes rather than by removing the ones it
+must not, so a field added to a project next year is absent from the wire until somebody decides
+otherwise.
+
+**Not the asking board's own token.** That secret is this server's, for callers on this machine;
+the peer's is a different one entirely, and sending both would offer the peer a choice it should
+never be given. The device credential replaces it, in one place, on the way out.
+
+**Not the peer's secret, into anything readable.** It appears in no log line and in no error
+handed back to a page, on either machine.
+
+## The files it is being built in
+
+None of these exist yet; they are named here so the reader of a pull request can see where each
+decision lands.
+
+```
+src/core/peer-registry.ts    what this board keeps about a board that approved it
+src/core/peer-client.ts      one board's HTTP call to another, and what each failure means
+src/core/peer-proxy.ts       the seam that sends a request to the machine that owns the board
+```
+
+The milestone that files them is *One tab strip, two machines*, and the design decisions above
+are each a done-when bullet on one of its issues rather than a preference stated here.
+
+## Related
+
+- [SECURITY.md](SECURITY.md) — the trust model, the token, the gates, and the pairing gesture
+- [devices.md](devices.md) — who can reach my board: the list, the rename, and the revoke
+- [workspaces.md](workspaces.md) — what a project is, and what a board is pointed at
+- [rest-api.md](rest-api.md) — every route, and which of them answer whom
+- [running.md](running.md) — the run procedure, and which addresses a board answers on
+- [whats-next.md](whats-next.md) — what has not shipped
