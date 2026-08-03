@@ -479,37 +479,6 @@ export function markFounderActionPublished(
 }
 
 /**
- * Replace what a record says, when something has been agreed that changes it.
- *
- * The second door into the card, and it is measured by the same rule the first one is: a chat
- * that could write past `validateFounderAction` would be the register enforced at one write and
- * not at the other, which is the same as not enforced. The fields arrive already merged — the
- * whole card, never a patch — because every rule that spans fields is only meaningful over the
- * complete record, and `parseFounderChatAnswer` is where that merge happens.
- *
- * Only an **open** record may be revised. A settled one is a record of what was asked and what
- * closed it, and rewriting it afterwards would make the column's own history disagree with the
- * board that acted on it.
- */
-export function reviseFounderAction(
-  workspaceId: string,
-  key: string,
-  fields: FounderActionFields
-): FounderActionWrite {
-  const faults = validateFounderAction(fields).faults;
-  if (faults.length > 0) return { ok: false, record: null, faults };
-
-  const id = normalizeWorkspaceId(workspaceId);
-  const records = forWorkspace(id);
-  const record = records.get(key);
-  if (!record || record.state !== 'open') return { ok: false, record: null, faults: [] };
-
-  record.fields = copy(fields);
-  saveWorkspace(id, records);
-  return { ok: true, record: copy(record), faults: [] };
-}
-
-/**
  * Add a turn to a record's conversation.
  *
  * Nothing here is measured against the register. See `FounderChatTurn`: the card is fields and
