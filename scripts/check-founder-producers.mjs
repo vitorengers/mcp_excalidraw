@@ -25,7 +25,12 @@
  *  - **The board closes what it can.** A founder who runs `gh auth login` in a terminal must not
  *    keep a stale card for ever, so every producer pass reads the open records back through
  *    `verifyAgainst` and settles the ones answering `satisfied`, recording `resolvedBy: 'probe'`.
- *  - **Publication is opt-in, and it is unset here.** No `gh` write of any kind is spawned —
+ *  - **Publication is the publisher's decision, and this is only the call.** The issue behind
+ *    this check expected to gate publication itself; #540 landed first and settled it one layer
+ *    down, where `projectFounderPublishOff` is a *suppression* rather than an opt-in. So what is
+ *    asserted here is the call site: a suppressed board and a board with no project spawn no
+ *    `gh` at all, a board with neither publishes exactly one draft item and remembers what it
+ *    became, and no run of this check ever spawns `gh issue create` or `gh project item-add` —
  *    asserted across the whole argv log rather than at one call, which is the assertion that
  *    catches a publisher wired in at the wrong end.
  *  - **The queue points at the card.** A pass whose cards were all refused names the founder
@@ -108,6 +113,8 @@ writeFileSync(directGhLogPath, '', 'utf8');
 const TODO = { id: 'f75ad846', name: 'Todo' };
 const DOING = { id: '47fc9ee4', name: 'In Progress' };
 const DONE = { id: '98236657', name: 'Done' };
+/** The column a published founder action is placed in — `DEFAULT_FOUNDER_COLUMN`'s name. */
+const FOUNDER = { id: 'a1b2c3d4', name: 'Founder Actions' };
 
 const READ_ONLY = 'someone/read-only';
 const WRITABLE = 'someone/writable';
@@ -137,7 +144,7 @@ const project = (number, nodes) => ({
         id: `PVT_project${number}`,
         title: `project ${number}`,
         url: `https://github.com/users/someone/projects/${number}`,
-        field: { id: 'PVTSSF_status', name: 'Status', options: [TODO, DOING, DONE] },
+        field: { id: 'PVTSSF_status', name: 'Status', options: [TODO, DOING, DONE, FOUNDER] },
         items: { pageInfo: { hasNextPage: false }, nodes },
       },
     },
@@ -227,6 +234,11 @@ if (args[0] === 'pr' && args[1] === 'view') {
   process.exit(0);
 }
 
+if (args[0] === 'project' && args[1] === 'item-create') {
+  process.stdout.write(JSON.stringify({ id: 'PVTI_draft1', type: 'Draft' }) + '\\n');
+  process.exit(0);
+}
+
 // A failure nothing in \`classifyGhFailure\` recognises, which is deliberately not terminal.
 if (args[0] === 'blip') {
   process.stderr.write('dial tcp: lookup api.github.com: no such host\\n');
@@ -263,9 +275,17 @@ process.stdin.on('end', async () => {
  * own: the push probe reads the remote rather than the configured `repo`.
  */
 const BOARDS = [
-  // The mirror the three surfaces of section 2 are read through.
-  { id: 'mirror', repo: WRITABLE, project: 5, origin: `https://github.com/${WRITABLE}.git` },
-  // An account that may not push, which is the 403 and the queue's refusal.
+  // The mirror the three surfaces of section 2 are read through, with publication suppressed:
+  // this is the board that proves the switch closes the door.
+  {
+    id: 'mirror',
+    repo: WRITABLE,
+    project: 5,
+    origin: `https://github.com/${WRITABLE}.git`,
+    publishOff: true,
+  },
+  // An account that may not push, which is the 403 and the queue's refusal — and the one board
+  // here that publishes, because nothing turned it off.
   { id: 'readonly', repo: READ_ONLY, project: 6, origin: `https://github.com/${READ_ONLY}.git` },
   // An origin nowhere near github.com, so the push probe never asks and answers `unknown`.
   { id: 'unsure', repo: WRITABLE, origin: 'https://gitlab.com/someone/elsewhere.git' },
@@ -283,6 +303,7 @@ function makeProject(board) {
   const config = { name: board.id };
   if (board.repo) config.repo = board.repo;
   if (board.project) config.githubProject = `https://github.com/users/someone/projects/${board.project}`;
+  if (board.publishOff) config.projectFounderPublishOff = true;
   writeFileSync(join(dir, 'board.config.json'), JSON.stringify(config), 'utf8');
   writeFileSync(join(dir, 'README.md'), `# ${board.id}\n`, 'utf8');
   git(dir, ['add', '.']);
@@ -624,26 +645,59 @@ try {
         JSON.stringify(ofKind(registryPath, 'readonly', 'push-denied')));
 
   // ─── 6 ──────────────────────────────────────────────────────
-  console.log('\n6. a board with no project still lands a card, and publishes nothing');
+  console.log('\n6. a board with no project still lands a card, and only one board publishes');
 
   await waitFor(() => actionsOf(registryPath, 'noproject').length > 0,
                 'a board with no project to record its own blocker');
-  check('a workspace with no githubProject still has a founder action',
-        actionsOf(registryPath, 'noproject').length > 0,
-        JSON.stringify(actionsOf(registryPath, 'noproject')));
+  const nowhere = actionsOf(registryPath, 'noproject');
+  check('a workspace with no githubProject still has a founder action', nowhere.length > 0,
+        JSON.stringify(nowhere));
+  check('and none of its records was published anywhere',
+        nowhere.every((action) => !action.publishedItemId), JSON.stringify(nowhere));
 
-  const everyCall = [...argvLog(ghLogPath), ...argvLog(soloGhLogPath)].map((args) => args.join(' '));
-  check('nothing anywhere created a draft item',
-        everyCall.every((line) => !line.includes('item-create')),
-        everyCall.filter((line) => line.includes('item-create')).join(' | '));
-  check('nor an issue', everyCall.every((line) => !/\bissue create\b/.test(line)),
-        everyCall.filter((line) => /\bissue create\b/.test(line)).join(' | '));
-  check('nor added one to a project', everyCall.every((line) => !line.includes('item-add')),
-        everyCall.filter((line) => line.includes('item-add')).join(' | '));
-  const cardTitle = (ofKind(registryPath, 'readonly', 'push-denied')[0] ?? {}).fields?.title ?? '';
-  check('and no card text was ever handed to gh',
-        Boolean(cardTitle) && everyCall.every((line) => !line.includes(cardTitle)),
-        `looked for "${cardTitle}"`);
+  // The other direction of the suppression, so nothing below it is vacuous: a board that turned
+  // nothing off publishes, without anybody having switched anything on.
+  //
+  // It could not have published when the card was first written: the CLI was signed out, and the
+  // uncapped project read a publication begins with is one of the calls a signed-out CLI refuses.
+  // So this is also where "a gh failure leaves the record unpublished and re-publishable" is
+  // measured — one more refusal, now that the sign-in is back, and the card goes up.
+  check('nothing was published while the CLI was signed out',
+        !(ofKind(registryPath, 'readonly', 'push-denied')[0] ?? {}).publishedItemId,
+        JSON.stringify(ofKind(registryPath, 'readonly', 'push-denied')[0]?.publishedItemId));
+  const again = await start('readonly', issue(READ_ONLY, 999));
+  check('and the refusal is unchanged by any of it', again.status === 403,
+        `got ${again.status} ${JSON.stringify(again.body)}`);
+  await waitFor(() => ofKind(registryPath, 'readonly', 'push-denied')
+    .some((action) => Boolean(action.publishedItemId)), 'the unsuppressed board to publish');
+  const published = ofKind(registryPath, 'readonly', 'push-denied')[0] ?? {};
+  check('a board that suppressed nothing published its card and remembered the item',
+        published.publishedItemId === 'PVTI_draft1', JSON.stringify(published.publishedItemId));
+
+  const everyCall = [...argvLog(ghLogPath), ...argvLog(soloGhLogPath)];
+  const everyLine = everyCall.map((args) => args.join(' '));
+  check('nothing anywhere created an issue',
+        everyLine.every((line) => !/\bissue create\b/.test(line)),
+        everyLine.filter((line) => /\bissue create\b/.test(line)).join(' | '));
+  check('nor added one to a project', everyLine.every((line) => !line.includes('item-add')),
+        everyLine.filter((line) => line.includes('item-add')).join(' | '));
+
+  const creates = everyCall.filter((args) => args[0] === 'project' && args[1] === 'item-create');
+  check('exactly one draft item, however many times the card was noticed', creates.length === 1,
+        JSON.stringify(creates.map((args) => args.slice(0, 5))));
+  check('carrying the card the register composed, and not what gh said',
+        Boolean(published.fields?.title) && creates[0]?.includes(published.fields.title)
+        && !creates.flat().join(' ').includes(SENTINEL), JSON.stringify(creates[0]));
+
+  // The suppression is #540's, and this is the call site honouring it: a board that turned
+  // publication off spawns nothing for its own card, however many cards it has.
+  const suppressed = actionsOf(registryPath, 'mirror');
+  check('a board with the suppression set published none of its records',
+        suppressed.length > 0 && suppressed.every((action) => !action.publishedItemId),
+        JSON.stringify(suppressed.map((one) => [one.key, one.publishedItemId])));
+  check('and nothing was created on the project it points at',
+        creates.every((args) => !args.includes('5')),
+        JSON.stringify(creates.map((args) => args.slice(0, 5))));
 
   // ─── 7 ──────────────────────────────────────────────────────
   console.log('\n7. the queue points at the card rather than repeating what gh said');

@@ -483,6 +483,16 @@ export class NotOnThisBoard extends Error {}
 export const DEFAULT_IN_PROGRESS_COLUMN = 'In Progress';
 export const DEFAULT_TODO_COLUMN = 'Todo';
 
+/**
+ * And where the work only a person can do goes.
+ *
+ * A third fallback on the same terms as the two above, and the one column here GitHub did not
+ * invent — a project it created has no such option, so a board that wants one either adds it
+ * under this name or names its own. A board with neither publishes nothing and says so, which
+ * is the same answer `moveIssueToColumn` gives a project missing the column it was sent to.
+ */
+export const DEFAULT_FOUNDER_COLUMN = 'Founder Actions';
+
 /** A column to move to, and the setting that would name it if the default is wrong. */
 export interface ColumnTarget {
   /** The column's name on the project, matched case-insensitively. */
@@ -504,6 +514,22 @@ export function todoColumn(workspace: Workspace): ColumnTarget {
   return {
     name: workspace.projectTodoColumn ?? DEFAULT_TODO_COLUMN,
     setting: 'projectTodoColumn',
+  };
+}
+
+/**
+ * Where a founder action is published — the column a person reads, not one a queue drains.
+ *
+ * Beside its two siblings so that a founder column is identified the way every other column in
+ * this file is: a case-insensitive name plus the `board.config.json` key that would fix it. The
+ * refusal of a board that points this at the drained column is #536's, and it belongs there
+ * rather than here: this function answers what the column is called, and nothing it can see
+ * says what any other column is called.
+ */
+export function founderColumn(workspace: Workspace): ColumnTarget {
+  return {
+    name: workspace.projectFounderColumn ?? DEFAULT_FOUNDER_COLUMN,
+    setting: 'projectFounderColumn',
   };
 }
 

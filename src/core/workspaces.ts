@@ -331,6 +331,27 @@ export interface WorkspaceConfig {
    * such column gets no move rather than a guess.
    */
   projectTodoColumn?: string;
+  /**
+   * Column a founder action is published into, as a draft item.
+   *
+   * Unset, the option named `Founder Actions` is used. Unlike the two above, GitHub invents no
+   * such column on a project it creates, so a board that wants the work only a person can do
+   * mirrored onto its project either adds an option under that name or names its own here. A
+   * project with neither gets no draft item rather than one dropped in a guessed column.
+   */
+  projectFounderColumn?: string;
+  /**
+   * Stop publishing founder actions to the project at all.
+   *
+   * A **suppression** rather than a switch, and the asymmetry with the implement queue is the
+   * decision: that one starts coding agents against a repository and is rightly off until
+   * somebody says so, while this one writes a draft item to a column. A draft spawns nothing —
+   * `startableCards` cannot pick one up — and the column exists precisely so that a blocker is
+   * seen without anybody going to look for it, so a feature whose whole point is visibility must
+   * not ship invisible. Unset is therefore publishing, and this is for a board that wants its
+   * project left alone.
+   */
+  projectFounderPublishOff?: boolean;
   /** Per-project model, effort, ceiling and workflow for each agent. See WorkspaceAgentConfig. */
   agents?: WorkspaceAgentsConfig;
 }
@@ -355,6 +376,10 @@ export interface Workspace {
   projectInProgressColumn: string | null;
   /** Null means "the column named Todo, if the project has one". */
   projectTodoColumn: string | null;
+  /** Null means "the column named Founder Actions, if the project has one". */
+  projectFounderColumn: string | null;
+  /** True stops founder actions being published to the project. Unset publishes. */
+  projectFounderPublishOff: boolean;
   /** Per-agent overrides; null fields fall through to the board's own environment. */
   agents: WorkspaceAgents;
   /** Populated when this workspace could not be fully loaded. */
@@ -574,6 +599,8 @@ async function loadWorkspace(
     projectCardLimit: null,
     projectInProgressColumn: null,
     projectTodoColumn: null,
+    projectFounderColumn: null,
+    projectFounderPublishOff: false,
     agents: { issue: NO_AGENT_SETTINGS, implement: NO_AGENT_SETTINGS },
     error: null,
   };
@@ -657,6 +684,10 @@ async function loadWorkspace(
       : null,
     projectInProgressColumn: config.projectInProgressColumn?.trim() || null,
     projectTodoColumn: config.projectTodoColumn?.trim() || null,
+    projectFounderColumn: config.projectFounderColumn?.trim() || null,
+    // Only `true` suppresses. Anything else — unset, absent, or a value somebody typed that is
+    // not a boolean — is a board that publishes, which is what the default has to be.
+    projectFounderPublishOff: config.projectFounderPublishOff === true,
     agents: readAgents(id, config, board, enabled),
     error: escaped.length
       ? `Config field(s) outside the workspace, ignored: ${escaped.join(', ')}`
@@ -1181,10 +1212,25 @@ export type WorkspaceOrderResult =
  * dropped — a duplicate path, a duplicate id, an entry with no path at all — has no tab and
  * so no position to state; it is kept, in its own relative order, after the ones that do.
  * Kept, because deleting a line of somebody's registry is not what a reorder was asked to do.
+ *
+ * **An id this machine does not own is passed through rather than refused**, when the caller
+ * says which those are. A tab strip carrying a peer board's projects (`docs/federation.md`) is
+ * one strip, so a drag on it names ids no registry here has ever held; refusing the write would
+ * make an order spanning two machines unexpressible, and dropping them would answer the caller
+ * with a list short of the tabs it is holding. Nothing is written for them — there is nowhere
+ * here to write one — and the permutation below still has to name every project this registry
+ * does load, exactly once, because a caller working from a stale list is the mistake that rule
+ * exists to catch. `foreign` is a predicate rather than "anything unregistered" for that reason.
  */
+export interface ReorderOptions {
+  /** Whether an id belongs to a machine this registry does not answer for. */
+  foreign?: (id: string) => boolean;
+}
+
 export async function reorderWorkspaces(
   registryPath: string,
-  ids: unknown
+  ids: unknown,
+  options: ReorderOptions = {}
 ): Promise<WorkspaceOrderResult> {
   if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string' && id.trim())) {
     return {
@@ -1194,6 +1240,10 @@ export async function reorderWorkspaces(
     };
   }
   const wanted = (ids as string[]).map((id) => id.trim());
+  const foreign = options.foreign ?? (() => false);
+  // The half of the order this registry is answerable for. The rest is still a position on the
+  // strip — it is just not a position in a file on this machine.
+  const mine = wanted.filter((id) => !foreign(id));
 
   const read = await readRegistry(registryPath);
   if (!read.ok) return read;
@@ -1202,8 +1252,9 @@ export async function reorderWorkspaces(
   const current = await loadWorkspaces(registryPath);
   const known = current.map((workspace) => workspace.id);
 
-  const missing = known.filter((id) => !wanted.includes(id));
-  const unknown = wanted.filter((id) => !known.includes(id));
+  const missing = known.filter((id) => !mine.includes(id));
+  const unknown = mine.filter((id) => !known.includes(id));
+  // Over the whole list, foreign ids included: one tab cannot be in two places whoever owns it.
   const repeated = [...new Set(wanted.filter((id, at) => wanted.indexOf(id) !== at))];
   if (missing.length || unknown.length || repeated.length) {
     const said = [
@@ -1224,7 +1275,7 @@ export async function reorderWorkspaces(
   // both claim the one position that id has on the strip.
   const remaining = [...entries];
   const ordered: RegistryEntry[] = [];
-  for (const id of wanted) {
+  for (const id of mine) {
     const at = remaining.findIndex((entry) => idOfEntry(entry) === id);
     if (at >= 0) ordered.push(...remaining.splice(at, 1));
   }

@@ -106,6 +106,7 @@ import {
   resolveFounderAction
 } from './core/founder-store.js';
 import { FounderSnapshot, verifyAgainst } from './core/founder-verify.js';
+import { publishFounderAction as publishFounderActionTo } from './core/founder-publish.js';
 import { setTerminalGhReporter } from './core/gh.js';
 import {
   lastQueuePass,
@@ -177,9 +178,31 @@ import {
 } from './core/element-store.js';
 import { allowedAuthorities, verifyOrigin, verifySameAuthority } from './core/origin-gate.js';
 import { callerIsLocal } from './core/caller-gate.js';
+import { hostname as osHostname } from 'os';
+
 import { createPairingDesk, isLoopbackCaller } from './core/pairing.js';
 import { addDevice, deviceRegistryPath } from './core/device-registry.js';
 import { peerProxy } from './core/peer-proxy.js';
+import {
+  addPeer,
+  forgetPeer,
+  listPeers,
+  peerRegistryPath,
+  touchPeer,
+  type PeerRecord
+} from './core/peer-registry.js';
+import { createPeerAskDesk, PEER_ASK_POLL_MS } from './core/peer-pairing-ask.js';
+import {
+  createPeerStrip,
+  PEER_STRIP_REFRESH_MS,
+  type PeerStripEntry,
+  type StripPeer
+} from './core/peer-strip.js';
+import {
+  isRemoteWorkspaceId,
+  REMOTE_WORKSPACE_ID_PREFIX,
+  splitRemoteWorkspaceId
+} from './core/remote-workspace-id.js';
 import {
   authRequired,
   consumeTokenHandover,
@@ -623,7 +646,63 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 app.use(express.json({ limit: '10mb' }));
 
+/**
+ * The forwarding seam, first: a request naming a peer's board leaves this machine here.
+ *
+ * `core/peer-proxy.ts` (#565) reads the board off the request, finds the machine that owns it and
+ * sends the request there. It is deliberately above the refusal below rather than beside it: a
+ * board this one still holds a credential for is **answered by its owner**, and the refusal is
+ * for what that seam does not route.
+ */
 app.use(peerProxy);
+
+/**
+ * And a board nobody can be asked about is refused, rather than answered out of a store made up
+ * on the spot.
+ *
+ * The forwarder above deliberately lets an id it cannot route **fall through** — a peer that has
+ * been forgotten, the row a peer with no projects wears on the strip, a near miss inside the
+ * namespace. Falling through used to mean being answered locally, and that is the one failure in
+ * this milestone that is **silent**: `elementsFor` yields an empty store for an id nothing
+ * registered — deliberately, and eleven sibling maps behave the same way — so the operator would
+ * see a blank canvas for a project that is alive somewhere, and one pointer press arming the
+ * autosync would write that blank scene into a local store and into a local `.excalidraw`.
+ * Nothing would log and there would be no thread to pull.
+ *
+ * So it refuses with a **stated status and a sentence**: 421, the status for a request that
+ * reached a server which cannot produce the answer, and prose a page can render verbatim. A
+ * forwarded request never gets here; what does is exactly the set for which there is nobody to
+ * ask, and the two branches below are the two ways that happens.
+ *
+ * **The whole reserved namespace, not only the ids that parse.** `REMOTE_WORKSPACE_ID_PREFIX` is
+ * reserved by `core/remote-workspace-id.ts`, and a near miss inside it would otherwise read as a
+ * local project and manufacture exactly the store this exists to prevent.
+ *
+ * In front of every route rather than inside them, because "every board-scoped route" is some
+ * thirty of them and a rule applied thirty times is a rule with a twenty-ninth site. After
+ * `express.json`, because `workspaceIdFrom` reads a body field as well as a query parameter and a
+ * header, and behind the token gate, because a caller holding nothing is told that first.
+ */
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (!isApiPath(gatePath(req))) return next();
+  const named = workspaceIdFrom(req);
+  if (!named.startsWith(REMOTE_WORKSPACE_ID_PREFIX)) return next();
+
+  const pair = splitRemoteWorkspaceId(named);
+
+  logger.warn(`Refused ${req.method} ${req.path}: it names the board "${named}", which is not `
+    + 'one of this board\'s own and is not on a machine this board can ask.');
+  res.status(421).json({
+    success: false,
+    error: pair
+      ? `"${named}" is a project on a machine this board holds no credential for, so there is `
+        + 'nothing to ask and nothing here to answer with. An empty board answered in its place '
+        + 'would look exactly like a project with nothing on it. Pair with that machine again, or '
+        + 'take the tab off the strip.'
+      : `"${named}" is inside the "${REMOTE_WORKSPACE_ID_PREFIX}" namespace, which names another `
+        + 'machine rather than a board this one keeps. Nothing was read and nothing was written.'
+  });
+});
 
 // Serve static files from the build directory
 const staticDir = path.join(__dirname, '../dist');
@@ -2082,6 +2161,254 @@ app.delete('/api/devices/:id', (req: Request, res: Response) => {
   }
 });
 
+// ─── Peer boards (the other machine on this strip) ────────────
+//
+// The operator's half of federation, in three routes: point this board at another one, see what
+// it is holding, and forget one. `docs/federation.md` is the shape and this is where it is
+// reachable from a page.
+//
+// **`notTheHost` in front of all three, and not a new copy of the rule.** Registering a peer is
+// how this board learns to carry a credential to another machine, so a paired device asking this
+// board to pair with a third would be a chain nobody approved — and the funnel every other route
+// sits behind admits an approved device since #522, which is exactly the caller that must not be
+// able to ask for this. The device management routes above are guarded the same way and for the
+// same reason.
+//
+// **Forgetting a peer is this end only.** The secret leaves this machine's file; the device
+// record on the other machine is untouched and stays on that operator's list until they revoke
+// it. The two registries are independent, and `docs/federation.md` says so out loud because
+// assuming otherwise is what leaves a row nobody recognises on a list somebody reads in six
+// months.
+
+/**
+ * What this board keeps about the machines it has been approved by, and what it will say about
+ * each of them right now.
+ *
+ * Two desks, because they answer two questions and neither should have to know the other's: one
+ * runs the gesture that turns an address into a credential, and one holds the last thing each
+ * peer said about its projects. Neither is passed a transport, a clock or a writer from here —
+ * the defaults are the real ones, and the seams exist so a check can drive the arithmetic
+ * without a socket or a file.
+ */
+const peerStrip = createPeerStrip({ seen: (peerId) => { touchPeer(peerId); } });
+
+const peerAskDesk = createPeerAskDesk({
+  // Wrapped rather than passed bare, so that a peer approved a moment ago has its projects on
+  // the strip on the next render instead of at the next tick of the timer below.
+  record: (peer) => {
+    const written = addPeer(peer);
+    if (written.ok) refreshPeersSoon();
+    return written;
+  },
+  known: () => listPeers().map((peer) => ({ baseUrl: peer.baseUrl }))
+});
+
+/** Every peer, in the shape the strip desk takes one. The secret is carried, never shown. */
+function stripPeers(): StripPeer[] {
+  return listPeers().map((peer) => ({
+    id: peer.id,
+    name: peer.name,
+    baseUrl: peer.baseUrl,
+    secret: peer.secret
+  }));
+}
+
+/**
+ * One peer as a route may answer with it.
+ *
+ * Built by naming the fields it includes, for `core/remote-workspace-view.ts`'s reason: the one
+ * field a `PeerRecord` holds that must never leave this process is the secret, and a projection
+ * assembled by spreading the record and deleting a key is a projection that leaks the next
+ * secret-shaped field somebody adds.
+ */
+function peerView(peer: PeerRecord): Record<string, unknown> {
+  return {
+    id: peer.id,
+    name: peer.name,
+    baseUrl: peer.baseUrl,
+    addedAt: peer.addedAt,
+    lastSeenAt: peer.lastSeenAt,
+    status: peerStrip.mark({
+      id: peer.id, name: peer.name, baseUrl: peer.baseUrl, secret: peer.secret
+    })
+  };
+}
+
+/**
+ * The strip, for whoever is asking.
+ *
+ * Merged for the operator's own page and **not** for a peer. A board asking this one for its
+ * projects is asking about *this* machine; handing it back the projects of a third would put a
+ * board on its own strip one hop away, under a namespaced id it does not use for itself, and two
+ * boards paired both ways would each carry the other's copy of their own tabs.
+ *
+ * Appended rather than interleaved: the local registry is the order the operator arranged, and
+ * where they have arranged one across machines it is `PUT /api/workspaces/order` that says so.
+ */
+function mergedStrip(local: Workspace[], res: Response): (Workspace | PeerStripEntry)[] {
+  if (res.locals.device) return local;
+  return [...local, ...peerStrip.entries(stripPeers())];
+}
+
+/**
+ * The same strip, in the order a caller just asked for.
+ *
+ * The frontend reconciles optimistically against the list a write answers with, so a merge that
+ * came back short would drop a peer's tabs the moment somebody dragged one — the registry this
+ * board writes holds only the ids it owns, and the rest of the order has to survive the round
+ * trip rather than be rebuilt by the reconcile.
+ *
+ * Ids the caller did not name keep their own order and go last, which is what a list that grew
+ * between the render and the drop should do.
+ */
+function orderedStrip(
+  local: Workspace[],
+  res: Response,
+  wanted: string[] | null
+): (Workspace | PeerStripEntry)[] {
+  const rows = mergedStrip(local, res);
+  if (!wanted?.length) return rows;
+  const at = new Map(wanted.map((id, index) => [id, index]));
+  return [...rows].sort((left, right) =>
+    (at.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (at.get(right.id) ?? Number.MAX_SAFE_INTEGER));
+}
+
+/**
+ * The probe runs here, on a timer, and never on a request.
+ *
+ * A page polling the strip must not be what wakes a sleeping peer, and a route that asked its
+ * peers when it was asked would spend every sleeping machine's connect budget on the one call the
+ * page cannot render without. `checking` exists as a real state precisely so that the first
+ * answer after a start is honest rather than a guess.
+ *
+ * `unref`, so a process with nothing else to do is not held open by this; and a round that is
+ * still running is not started again, which `createPeerStrip` already guarantees per peer.
+ */
+const peerStripTimer = setInterval(() => {
+  const peers = stripPeers();
+  if (!peers.length) return;
+  peerStrip.refresh(peers).catch((error) => {
+    logger.debug(`A round of peer probes did not finish: ${(error as Error).message}`);
+  });
+}, PEER_STRIP_REFRESH_MS);
+peerStripTimer.unref();
+
+/** The gesture in flight, asked more often than the strip: an operator is standing at a screen. */
+const peerAskTimer = setInterval(() => {
+  peerAskDesk.poll().catch((error) => {
+    logger.debug(`A pairing attempt did not finish its poll: ${(error as Error).message}`);
+  });
+}, PEER_ASK_POLL_MS);
+peerAskTimer.unref();
+
+/** Ask every peer now rather than at the next tick — an operator has just changed the list. */
+function refreshPeersSoon(): void {
+  const peers = stripPeers();
+  if (!peers.length) return;
+  peerStrip.refresh(peers).catch(() => { /* the next tick says the same thing */ });
+}
+
+/**
+ * Point this board at another one.
+ *
+ * It answers **the code** and not the peer: what happens next is the operator walking to the
+ * other machine and approving the request showing the same six digits. The peer appears on
+ * `GET /api/peers` once that machine has approved it, which is the second answer and the reason
+ * this is not one blocking call.
+ *
+ * An address nothing answers on is **registered rather than refused** — `unreachable` is a state
+ * and not a rejection, and a machine that is asleep does not refuse a connection, it hangs. What
+ * is refused is a string that is not an address at all: that is a typo, and a typo recorded as a
+ * state is a row the operator then has to work out how to get rid of.
+ */
+app.post('/api/peers', async (req: Request, res: Response) => {
+  if (notTheHost(req, res, 'A peer board is registered')) return;
+
+  const outcome = await peerAskDesk.ask({
+    name: typeof req.body?.name === 'string' ? req.body.name : '',
+    baseUrl: typeof req.body?.baseUrl === 'string' ? req.body.baseUrl : '',
+    // What the *other* operator sees asking, which is not what this one calls that machine. A
+    // caller may say so outright; the machine's own name is what a person at the other keyboard
+    // has the best chance of recognising.
+    as: typeof req.body?.as === 'string' && req.body.as.trim() ? req.body.as : osHostname()
+  });
+
+  if (!outcome.ok) {
+    return res.status(outcome.status).json({ success: false, error: outcome.error });
+  }
+
+  logger.info(`Asked the board at ${outcome.ask.baseUrl} to pair, as "${outcome.ask.name}": `
+    + `${outcome.ask.state}.`);
+  // 202: something has been started and there is no peer yet. The code is the whole of what the
+  // operator has to act on, and it is in the answer rather than behind a second call.
+  res.status(202).json({
+    success: true,
+    pending: outcome.ask,
+    peers: listPeers().map(peerView)
+  });
+});
+
+/** Which boards approved this one, what each is doing, and what is still being asked. */
+app.get('/api/peers', (req: Request, res: Response) => {
+  if (notTheHost(req, res, 'Peer boards are listed')) return;
+  try {
+    res.json({
+      success: true,
+      peers: listPeers().map(peerView),
+      pending: peerAskDesk.pending()
+    });
+  } catch (error) {
+    logger.error('Could not list the peer boards:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/**
+ * Forget a peer, or give up on an attempt to become one.
+ *
+ * One route for both because one id names one thing: a peer's id is the one the other machine
+ * approved this one under, and an attempt's is this board's own. The secret goes with the peer,
+ * out of the file — and the device record on the other machine is untouched, which is the
+ * asymmetry `docs/federation.md` states rather than a shortcoming of this route.
+ */
+app.delete('/api/peers/:id', (req: Request, res: Response) => {
+  if (notTheHost(req, res, 'A peer board is forgotten')) return;
+
+  const id = req.params.id ?? '';
+  try {
+    const held = listPeers().find((peer) => peer.id === id) ?? null;
+    if (held && forgetPeer(id)) {
+      peerStrip.forget({
+        id: held.id, name: held.name, baseUrl: held.baseUrl, secret: held.secret
+      });
+      return res.json({
+        success: true,
+        forgotten: { id: held.id, name: held.name, baseUrl: held.baseUrl },
+        // Said back rather than left to a document nobody is reading at that moment.
+        note: `The secret is gone from ${peerRegistryPath()}. The device record on ${held.name} `
+          + 'is untouched and is that operator\'s to revoke.',
+        peers: listPeers().map(peerView),
+        pending: peerAskDesk.pending()
+      });
+    }
+    if (peerAskDesk.cancel(id)) {
+      return res.json({
+        success: true,
+        cancelled: id,
+        peers: listPeers().map(peerView),
+        pending: peerAskDesk.pending()
+      });
+    }
+    res.status(404).json({
+      success: false,
+      error: 'No peer board and no pairing attempt on this board has that id.'
+    });
+  } catch (error) {
+    logger.error('Could not forget a peer board:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
 // ─── Workspaces API (one project per board) ───────────────────
 
 // Every route in this block calls `offLoopback`, declared above the first route of the file.
@@ -2108,7 +2435,7 @@ app.get('/api/workspaces', async (_req: Request, res: Response) => {
       // any project has been *added* is the list below, in the same payload; the boolean that
       // has to be read without one is `/health`'s `workspaces`.
       configured: true,
-      workspaces
+      workspaces: mergedStrip(workspaces, res)
     });
   } catch (error) {
     logger.error('Failed to load workspaces:', error);
@@ -2224,17 +2551,32 @@ app.delete('/api/workspaces/:id', async (req: Request, res: Response) => {
  * rather than "move this one to position n": a permutation is checked against what the
  * registry holds in a single comparison, while an index is a guess about a list the caller
  * may have been looking at some seconds ago.
+ *
+ * **The order may span machines and this board writes only its own half.** A strip carrying a
+ * peer's projects is one strip, so the list that arrives here names ids no registry on this
+ * machine has ever heard of. Dropping them would be the wrong answer twice over: the write would
+ * be refused for naming a project that is not registered, and the list it answered with would
+ * come back short of the tabs the page is holding. So an id in the peer namespace is passed
+ * through — not written, because there is nothing here to write it into, and not refused, because
+ * the operator dragging a tab is describing one strip.
  */
 app.put('/api/workspaces/order', async (req: Request, res: Response) => {
   if (offLoopback(res, 'The order of the projects is written')) return;
 
   try {
-    const result = await reorderWorkspaces(registryPath(), req.body?.ids);
+    const result = await reorderWorkspaces(registryPath(), req.body?.ids, {
+      // Named by the namespace rather than by "anything unregistered": a stale client naming a
+      // project that has been removed is still the mistake the refusal above exists to catch.
+      foreign: isRemoteWorkspaceId
+    });
     if (!result.ok) {
       return res.status(result.status).json({ success: false, error: result.error });
     }
+    const wanted = Array.isArray(req.body?.ids)
+      ? (req.body.ids as unknown[]).filter((id): id is string => typeof id === 'string')
+      : null;
     logger.info(`Workspace order set: ${result.workspaces.map((workspace) => workspace.id).join(', ')}`);
-    res.json({ success: true, workspaces: result.workspaces });
+    res.json({ success: true, workspaces: orderedStrip(result.workspaces, res, wanted) });
   } catch (error) {
     logger.error('Failed to reorder the workspaces:', error);
     res.status(500).json({ success: false, error: (error as Error).message });
@@ -3154,69 +3496,42 @@ const FOUNDER_PASS_MS = (() => {
 })();
 
 /**
- * Whether a recorded blocker is also written to the GitHub project.
- *
- * Off unless somebody says otherwise, which is what the done-when this was built against
- * requires: with it unset no GitHub write of any kind is made for a founder action, and the
- * card is still recorded and still drawn. The publisher itself is #540's — see
- * `founderPublisherModule` for what happens until it lands.
- */
-const FOUNDER_PUBLISH = env('FOUNDER_PUBLISH')?.trim() === '1';
-
-/** What #540 will export: one draft item on the project, and the item id written back. */
-type FounderPublisher = (workspace: Workspace, record: FounderActionRecord) => Promise<unknown>;
-
-/** Resolved once, and `null` for "there is nothing to publish through". */
-let founderPublisher: FounderPublisher | null | undefined;
-
-/**
- * Position 9's publisher, or null.
- *
- * `src/core/founder-publish.ts` is #540's to write and has not landed, so this is a seam rather
- * than an import: the specifier is held in a variable, which is what keeps the type checker from
- * resolving a file that is not there yet. The moment that module exists exporting
- * `publishFounderAction`, this finds it and no call site changes.
- *
- * Asked for only when `FOUNDER_PUBLISH` is set, so a board that never opted in never looks.
- */
-async function founderPublisherModule(): Promise<FounderPublisher | null> {
-  if (founderPublisher !== undefined) return founderPublisher;
-  founderPublisher = null;
-
-  const specifier = './core/founder-publish.js';
-  try {
-    const loaded = await import(specifier) as { publishFounderAction?: FounderPublisher };
-    if (typeof loaded.publishFounderAction === 'function') {
-      founderPublisher = loaded.publishFounderAction;
-    }
-  } catch {
-    // Absent is the ordinary case until #540 lands, and it is said once, below, rather than
-    // here: an operator who asked for publication is owed the sentence, and a resolution
-    // failure is the only shape "it is not built yet" can arrive in.
-  }
-  if (!founderPublisher) {
-    logger.warn(`${settingName('FOUNDER_PUBLISH')} is set, but this board has nothing to publish `
-      + 'founder actions through. They are recorded and drawn here, and nothing is written to '
-      + 'GitHub.');
-  }
-  return founderPublisher;
-}
-
-/**
  * Publish one newly recorded action, on the same terms as the two automatic card moves.
  *
- * Not awaited and never fatal: the store is the record and GitHub is a projection of it, so a
- * publication that fails costs a log line and leaves the card exactly where a person can read
- * it. A workspace is needed to publish at all — the host-level pass has none, and a board with
- * no project publishes nothing either way.
+ * **The opt-in is not read here, and that is the reconciliation.** This issue was written
+ * expecting to gate publication itself; #540 landed while it was being built and settled the
+ * policy one layer down, where it belongs — `publishFounderAction` reads the workspace's
+ * `projectFounderPublishOff` suppression, refuses a board with no project before spawning
+ * anything, and warns by name for a project with no founder column. A second switch here would
+ * be a second answer to one question, and the two would drift. So what is left of this issue's
+ * half is the call.
+ *
+ * Not awaited and never fatal, exactly as for the In Progress and Todo moves: the store is the
+ * record and GitHub is a projection of it, so a publication that fails costs a log line and
+ * leaves the card where a person can read it. A workspace is needed at all — the host-level
+ * pass has none, and a board nobody registered has no project to publish to either way.
+ *
+ * **One at a time per card, and that set is load-bearing.** The caller retries an unpublished
+ * record on every sighting, because a publication is one `gh` against a project that may well
+ * have been unreachable at the moment the blocker was noticed — a signed-out CLI is exactly the
+ * blocker most likely to stop its own card going up. But the retry is fire-and-forget, and the
+ * store guard inside the publisher is read *before* it spawns: without this, one pass every few
+ * seconds would put a dozen publications in flight that each read "not published yet" and each
+ * create a draft item. The store cannot see an attempt that has not finished; this can.
  */
+const publishingFounderActions = new Set<string>();
+
 function publishFounderAction(workspace: Workspace | null, record: FounderActionRecord): void {
-  if (!FOUNDER_PUBLISH || !workspace) return;
-  void founderPublisherModule()
-    .then((publish) => publish?.(workspace, record))
+  if (!workspace || publishingFounderActions.has(record.key)) return;
+  publishingFounderActions.add(record.key);
+  void publishFounderActionTo(workspace, record)
+    .then((itemId) => {
+      if (itemId) logger.info(`Founder action "${record.key}" was published as ${itemId}`);
+    })
     .catch((error) => logger.warn(
       `Could not publish the founder action "${record.key}": ${(error as Error).message}`
-    ));
+    ))
+    .finally(() => publishingFounderActions.delete(record.key));
 }
 
 /**
@@ -3262,8 +3577,15 @@ function noticeFounderBlocker(
 
   if (!already) {
     logger.info(`Founder action "${written.record.key}" was recorded: ${written.record.fields.title}`);
-    publishFounderAction(workspace, written.record);
   }
+  // Every sighting of a record that has not been published yet, rather than the first one only.
+  // A publication is one `gh` against a project that may have been unreachable at the moment
+  // the blocker was noticed — a signed-out CLI is precisely the blocker most likely to stop its
+  // own card being published — and #540's contract is that such a failure "leaves the record
+  // unpublished and re-publishable". Publishing on the first sighting alone would make that
+  // sentence false. Publishing twice is impossible: `publishFounderAction` reads the store back
+  // before it spawns anything, which is the guard that also survives a restart.
+  if (!written.record.publishedItemId) publishFounderAction(workspace, written.record);
   return written.record;
 }
 
