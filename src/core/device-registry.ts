@@ -218,17 +218,53 @@ function readRegistry(): RegistryFile {
  * success and is gone on the next request, which is exactly the shape of failure this repository
  * spends its comments on.
  */
+/** How many times *this* process has written the file, so a same-millisecond edit still counts. */
+let writes = 0;
+
 function writeRegistry(file: RegistryFile): void {
   const target = deviceRegistryPath();
   fs.mkdirSync(path.dirname(target), { recursive: true });
   try { fs.unlinkSync(target); } catch { /* not there, which is the ordinary case */ }
   fs.writeFileSync(target, `${JSON.stringify(file, null, 2)}\n`, { encoding: 'utf-8', mode: 0o600 });
   try { fs.chmodSync(target, 0o600); } catch { /* not this platform's idea of permissions */ }
+  writes++;
 }
 
 /** Every approved device, oldest first. The answer to "which devices can drive this board". */
 export function listDevices(): DeviceRecord[] {
   return readRegistry().devices;
+}
+
+/**
+ * A value that changes whenever the registry does, for a caller memoising something derived
+ * from it.
+ *
+ * Nothing here is memoised and the comment on `readRegistry` says why at length. But a caller
+ * can have a good reason to be: the origin gate builds a set of authorities on every single
+ * request including the static ones, and rebuilding that from a file read per request would put
+ * an open, a parse and a validate in front of every image the page loads.
+ *
+ * So this is the middle answer — a `stat` rather than a read, and a caller that compares. It has
+ * to catch a change made by **another** process, because the process that revokes is not always
+ * the process that verifies (the CLI, a second board, a management surface), which is why the
+ * file's own mtime and size are in it. And it has to catch two writes inside one millisecond
+ * that leave the same length, which no filesystem timestamp is fine enough to see, which is why
+ * this process's own write count is in it too.
+ *
+ * A registry that is not there yet is a value like any other: a board with no devices has a
+ * revision, and the first approval changes it.
+ */
+export function deviceRegistryRevision(): string {
+  for (const file of deviceRegistryPaths()) {
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(file);
+    } catch {
+      continue; // not in this directory, which is the ordinary case for all but one of them
+    }
+    return `${writes}:${file}:${stat.mtimeMs}:${stat.size}`;
+  }
+  return `${writes}:none`;
 }
 
 /**
