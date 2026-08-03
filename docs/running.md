@@ -360,6 +360,7 @@ out, and neither `PORT` nor anything else in the environment reaches it.
 | `EXCALIDRAW_IMPLEMENT_RECLAIM_MS` | `30000` | How long a run whose agent process has gone must sit before its slot is given back. The wait is there because a run's process ending is not the run ending — the server still has GitHub to ask and a checkout to release. `0` gives the slot back on the first sighting |
 | `EXCALIDRAW_ISSUE_MEMO_MS` | `30000` | How long one `gh` read of an issue is reused. `0` turns the memo off |
 | `EXCALIDRAW_GH_STATUS_MEMO_MS` | `30000` | How long one answer about `gh` *itself* — installed, logged in, which scopes — is reused before `GET /api/github-status` asks again. `0` turns the memo off. The canvas asks on a failing poll, so without it a board whose `gh` is broken would spawn two processes every twenty seconds to be told the same thing |
+| `EXCALIDRAW_FOUNDER_PASS_MS` | `300000` | How often the board looks for blockers only a person can clear, and closes the ones a re-probe says are gone. One `gh --version` and one `gh auth status` per project per pass, which is why it is minutes rather than seconds. `0` turns the pass off, and the blockers a refused run notices are still recorded |
 | `EXCALIDRAW_GH_COMMAND` | `gh` | The GitHub CLI on **this machine**, when it is not on `PATH` — [trap-gh-path.md](trap-gh-path.md) |
 | `EXCALIDRAW_AGENT_LIMITS` | unset | The directory your coding agent writes its usage files into — today only Claude Code can write them, from its status line command. Unset means `GET /api/agent-limits` answers 404 and the header shows nothing — [agent-limits.md](agent-limits.md) |
 | `EXCALIDRAW_TERMINAL` | unset | `1` for the default shell, or a command line of your own. Unset means the terminal routes answer 404 — [terminal.md](terminal.md) |
@@ -594,8 +595,8 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 186 | yes |
-| `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 86 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 188 | yes |
+| `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 85 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
 | `repo` | the full history, and this repository's own board | anywhere with a full clone | 8 | no |

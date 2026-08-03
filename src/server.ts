@@ -67,7 +67,8 @@ import {
   KNOWN_BACKEND_NAMES, enabledAgentBackends, parseAgentBackends, type AgentGrants
 } from './core/agent-backend.js';
 import {
-  AgentRoleCommands, AgentsHealth, agentRoles, initialAgents, preflightAgents, preflightLines
+  AgentEnvironmentHealth, AgentRoleCommands, AgentsHealth, agentRoles, initialAgents,
+  preflightAgents, preflightLines
 } from './core/agent-preflight.js';
 import { AgentUsage } from './core/agent-usage.js';
 import { AgentLimitsReading, STALE_AFTER_SECONDS } from './core/agent-limits.js';
@@ -92,6 +93,25 @@ import { openFounderActions } from './core/founder-store.js';
 import {
   GithubHealth, GithubStatus, githubHealth, githubPreflightLine, initialGithub, readGithubStatus
 } from './core/github-status.js';
+import {
+  FounderBlocker,
+  blockerForAgentPreflight,
+  blockerForGhFailure,
+  blockerForGithubStatus,
+  blockerForPushAccess,
+  founderActionFor
+} from './core/founder-blockers.js';
+import {
+  FounderActionRecord,
+  founderActionKey,
+  openFounderActions,
+  readFounderAction,
+  recordFounderAction,
+  resolveFounderAction
+} from './core/founder-store.js';
+import { FounderSnapshot, verifyAgainst } from './core/founder-verify.js';
+import { publishFounderAction as publishFounderActionTo } from './core/founder-publish.js';
+import { setTerminalGhReporter } from './core/gh.js';
 import {
   lastQueuePass,
   QueuePass,
@@ -3453,6 +3473,215 @@ const ghPushMemo = new IssueMemo<PushAccess>(
   memoWindow(env('GH_STATUS_MEMO_MS'))
 );
 
+// ─── Blockers only a person can clear ─────────────────────────
+//
+// Ten human blockers were being detected and then merely refused, and `core/founder-blockers.ts`
+// named every one of them. This is the wiring: the four places this server learns of one, the
+// pass that closes them again, and nothing else. Every rule about what a card may *say* lives in
+// `core/founder-action-text.ts` and is enforced at the write, so nothing here composes prose.
+
+/**
+ * How often the board looks for these on its own, and closes the ones that have gone.
+ *
+ * Minutes rather than seconds, and that is the whole of the cost argument: a pass spawns one
+ * `gh --version` and one `gh auth status` per project, and a board that is perfectly well pays
+ * for them for ever. Five minutes is fast enough that a founder who has just run `gh auth login`
+ * in a terminal sees the card close while they are still looking at the board, and slow enough
+ * that a healthy board makes two processes per project per five minutes.
+ *
+ * `0` turns the pass off. What a *refusal* notices is unaffected by it — those producers run on
+ * the request that was refused, not on a timer.
+ */
+const FOUNDER_PASS_MS = (() => {
+  const configured = env('FOUNDER_PASS_MS');
+  if (configured === undefined || configured.trim() === '') return 300_000;
+  const parsed = Number(configured);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 300_000;
+})();
+
+/**
+ * Publish one newly recorded action, on the same terms as the two automatic card moves.
+ *
+ * **The opt-in is not read here, and that is the reconciliation.** This issue was written
+ * expecting to gate publication itself; #540 landed while it was being built and settled the
+ * policy one layer down, where it belongs — `publishFounderAction` reads the workspace's
+ * `projectFounderPublishOff` suppression, refuses a board with no project before spawning
+ * anything, and warns by name for a project with no founder column. A second switch here would
+ * be a second answer to one question, and the two would drift. So what is left of this issue's
+ * half is the call.
+ *
+ * Not awaited and never fatal, exactly as for the In Progress and Todo moves: the store is the
+ * record and GitHub is a projection of it, so a publication that fails costs a log line and
+ * leaves the card where a person can read it. A workspace is needed at all — the host-level
+ * pass has none, and a board nobody registered has no project to publish to either way.
+ *
+ * **One at a time per card, and that set is load-bearing.** The caller retries an unpublished
+ * record on every sighting, because a publication is one `gh` against a project that may well
+ * have been unreachable at the moment the blocker was noticed — a signed-out CLI is exactly the
+ * blocker most likely to stop its own card going up. But the retry is fire-and-forget, and the
+ * store guard inside the publisher is read *before* it spawns: without this, one pass every few
+ * seconds would put a dozen publications in flight that each read "not published yet" and each
+ * create a draft item. The store cannot see an attempt that has not finished; this can.
+ */
+const publishingFounderActions = new Set<string>();
+
+function publishFounderAction(workspace: Workspace | null, record: FounderActionRecord): void {
+  if (!workspace || publishingFounderActions.has(record.key)) return;
+  publishingFounderActions.add(record.key);
+  void publishFounderActionTo(workspace, record)
+    .then((itemId) => {
+      if (itemId) logger.info(`Founder action "${record.key}" was published as ${itemId}`);
+    })
+    .catch((error) => logger.warn(
+      `Could not publish the founder action "${record.key}": ${(error as Error).message}`
+    ))
+    .finally(() => publishingFounderActions.delete(record.key));
+}
+
+/**
+ * Notice one blocker, or nothing at all.
+ *
+ * Every producer in this file funnels through here, and it is deliberately the only door: the
+ * dedupe is the store's key, so four producers that noticed the same thing have to compose the
+ * same key without having heard of one another — which they do by handing over a
+ * `FounderBlocker` and letting `founderActionKey` compose it.
+ *
+ * A null blocker is the ordinary answer and is not an error: `blockerForPushAccess` yields null
+ * for a verdict nobody could settle, `blockerForGhFailure` for a failure that is not one of the
+ * named conditions, and both of those are the permissive rule the column depends on.
+ *
+ * A record the register refuses is a warning and no card. That is a defect in this file rather
+ * than in the operator's machine — the corpus is fixed and the edits are validated — so it is
+ * said out loud rather than swallowed.
+ */
+function noticeFounderBlocker(
+  workspaceId: string,
+  workspace: Workspace | null,
+  found: FounderBlocker | null | undefined
+): FounderActionRecord | null {
+  if (!found) return null;
+
+  // Read before the write, so "this is the first sighting" is a fact rather than a comparison
+  // of two timestamps that can land in the same millisecond. Only a first sighting publishes.
+  const key = founderActionKey(workspaceId, found.kind, found.discriminator);
+  const already = readFounderAction(workspaceId, key);
+
+  const written = recordFounderAction({
+    workspaceId,
+    kind: found.kind,
+    discriminator: found.discriminator,
+    fields: founderActionFor(found),
+    evidence: found.evidence,
+  });
+  if (!written.ok || !written.record) {
+    logger.warn(`A founder action for "${found.key}" was not recorded: `
+      + written.faults.map((fault) => `${fault.field} ${fault.rule} (${fault.detail})`).join('; '));
+    return null;
+  }
+
+  if (!already) {
+    logger.info(`Founder action "${written.record.key}" was recorded: ${written.record.fields.title}`);
+  }
+  // Every sighting of a record that has not been published yet, rather than the first one only.
+  // A publication is one `gh` against a project that may have been unreachable at the moment
+  // the blocker was noticed — a signed-out CLI is precisely the blocker most likely to stop its
+  // own card being published — and #540's contract is that such a failure "leaves the record
+  // unpublished and re-publishable". Publishing on the first sighting alone would make that
+  // sentence false. Publishing twice is impossible: `publishFounderAction` reads the store back
+  // before it spawns anything, which is the guard that also survives a restart.
+  if (!written.record.publishedItemId) publishFounderAction(workspace, written.record);
+  return written.record;
+}
+
+/**
+ * Close every open record this snapshot can honestly close.
+ *
+ * Called wherever a fresh probe answer exists rather than from one place, because the answers
+ * arrive in different rooms: the pass has the GitHub status, and `beginImplement` has the push
+ * permission the moment it reads one. Neither of them probes for this — the whole rule is that
+ * settling adds no `gh` at all.
+ *
+ * `satisfied` and nothing else. `still-blocked` leaves the card where it is, and `cannot-say`
+ * is the verifier refusing to guess, which is the property that keeps this from closing a card
+ * because the network had a bad minute.
+ */
+function settleFounderActions(workspaceId: string, snapshot: FounderSnapshot): void {
+  for (const record of openFounderActions(workspaceId)) {
+    const verdict = verifyAgainst(record.kind, snapshot);
+    if (verdict.settled !== 'satisfied') continue;
+    if (!resolveFounderAction(workspaceId, record.key, 'probe')) continue;
+    logger.info(`Founder action "${record.key}" was closed by a re-probe: ${verdict.why}`);
+  }
+}
+
+/**
+ * One pass over one board: what `gh` says about itself, and what that closes.
+ *
+ * `readGithubStatus` is the only detector that goes through `spawnProbe` rather than `runGh`,
+ * which makes it the only one that sees a missing or signed-out CLI on a board with no project
+ * and no repository — the fresh clone this column exists for. Every other producer here needs
+ * somebody to have asked for something first.
+ */
+async function founderPassOver(workspace: Workspace | null, workspaceId: string): Promise<void> {
+  let github: GithubStatus | null = null;
+  try {
+    github = await ghStatusMemo.read(
+      workspace ? workspace.id : `${workspaceId} host`,
+      GH_STATUS_KEY,
+      () => readGithubStatus(workspace)
+    );
+  } catch (error) {
+    logger.warn(`Founder pass: gh could not be read for "${workspaceId}": ${(error as Error).message}`);
+    return;
+  }
+
+  noticeFounderBlocker(workspaceId, workspace, blockerForGithubStatus(github));
+  settleFounderActions(workspaceId, { github, agent: implementAgentHealth(workspace) });
+}
+
+/** What the startup preflight found for the implement agent in this board's environment. */
+function implementAgentHealth(workspace: Workspace | null): AgentEnvironmentHealth | null {
+  const kind = workspace?.environment.kind === 'wsl' ? 'wsl' : 'native';
+  return AGENT_PREFLIGHT.implement?.environments?.[kind] ?? null;
+}
+
+/**
+ * Every board this pass covers.
+ *
+ * The registered projects, or the host's own `gh` when there are none — a machine with nothing
+ * registered is exactly the machine most likely to be blocked, and answering "no workspaces, so
+ * nothing to say" would leave the column empty on the board it was built for. A workspace the
+ * registry could not resolve is skipped: that is a board problem, and a board problem is not a
+ * founder action.
+ */
+async function founderProducerPass(): Promise<void> {
+  const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
+  const usable = workspaces.filter((workspace) => !workspace.error);
+  if (usable.length === 0) {
+    await founderPassOver(null, DEFAULT_WORKSPACE_ID);
+    return;
+  }
+  for (const workspace of usable) {
+    await founderPassOver(workspace, normalizeWorkspaceId(workspace.id));
+  }
+}
+
+/**
+ * The timer, started once and `unref`'d so it is never why a process stays alive.
+ *
+ * The first pass waits out an interval rather than running at startup. Two probes per project
+ * in the first second of every server start is a cost every check in `scripts/` would pay for a
+ * feature none of them is about, and nothing is lost by it: the blockers that matter at the
+ * moment somebody clicks are recorded by the refusal itself.
+ */
+let founderTimer: NodeJS.Timeout | null = null;
+
+function startFounderProducer(): void {
+  if (FOUNDER_PASS_MS <= 0 || founderTimer) return;
+  founderTimer = setInterval(() => { void founderProducerPass(); }, FOUNDER_PASS_MS);
+  founderTimer.unref?.();
+}
+
 /**
  * How many implementations one workspace may have in flight at once.
  *
@@ -3640,6 +3869,16 @@ function recordImplementPid(workspaceId: string, issueUrl: string, pid: number |
 interface ImplementAnswer {
   status: number;
   body: Record<string, unknown>;
+  /**
+   * The founder action this refusal filed, when it filed one.
+   *
+   * Beside the answer and deliberately not inside `body`: every status, body and sentence this
+   * function produces is byte-identical to what it produced before founder actions existed, and
+   * a field added to the body would be that promise broken on the first caller that compares
+   * one. The queue is what reads this — a card refused every interval is worth naming by what a
+   * person has to go and do, rather than by repeating what `gh` said about it.
+   */
+  founderAction?: FounderActionRecord | null;
 }
 
 /**
@@ -3791,7 +4030,20 @@ async function beginImplement(
   );
   if (agentRefusal) {
     releaseSlot();
-    return { status: 404, body: { success: false, error: agentRefusal } };
+    // A board that was never granted a command for this environment is somebody's decision to
+    // make, not this process's: the card names the environment and the variable that grants
+    // one. `unconfigured` rather than `not found` because that is precisely what was asked —
+    // `agentCommandRefusal` answers on there being no command at all, having probed nothing.
+    const founderAction = noticeFounderBlocker(workspaceId, workspace, blockerForAgentPreflight({
+      role: 'implement',
+      environment: workspace.environment.kind === 'wsl' ? 'wsl' : 'native',
+      variable: workspace.environment.kind === 'wsl'
+        ? `${settingName('IMPLEMENT_AGENT')}_WSL`
+        : settingName('IMPLEMENT_AGENT'),
+      binary: null,
+      resolved: 'unconfigured',
+    }));
+    return { status: 404, body: { success: false, error: agentRefusal }, founderAction };
   }
 
   // The last question asked before anything exists to clean up, and the only one about GitHub:
@@ -3810,9 +4062,17 @@ async function beginImplement(
   // 403 rather than 409: this is not a conflict with what the board is doing, it is a
   // permission the board cannot change.
   const push = await ghPushMemo.read(workspaceId, GH_PUSH_KEY, () => readPushAccess(workspace));
+  // The answer this just read is the freshest one anybody has, so it is also what settles a
+  // push card that has been open since the last refusal. No probe is added by it: this is the
+  // probe, and an account that has been forked to since is closed here rather than never.
+  settleFounderActions(workspaceId, { push });
   if (push.verdict === 'no') {
     releaseSlot();
-    return { status: 403, body: { success: false, error: pushRefusal(push) } };
+    // Only a `no` — the verdict GitHub stated. `unknown` starts the run and files nothing, for
+    // the reason `github-push.ts` gives: a probe that could not learn anything must not refuse
+    // a reader through a second door after declining to refuse them through the first.
+    const founderAction = noticeFounderBlocker(workspaceId, workspace, blockerForPushAccess(push));
+    return { status: 403, body: { success: false, error: pushRefusal(push) }, founderAction };
   }
   if (push.verdict === 'unknown') {
     // Info rather than warn: a board whose `origin` is not on github.com, or which has no `gh`
@@ -4401,7 +4661,14 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
       logger.warn(`Queue: ${issueUrl} was refused (${answer.status}): ${answer.body.error}`);
       refusals++;
       if (!firstRefusal) {
-        firstRefusal = `${issueUrl} was refused ${answer.status} — ${answer.body.error ?? ''}`;
+        // The founder action's title where there is one, because that is the sentence written
+        // for whoever has to act. `gh`'s own wording is what the reader was being given before,
+        // and it names a permission, a repository and a `git remote set-url` — true, and not
+        // the thing to say to somebody looking at a queue that has stopped.
+        firstRefusal = answer.founderAction
+          ? `${issueUrl} was refused ${answer.status}, and it needs you: `
+            + `${answer.founderAction.fields.title}`
+          : `${issueUrl} was refused ${answer.status} — ${answer.body.error ?? ''}`;
       }
     }
 
@@ -7718,6 +7985,23 @@ async function startServer(): Promise<void> {
     // and which fails in more ways than the agents do. Separately again: neither waits on the
     // other, and a `gh auth status` that reaches the network must not delay either.
     void runGithubPreflight();
+
+    // And beside them, the one reporter every `gh`-backed feature on this board files founder
+    // blockers through. Installed here rather than at the four call sites for the reason
+    // `setTerminalGhReporter` gives: a producer wired in per call site is one that will be
+    // forgotten at the next call site. `runGh` invokes it at the rethrow it already has, and
+    // only for a failure no retry can fix — which is the definition of "a person has to act".
+    //
+    // It is handed the failure itself: `said` and `remedy` are separate fields, and reading
+    // `.message` instead would put a tool's stderr on a card written for a person.
+    setTerminalGhReporter((workspace, failure) => {
+      noticeFounderBlocker(
+        normalizeWorkspaceId(workspace.id), workspace, blockerForGhFailure(failure)
+      );
+    });
+    // And the pass that closes them again. First fire is one interval away — see the comment
+    // on `startFounderProducer` for why nothing runs at startup.
+    startFounderProducer();
   });
 
   const shutdown = (signal: NodeJS.Signals): void => {

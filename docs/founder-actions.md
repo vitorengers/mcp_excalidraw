@@ -474,7 +474,52 @@ card a reader can select. The `+` is not drawn on this column, and a block writt
 rehomes to **My Notes** — a founder action is something the board noticed, never something
 somebody typed.
 
+What the column is called is the project's own answer, resolved by the same
+`founderColumn(workspace)` a published draft item is filed with — see [Naming the column per
+project](#naming-the-column-per-project). The canvas draws its own only while the project
+declares no column of that name, so the two can never show the same work twice.
+
 [project-board.md](project-board.md#the-founder-column) is where the geometry is argued.
+## Naming the column per project
+
+The column has a name, and the name is per project. `projectFounderColumn` in a project's
+`board.config.json` says which of its columns this one is
+([workspaces.md](workspaces.md#boardconfigjson)); unset, it is **`Founder Actions`**. That
+default is this tool's own suggestion rather than one of GitHub's — no project GitHub creates
+has such a column — but it is a default in exactly the same sense as the other two: a project
+that already keeps one under a name of its own says so, and a project that has no such column
+is told which key would name it rather than having one guessed for it.
+
+`founderColumn(workspace)` in `src/core/project-board.ts` resolves it, and it returns the same
+`ColumnTarget` shape as `todoColumn` and `inProgressColumn` — a name matched trimmed and
+case-insensitively, plus the `board.config.json` key that would fix it. That shape is the whole
+of column identity in this codebase; a founder column follows it or it is the constant
+`project-board.ts` was written to avoid.
+
+**A project may not point it at either of the other two, and that refusal is a correctness
+requirement rather than tidiness.** The implement queue drains exactly one column, resolved by
+name at dispatch time, and `findColumn` matches `trim().toLowerCase()`. A founder column with a
+name of its own is therefore invisible to the start loop *by construction* — which is the
+argument `scripts/check-founder-not-startable.mjs` holds — and that construction holds only
+while the two names differ. A configuration that makes them the same is the one route by which
+a founder action, which is by definition work no agent can do, reaches the column an agent
+starts from. So it is closed by name, in both places a config is read:
+
+- `validateWorkspaceConfigPatch` refuses the save, so the settings dialog says no while
+  somebody is looking at the field they just typed into. Nothing is written.
+- `loadWorkspace` refuses the config, so a file edited by hand loads as a project marked
+  broken rather than as a board quietly resolving a name the operator can see is wrong.
+
+Both compare the columns **as the board would resolve them** — trimmed, folded to lower case,
+and defaulted on either side. A project that never wrote `projectTodoColumn` and calls its
+founder column `Todo` collides with the default just as squarely as one that wrote both, and a
+project that renamed its queue column onto `Founder Actions` collides from the other side. The
+message names **both** keys, because either one of them is a legitimate thing to change and
+nothing here knows which one was meant.
+
+`scripts/check-founder-column-setting.mjs` covers the resolver, the setting's route through the
+config loader and the validator, and the refusal over a table of configurations differing only
+by case and by surrounding space.
 
 ## What is not written here yet
 
@@ -491,11 +536,6 @@ of the same blocker does to the one already there.
 
 How a founder action reaches the project board as a draft item rather than as an issue, and why
 an issue would be the wrong shape.
-
-### Naming the column per project
-
-How a project says which of its columns is the founder one, and why a board pointing that at the
-queue's own column has to be refused.
 
 ### Choosing a founder card
 
