@@ -146,12 +146,25 @@ than pinned — you are the one who can tell `mac.tailnet.ts.net` from something
 resolves here. `Origin`, when a browser sends one, still has to name the same authority as
 `Host`, so a page at some other origin cannot put rows on your screen.
 
-**What a paired device can do today: nothing yet.** Pairing writes the device down; teaching the
-guard to accept it is #501, and until that lands the credential is minted, stored and idle. The
-bind section below is still true.
+**What a paired device can do today.** The token gate accepts its credential, after the board
+token and never instead of it, on `/api` and on the WebSocket upgrade — so an approved device is
+a caller that got past the gate, exactly as the operator's own page is. What it still cannot do
+is reach this board **from another machine**: the bind section below is unchanged, and
+`offLoopback` asks where the server bound rather than who is calling. Teaching that guard the
+difference is #501, and until it lands a device paired from a second machine is a credential
+that works only from this one.
 
-`scripts/check-pairing-handshake.mjs` holds this, including an approval attempted from a
-genuinely non-loopback socket and one attempted with a forwarded header claiming loopback.
+**Taking one away** is [devices.md](devices.md): the list, the name and the revoke. A revocation
+refuses the device on its **next request** — every verification reads the registry, so there is
+no cache to wait out — and closes the sockets it holds, because an upgrade already accepted goes
+on streaming the scene and every live shell's scrollback whatever the registry says afterwards.
+Revoking the device you are reading on is allowed; the host is not on the list and cannot be
+locked out from there.
+
+`scripts/check-pairing-handshake.mjs` holds the approval, including one attempted from a
+genuinely non-loopback socket and one attempted with a forwarded header claiming loopback;
+`scripts/check-device-management.mjs` and `scripts/check-device-revoke-socket.mjs` hold what
+becomes of a device afterwards.
 
 ## Where it listens
 
