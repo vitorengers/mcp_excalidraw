@@ -259,8 +259,21 @@ check('and no outcome maps to two of them',
       kinds.every((kind) => typeof PEER_CALL_LIVENESS[kind] === 'string'),
       JSON.stringify(PEER_CALL_LIVENESS));
 
-const supplying = tracked.filter((file) => !file.endsWith('core/peer-client.ts')
-  && /callPeer\([^)]*,[^)]*,[^)]*\)/.test(readFileSync(join(repoRoot, file), 'utf8')));
+// What is banned is a *transport*, not a third argument: `callPeer(peer, call)` with two object
+// literals in it already carries three commas, so counting them called `core/peer-workspaces.ts`
+// a breach for having named the fields of a request. A caller that names the seam is what this is
+// about, and a caller that does not cannot supply one whatever its formatting.
+//
+// Comments blanked first, and for the reason `check-tiers.mjs` blanks them: a module explaining
+// in prose which transport it defaults to is a module doing the right thing, and a rule that read
+// the explanation as the breach would make writing it down the thing that fails.
+const withoutComments = (text) =>
+  text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+const supplying = tracked.filter((file) => {
+  if (file.endsWith('core/peer-client.ts')) return false;
+  const text = withoutComments(readFileSync(join(repoRoot, file), 'utf8'));
+  return /callPeer\(/.test(text) && /(transport\s*:|PeerTransport\b)/.test(text);
+});
 check('nothing in src/ passes the transport', supplying.length === 0,
       `${supplying.join(', ')} — a board that can be told who answered is a board that can be `
       + 'lied to about a peer');
