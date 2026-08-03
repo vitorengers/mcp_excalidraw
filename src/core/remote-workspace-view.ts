@@ -69,8 +69,10 @@ export interface RemoteWorkspaceView {
    *
    * It goes back to that board on every request about the project, so it crosses unchanged.
    * Two boards can perfectly well both hold an `id` of `board`; making one addressable from
-   * here without colliding with the other is #520's, and is done to this value rather than in
-   * place of it.
+   * here without colliding with the other is `core/remote-workspace-id.ts`'s, and it is done
+   * *to* this value rather than in place of it — `mintRemoteWorkspaceId` takes the id that
+   * arrived here and the peer's own id, and its inverse hands this one back for the upstream
+   * URL. So what crosses is the owner's spelling, unmodified.
    */
   id: string;
   /** What a person reads on the tab. The operator's own word for the project. */
@@ -151,10 +153,10 @@ const UNNAMED_PEER = 'another machine';
  * project's own name and the name this board calls the machine by are enough to disambiguate,
  * and disclose nothing about the peer's disk.
  *
- * The peer's name is the second argument because it is not the owner's to give. It is what the
- * operator typed on *this* machine when they paired it, held in this board's own peer record
- * (#519), so an owning board cannot influence what it is labelled as — and a peer that has not
- * been named yet reads as a sentence rather than as `undefined`.
+ * The peer's name is the second argument because it is not the owner's to give. It is
+ * `PeerRecord.name` in `core/peer-registry.ts` — what this operator calls that machine, theirs
+ * to change and keyed on by nothing — so an owning board cannot influence what it is labelled
+ * as, and a peer that has not been named yet reads as a sentence rather than as `undefined`.
  */
 export function remoteWorkspaceLocation(view: RemoteWorkspaceView, peerName: string): string {
   const peer = peerName.trim() || UNNAMED_PEER;
