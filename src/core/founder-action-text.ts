@@ -149,29 +149,224 @@ export const FOUNDER_ACTION_JARGON: readonly string[] = [
   'OAuth', 'PAT', 'worktree', 'single-select', 'stderr', 'loopback',
 ];
 
+/** A leading ordinal a producer transcribed along with the step. */
+const ORDINAL = /^\s*(?:step\s+)?(\d+)\s*[.):\-–—]\s+/i;
+
+/** Backticked spans and URLs, which the long-line, machine-noise and jargon rules skip. */
+const SPANS = /`[^`]*`|https?:\/\/\S+/g;
+
+/** A path into this tree, which is a fact about the machine rather than about the blocker. */
+const OUR_PATH = /(^|[\s(<"'])(?:src|scripts)\/[\w./-]+/;
+
+/** A tool's own error prefix, at the head of a line. */
+const ERROR_PREFIX = /(^|\n)[ \t]*\w*Error:/;
+
+/** An HTTP status, which is a number no founder has an opinion about. */
+const HTTP_STATUS = /\bHTTP\s\d{3}\b/;
+
+const isText = (value: unknown): value is string => typeof value === 'string';
+
+/** A field as a string, whatever a producer handed over. */
+const text = (value: unknown): string => (isText(value) ? value : '');
+
+/** The field with backticked spans and URLs taken out, so a rule cannot read them. */
+const withoutSpans = (value: string): string => value.replace(SPANS, ' ');
+
+/** A step as the reader sees it: any ordinal the producer typed belongs to the composer. */
+const bare = (step: unknown): string => text(step).replace(ORDINAL, '').trim();
+
+/** The steps as an array, whatever a producer handed over. */
+const stepsOf = (fields: FounderActionFields): string[] =>
+  Array.isArray(fields?.steps) ? fields.steps.map((step) => text(step)) : [];
+
+/**
+ * A field cut into sentences.
+ *
+ * A full stop that is not followed by a space is inside a number or an address rather than at
+ * the end of anything, which is why the split needs the whitespace.
+ */
+const sentencesOf = (value: string): string[] =>
+  value.split(/(?<=[.!?])\s+/).map((sentence) => sentence.trim()).filter(Boolean);
+
+const wordsIn = (sentence: string): number => sentence.split(/\s+/).filter(Boolean).length;
+
+/**
+ * Whether the word is explained where it stands.
+ *
+ * Deliberately local rather than "somewhere in the same sentence": a sentence that explains
+ * itself two clauses later has already lost the reader at the word. `pushRefusal` passes this
+ * because its sentence keeps going at the word — "stranded in a worktree — so it is refused
+ * before anything is created" — which is what a gloss is.
+ */
+function glossed(sentence: string, at: number, word: string): boolean {
+  const after = sentence.slice(at + word.length);
+  if (/^[\s,]{0,3}[(–—]|^[\s]{0,3}--\s/.test(after)) return true;
+  return /[)][\s,]{0,3}$/.test(sentence.slice(0, at));
+}
+
+/** Every jargon word in the field that nothing explains and no backticks excuse. */
+function unexplainedJargon(value: string): string[] {
+  const found: string[] = [];
+  for (const sentence of sentencesOf(withoutSpans(value))) {
+    for (const word of FOUNDER_ACTION_JARGON) {
+      const pattern = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+      for (const hit of sentence.matchAll(pattern)) {
+        if (typeof hit.index === 'number' && !glossed(sentence, hit.index, hit[0])) found.push(word);
+      }
+    }
+  }
+  return found;
+}
+
 /**
  * Render one founder action.
  *
- * A first cut: the fields, joined. This is what the register looks like before there is one.
+ * Four headings, always in this order, and `## Evidence` last and only when there is any.
+ * The order is the order the reader's questions arrive in, and a composer that could be asked
+ * for another order would be a composer producers argue with.
  */
 export function renderFounderAction(
   fields: FounderActionFields,
   evidence?: FounderActionEvidence,
 ): string {
-  const steps: Array<string | undefined> = Array.isArray(fields?.steps) ? fields.steps : [];
-  const parts = [fields?.title, fields?.what, fields?.why, ...steps, fields?.confirm];
-  if (evidence) parts.push(evidence.command, evidence.said, evidence.source);
-  return parts.filter((part) => typeof part === 'string' && part).join('\n\n');
+  const steps = stepsOf(fields).map((step, at) => `${at + 1}. ${bare(step)}`);
+  const lines: string[] = [
+    `# ${text(fields?.title).trim()}`,
+    '',
+    '## What',
+    '',
+    text(fields?.what).trim(),
+    '',
+    '## Why',
+    '',
+    text(fields?.why).trim(),
+    '',
+    '## Steps',
+    '',
+    ...steps,
+    '',
+    '## Confirm',
+    '',
+    text(fields?.confirm).trim(),
+  ];
+
+  // Only what was supplied, in one order. An evidence object whose every field is empty is no
+  // evidence: the heading would promise the reader something and then show them nothing.
+  const rows: string[] = [];
+  const command = text(evidence?.command).trim();
+  const said = text(evidence?.said).trim();
+  const source = text(evidence?.source).trim();
+  if (command) rows.push(`- Command: \`${command}\``);
+  if (said) rows.push(`- Said: ${said}`);
+  if (source) rows.push(`- Source: ${source}`);
+  if (rows.length > 0) lines.push('', '## Evidence', '', ...rows);
+
+  return lines.join('\n');
 }
 
 /**
  * Read a record against every rule, and say which field broke which one.
  *
- * A first cut: nothing is read and nothing is refused.
+ * Countable, one rule at a time, and each fault names a field — because "this does not sound
+ * like a founder action" is advice, and advice is what this module exists instead of.
  */
 export function validateFounderAction(fields: FounderActionFields): FounderActionValidation {
-  void fields;
-  return { ok: true, faults: [] };
+  const faults: FounderActionFault[] = [];
+  const fault = (field: string, rule: string, detail: string) => faults.push({ field, rule, detail });
+
+  const title = text(fields?.title);
+  const what = text(fields?.what);
+  const why = text(fields?.why);
+  const confirm = text(fields?.confirm);
+  const steps = stepsOf(fields);
+
+  // ── every field non-empty ──
+  const singles: ReadonlyArray<[string, string, number]> = [
+    ['title', title, FOUNDER_ACTION_LIMITS.title],
+    ['what', what, FOUNDER_ACTION_LIMITS.what],
+    ['why', why, FOUNDER_ACTION_LIMITS.why],
+    ['confirm', confirm, FOUNDER_ACTION_LIMITS.confirm],
+  ];
+  for (const [field, value, limit] of singles) {
+    if (!value.trim()) fault(field, 'non-empty', 'nothing was written in it');
+    if (value.length > limit) fault(field, 'length', `${value.length} characters, the cap is ${limit}`);
+  }
+  if (steps.length === 0 || steps.some((step) => !bare(step))) {
+    fault('steps', 'non-empty', 'a step with nothing in it is not a step');
+  }
+
+  // ── the title is a title ──
+  if (/\r|\n/.test(title)) fault('title', 'one-line', 'a title is one line');
+  if (/\.$/.test(title.trim())) fault('title', 'no-trailing-full-stop', 'a title is not a sentence');
+
+  // ── the steps are a procedure ──
+  if (steps.length > 0
+      && (steps.length < FOUNDER_ACTION_LIMITS.minSteps || steps.length > FOUNDER_ACTION_LIMITS.maxSteps)) {
+    fault('steps', 'count', `${steps.length} step(s), the range is `
+      + `${FOUNDER_ACTION_LIMITS.minSteps} to ${FOUNDER_ACTION_LIMITS.maxSteps}`);
+  }
+  for (const step of steps) {
+    const one = bare(step);
+    if (one.length > FOUNDER_ACTION_LIMITS.step) {
+      fault('steps', 'length',
+            `${one.length} characters, the cap is ${FOUNDER_ACTION_LIMITS.step}: ${one.slice(0, 40)}…`);
+    }
+    if (one && sentencesOf(withoutSpans(one)).length > 1) {
+      fault('steps', 'one-sentence', `two things in one step: ${one.slice(0, 60)}…`);
+    }
+  }
+
+  // A producer that transcribed a numbered list has to have transcribed all of it. The composer
+  // strips the ordinal either way, so a gap here is a step that was dropped on the way in.
+  const ordinals = steps.map((step) => step.match(ORDINAL)?.[1]);
+  const numbered = ordinals.filter((found) => found !== undefined);
+  if (numbered.length > 0) {
+    const consecutive = numbered.length === steps.length
+      && ordinals.every((found, at) => Number(found) === at + 1);
+    if (!consecutive) {
+      fault('steps', 'numbering',
+            `the steps read ${ordinals.map((found) => found ?? '—').join(', ')} rather than `
+            + `${steps.map((_, at) => at + 1).join(', ')}`);
+    }
+  }
+
+  // ── what nothing founder-facing may carry ──
+  const founderFields: ReadonlyArray<[string, string]> = [
+    ['title', title], ['what', what], ['why', why], ['confirm', confirm],
+    ...steps.map((step, at): [string, string] => [`steps[${at}]`, bare(step)]),
+  ];
+  for (const [field, value] of founderFields) {
+    const plain = withoutSpans(value);
+    if (HTTP_STATUS.test(plain)) fault(field, 'machine-noise', 'an HTTP status is not a fact for a reader');
+    if (ERROR_PREFIX.test(plain)) fault(field, 'machine-noise', 'a tool\'s "Error:" prefix belongs in the evidence');
+    if (OUR_PATH.test(plain)) fault(field, 'machine-noise', 'a path into this tree belongs in the evidence');
+    for (const line of plain.split(/\r?\n/)) {
+      if (line.length > FOUNDER_ACTION_LIMITS.line) {
+        fault(field, 'machine-noise',
+              `a run of ${line.length} characters on one line, the cap is ${FOUNDER_ACTION_LIMITS.line}`);
+      }
+    }
+    for (const sentence of sentencesOf(value)) {
+      const words = wordsIn(sentence);
+      if (words > FOUNDER_ACTION_LIMITS.sentenceWords) {
+        fault(field, 'sentence-words',
+              `${words} words in one sentence, the cap is ${FOUNDER_ACTION_LIMITS.sentenceWords}`);
+      }
+    }
+    const jargon = unexplainedJargon(value);
+    if (jargon.length > 0) {
+      fault(field, 'jargon', `${[...new Set(jargon)].join(', ')} — gloss it, or put the literal in backticks`);
+    }
+  }
+
+  // ── and the whole of it, as the reader gets it ──
+  const body = renderFounderAction(fields);
+  if (body.length > FOUNDER_ACTION_LIMITS.body) {
+    fault('body', 'body-length',
+          `${body.length} rendered characters before the evidence, the cap is ${FOUNDER_ACTION_LIMITS.body}`);
+  }
+
+  return { ok: faults.length === 0, faults };
 }
 
 /**
