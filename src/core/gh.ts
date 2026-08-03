@@ -239,6 +239,52 @@ export class TerminalGhFailure extends Error {
 }
 
 /**
+ * Somebody told about every `gh` failure no retry can fix.
+ *
+ * One reporter for the whole server, installed once beside the startup preflights, rather than
+ * a producer wired into each call site: `gh` is reached from four regions of `server.ts`, and a
+ * feature that had to be remembered at each of them is a feature that will be forgotten at the
+ * fifth. The rethrow below is the one place every terminal failure passes through.
+ *
+ * **Only the terminal ones**, and that is the whole selection rule. A failure no retry can fix
+ * is by definition one a person has to act on, which is what a founder action is; the
+ * fallthrough in `classifyGhFailure` is deliberately non-terminal, so a failure this tool does
+ * not recognise stays a bad minute and produces nothing.
+ *
+ * It is handed the `TerminalGhFailure` itself rather than a message, because `said` and
+ * `remedy` are separate fields on it. `message` is the two glued together, and a reader of
+ * `message` is how a tool's stderr reaches a card written for somebody with a payment card.
+ */
+export type TerminalGhReporter = (workspace: Workspace, failure: TerminalGhFailure) => void;
+
+let reportTerminalFailure: TerminalGhReporter | null = null;
+
+/**
+ * Install the reporter, or take it away again with `null`.
+ *
+ * Module state rather than an option on `RunGhOptions` for the reason above: an option is a
+ * thing every call site has to pass, and the call sites are what this exists to avoid editing.
+ */
+export function setTerminalGhReporter(reporter: TerminalGhReporter | null): void {
+  reportTerminalFailure = reporter;
+}
+
+/**
+ * Tell the reporter, and never let it become this call's failure.
+ *
+ * A reporter writes a file and composes text for a person; both can throw, and neither is a
+ * reason for a `gh` call to stop answering what it was going to answer. The failure being
+ * reported is the one the caller gets, whatever happens here.
+ */
+function reportTerminal(workspace: Workspace, failure: TerminalGhFailure): void {
+  try {
+    reportTerminalFailure?.(workspace, failure);
+  } catch (error) {
+    logger.warn(`A terminal gh failure could not be reported: ${(error as Error).message}`);
+  }
+}
+
+/**
  * The error a failed `gh` becomes.
  *
  * `said` is what the caller will read; `full` is everything `gh` printed, which is what the
@@ -302,7 +348,10 @@ export async function runGh(
       // A failure that cannot succeed does not get a second chance. Three tries and 1.6
       // seconds of waiting turn a missing scope into a slow missing scope, and the wait is
       // paid by the canvas, which is showing nothing while it happens.
-      if (error instanceof TerminalGhFailure) throw error;
+      if (error instanceof TerminalGhFailure) {
+        reportTerminal(workspace, error);
+        throw error;
+      }
       // Report the last failure, not the first: it describes what kept happening.
       lastError = error as Error;
       if (attempt < attempts - 1) {
