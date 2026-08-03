@@ -383,6 +383,29 @@ Nothing here can add more, and every run is refused at once until the window com
 The usage figure has room again, and a run begins instead of refusing.
 ```
 
+## The column the canvas owns
+
+The cards are drawn in a column of the project mirror's that mirrors nothing, under the reserved
+id `canvas:founder` — the arrangement **My Notes** already proved, and here for a stronger
+reason. The first founder action a fresh clone produces is *sign the GitHub CLI in*, and at that
+moment there is no project to file it into and no working `gh` to file it with, so a column that
+waited for GitHub to declare one would be missing exactly when it is needed. It is drawn on the
+board with no project at all, beside the notes column and nothing else.
+
+Nothing is drawn while nothing is waiting: no column, no extra width, no extra line on the strip.
+When something is, the column is **appended** after every column the project declares, so no
+column already there changes its index — and therefore its hue — and the strip gains a line
+saying how many are open.
+
+A card is an ordinary mirror card carrying `customData.founderKey` and no item id, which is what
+makes one dropped into another column snap back with nothing sent to GitHub: there is no project
+item to address a move to. It is not locked, because the panel that will answer these needs a
+card a reader can select. The `+` is not drawn on this column, and a block written by hand still
+rehomes to **My Notes** — a founder action is something the board noticed, never something
+somebody typed.
+
+[project-board.md](project-board.md#the-founder-column) is where the geometry is argued.
+
 ## What is not written here yet
 
 The register is the first half of the column and the rest of it lands separately. Each heading
@@ -398,11 +421,6 @@ about again on its own rather than waiting to be told.
 
 Where a founder action is kept once the run that noticed it has ended, and what a second sighting
 of the same blocker does to the one already there.
-
-### The column the canvas owns
-
-How the column is drawn on a board that has never had one, so the first blocker on a fresh clone
-has somewhere to land.
 
 ### Publishing to the GitHub project
 

@@ -4,8 +4,10 @@ A region to the left of the board's own content, showing the workspace's GitHub 
 section per column, newest issue on top — except **Todo**, which reads oldest first because it is
 the column the queue drains — and cards you can drag between columns with the move travelling back
 to GitHub. Dormant unless a project names a `githubProject` — a board that has none mirrors
-nothing, and since #316 still draws the one column that mirrors nothing anyway: **My Notes**, with
-its `+`. See [The region on a board with no project](#the-region-on-a-board-with-no-project).
+nothing, and since #316 still draws the columns that mirror nothing anyway: **My Notes**, with
+its `+`, and — when anything is waiting in it — **Founder Actions**, at the other end. See
+[The region on a board with no project](#the-region-on-a-board-with-no-project) and
+[The founder column](#the-founder-column).
 
 The **leftmost** region again since #200: the canvas reads `mirror | terminals | documentation`,
 and the terminal blocks sit between this one and the board's own content, anchored to the
@@ -304,6 +306,50 @@ the issue in](issue-block.md#a-run-needs-a-repository-to-create-the-issue-in).
 `scripts/check-notes-column-without-project-browser.mjs` holds all of it, in a browser and at two
 zooms: the column's position is computed relative to the mirrored ones, so drawing it alone is a
 layout change that compiles perfectly either way.
+
+## The founder column
+
+The second column the canvas owns, under the reserved id `canvas:founder`, holding the work only
+a person can do — install something, sign in, pay a bill. Its cards come from this board's own
+records ([founder-actions.md](founder-actions.md)) rather than from GitHub, and it is drawn on
+exactly the terms **My Notes** is: an id with a `:` in it, which is not an id GitHub could issue
+and which `buildMoveArgs` refuses before a command line is built.
+
+The reason it cannot wait for GitHub to declare a column is the first founder action this product
+will ever produce, which is *sign the GitHub CLI in*. At that moment there is no project to file
+it into and no working `gh` to file it with, so the board with no project is precisely the board
+with something waiting — which is why the column rides on the 404 as well as on the read.
+
+Four decisions worth having in one place:
+
+- **Appended, after every column the project declares.** A column's hue is its index into a list
+  of five, so inserting it anywhere else would re-colour every column after it the day the first
+  blocker arrived. At the end, nothing already drawn changes index, hue, role or geometry, and the
+  mirror simply gets 324 wider. Being pinned by its right edge, the region therefore slides 324
+  left on the poll that first draws it — the same accepted shift a column added on GitHub already
+  causes, and [Where the region sits](#where-the-region-sits) is where that is argued.
+- **Nothing is drawn when nothing is waiting.** No column, no extra width, no extra line on the
+  strip. A column for a case that has not happened is a column in everybody's way.
+- **A card is `role: 'card'` under the mirror's own kind**, carrying `customData.founderKey` and
+  no `customData.itemId`. Not a role of its own, so all five derived-element rules go on keying
+  on the kind and nothing is saved, exported, synced or mis-measured; and the missing item id is
+  what makes a card dropped in another column snap back with no request — there is no project
+  item to address a move to. It is deliberately *not* locked, because a locked shape cannot even
+  be selected.
+- **A project that declares a column of that name draws its own and no duplicate.** Once these
+  are published as draft items they arrive in a column read from GitHub, and the canvas has to
+  stand down rather than show the same work twice under one heading.
+
+The strip carries a second line saying how many are waiting, the way the `morePages` line is
+carried, and for the reason [a failed read draws a strip rather than a
+toast](#a-read-that-fails-says-so--on-a-strip-when-the-board-is-cold-in-words-either-way): what
+is being reported lasts as long as the blocker does.
+
+The `+` is not drawn on this column and a draft dropped anywhere still rehomes to **My Notes**. A
+founder action is never authored by hand — it is something the board noticed.
+`scripts/check-founder-column-canvas.mjs` holds the arithmetic and
+`scripts/check-founder-column-browser.mjs` drives the drag in a real browser, with the same drag
+on a real card as its control.
 
 ## Where the region sits
 
