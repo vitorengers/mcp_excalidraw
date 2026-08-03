@@ -419,7 +419,17 @@ try {
   console.log('0. src/server.ts learns a name, and the reply halves are named through one list');
 
   const serverSource = readFileSync(join(repoRoot, 'src', 'server.ts'), 'utf8');
-  const mentions = serverSource.split('\n')
+  // Comments blanked first, and for the reason `check-peer-client.mjs` blanks them: what this is
+  // about is how much *code* the server learns — an import and one `app.use` — and a comment
+  // beside that `app.use` explaining what runs after it, and why, is the file doing the right
+  // thing. A rule that read the explanation as the breach would make writing it down the failure
+  // (#530). Blanked in place rather than deleted, so the line numbers below still point at the
+  // file; the route case underneath reads the raw source, because a comment cannot register one.
+  const blanked = (block) => block.replace(/[^\n]/g, ' ');
+  const serverCode = serverSource
+    .replace(/\/\*[\s\S]*?\*\//g, blanked)
+    .replace(/^[^\n]*\/\/[^\n]*$/gm, (line) => (/^\s*\/\//.test(line) ? blanked(line) : line));
+  const mentions = serverCode.split('\n')
     .map((line, at) => ({ line: line.trim(), at: at + 1 }))
     .filter(({ line }) => /peer-proxy|peerProxy/.test(line));
   check('src/server.ts names the forwarder on exactly two lines', mentions.length === 2,
@@ -748,15 +758,26 @@ try {
         marksOn(peerAfter).includes(ONLY_ON_THE_PEER), JSON.stringify(marksOn(peerAfter)));
 
   // Asked of the store rather than of the page: with the peer forgotten the id stops being
-  // routable, so the local routes answer for it — which is exactly the store this board would
-  // have filled if nothing had been forwarded.
+  // routable here, so nothing forwards it — which is exactly the store this board would have
+  // filled if nothing had been forwarded in the first place.
+  //
+  // **The observation moved with #530 and the property did not.** Falling through used to mean
+  // being answered out of the empty store `elementsFor` makes for an unknown id, so *the store is
+  // empty* was how *nothing was manufactured* was read. That board is now refused with 421 and a
+  // sentence instead, because a blank canvas answered for a project that is alive somewhere reads
+  // exactly like a project with nothing on it. The refusal is the stronger evidence of the same
+  // property: the request never reaches a handler, so no store, board-state file, terminal
+  // session or implement record can be made for it at all. Either shape is accepted here, because
+  // what this case is about is that nothing was filled — not which sentence says so.
   await evaluate('window.location.href = "about:blank"');
   await sleep(1_000);
   writePeers([RECORDER_PEER]);
   const localStore = await ask(LOCAL, `/api/elements?workspace=${DESK_BOARD}`);
-  check('and the local store for that id is still empty — nothing was manufactured here',
-        localStore.status === 200 && (localStore.json?.elements?.length ?? -1) === 0,
-        `${localStore.status} ${localStore.text.slice(0, 200)}`);
+  const refusedHere = localStore.status === 421
+    && typeof localStore.json?.error === 'string' && localStore.json.error.length > 20;
+  const emptyHere = localStore.status === 200 && (localStore.json?.elements?.length ?? -1) === 0;
+  check('and nothing was manufactured here for that id — refused, or an empty store',
+        refusedHere || emptyHere, `${localStore.status} ${localStore.text.slice(0, 200)}`);
   writePeers([DESK_PEER, RECORDER_PEER]);
 
   // ── 3. Recovery ─────────────────────────────────────────────
