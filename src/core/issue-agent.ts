@@ -26,18 +26,22 @@ import os from 'os';
 import path from 'path';
 import logger from '../utils/logger.js';
 import {
-  deliverStdin, invocationArgs, singleQuoted, tokenizeCommand, withoutAnyFullAccess,
-  type AgentAdapter, type AgentCommandSpec, type AgentInvocation, type AgentRole,
+  AGENT_PERMISSIONS, deliverStdin, hasArgument, invocationArgs, quotedLine, singleQuoted,
+  tokenizeCommand, withoutAnyFullAccess,
+  type AgentAdapter, type AgentBackendId, type AgentCommandSpec, type AgentInvocation,
+  type AgentRole,
 } from './agent-adapter.js';
 import {
-  agentGrants, agentSpecFor, parseAgentBackends, type AgentGrants,
+  KNOWN_BACKEND_NAMES, agentGrants, agentSpecFor, parseAgentBackends, type AgentGrants,
 } from './agent-backend.js';
+import { founderChatPrompt, type FounderChatMessage } from './founder-chat.js';
+import type { FounderActionEvidence, FounderActionFields } from './founder-action-text.js';
 import { adapterFor } from './agents/index.js';
 import { commandLineInvocation } from './agents/raw.js';
 import { AgentUsage, UsageMeter } from './agent-usage.js';
 import { GITHUB_HOST } from './github-host.js';
 import { AgentSettings, loadAgentWorkflow, Workspace } from './workspaces.js';
-import { env as settingValue } from './settings.js';
+import { env as settingValue, settingName } from './settings.js';
 
 /**
  * The two command-line helpers that are still anybody's, still reachable from here.
@@ -682,6 +686,34 @@ export function agentRunFor(
       fullAccess: role === 'implement' && implementFullAccess(),
     }),
   };
+}
+
+/**
+ * The refusal a board answers when the run being asked for is not one it can make.
+ *
+ * The wording is the server's — it was `agentCommandRefusal`'s whole body, and that function
+ * still produces it by calling this. It moved down here because a second caller appeared that
+ * is not a route: `runFounderChatAgent` refuses in this module, before anything is spawned, and
+ * a second copy of the sentence is how the two come to name different variables.
+ *
+ * Naming the variable that is missing is the whole value of refusing rather than letting a run
+ * start and exit 127 somewhere the reader cannot see. The backend variable comes first, because
+ * it is the answer for a board that has an agent installed and no command line anywhere.
+ */
+export function agentNotEnabledRefusal(
+  workspace: Workspace,
+  what: string,
+  variable: string
+): string {
+  const where = workspace.environment.kind === 'wsl'
+    ? {
+        wanted: `${variable}_WSL or ${variable}`,
+        names: `the WSL distro "${workspace.environment.distro}" names it`,
+      }
+    : { wanted: variable, names: 'this machine names it' };
+  return `${what} is not enabled for workspace "${workspace.id}". `
+    + `Set ${settingName('AGENT_BACKEND')} to one of ${KNOWN_BACKEND_NAMES}, `
+    + `or ${where.wanted} to the agent command as ${where.names}.`;
 }
 
 /**
@@ -1567,4 +1599,242 @@ export async function runReviseAgent(
     ...(options.onUsage ? { onUsage: options.onUsage } : {}),
   });
   return { ok: run.ok, issueUrl: run.url, output: run.output, error: run.error };
+}
+
+// ─── One founder chat turn ────────────────────────────────────
+
+/**
+ * The `gh` verbs a founder chat may not be granted, whatever list it was handed.
+ *
+ * Verbs rather than the binary, because the chat's whole value is that it can *read* — the run
+ * that answers "did my payment go through" wants `gh issue list` and `gh issue view` — and a
+ * board that took `gh` away wholesale would leave an agent guessing about the thing it was
+ * asked. `gh project` is here with no verb after it because every one of them writes: the
+ * product's own habit is to move a created issue into Todo, and a chat that could do that is a
+ * chat that can put work into the queue a person never asked for.
+ *
+ * A future addition is one row. `scripts/check-founder-chat-agent.mjs` iterates the same list.
+ */
+const FOUNDER_CHAT_FORBIDDEN = [
+  'gh issue create',
+  'gh issue edit',
+  'gh issue comment',
+  'gh project',
+];
+
+/** Said after the refusal below, because "not enabled" alone sends a reader to the wrong knob. */
+const FOUNDER_CHAT_UNNARROWED = 'The founder chat runs only where the agent’s permissions can '
+  + 'be narrowed, and they cannot be on a "raw" backend or on a command line that already '
+  + 'states its own --allowedTools, --permission-mode or sandbox.';
+
+/**
+ * The rules of an allow-list, split on the whitespace *between* them.
+ *
+ * A plain split on spaces would tear `Bash(gh issue list:*)` into three, which is how a
+ * narrowing comes to drop a rule it never meant to touch. Parenthesis depth is the whole of it:
+ * the grammar has no nesting and no quoting inside a rule.
+ */
+function toolRules(list: string): string[] {
+  const rules: string[] = [];
+  let current = '';
+  let depth = 0;
+  for (const character of list) {
+    if (character === '(') depth += 1;
+    else if (character === ')') depth -= 1;
+    else if (/\s/.test(character) && depth === 0) {
+      if (current) rules.push(current);
+      current = '';
+      continue;
+    }
+    current += character;
+  }
+  if (current) rules.push(current);
+  return rules;
+}
+
+/**
+ * Whether one rule's command space touches a verb the chat may not run.
+ *
+ * Both directions, and the second is the one that matters: `Bash(gh:*)` names none of the four
+ * verbs and grants every one of them. So a rule goes when it is at least as wide as a forbidden
+ * verb *or* narrower than one — `Bash(gh project item-add:*)` is inside `gh project` — and stays
+ * only when the two cannot overlap at all.
+ */
+function grantsGhWrite(rule: string): boolean {
+  const inner = /^Bash\((.*)\)$/.exec(rule)?.[1];
+  if (inner === undefined) return false;
+  const command = inner.replace(/:\*$/, '').trim().replace(/\s+/g, ' ');
+  if (!command) return false;
+  return FOUNDER_CHAT_FORBIDDEN.some((verb) => command === verb
+    || command.startsWith(`${verb} `) || verb.startsWith(`${command} `));
+}
+
+/** The same list with those rules removed, and nothing else changed. It only ever shortens. */
+function withoutGhWriteRules(value: string): string {
+  return toolRules(value).filter((rule) => !grantsGhWrite(rule)).join(' ');
+}
+
+/**
+ * The same invocation with the GitHub writes taken out of it, or null when they cannot be.
+ *
+ * Null is an answer rather than a failure to look, and it has two causes, both of which are
+ * boards a chat must be refused on rather than run:
+ *
+ *  - the `raw` backend, which has no `AGENT_PERMISSIONS` entry and writes no posture flags at
+ *    all. What such a board grants is whatever its operator typed into a variable, and nothing
+ *    here can narrow a string it did not write.
+ *  - an operator who already stated a posture, where `permissionArgs` deliberately appends
+ *    nothing. Their grant is theirs; a narrowing bolted onto it would be this board overruling
+ *    a decision it was handed.
+ *
+ * Both are recognised the same way, off the **realised argv** rather than off the constants: the
+ * board's own read-only posture has to be in there, exactly once, and it has to be the only
+ * posture in there. A second `--allowedTools` further along — an operator's pinned arguments are
+ * appended last, and last is the word a CLI keeps — is a list this one is not narrowing, so the
+ * answer is null there too.
+ */
+function narrowedInvocation(
+  backend: AgentBackendId,
+  invocation: AgentInvocation
+): AgentInvocation | null {
+  const permissions = AGENT_PERMISSIONS[backend as 'claude-code' | 'codex-cli'];
+  if (!permissions) return null;
+
+  const posture = permissions.flags['read-only'];
+  const found: number[] = [];
+  for (let index = 0; index + posture.length <= invocation.args.length; index += 1) {
+    if (posture.every((one, offset) => invocation.args[index + offset] === one)) found.push(index);
+  }
+  const start = found.length === 1 ? found[0] ?? -1 : -1;
+  if (start === -1) return null;
+
+  // And it is the only posture on the line. Counted rather than searched, so that a flag this
+  // backend spells in two ways is still one statement whichever way it was written.
+  const stated = invocation.args.filter(
+    (one) => hasArgument([one], ...permissions.decided)
+  ).length;
+  const inPosture = posture.filter((one) => hasArgument([one], ...permissions.decided)).length;
+  if (stated !== inPosture) return null;
+
+  const args = invocation.args.map((one, index) => (
+    index >= start && index < start + posture.length ? withoutGhWriteRules(one) : one
+  ));
+  // A backend whose read-only posture is a sandbox rather than a list has nothing to take out,
+  // and is already the posture this chat wants. Handing back the same object says so.
+  if (args.every((one, index) => one === invocation.args[index])) return invocation;
+  // The line is derived from argv for every named backend — see the note at the top of
+  // `agent-adapter.ts` — so it is re-derived here rather than left describing the old argv.
+  return { ...invocation, args, line: quotedLine(invocation.command, args) };
+}
+
+/** What one turn needs beyond the conversation itself. */
+export interface FounderChatAgentOptions {
+  /** Which agent, and the command that reaches it. The issue agent's. See `agentGrantFor`. */
+  agent: AgentCommandSpec;
+  /**
+   * The item's key, which is not one of its fields.
+   *
+   * It is `founderActionKey`'s composition rather than anything a person wrote, and the prompt
+   * has to name it so that an answer about this card can be told from an answer about another.
+   */
+  key: string;
+  timeoutMs?: number;
+  /** Named when the command turns out not to exist where it was run. See RunAgentOptions. */
+  notFoundVariable?: string | null;
+  /** The run's token totals so far. The same opt-in as `runIssueAgent`, one seam not two. */
+  onUsage?: (usage: AgentUsage) => void;
+}
+
+/**
+ * One turn of the founder chat, as a headless run with the GitHub writes taken away.
+ *
+ * **A loop of one-shot runs, one per message, and that is measured rather than preferred.**
+ * A readable transcript needs `--output-format stream-json`, which Claude Code accepts only
+ * beside `--print`, which reads the prompt from stdin and spends it; and a pseudoterminal has no
+ * end of file to spend a second one with — measured on ConPTY, a child sees neither `^Z` nor
+ * `^D` (`terminal-session.ts`, `docs/terminal.md`). A readable run and a typeable session are
+ * mutually exclusive under both named backends, so the conversation is kept by the caller and
+ * every turn is a new process.
+ *
+ * **No `host`**, exactly as `runIssueAgent` and `runReviseAgent` pass none. Nothing here opens a
+ * terminal session, which means none of the eight `TERMINAL_SESSION_LIMIT` allows is spent: one
+ * tab per founder action would exhaust a board, and a tab never ends by itself, reports no token
+ * counts, and holds its slot until a person closes it.
+ *
+ * **No new `AgentRole`.** This is the issue role — a run that reads and answers — with its
+ * invocation narrowed in place, which is what `withoutFullAccess` already does one door along. A
+ * role would cost a union member, an arm in `postureFor`, per-backend flags, its own grant and a
+ * key in `AgentsHealth` that nothing fills.
+ *
+ * **A board whose posture cannot be narrowed is refused**, in the wording the board already uses
+ * for an agent it cannot run, with the cause said after it. A chat that silently holds
+ * repository write access is worse than no chat: the prompt tells the agent it may not file
+ * anything, and prose is not a boundary.
+ *
+ * Never throws. It answers in `IssueAgentResult`'s shape, with `issueUrl` always null — a
+ * conversation is not asked for a URL, so unlike the two runs above, `ok` is the exit code and
+ * nothing else.
+ */
+export async function runFounderChatAgent(
+  workspace: Workspace,
+  fields: FounderActionFields,
+  evidence: FounderActionEvidence | null | undefined,
+  transcript: readonly FounderChatMessage[],
+  message: string,
+  options: FounderChatAgentOptions
+): Promise<IssueAgentResult> {
+  try {
+    // The issue agent's settings: a founder chat is the research agent answering a person, and a
+    // project that said how its issue agent runs said it about this run too.
+    const settings = workspace.agents?.issue ?? null;
+    const { adapter, invocation } = agentRunFor(options.agent, 'issue', settings);
+
+    const narrowed = narrowedInvocation(options.agent.backend, invocation);
+    if (!narrowed) {
+      return {
+        ok: false,
+        issueUrl: null,
+        output: '',
+        error: `${agentNotEnabledRefusal(workspace, 'Founder chat', settingName('ISSUE_AGENT'))} `
+          + FOUNDER_CHAT_UNNARROWED,
+      };
+    }
+
+    const prompt = founderChatPrompt(
+      { key: options.key, fields }, evidence, transcript, message
+    );
+    const timeoutMs = options.timeoutMs !== undefined
+      ? options.timeoutMs
+      : settings?.timeoutMs ?? undefined;
+    const run = await runAgent(workspace, prompt, {
+      adapter,
+      invocation: narrowed,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      // The kind of URL a salvaged timeout would look for, and it is all this decides here:
+      // nothing below reads `run.url`, because a conversation answers with prose.
+      expects: 'issues',
+      what: 'founder chat agent',
+      notFoundVariable: options.notFoundVariable ?? null,
+      ...(options.onUsage ? { onUsage: options.onUsage } : {}),
+    });
+
+    // The exit code alone. `AgentRun.ok` folds "exited zero *and* printed a URL" into one
+    // answer, and the second half is a question nobody asked this run.
+    const ok = run.code === 0;
+    return {
+      ok,
+      issueUrl: null,
+      output: run.output,
+      error: ok ? null : (run.error ?? 'The founder chat agent ended without saying why.'),
+    };
+  } catch (error) {
+    // Never throws, and this is the whole of that promise: a caller drawing a panel has an
+    // answer to show either way, and a chat turn that blew up is a message rather than a 500.
+    return {
+      ok: false,
+      issueUrl: null,
+      output: '',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
