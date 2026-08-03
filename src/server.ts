@@ -2601,8 +2601,16 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
  * block already reads correctly with nothing selected and no network; what only lives here is
  * the token total, because a figure that changes throughout a run cannot go on a shape without
  * broadcasting an update every time it does.
+ *
+ * Behind the funnel like everything else under `/api`, since #508/#518. That it reads memory
+ * rather than shelling out to `gh` was the reasoning it was written with, and it is not the
+ * question the guard asks: what a stranger gets here is what this machine's agents have been
+ * doing with this machine's repository, which is not less of a publication for having cost no
+ * subprocess.
  */
 app.get('/api/issue-block/:id/run', (req: Request, res: Response) => {
+  if (offLoopback(res, 'A research run is read')) return;
+
   res.json({ success: true, run: issueRuns.get(req.params.id ?? '') ?? null });
 });
 
@@ -4646,7 +4654,17 @@ function resetImplement(res: Response, workspaceId: string, issueUrl: string): v
   res.json({ success: true, issueUrl });
 }
 
+/**
+ * The same reset again, addressed by element.
+ *
+ * Refused before the element is looked at, and that order is the point rather than tidiness:
+ * this route read the store first, so a 404 for a block that is not on the board and a 400 for
+ * one that is told a caller on the network which block ids this board holds — an oracle a
+ * refusal written after the lookup would have left open. One question, asked first.
+ */
 app.delete('/api/issue-block/:id/implement', (req: Request, res: Response) => {
+  if (offLoopback(res, 'An implementation record is reset')) return;
+
   const elementId = req.params.id ?? '';
   const workspaceId = workspaceIdFrom(req);
   const element = elementsFor(workspaceId).get(elementId);
@@ -4680,10 +4698,24 @@ app.delete('/api/issue-block/:id/implement', (req: Request, res: Response) => {
  * asks this once per poll, for the marks on the cards, and the toggle's two appearances have
  * to survive every redraw — so the state that decides them has to arrive with the redraw's
  * own data or it will be one poll behind. `queue` is **absent** rather than off when
- * implementing is disabled or the server is not on loopback, because a button that cannot do
- * anything should not be drawn at all.
+ * implementing is disabled or the server is not bound to loopback, because a button that
+ * cannot do anything should not be drawn at all.
+ *
+ * That last test is about the **bind** and stays that way, which is not the same rule as the
+ * funnel above it. The toggle it decides turns `POST /api/implement/queue` on, and that route
+ * is bind-guarded along with the rest of the implement agent — so on an interface-bound board
+ * the button really cannot do anything, for its own operator too, and drawing it would be a lie
+ * whoever pressed it. What the funnel decides is a different question: who may read the
+ * records at all.
+ *
+ * The funnel is #508/#518, and this was the closest thing here to a decided exemption — it
+ * dropped `queue` off loopback on purpose, which is precisely the shape of a route somebody
+ * looked at and half-guarded. What it went on answering was every run's state, its pull
+ * request, its `error` text and the absolute path of the worktree it left on this machine.
  */
 app.get('/api/implement', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Implementation records are read')) return;
+
   const workspaceId = workspaceIdFrom(req);
   const issueUrl = typeof req.query.url === 'string' ? req.query.url : '';
   if (issueUrl) {
@@ -4708,6 +4740,8 @@ app.get('/api/implement', async (req: Request, res: Response) => {
 
 /** The same reset, for a mirrored card with no element behind it. */
 app.delete('/api/implement', (req: Request, res: Response) => {
+  if (offLoopback(res, 'An implementation record is reset')) return;
+
   const issueUrl = typeof req.body?.url === 'string' ? req.body.url : '';
   if (!issueUrl) {
     return res.status(400).json({ success: false, error: 'No issue URL was given.' });
@@ -5067,8 +5101,14 @@ app.post('/api/issue/recreate', async (req: Request, res: Response) => {
  *
  * The panel cannot be told: a mirrored card has no element for the socket to update, and a
  * recreate leaves nothing on a shape while it runs. So it asks, and asking has to be free.
+ *
+ * Free to the panel, and behind the funnel to everybody else since #508/#518: the panel doing
+ * the asking is on this machine, and the state of a run over somebody's repository is not a
+ * thing to hand a caller who is not.
  */
 app.get('/api/issue/recreate', (req: Request, res: Response) => {
+  if (offLoopback(res, 'A recreate run is read')) return;
+
   const issueUrl = typeof req.query.url === 'string' ? req.query.url : '';
   if (!issueUrl) {
     return res.status(400).json({ success: false, error: 'No issue URL was given.' });

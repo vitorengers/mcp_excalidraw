@@ -243,34 +243,37 @@ and the writes are behind the same guard:
   token out of an address bar it has not loaded yet; `GET /health`, which is how anything finds
   out whether a canvas is on a port at all; `GET /api/sync/status`; the pairing front door,
   `POST /api/pair/request` and `GET /api/pair/status`, which are open on purpose and bounded for
-  it (see [above](#pairing-a-second-machine)); `GET /api/pair/admission`, which is the page's own
-  question and answers nothing but the verdict of the two gates in front of it — a caller that
-  reaches it has already got past them, so it learns only what it already knew; and the records
-  of what the agents have been
-  doing, which live in this process's memory rather than behind that guard —
-  `GET /api/issue-block/:id/run`, `GET /api/issue/recreate` and `GET /api/implement`, the last of
-  which carries every run's pull request, its error text and the **absolute path of the worktree**
-  it left on this machine — together with the two routes that reset such a record,
-  `DELETE /api/implement` and `DELETE /api/issue-block/:id/implement`.
+  it (see [above](#pairing-a-second-machine)); and `GET /api/pair/admission`, which is the page's
+  own question and answers nothing but the verdict of the two gates in front of it — a caller
+  that reaches it has already got past them, so it learns only what it already knew.
 <!-- /routes: answered-off-loopback -->
 - **Answered to you, refused to them** — `GET /api/pair/pending`, `POST /api/pair/approve` and
   `POST /api/pair/refuse`, written that way by #503 and #504, and since #501 the whole of the
   `offLoopback` funnel beside them: the board's own contents, the registry, the picker, the
-  restart route and the rest of the first list. They ask **who is calling** rather than where the
-  server opened, so an interface-bound board serves them from your own keyboard while refusing
-  the network the same route. What is left on the bind is the terminal, the two agent helpers and
-  the GitHub routes, which such a board refuses to everybody including you.
+  restart route and the rest of the first list. Since #518 the records of what the agents have
+  been doing are here too — `GET /api/implement`, which carries every run's pull request, its
+  error text and the **absolute path of the worktree** it left on this machine,
+  `GET /api/issue-block/:id/run`, `GET /api/issue/recreate`, and the two routes that reset such a
+  record, `DELETE /api/implement` and `DELETE /api/issue-block/:id/implement`. They ask **who is
+  calling** rather than where the server opened, so an interface-bound board serves them from
+  your own keyboard while refusing the network the same route. What is left on the bind is the
+  terminal, the two agent helpers and the GitHub routes, which such a board refuses to everybody
+  including you.
 
 So the sentence this used to end on — that a board bound that way is inert — was not true, and it
 is the kind of claim worth being exact about. What is inert **to a stranger** is the board:
-nothing on one publishes a drawing to them or takes one from them. What is not is the record of
-what the agents have done with your repository, which such a caller can read, and can reset. The
-pairing pair is deliberate and bounded; that one is not deliberate at all — it is a gap in the
-guard rather than a decision anybody wrote down, and it is filed as
-[#508](https://github.com/vitorengers/vibemaxxing/issues/508).
-`scripts/check-guarded-routes-documented.mjs` derives these lists from `src/server.ts`, so they
-and the tables in [rest-api.md](rest-api.md) cannot drift from the code again without a check
-going red — including on the day #508 closes and the first list gets shorter.
+nothing on one publishes a drawing to them or takes one from them. The five routes that were the
+exception to that are not one any more. Until #518 they answered such a caller — the record of
+what the agents had done with your repository, which they could read and could reset — not
+because anybody decided they should, but because each was written after the guard on the
+reasoning that it read this process's memory rather than shelling out to `gh`, and reading memory
+is not the question the guard asks. The pairing front door is the one thing left open on purpose,
+and it is bounded for it. `scripts/check-guarded-routes-documented.mjs` derives these lists from
+`src/server.ts`, so they and the tables in [rest-api.md](rest-api.md) cannot drift from the code
+again without a check going red, and
+[`check-unguarded-implement-reads.mjs`](../scripts/check-unguarded-implement-reads.mjs) holds the
+half a status code cannot see: that a `DELETE` refused off this machine has not already reset the
+record on its way to saying no.
 
 Before #366 the second list was the whole drawing canvas — elements, files, documents, the
 library and the snapshots. The two honest options were to guard them or to write down that a
