@@ -26,6 +26,7 @@ The board itself is cut into two halves, each with a key that scrolls onto it �
 | [SECURITY.md](SECURITY.md) | The trust model: what the tool runs as, which switches spawn code, the bind and the origin gate, and where to report a vulnerability |
 | [devices.md](devices.md) | Who can reach my board — the list of approved devices, renaming one, and revoking one |
 | [federation.md](federation.md) | Two machines, one tab strip — what you approve, what crosses, and what stops when the other one sleeps |
+| [founder-actions.md](founder-actions.md) | The work only a person can do — the named fields a founder action is made of, and the one composer that renders them |
 | [board-sections.md](board-sections.md) | The two halves of the board and the keys that reach them |
 | [faq.md](faq.md) | The questions the front page used to answer at length, and the failures worth recognising on sight |
 | [whats-next.md](whats-next.md) | What has not shipped |
