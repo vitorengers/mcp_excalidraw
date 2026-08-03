@@ -176,7 +176,7 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-The first four of them have landed; the rest are named here so the reader of a pull request can
+The first five of them have landed; the rest are named here so the reader of a pull request can
 see where each decision lands.
 
 ```
@@ -210,6 +210,18 @@ files, and nothing yet adds a row to it or presents what a row holds. What it se
 asymmetry above — the record here keeps the secret rather than a hash, so the file is owner-only
 and every update swaps it whole rather than rewriting it in place, and a reader looking at it
 while a peer is renamed or forgotten never finds it missing or half-written.
+
+The client is the thing that performs the call, and it too has no route and no caller yet. Two
+decisions give it its shape. **The header discipline is the whole of its security**: the outgoing
+request is built by naming the headers that cross, so this board's own token stops here in both
+of the spellings a caller can offer it in, exactly one credential reaches the peer, and
+`x-client-id` arrives byte-identical — a substituted one would get the reader its own writes
+echoed back. **And a failure comes back as a value rather than as an exception**, carrying one of
+the four states above and a sentence for the operator: a connect timeout, a read timeout, a 401
+and the two 403s are five different repairs, and the budget a connection is given to open is
+stated separately from the budget the answer is given to arrive, because a machine that is asleep
+and a board that is answering slowly are not the same thing. A redirect is not followed and is
+reported as its own outcome, since a peer answering 3xx is not the board this device paired with.
 
 The milestone that files them is *One tab strip, two machines*, and the design decisions above
 are each a done-when bullet on one of its issues rather than a preference stated here.
