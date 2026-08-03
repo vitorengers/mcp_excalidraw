@@ -630,6 +630,16 @@ check('it watched the records arrive', (watched?.most ?? 0) > 1,
 check('and it never once saw a partial document', watched?.partial === 0,
       `${watched?.partial} of ${watched?.found} reads`);
 
+// Atomicity that lost a write would be a file nobody ever saw half of because half of it was
+// never landed. A fresh instance reads what is actually on the disk, so this is the other half
+// of the claim: two hundred were written, and two hundred are there.
+const afterBusy = await import(`${storeUrl}?busy=1`);
+check('and every one of the records is on the disk afterwards',
+      afterBusy.listFounderActions(BUSY).length === RECORDS,
+      `${afterBusy.listFounderActions(BUSY).length} of ${RECORDS} survived the writing`);
+check('the last one written among them',
+      afterBusy.readFounderAction(BUSY, `${BUSY}:gh-rate-limit:run-${RECORDS - 1}`) !== null);
+
 check('the file is written in exactly one place in the module',
       (source.match(/writeFileSync\(/g) ?? []).length === 1
       && (source.match(/renameSync\(/g) ?? []).length === 1,
