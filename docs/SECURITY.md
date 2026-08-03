@@ -114,12 +114,12 @@ past to the next free port, not a pin ([running.md](running.md)).
 `HOST=0.0.0.0` puts the board on **every network interface**. The token goes with it, and it is
 one secret with no sessions and no accounts behind it: anyone who has it is the operator as far
 as this server is concerned, and anyone who has not is refused. Underneath that, **who is
-calling** is its own guard and a second answer: a caller that did not reach this server from the
-machine it runs on gets **403** from every route worth reaching — not only the GitHub half, the
-agents and the terminal, but since #366 every read of what the board holds and since #456 every
-write of it. There is nothing left for a stranger to publish that way and nothing left for one to
-change. Do not do it on a network you do not control, and put access control in front of it if
-you do it at all.
+calling** is its own guard and a second answer: a caller whose own address is not loopback — one
+that did not reach this server from the machine it runs on — gets **403** from every route worth
+reaching, not only the GitHub half, the agents and the terminal, but since #366 every read of
+what the board holds and since #456 every write of it. There is nothing left for a stranger to
+publish that way and nothing left for one to change. Do not do it on a network you do not
+control, and put access control in front of it if you do it at all.
 
 The two are not the same control and neither stands in for the other. The token is what a caller
 carries; the caller's address is what the kernel filled in, and it is still the answer with

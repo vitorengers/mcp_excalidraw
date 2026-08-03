@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * A board bound off loopback cannot be drawn on either.
+ * A board cannot be drawn on by a caller that is not on this machine either.
  *
  * #366 guarded every **read** of board contents behind the bind and deliberately stopped there,
  * which left a board bound to an interface as something odd: nobody on the network could read it,
@@ -31,27 +31,33 @@
  * lost; what is refused is a network caller resolving somebody else's pending export by guessing
  * a request id.
  *
+ * Since #501 the question is who is calling rather than where the server opened, so the caller
+ * that may not write is one that did not reach this server from the machine it runs on.
+ *
  * Four servers over one registry and two seeded projects:
  *
  *   1. bound to loopback — every write answers exactly as it does today, and the board it
  *      changed says so afterwards. This is the half the guard has to keep working.
- *   2. bound off loopback, over a second project — every one answers 403, the refusal names the
- *      bind and carries none of the board, and then a **fresh loopback server over that same
- *      project** finds the board exactly as it was seeded: not drawn on, not synced over, not
- *      emptied. A 403 that still wrote would be a status code rather than a guard.
- *   3. **bound off loopback with the token on**, which is the shipped configuration since #350: a
- *      caller carrying this start's own secret is refused all the same. The bind is a second
- *      answer rather than the token's shadow, and it is the only one left where
+ *   2. bound to `0.0.0.0` and called on an address that is not loopback, over a second project —
+ *      every one answers 403, the refusal names the caller and carries none of the board, and
+ *      then a **fresh loopback server over that same project** finds the board exactly as it was
+ *      seeded: not drawn on, not synced over, not emptied. A 403 that still wrote would be a
+ *      status code rather than a guard.
+ *   3. **the same, with the token on**, which is the shipped configuration since #350: a remote
+ *      caller carrying this start's own secret is refused all the same. The caller's address is a
+ *      second answer rather than the token's shadow, and it is the only one left where
  *      `VIBEMAXXING_NO_AUTH` is set — which is every check in this directory.
  *   4. read off `src/server.ts` rather than off a server: each of those routes carries an
  *      `offLoopback` call, so a fifteenth write added beside them cannot be the next one left out.
  *
- * **The off-loopback server is bound to `127.0.0.2`, not to a real interface**, for the reason
- * `check-board-reads-guard.mjs` and `check-workspaces-guard.mjs` both give: the guard's question
- * is `LOOPBACK_ADDRESSES.includes(HOST)` over a list that is `127.0.0.1` and `::1` exactly, so
- * `127.0.0.2` is off loopback to the code under test while never leaving this machine. Where a
- * platform will not bind a loopback alias, the first real interface is the fallback and the check
- * says so on stdout.
+ * **The remote caller is a real one, and it did not have to be.** While the guard tested the
+ * bind, this check bound `127.0.0.2` — off loopback to a list of `127.0.0.1` and `::1` exactly,
+ * and never leaving this machine. Now that the guard tests the caller, `127.0.0.2` is a loopback
+ * address like the rest of `127.0.0.0/8`, and there is no substitute left for an address a second
+ * machine could in principle use. `scripts/lib/remote-caller.mjs` prefers a host-only adapter over
+ * a real interface, says on stdout when it had to take a real one, and answers `null` on a machine
+ * that has nothing but loopback, where the refusal sections say they could not run rather than
+ * passing as though they had.
  *
  * Self-contained: it builds a throwaway registry and two projects in a temp directory, starts its
  * own servers on ports the kernel just handed out and kills them. No browser. Run
@@ -62,16 +68,16 @@
  * Tier: fast
  */
 
-import { createServer } from 'node:net';
 import {
   existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
-import { networkInterfaces, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { freePorts } from './lib/free-port.mjs';
 import { startCanvas } from './lib/spawn-canvas.mjs';
+import { looksLikeLoopback, peerAddressSeenOn, remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const startupTimeoutMs = 15000;
@@ -83,27 +89,8 @@ function check(name, condition, detail = '') {
   else { failures++; console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`); }
 }
 
-/** Whether this machine will let a server sit on `host`. */
-function canBind(host) {
-  return new Promise((resolve) => {
-    const probe = createServer();
-    probe.once('error', () => resolve(false));
-    probe.listen(0, host, () => probe.close(() => resolve(true)));
-  });
-}
-
-/** An address the guard calls "not loopback" and this machine will bind. */
-async function offLoopbackHost() {
-  if (await canBind('127.0.0.2')) return '127.0.0.2';
-  for (const entries of Object.values(networkInterfaces())) {
-    for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal && (await canBind(entry.address))) {
-        console.log(`  note  127.0.0.2 is not bindable here; using the interface ${entry.address}`);
-        return entry.address;
-      }
-    }
-  }
-  throw new Error('No non-loopback address on this machine could be bound.');
+function note(line) {
+  console.log(`  note  ${line}`);
 }
 
 async function waitForHealth(base, child) {
@@ -289,13 +276,14 @@ function conventionalTokenFile(port) {
   return join(home, leaf, `server-${port}.token`);
 }
 
+const remote = await remoteInterfaceAddress(note);
+
 let loopback;
 let off;
 let reRead;
 let authed;
 
 try {
-  const offHost = await offLoopbackHost();
 
   // ─── 1. Bound to loopback, every write answers as it does today ───
 
@@ -338,12 +326,39 @@ try {
 
   loopback.stop();
 
-  // ─── 2. Bound anywhere else, every one of them refuses ───
+  // ─── 2. Called from anywhere else, every one of them refuses ───
 
-  console.log(`\n2. bound to ${offHost}, every write refuses before it writes anything`);
-  off = startCanvas({ port: offPort, cwd: workdir, env: { ...env, HOST: offHost } });
-  const offBase = `http://${offHost}:${offPort}`;
-  await waitForHealth(offBase, off.child);
+  if (!remote) {
+    note('this machine has no non-loopback address to be called on, so sections 2, 3 and 4 — the '
+         + 'caller that is not on this machine, the boards it did not change, and the one holding '
+         + 'a token — could not be run at all');
+  }
+
+  if (remote) {
+  console.log(`\n2. bound to 0.0.0.0 and called on ${remote}, every write refuses before it `
+              + 'writes anything');
+  off = startCanvas({
+    port: offPort,
+    cwd: workdir,
+    env: {
+      ...env,
+      HOST: '0.0.0.0',
+      // The origin gate is a different control and this check is not about it. A request to
+      // `http://<interface>:<port>` names that authority in `Host`, which a board bound to
+      // `0.0.0.0` does not answer for, so without this every case below would be refused by the
+      // wrong gate and would pass for the wrong reason.
+      EXCALIDRAW_ALLOWED_HOSTS: `${remote}:${offPort}`,
+    },
+  });
+  const offBase = `http://${remote}:${offPort}`;
+  await waitForHealth(`http://127.0.0.1:${offPort}`, off.child);
+
+  // The premise, established with a server of this check's own rather than with the code under
+  // test: a connection to one of this machine's interface addresses reports that interface as its
+  // source, not 127.0.0.1.
+  const peer = await peerAddressSeenOn(remote);
+  check(`a server on ${remote} sees a peer that is not loopback (${peer})`,
+        Boolean(peer) && !looksLikeLoopback(peer), peer);
 
   const health = await get(offBase, '/health', 'untouched');
   check('the canvas itself is up — this is a guard, not a broken server', health.status === 200,
@@ -352,9 +367,10 @@ try {
   for (const [name, method, path, body] of WRITES) {
     const refused = await call(offBase, method, path, offBoardOf(name), body);
     check(`${name} answers 403`, refused.status === 403,
-          `got ${refused.status} — ${refused.text.slice(0, 160)}`);
-    check(`  ${name} refuses in the words of the bind`, /loopback/i.test(refused.text),
-          refused.text.slice(0, 160));
+          `got ${refused.status} — ${refused.text.slice(0, 200)}`);
+    check(`  ${name} refuses in the words of the caller, not of the origin gate`,
+          /machine/i.test(refused.text) && !/DNS rebinding/i.test(refused.text),
+          refused.text.slice(0, 200));
     const echoed = INTRUDERS.filter((mark) => refused.text.includes(mark));
     check(`  ${name} does not echo what it was handed`, echoed.length === 0, echoed.join(', '));
   }
@@ -407,7 +423,7 @@ try {
 
   reRead.stop();
 
-  // ─── 3. The bind guard is not the token's shadow ───
+  // ─── 3. The caller guard is not the token's shadow ───
 
   console.log('\n4. and a caller holding this start\'s token is refused there just the same');
   authed = startCanvas({
@@ -415,10 +431,11 @@ try {
     cwd: workdir,
     env: {
       ...env,
-      HOST: offHost,
+      HOST: '0.0.0.0',
+      EXCALIDRAW_ALLOWED_HOSTS: `${remote}:${authedPort}`,
       // `canvasEnvironment` turns the token off for every check in this directory; this is the one
       // server here that has to take it back on, because the question of this section is whether
-      // the bind guard survives the control that was supposed to make it unnecessary.
+      // the caller guard survives the control that was supposed to make it unnecessary.
       EXCALIDRAW_NO_AUTH: undefined,
       HOME: fakeHome,
       USERPROFILE: fakeHome,
@@ -426,8 +443,8 @@ try {
       XDG_STATE_HOME: fakeHome,
     },
   });
-  const authedBase = `http://${offHost}:${authedPort}`;
-  await waitForHealth(authedBase, authed.child);
+  const authedBase = `http://${remote}:${authedPort}`;
+  await waitForHealth(`http://127.0.0.1:${authedPort}`, authed.child);
 
   const tokenFile = conventionalTokenFile(authedPort);
   const token = existsSync(tokenFile) ? readFileSync(tokenFile, 'utf8').trim() : '';
@@ -457,6 +474,7 @@ try {
         `got ${entitledClear.status} — ${(await entitledClear.text()).slice(0, 160)}`);
 
   authed.stop();
+  }
 } catch (error) {
   failures++;
   console.error(`  FAIL  ${error instanceof Error ? error.message : String(error)}`);
@@ -503,4 +521,4 @@ if (failures) {
   console.error(`${failures} case(s) failed`);
   process.exit(1);
 }
-console.log('All cases passed: a board bound off loopback cannot be drawn on either.');
+console.log('All cases passed: a board takes nothing from a caller that is not on this machine.');

@@ -795,7 +795,8 @@ const UpdateElementSchema = z.object({
  *
  * **Until #501 all of that asked about the bind**, and so a board on any interface was inert for
  * everybody — including the browser on the host machine, which is loopback and whose request was
- * refused anyway. `HOST=0.0.0.0` and an address on a private overlay were treated alike, so the
+ * refused anyway. A bind on every interface and a bind on one address of a private overlay were
+ * treated alike, so the
  * careful configuration was punished exactly as hard as the reckless one, and there was no
  * configuration in which this board could be reached from a second machine, however narrow. It
  * asks about the caller now, so the consequence changes shape rather than going away: what a

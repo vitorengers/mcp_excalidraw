@@ -4,7 +4,8 @@
  * The guard in front of the board's contents used to test the **bind address** —
  * `LOOPBACK_ADDRESSES.includes(HOST)` — and that made a board on any interface inert for
  * everybody, the browser on the host machine included: its request comes from loopback and was
- * refused all the same. `HOST=0.0.0.0` and `HOST=100.x.y.z` on a private overlay were treated
+ * refused all the same. A bind on every interface and a bind on one address of a private
+ * overlay — `100.x.y.z` on a tailnet, say — were treated
  * alike, so the careful configuration was punished exactly as hard as the reckless one, and
  * there was no configuration, however narrow, in which the board was reachable from a second
  * machine. That was the right answer while there was nobody to ask about (#366): the only
