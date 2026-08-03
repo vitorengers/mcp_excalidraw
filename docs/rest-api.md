@@ -31,11 +31,20 @@ The CLI and the MCP server read that file themselves, so nothing below needs a f
 
 **Or an approved device's credential**, in the same header and the same query parameter. A
 device paired through the handshake above holds one of its own — see [devices.md](devices.md) —
-and the gate takes it after the board token and never instead of it. The difference between the
-two is not what they reach: it is that a device's is one of many, survives a restart, and can be
-revoked while the board is running, where the board token is a per-start file this account owns.
-Only the three device routes ask which one a caller holds; everywhere else in this table the two
-are the same thing.
+and the gate takes it after the board token and never instead of it. A device's is one of many,
+survives a restart, and can be revoked while the board is running, where the board token is a
+per-start file this account owns.
+
+It is also the one credential that works **from another machine** (#522). Every row below marked
+*loopback caller only* is answered to a caller on this machine and to an approved device, and to
+nobody else; a remote request holding the board's own token is refused there like any other,
+because that token is a file and not a device anybody approved. What an approved device reaches
+is therefore this table minus three things: the rows marked *loopback only*, which test the bind
+and are refused to everybody on a board bound to an interface; the pairing desk, which is yours
+from this machine; and the three device rows below. The terminal and the implement agent are
+marked *loopback only* and take an approved device as the second way that test passes — that is
+the one place the two marks are not the whole story, and
+[SECURITY.md](SECURITY.md#pairing-a-second-machine) enumerates it.
 
 ## Elements
 
@@ -77,9 +86,16 @@ These three are the only routes where *which credential* a caller holds changes 
 Everywhere else in this table, the board's token and an approved device's credential are the
 same thing: a caller that got past the gate.
 
+**They are the host's, from this machine, full stop.** They were guarded by the same funnel as
+everything else until #522 taught that funnel to admit an approved device; they are guarded on
+the caller directly now, so the management surface did not widen along with the board. A device
+reaching this board from where a device actually is gets 403 from all three — the list included.
+Which credential a caller holds still decides the answer for the two that can arrive from *this*
+machine.
+
 | Route | What it does |
 |---|---|
-| `GET /api/devices` | Every approved device, with `self` naming the entry a request came from when it came from one of them. Answered to the host and to a paired device, and refused to anybody else by the gate above (loopback caller only) |
+| `GET /api/devices` | Every approved device, with `self` naming the entry a request came from when it came from one of them. Refused to a caller that is not on this machine, a paired device included (loopback caller only) |
 | `PATCH /api/devices/:id` | Rename one. The host's only — a device renaming its neighbours has no standing to (loopback caller only) |
 | `DELETE /api/devices/:id` | Revoke one, refusing it from its next request and closing the sockets it holds. The host's, and a device's own: signing this machine out is legitimate and is not special-cased into a refusal (loopback caller only) |
 
@@ -96,7 +112,7 @@ caller on the network — which is where #508/#518 put them; see
 |---|---|
 | `POST /api/issue-block/:id` | Run the research agent and open the issue (loopback only) |
 | `POST /api/issue-block/:id/adopt` | Attach an issue that already exists, without creating one (loopback caller only) |
-| `DELETE /api/issue-block/:id` | Forget the run, so the block can be tried again (loopback only) |
+| `DELETE /api/issue-block/:id` | Forget the run, so the block can be tried again (loopback caller only) |
 | `GET /api/issue-block/:id/issue` | The issue behind a block, read live rather than copied onto it (loopback only) |
 | `GET /api/issue-block/:id/run` | What that block's research run has spent, polled while it is going. Reads memory, so it is the one route here with no `gh` behind it — and therefore one of the two here guarded on the caller rather than on the bind (loopback caller only) |
 | `GET /api/issue` | The issue behind a *mirrored card*, which has no element id, plus what is known about implementing it (loopback only) |
@@ -156,7 +172,7 @@ loopback only, and capped per board.
 | Route | What it does |
 |---|---|
 | `GET /api/docs/:key` | The markdown behind a `customData.docKey` — [docs-block.md](docs-block.md) (loopback caller only) |
-| `GET /api/library` | The environment-wide `.excalidrawlib` plus the project's own — [shared-library.md](shared-library.md) (loopback only) |
+| `GET /api/library` | The environment-wide `.excalidrawlib` plus the project's own — [shared-library.md](shared-library.md) (loopback caller only) |
 | `GET /api/files` | The image payloads *this* board references (loopback caller only) |
 | `GET /api/files/:id` | One of them (loopback caller only) |
 | `POST /api/files` | Add one (loopback caller only) |

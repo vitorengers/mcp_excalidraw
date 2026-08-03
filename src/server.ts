@@ -174,6 +174,7 @@ import {
   TOKEN_QUERY
 } from './core/auth-token.js';
 import {
+  deviceRegistryRevision,
   listDevices,
   renameDevice,
   revokeDevice,
@@ -232,15 +233,51 @@ app.set('strict routing', true);
 const server = createServer(app);
 
 /**
- * The authorities this board answers for, built once the port is known.
+ * The authorities this board answers for, built once the port is known and rebuilt when the set
+ * of approved devices changes.
  *
  * Read through a function rather than captured, because `HOST` and `PORT` are resolved at the
  * bottom of this file and both gates below run long after that.
+ *
+ * **The memo used to be for the whole of it, and that made approval and reachability two
+ * different lifetimes.** The set was built from `HOST`, `PORT` and `ALLOWED_HOSTS` on the first
+ * request and never again, so a device approved a minute later reached this board under a name
+ * the memo had been built without — refused at the first middleware, holding a perfect
+ * credential, until somebody restarted the server. Each `DeviceRecord` carries the authority it
+ * was approved *for*, which is the name the operator read off the pairing card before they
+ * approved it, so those names join the set here.
+ *
+ * Still memoised, because this runs on every request the board serves, static files included,
+ * and a registry read per request would put an open and a parse in front of every font the page
+ * loads. `deviceRegistryRevision` is a `stat` and a comparison, which is what makes that safe:
+ * an approval or a revocation — in this process or in another one — changes it, and the set is
+ * rebuilt on the next request rather than at the next restart.
  */
 let authorities: Set<string> | null = null;
+let authoritiesFrom: string | null = null;
+
+/** Every approved device's own authority, or none when the registry cannot be read. */
+function approvedAuthorities(): string[] {
+  try {
+    return listDevices().map(device => device.host).filter(Boolean);
+  } catch (error) {
+    // Refusing to answer at all because a file is unreadable would take the board down over a
+    // list of devices; `core/device-registry.ts` makes the same call for the same reason.
+    logger.warn(`The device registry could not be read: ${(error as Error).message}`);
+    return [];
+  }
+}
+
 function boardAuthorities(): Set<string> {
-  if (!authorities) {
-    authorities = allowedAuthorities(HOST, PORT, env('ALLOWED_HOSTS'));
+  let revision: string;
+  try {
+    revision = deviceRegistryRevision();
+  } catch {
+    revision = 'unreadable';
+  }
+  if (!authorities || revision !== authoritiesFrom) {
+    authorities = allowedAuthorities(HOST, PORT, env('ALLOWED_HOSTS'), approvedAuthorities());
+    authoritiesFrom = revision;
   }
   return authorities;
 }
@@ -351,6 +388,13 @@ function noteDeviceSeen(device: DeviceRecord): void {
 const wss = new WebSocketServer({
   server,
   verifyClient: ({ origin, req }, done) => {
+    // Resolved once, before either question below, because both of them turn on it: which device
+    // is calling decides whether a caller that is not on this machine may be here at all, and
+    // then whether what it carries is a credential this board accepts. Read again in
+    // `connection` below rather than stashed on `req`, so that the record of who holds a socket
+    // does not depend on two callbacks being handed the same object.
+    const holder = AUTH_REQUIRED ? deviceFor(offeredToken(req.headers, req.url)) : null;
+
     // Who is calling, first, because the origin gate cannot see this caller at all. It asks a
     // browser question, and a program connecting from the network supplies whatever `Host` it
     // likes and is waved through — so an unguarded socket hands the whole board and every live
@@ -359,9 +403,15 @@ const wss = new WebSocketServer({
     //
     // It asked about the *bind* until #501, and had to move with `offLoopback` rather than be
     // left behind an HTTP-only guard: this is where `initial_elements` and the scrollback go.
-    if (!callerIsLocal(req)) {
-      logger.warn('Refused a WebSocket upgrade: the board is served over the socket only to a '
-                  + `caller on this machine, and this one came from ${req.socket?.remoteAddress}.`);
+    //
+    // An approved device is the one caller off this machine that may be here, and it has to be
+    // able to be: the scene arrives over this socket and nowhere else, so a device refused here
+    // is a device with a board that never draws. This is the same widening `offLoopback` takes,
+    // in the place where refusing late is refusing after the whole board has been sent.
+    if (!callerIsLocal(req) && !holder) {
+      logger.warn('Refused a WebSocket upgrade: the board is served over the socket to a caller '
+                  + 'on this machine or on a device this board has approved, and this one came '
+                  + `from ${req.socket?.remoteAddress} with neither.`);
       done(false, 403, 'Forbidden');
       return;
     }
@@ -379,11 +429,8 @@ const wss = new WebSocketServer({
       const offered = offeredToken(req.headers, req.url);
       // A paired device's secret opens the socket as the board token does, and the socket is
       // where revocation has to reach: an upgrade that has already been accepted keeps streaming
-      // the scene and every live shell's scrollback whatever the registry says afterwards. Which
-      // device it was is resolved again in `connection` below rather than stashed on `req`, so
-      // that the record of who holds a socket does not depend on two callbacks being handed the
-      // same object.
-      if (!sameToken(offered, AUTH_TOKEN) && !deviceFor(offered)) {
+      // the scene and every live shell's scrollback whatever the registry says afterwards.
+      if (!sameToken(offered, AUTH_TOKEN) && !holder) {
         logger.warn('Refused a WebSocket upgrade: it carried no valid board token.');
         done(false, 401, 'Unauthorized');
         return;
@@ -1039,12 +1086,27 @@ const UpdateElementSchema = z.object({
  * configuration in which this board could be reached from a second machine, however narrow. It
  * asks about the caller now, so the consequence changes shape rather than going away: what a
  * *stranger* gets from a board on an interface is still nothing in either direction, and what the
- * operator gets on the machine it runs on is the whole board. Remote is refused until there is a
- * device credential to present, which is the rest of this milestone (#502 is the registry, #503
- * the pairing); nothing a remote caller could not reach before is reachable now, and a board with
- * no device paired behaves exactly as it did. A reverse proxy is unaffected either way — it
- * reaches this server on loopback, which is the configuration `EXCALIDRAW_ALLOWED_HOSTS` exists
- * for.
+ * operator gets on the machine it runs on is the whole board. A reverse proxy is unaffected
+ * either way — it reaches this server on loopback, which is the configuration
+ * `EXCALIDRAW_ALLOWED_HOSTS` exists for.
+ *
+ * **And #522 is the credential that answer was waiting for.** #501 refused every remote caller
+ * because there was nobody to ask about: the only identity was one per-start bearer token, which
+ * a second machine cannot read off a filesystem it is not on. #502 gave the board a registry and
+ * #503 the gesture that writes into it, and until this funnel consulted them a device could
+ * complete the whole approval, hold a secret nothing refused, and reach not one route. So a
+ * caller that is not on this machine is admitted here on exactly one ground — `res.locals.device`,
+ * set by the token gate above when the credential it carried verified against the registry — and
+ * refused on every other. That is one named, revocable, per-device record and not a widening: a
+ * board with no device paired behaves exactly as it did, and so does one whose operator has
+ * turned authentication off, because with no gate there is no `res.locals.device` for anybody.
+ *
+ * What a device reaches by being admitted here is the whole of this funnel, which is the board
+ * and the boards, the files, the images, the exports, the snapshots, the viewport, the projects,
+ * the directory picker and the restart button — `docs/SECURITY.md` enumerates it. What it does
+ * **not** reach is anything still guarded on the bind: the routes that spawn `gh` with the
+ * operator's own credentials stay the operator's, and so does the pairing desk, which is
+ * `notTheHost`'s and is how a device is approved in the first place.
  *
  * `res.req` rather than a second parameter, because a funnel is only one place to change while
  * nothing has to be threaded through the call sites to reach it. Express sets it on every
@@ -1063,13 +1125,50 @@ const UpdateElementSchema = z.object({
  */
 function offLoopback(res: Response, what: string): boolean {
   if (callerIsLocal(res.req)) return false;
+  if (res.locals.device) return false;
   res.status(403).json({
     success: false,
-    error: `${what} only for a caller on this machine. This request came from `
-      + `${res.req.socket?.remoteAddress ?? 'an address this server could not read'}, `
-      + 'which is not loopback.'
+    // The credential, not the bind. A caller here has already satisfied the token gate — a
+    // remote request holding the board's own token lands exactly here — so telling it about
+    // loopback would send whoever reads this to rebind a server that is bound correctly, when
+    // what they are missing is an approved device (`docs/devices.md`).
+    error: `${what} only for a caller on this machine, or one on a device this board has `
+      + `approved. This request came from `
+      + `${res.req.socket?.remoteAddress ?? 'an address this server could not read'} `
+      + 'and carried no approved device\'s credential.'
   });
   return true;
+}
+
+/**
+ * Whether the two features that *act on this machine* are this caller's to use.
+ *
+ * A different question from the funnel above, and the reason it is different is the reason #518
+ * gave for leaving it alone: the funnel asks who may **read** the records, and this asks whether
+ * a shell and a coding agent may be started at all. Its old answer was the bind and nothing else
+ * — `LOOPBACK_ADDRESSES.includes(HOST)` — because a board reachable from the network offered
+ * remote code execution to whoever reached the port, and there was nobody to tell apart from
+ * whoever.
+ *
+ * There is now: an approved device is one named, revocable record that the operator wrote by
+ * looking at a card and pressing approve. So the bind stays the answer for a caller with no
+ * credential — an interface-bound board still refuses the terminal and the implement agent to
+ * its own operator, who has a loopback board a keystroke away — and a device is the second way
+ * to be entitled rather than a hole in the first.
+ *
+ * Taken with no response at all where a run of the board's own asks the question of *itself*
+ * (`interactiveTabRefusal`, `implementTerminalHost`): nobody is calling there, and the bind is
+ * the whole of the answer.
+ *
+ * This is one predicate on purpose. The two capability flags — `queue` on `GET /api/implement`,
+ * and whether a terminal can be had — and the two refusals behind them are halves of the same
+ * rule, and a board that drew a toggle its own route then refused would be lying to whoever
+ * pressed it. That is what #518 objected to and it is answered by moving both halves together,
+ * not by leaving the flag behind.
+ */
+function actingFor(res: Response | null): boolean {
+  if (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost') return true;
+  return Boolean(res?.locals.device);
 }
 
 // API Routes
@@ -1845,11 +1944,20 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
 //     lock themselves out (the board token is a file, not a device), and a paired device signing
 //     itself out is the ordinary case rather than the dangerous one.
 //
-// `offLoopback` in front of all three, like every other route that answers with something this
-// machine owns — see the comment on that function. The consequence, said plainly: on a board
-// bound to an interface these answer 403 the way the rest of the API does, so this surface is
-// the operator's on their own machine. Which credential a caller holds and which address the
-// server bound are separate questions and both are asked.
+// `notTheHost` in front of all three, and that is the one thing here #522 changed. It was
+// `offLoopback`, which asked the identical question until that issue taught the funnel to admit
+// an approved device — at which point these three would have widened along with everything else,
+// silently, as a side effect of a change about the scene. They do not. **Host-only, full stop:**
+// the list, the rename and the revoke are the operator's, on the machine the board runs on, and
+// a device reading its own record would put the management surface on the network for a
+// convenience nobody asked for.
+//
+// So the split above is now a split between two callers that both reach here from *this*
+// machine: the operator's browser holding the board token, and a local process holding a device
+// credential. It is kept rather than flattened because it is the honest description of what the
+// routes do — `res.locals.device` is what tells them apart wherever a credential arrives — and
+// because a device signing itself out is a legitimate thing for these routes to answer when the
+// gate in front of them lets it ask.
 
 /** Every socket a device holds, closed. The count, so a caller is told what it disconnected. */
 function closeSocketsOfDevice(deviceId: string, reason: string): number {
@@ -1868,8 +1976,8 @@ function closeSocketsOfDevice(deviceId: string, reason: string): number {
   return closed;
 }
 
-app.get('/api/devices', (_req: Request, res: Response) => {
-  if (offLoopback(res, 'Paired devices are listed')) return;
+app.get('/api/devices', (req: Request, res: Response) => {
+  if (notTheHost(req, res, 'Paired devices are listed')) return;
   try {
     const asked = res.locals.device as DeviceRecord | undefined;
     res.json({
@@ -1886,7 +1994,7 @@ app.get('/api/devices', (_req: Request, res: Response) => {
 });
 
 app.patch('/api/devices/:id', (req: Request, res: Response) => {
-  if (offLoopback(res, 'A paired device is renamed')) return;
+  if (notTheHost(req, res, 'A paired device is renamed')) return;
   if (res.locals.device) {
     res.status(403).json({
       success: false,
@@ -1916,7 +2024,7 @@ app.patch('/api/devices/:id', (req: Request, res: Response) => {
 });
 
 app.delete('/api/devices/:id', (req: Request, res: Response) => {
-  if (offLoopback(res, 'A paired device is revoked')) return;
+  if (notTheHost(req, res, 'A paired device is revoked')) return;
   const asked = res.locals.device as DeviceRecord | undefined;
   const id = req.params.id ?? '';
   if (asked && asked.id !== id) {
@@ -2755,6 +2863,15 @@ app.post('/api/issue-block/:id/adopt', async (req: Request, res: Response) => {
  * one observation: `POST` guards on `customData.issueUrl`, and that stays.
  */
 app.delete('/api/issue-block/:id', (req: Request, res: Response) => {
+  // Behind the funnel like the other reset, and it was not — it has been answering a caller on
+  // the network for as long as it has existed, and nothing said so. #518 guarded the two resets
+  // it could see; this one was invisible to `scripts/check-guarded-routes-documented.mjs`,
+  // which reads a route's body as everything up to the next `app.<method>` declaration and
+  // found `implementingRefused`'s bind test eighteen hundred lines below, in a slice that is
+  // not this route at all. #522 moved that test off the bind, the borrowed guard went with it,
+  // and the classifier said `open` about a route that writes to a block on somebody's board.
+  if (offLoopback(res, 'An issue block\'s run is reset')) return;
+
   const elementId = req.params.id ?? '';
   const workspaceId = workspaceIdFrom(req);
   const store = elementsFor(workspaceId);
@@ -4547,11 +4664,14 @@ function implementingRefused(res: Response): boolean {
     return true;
   }
   // This agent writes to the repository, which makes reaching this route from the network
-  // strictly worse than reaching the issue route.
-  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+  // strictly worse than reaching the issue route. `actingFor` rather than the bind alone since
+  // #522: an approved device is a caller with a name and a revoke, which is the thing the bind
+  // was standing in for the absence of.
+  if (!actingFor(res)) {
     res.status(403).json({
       success: false,
-      error: 'Implementing only runs while the server is bound to loopback.'
+      error: 'Implementing only runs while the server is bound to loopback, or for a device '
+        + 'this board has approved.'
     });
     return true;
   }
@@ -4720,12 +4840,15 @@ app.delete('/api/issue-block/:id/implement', (req: Request, res: Response) => {
  * implementing is disabled or the server is not bound to loopback, because a button that
  * cannot do anything should not be drawn at all.
  *
- * That last test is about the **bind** and stays that way, which is not the same rule as the
- * funnel above it. The toggle it decides turns `POST /api/implement/queue` on, and that route
- * is bind-guarded along with the rest of the implement agent — so on an interface-bound board
- * the button really cannot do anything, for its own operator too, and drawing it would be a lie
- * whoever pressed it. What the funnel decides is a different question: who may read the
- * records at all.
+ * That last test is still not the funnel — it is `actingFor`, which asks whether this caller may
+ * *act on this machine*, and the funnel asks who may read the records at all. It was the bind
+ * alone until #522, on the reasoning that the toggle it decides turns `POST /api/implement/queue`
+ * on and that route is bind-guarded with the rest of the implement agent, so drawing the button
+ * on an interface-bound board would be a lie to whoever pressed it. That reasoning is why both
+ * halves moved together rather than only this one: an approved device passes `actingFor` here
+ * *and* at `implementingRefused`, so the toggle a device is drawn is a toggle that works, and the
+ * operator on loopback of an interface-bound board is still shown nothing, because for them
+ * nothing has changed.
  *
  * The funnel is #508/#518, and this was the closest thing here to a decided exemption — it
  * dropped `queue` off loopback on purpose, which is precisely the shape of a route somebody
@@ -4741,8 +4864,7 @@ app.get('/api/implement', async (req: Request, res: Response) => {
     return res.json({ success: true, implement: readImplement(workspaceId, issueUrl) });
   }
 
-  const offered = IMPLEMENT_AGENT_CONFIGURED
-    && (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost');
+  const offered = IMPLEMENT_AGENT_CONFIGURED && actingFor(res);
   const workspaces = offered
     ? await loadWorkspaces(registryPath()).catch(() => [])
     : [];
@@ -5509,11 +5631,15 @@ function terminalRefused(res: Response): boolean {
     });
     return true;
   }
-  // A shell on this port is remote code execution for anyone who can reach it.
-  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+  // A shell on this port is remote code execution for anyone who can reach it — for *anyone*,
+  // which since #522 is no longer the same set as "anyone off this machine": `actingFor` reads
+  // the approved device the token gate resolved, and an approved device is somebody rather than
+  // anyone.
+  if (!actingFor(res)) {
     res.status(403).json({
       success: false,
-      error: 'The terminal only runs while the server is bound to loopback.'
+      error: 'The terminal only runs while the server is bound to loopback, or for a device '
+        + 'this board has approved.'
     });
     return true;
   }
@@ -5559,10 +5685,16 @@ function requireTerminal(req: Request, res: Response): TerminalSession | null {
   return sessions.values().next().value ?? null;
 }
 
-/** Whether a session could be opened at all, for a caller with no response to write. */
-function terminalAvailable(): boolean {
-  return Boolean(TERMINAL_SETTING)
-    && (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost');
+/**
+ * Whether a session could be opened at all, for a caller with no response to write.
+ *
+ * `res` is optional and null is not "no opinion": it is the board asking about *itself*, for a
+ * run it is about to start on its own account, where there is no caller and the bind is the
+ * whole answer. A request that has one passes it, so that a paired device is offered the tab
+ * the same route would then give it.
+ */
+function terminalAvailable(res: Response | null = null): boolean {
+  return Boolean(TERMINAL_SETTING) && actingFor(res);
 }
 
 /** What opening a session came to, for a caller that has to say why it did not. */
