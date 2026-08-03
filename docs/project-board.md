@@ -902,7 +902,12 @@ taken, by these issues", so the board says it as a **toast**, the first time the
 and repeats it only if it changes again — a stall stalls on a timer, and a toast per poll would
 be the board saying the same thing every twenty seconds until somebody switched it off. The
 sentence is composed by the server and also available as `queue.lastPass.detail` from
-`GET /api/implement`; `docs/issue-block.md` lists the reasons.
+`GET /api/implement`; `docs/issue-block.md` lists the reasons — ten of them, the tenth being
+**`refused`**: every card the pass could have started was told no by `POST /api/implement` for a
+reason the next pass will get again, which until #535 was reported as an idle column and drawn as
+a healthy queue. It stalls and it is announced. `QUEUE_PASS_REASONS` is that list as a value, so
+which of them stall and which interrupt a reader is a thing a check can assert rather than a
+thing two deny-lists imply.
 
 **The state is the server's and arrives with the poll.** It rides on the same `GET /api/implement`
 that brings the run marks, and is never read back off the shape: every mirrored element is thrown
