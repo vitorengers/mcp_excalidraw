@@ -15,6 +15,9 @@ import { canvasFontsReady } from './canvas-fonts'
 import { withBoardToken } from './auth'
 import { STORAGE_KEYS, readSetting, writeSetting } from './storage'
 import { CollapsibleTarget, CommentPosted, IssueTarget } from './components/DocsPanel'
+import type {
+  FounderAction, FounderChatState, FounderControls, FounderResolved, FounderTarget
+} from './components/DocsPanel'
 import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
 import type { Rect } from '../../src/core/anchored-placement'
 import { resolvePanelTarget } from '../../src/core/panel-target'
@@ -47,7 +50,9 @@ import {
   MIRROR_KIND,
   NOTES_OPTION_ID
 } from '../../src/core/project-board-layout'
-import type { CardImplementState, DraftBlock, MirrorAnchor, MirrorColumn } from '../../src/core/project-board-layout'
+import type {
+  CardImplementState, DraftBlock, FounderCard, LayoutOptions, MirrorAnchor, MirrorColumn
+} from '../../src/core/project-board-layout'
 import type { ProjectBoard } from '../../src/core/project-board-types'
 import { TerminalPanel } from './components/TerminalPanel'
 import {
@@ -230,6 +235,17 @@ const PRODUCT_NAME = 'VibeMaxxing';
  * being spawned all day.
  */
 const PROJECT_BOARD_POLL_MS = 20000;
+
+/**
+ * How often the canvas re-reads the work only a person can do.
+ *
+ * Its own cadence and its own request, because it is its own question: `GET /api/founder-actions`
+ * reads a local file and spawns nothing, so it costs nothing like a project read does — and,
+ * more to the point, it has to answer on a board where the project read is the thing that
+ * failed. Ten seconds rather than twenty, because a founder who has just pressed Done in a
+ * terminal wants the column to notice.
+ */
+const FOUNDER_POLL_MS = 10000;
 
 /**
  * How often the header re-reads what the coding agent has spent.
@@ -1432,6 +1448,30 @@ function App(): JSX.Element {
   const [libraryItems, setLibraryItems] = useState<unknown[]>([])
   const [collapsible, setCollapsible] = useState<CollapsibleTarget | null>(null)
   const [issue, setIssue] = useState<IssueTarget | null>(null)
+  /** The founder card under the pointer, when the selection is one. */
+  const [founder, setFounder] = useState<FounderTarget | null>(null)
+  /**
+   * What `GET /api/founder-actions` last answered for this board.
+   *
+   * State as well as a ref: the panel reads the record and the capabilities on every render,
+   * and the mirror reads the cards inside `renderMirror`, which runs from a poll rather than
+   * from a render. Written together so the two cannot disagree about what is open.
+   */
+  const [founderState, setFounderState] = useState<{
+    columnName: string
+    actions: FounderAction[]
+    capabilities: FounderControls
+  } | null>(null)
+  const founderRef = useRef<{ columnName: string; cards: FounderCard[] } | null>(null)
+  /**
+   * The founder column as it was last actually **drawn**, which is not the same question.
+   *
+   * A read can land before the canvas has any board to draw a column onto — the two polls are
+   * independent, so either may be first — and a redraw skipped for that reason must be retried
+   * rather than forgotten. Comparing against what was drawn, rather than against what was last
+   * read, is what makes the retry happen at all.
+   */
+  const founderDrawnRef = useRef<string>('')
 
   /**
    * The shape the card is pinned to, and where that shape currently is on screen.
@@ -2037,6 +2077,7 @@ function App(): JSX.Element {
 
     setSelectedDoc({ key: target?.docKey ?? null, title: target?.title ?? null })
     setIssue(target?.issue ?? null)
+    setFounder(target?.founder ?? null)
     setCollapsible(target?.collapsible ?? null)
 
     const anchorId = target?.anchorId ?? null
@@ -2712,10 +2753,26 @@ function App(): JSX.Element {
     const own = scene.filter((element) => !element.isDeleted && !isMirrorElement(element))
     const drafts = own.filter(isDraftBlock)
 
+    /**
+     * The founder actions, if this board is holding any.
+     *
+     * Read off a ref rather than off the state above, because this runs from a poll and not
+     * from a render: a closure over state would draw whatever was current when the poll was
+     * scheduled. It is the same object the width is measured from and the layout is drawn
+     * from, which is the one thing that must not have two answers — a region measured a
+     * column too narrow overlaps whatever sits to its left.
+     */
+    const founderCards = founderRef.current
+    const founderOption: LayoutOptions = founderCards && founderCards.cards.length > 0
+      ? { founder: { columnName: founderCards.columnName, cards: founderCards.cards } }
+      : {}
+
     // The notes column is drawn too, and it is as wide as the rest, so the width the first
     // measurement places the region by has to include it — `mirrorWidth`, not `boardWidth`,
-    // which counts only the options the project declares.
-    const width = mirrorWidth(board)
+    // which counts only the options the project declares. The founder column counts the same
+    // way when there is one, and the region slides one column left on the poll that first
+    // draws it: the origin is pinned by the right edge, which is #200's accepted trade.
+    const width = mirrorWidth(board, founderOption)
     const origin = placeMirror(scene, own, width)
 
     // The blocks the `+` dropped hold the top of their column, newest first, and the
@@ -2738,6 +2795,7 @@ function App(): JSX.Element {
       errors: projectBoardRef.current.errors,
       implementing: projectBoardRef.current.implementing,
       drafts: drafts.map(draftBlockOf),
+      ...founderOption,
       ...(queue && queueColumn
         ? {
           queue: {
@@ -3197,6 +3255,138 @@ function App(): JSX.Element {
       if (activeWorkspaceRef.current !== workspace) return
       renderUnreadable((error as Error).message)
       void announceProjectBoardFailure(api, workspace, (error as Error).message)
+    }
+  }
+
+  /**
+   * Re-read the work only a person can do, and redraw the column it goes in.
+   *
+   * **Its own request, on its own timer, and deliberately not inside `refreshProjectBoard`.**
+   * That function's 404 branch — a board with no `githubProject` — calls `renderNotesOnly` and
+   * returns, so a founder read nested there would never run on exactly the board this column
+   * exists for: the fresh clone whose first blocker is that `gh` is signed out. It also has to
+   * keep answering when the project read is the thing that is broken, which a call inside that
+   * function's success path could not.
+   *
+   * **A failure changes nothing at all.** No board is written, so an already-warm mirror is
+   * left alone and a notes-only board is not marked warm — `renderUnreadable` reads warm as
+   * "`board` is set and is not the notes-only one", and re-opening #252's silence by writing a
+   * board here would be the cost of a feature that has nothing to say about the project.
+   */
+  const refreshFounderActions = async (): Promise<void> => {
+    const workspace = activeWorkspaceRef.current
+    let body: Record<string, unknown>
+    try {
+      const response = await fetch(apiUrl('/api/founder-actions'))
+      if (!response.ok) return
+      body = await response.json()
+    } catch {
+      // A board whose server is down keeps whatever column it already has, for the length of
+      // the outage. There is nothing here worth a toast: the project poll is already saying so.
+      return
+    }
+    // The tab may have been switched while the request was in flight, and this answer belongs
+    // to the board it was asked of.
+    if (activeWorkspaceRef.current !== workspace) return
+    if (!body?.success) return
+
+    const actions = (Array.isArray(body.actions) ? body.actions : []) as FounderAction[]
+    const columnName = typeof body.columnName === 'string' && body.columnName
+      ? body.columnName
+      : 'Founder Actions'
+    setFounderState({
+      columnName,
+      actions,
+      capabilities: (body.capabilities as FounderControls) ?? { resolve: true, chat: false }
+    })
+
+    const cards: FounderCard[] = actions.map((action) => ({
+      key: action.key,
+      kind: action.kind ?? null,
+      state: action.state,
+      title: action.fields?.title ?? action.key
+    }))
+    founderRef.current = { columnName, cards }
+    const signature = JSON.stringify(founderRef.current)
+    if (signature === founderDrawnRef.current) return
+
+    // Drawn against the board this canvas already has, whichever it is — the mirrored one or
+    // the notes-only one a board with no project gets. A board that has not been read at all
+    // yet is left alone rather than invented: a notes-only board made up here would draw a
+    // column for a project that may be one request away from arriving. The signature is left
+    // un-marked, so the tick after it comes round and draws it.
+    const board = projectBoardRef.current.board
+    const api = excalidrawAPIRef.current
+    if (!board || !api || busyOnCanvas(api)) return
+    founderDrawnRef.current = signature
+    renderMirror(board)
+  }
+
+  /**
+   * Settle one founder action from the panel.
+   *
+   * `how: 'probe'` always: pressing Done is asking the board to look again, and the answer the
+   * reader deserves is the one it gets by looking rather than the one it remembered. A 409
+   * carries the probe's own sentence, which is what the panel shows in place.
+   */
+  const resolveFounderAction = async (key: string): Promise<FounderResolved> => {
+    try {
+      const response = await fetch(apiUrl('/api/founder-actions/resolve'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, how: 'probe' })
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok || !body?.success) {
+        return { ok: false, error: body?.error ?? `The server answered ${response.status}.` }
+      }
+      // The column is deliberately **not** redrawn here, and that is a decision rather than an
+      // omission. A settled action leaves the open list, so redrawing now would take the card
+      // out from under the reader in the same frame that the panel answered them — the shape
+      // goes, the selection empties, and the sentence saying what was settled is gone before
+      // it can be read. The poll takes it away a few seconds later, by which time the answer
+      // has been read and the card disappearing is the confirmation rather than the answer.
+      return {
+        ok: true,
+        why: typeof body.why === 'string' ? body.why : null,
+        verified: body.verified === true,
+        action: (body.action as FounderAction) ?? null
+      }
+    } catch (error) {
+      return { ok: false, error: (error as Error).message }
+    }
+  }
+
+  /** Ask about one. Answers an error to show, or null; the reply arrives minutes later. */
+  const sendFounderChat = async (key: string, message: string): Promise<string | null> => {
+    try {
+      const response = await fetch(apiUrl('/api/founder-actions/chat'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, message })
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok || !body?.success) {
+        return body?.error ?? `The server answered ${response.status}.`
+      }
+      return null
+    } catch (error) {
+      return (error as Error).message
+    }
+  }
+
+  /** What that turn has done, and the item as the store now holds it. */
+  const readFounderChat = async (key: string): Promise<FounderChatState | null> => {
+    try {
+      const response = await fetch(apiUrl(`/api/founder-actions/chat?key=${encodeURIComponent(key)}`))
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok || !body?.success) return null
+      return {
+        run: (body.run as FounderChatState['run']) ?? null,
+        action: (body.action as FounderAction) ?? null
+      }
+    } catch {
+      return null
     }
   }
 
@@ -4735,6 +4925,51 @@ function App(): JSX.Element {
     void tick()
 
     const onVisible = (): void => { if (document.visibilityState === 'visible') void refreshProjectBoard() }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [activeWorkspace, excalidrawAPI])
+
+  /**
+   * The work only a person can do, polled beside the project rather than inside it.
+   *
+   * A loop of its own, and that is the requirement rather than a tidiness: the project poll
+   * returns early on a board with no `githubProject`, which is the board this column exists
+   * for. Nothing here spawns a `gh` — it is a local file — so the cost of the extra request is
+   * a read of memory on a page that is on screen.
+   *
+   * The ref is emptied when the board changes, before the first read for the new one lands, or
+   * one project's blockers would be drawn on the next project's canvas for a poll.
+   */
+  useEffect(() => {
+    if (!excalidrawAPI) return
+    founderRef.current = null
+    founderDrawnRef.current = ''
+    setFounderState(null)
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const tick = async (): Promise<void> => {
+      if (cancelled) return
+      if (document.visibilityState === 'visible') await refreshFounderActions()
+      // A read whose column has not reached the canvas yet comes round again at once. That is
+      // the ordinary case on a cold page — the two polls start together, and this one can
+      // easily answer before there is any board to draw a column onto — and waiting out a
+      // whole interval for it would leave the column missing for ten seconds on exactly the
+      // board it exists for.
+      const undrawn = founderRef.current !== null
+        && founderDrawnRef.current !== JSON.stringify(founderRef.current)
+      if (!cancelled) timer = setTimeout(() => { void tick() }, undrawn ? 500 : FOUNDER_POLL_MS)
+    }
+    void tick()
+
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') void refreshFounderActions()
+    }
     document.addEventListener('visibilitychange', onVisible)
 
     return () => {
@@ -6957,6 +7192,19 @@ function App(): JSX.Element {
             onAdoptIssue={adoptIssueOnBlock}
             onAddComment={addObservationToIssue}
             onRecreateIssue={recreateIssue}
+            founder={founder}
+            // Looked up by key rather than carried on the shape: the mirror redraws a founder
+            // card from the server on every pass, so the card is the wrong place to keep the
+            // steps, the evidence or the conversation.
+            founderAction={
+              founder
+                ? (founderState?.actions.find((action) => action.key === founder.key) ?? null)
+                : null
+            }
+            founderControls={founderState?.capabilities ?? null}
+            onResolveFounder={resolveFounderAction}
+            onSendFounderChat={sendFounderChat}
+            onReadFounderChat={readFounderChat}
           />
 
           {/* Also siblings of the canvas, and for the same reason: a transcript is not a
