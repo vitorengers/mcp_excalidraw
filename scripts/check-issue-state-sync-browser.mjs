@@ -459,6 +459,15 @@ async function aimAtAdd() {
 
 /** Drop a block with the `+` and write an observation into it. */
 async function dropAndWrite(observation) {
+  // Nothing selected before the press either, and for the reason the deselect below already
+  // gives: a selected block puts Excalidraw's properties island and this project's own panel
+  // over the canvas. The second drop here happens with the run's block still selected, and its
+  // press was measured landing **29 px** left of `.element-docs` and vertically inside it — the
+  // panel is pinned to a block that has just been nudged fourteen times, so how much clearance
+  // there is is a fact about the arithmetic rather than a margin anybody chose.
+  await evaluate('window.__stateCheckApi.updateScene({ appState: { selectedElementIds: {} } })');
+  await sleep(400);
+
   let scene = await evaluate(PROBE);
   const before = scene.drafts.length;
   let aim = null;
