@@ -173,15 +173,16 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-The first three of them have landed; the rest are named here so the reader of a pull request can
+The first four of them have landed; the rest are named here so the reader of a pull request can
 see where each decision lands.
 
 ```
-src/core/peer-liveness.ts        the four answers above, and which refusal you are looking at
-src/core/remote-workspace-id.ts  what this board calls a peer's project, and the inverse
-src/core/peer-registry.ts        what this board keeps about a board that approved it
-src/core/peer-client.ts          one board's HTTP call to another, and what each failure means
-src/core/peer-proxy.ts           the seam that sends a request to the machine that owns the board
+src/core/peer-liveness.ts          the four answers above, and which refusal you are looking at
+src/core/remote-workspace-id.ts    what this board calls a peer's project, and the inverse
+src/core/remote-workspace-view.ts  which fields of a project cross, and what replaces the path
+src/core/peer-registry.ts          what this board keeps about a board that approved it
+src/core/peer-client.ts            one board's HTTP call to another, and what each failure means
+src/core/peer-proxy.ts             the seam that sends a request to the machine that owns the board
 ```
 
 The id module is where a peer's project gets the name it wears here, and it is a pure pair of
@@ -192,6 +193,14 @@ on the wrong scene and log nothing. It answers both directions, because the seco
 the wire needs — given a local id, the spelling the peer itself expects back — and a project that
 cannot be named inside the length a workspace id has is refused by a sentence rather than
 shortened into a valid id for a different board.
+
+The view module is the paragraph above — *what does not cross* — as code, and it has no caller
+either. Three fields of a project cross, named one at a time; the other fourteen are on a
+withheld list in that file with the reason beside each, so a field added to a project next year
+is absent from the wire until somebody edits this. It also decides what replaces the path in the
+tab's tooltip, since a peer's project has none here: the project's own name and the name this
+board calls the machine by, which is enough to tell two projects of the same name apart and is
+this board's own word rather than anything the owner sent.
 
 The registry is a module with no caller: it owns `peers.json` beside the state directory's other
 files, and nothing yet adds a row to it or presents what a row holds. What it settles is the
