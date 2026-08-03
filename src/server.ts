@@ -57,7 +57,7 @@ import { BoardScene, parseBoardScene } from './core/board-seed.js';
 import { listDirectories } from './core/directory-browse.js';
 import {
   AgentCommands, AgentHost, AgentRun, agentCommandFor, agentCommandsOf, agentGrantFor,
-  agentGrantsFromEnv, runIssueAgent, runReviseAgent
+  agentGrantsFromEnv, agentNotEnabledRefusal, runIssueAgent, runReviseAgent
 } from './core/issue-agent.js';
 import {
   DEFAULT_AGENT_BACKEND, type AgentAdapter, type AgentCommandSpec
@@ -2674,6 +2674,10 @@ const ISSUE_AGENT_CONFIGURED = Boolean(ISSUE_AGENT_COMMANDS.native || ISSUE_AGEN
  * a board with only `_WSL` set can research a distro-backed project and not a native one,
  * and the reverse. Naming the variable that is missing is the whole value of refusing here
  * rather than letting a run start and exit 127 somewhere the reader cannot see.
+ *
+ * The sentence itself is `agentNotEnabledRefusal`'s now, in `core/issue-agent.ts`, because a
+ * second caller of it is not a route: the founder chat refuses in that module, before anything
+ * is spawned, and two copies of this wording is how the two come to name different variables.
  */
 function agentCommandRefusal(
   workspace: Workspace,
@@ -2682,15 +2686,7 @@ function agentCommandRefusal(
   variable: string
 ): string | null {
   if (agentCommandFor(workspace, commands)) return null;
-
-  const where = workspace.environment.kind === 'wsl'
-    ? { wanted: `${variable}_WSL or ${variable}`, names: `the WSL distro "${workspace.environment.distro}" names it` }
-    : { wanted: variable, names: 'this machine names it' };
-  // The backend variable first, because it is the answer for a board that has an agent
-  // installed and no command line anywhere — which is every first run.
-  return `${what} is not enabled for workspace "${workspace.id}". `
-    + `Set ${settingName('AGENT_BACKEND')} to one of ${KNOWN_BACKEND_NAMES}, `
-    + `or ${where.wanted} to the agent command as ${where.names}.`;
+  return agentNotEnabledRefusal(workspace, what, variable);
 }
 
 /**
