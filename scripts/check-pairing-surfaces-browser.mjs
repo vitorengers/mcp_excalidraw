@@ -656,9 +656,11 @@ try {
 
       await operatorChrome.evaluate(clickOn('[data-pairing-approve]'));
 
-      // The device collects the credential on its next poll and reloads. What it is *then*
-      // able to drive is #501's; what is asserted here is that the gesture completed and left
-      // the device holding a credential of its own, rather than asking over and over.
+      // The device collects the credential on its next poll and reloads. What it is *then* able
+      // to drive is the rest of this milestone's — #501 moved the guard to the caller, and its
+      // answer to a remote socket is still "refused", credential or no credential — so what is
+      // asserted here is that the gesture completed and left the device holding a credential of
+      // its own, rather than asking over and over.
       const held = await settle(async () => {
         const value = await deviceChrome.evaluate(
           'window.localStorage.getItem("vibemaxxing.device.credential")');

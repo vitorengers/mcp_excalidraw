@@ -157,6 +157,7 @@ import {
   WORKSPACE_QUERY_KEYS
 } from './core/element-store.js';
 import { allowedAuthorities, verifyOrigin, verifySameAuthority } from './core/origin-gate.js';
+import { callerIsLocal } from './core/caller-gate.js';
 import { createPairingDesk, isLoopbackCaller } from './core/pairing.js';
 import { addDevice, deviceRegistryPath } from './core/device-registry.js';
 import {
@@ -350,14 +351,17 @@ function noteDeviceSeen(device: DeviceRecord): void {
 const wss = new WebSocketServer({
   server,
   verifyClient: ({ origin, req }, done) => {
-    // The bind first, because the origin gate cannot see this caller at all. It asks a browser
-    // question, and a program connecting from the network supplies whatever `Host` it likes and
-    // is waved through — so a socket left on a non-loopback bind hands the whole board and every
-    // live shell's scrollback to anyone who reaches the port, which is the same read the routes
-    // below refuse (#366). Guarding the reads and not this one would have made them decorative.
-    if (!boundToLoopback()) {
-      logger.warn('Refused a WebSocket upgrade: the board is served over the socket only while '
-                  + 'the server is bound to loopback.');
+    // Who is calling, first, because the origin gate cannot see this caller at all. It asks a
+    // browser question, and a program connecting from the network supplies whatever `Host` it
+    // likes and is waved through — so an unguarded socket hands the whole board and every live
+    // shell's scrollback to anyone who reaches the port, which is the same read the routes below
+    // refuse (#366). Guarding the reads and not this one would have made them decorative.
+    //
+    // It asked about the *bind* until #501, and had to move with `offLoopback` rather than be
+    // left behind an HTTP-only guard: this is where `initial_elements` and the scrollback go.
+    if (!callerIsLocal(req)) {
+      logger.warn('Refused a WebSocket upgrade: the board is served over the socket only to a '
+                  + `caller on this machine, and this one came from ${req.socket?.remoteAddress}.`);
       done(false, 403, 'Forbidden');
       return;
     }
@@ -980,14 +984,9 @@ const UpdateElementSchema = z.object({
 
 // ─── The loopback guard ───────────────────────────────────────
 //
-// Every route below that answers with something this machine owns asks this first. `HOST` and
-// `LOOPBACK_ADDRESSES` are resolved at the bottom of this file; both functions are called from
-// request handlers, which run long after that.
-
-/** Whether this server was told to bind an address only this machine can reach. */
-function boundToLoopback(): boolean {
-  return LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost';
-}
+// Every route below that answers with something this machine owns asks this first. What it asks
+// lives in `core/caller-gate.ts`; the whole of the funnel is here, so the ~40 call sites keep
+// the shape they have and there is one place where the question can change.
 
 /**
  * Refuse a caller that arrived over the network, and say which question was asked.
@@ -1013,24 +1012,43 @@ function boundToLoopback(): boolean {
  * #366, so nothing is lost, and what is refused is a network caller resolving somebody else's
  * pending export by guessing a request id.
  *
- * The consequence is stated rather than hidden: a non-loopback bind is now useless for
- * everything, not merely for the GitHub half. #278 had already taken the tab strip and the
- * picker; this takes the canvas, in both directions. A reverse proxy is unaffected — it reaches
- * this server on loopback, which is the configuration `EXCALIDRAW_ALLOWED_HOSTS` exists for.
+ * **Until #501 all of that asked about the bind**, and so a board on any interface was inert for
+ * everybody — including the browser on the host machine, which is loopback and whose request was
+ * refused anyway. A bind on every interface and a bind on one address of a private overlay were
+ * treated alike, so the
+ * careful configuration was punished exactly as hard as the reckless one, and there was no
+ * configuration in which this board could be reached from a second machine, however narrow. It
+ * asks about the caller now, so the consequence changes shape rather than going away: what a
+ * *stranger* gets from a board on an interface is still nothing in either direction, and what the
+ * operator gets on the machine it runs on is the whole board. Remote is refused until there is a
+ * device credential to present, which is the rest of this milestone (#502 is the registry, #503
+ * the pairing); nothing a remote caller could not reach before is reachable now, and a board with
+ * no device paired behaves exactly as it did. A reverse proxy is unaffected either way — it
+ * reaches this server on loopback, which is the configuration `EXCALIDRAW_ALLOWED_HOSTS` exists
+ * for.
+ *
+ * `res.req` rather than a second parameter, because a funnel is only one place to change while
+ * nothing has to be threaded through the call sites to reach it. Express sets it on every
+ * response, and it is the request this reply is being written for.
+ *
+ * `X-Forwarded-For` is not read; `core/caller-gate.ts` says at length why not, and takes an
+ * address rather than a request so that it cannot start.
  *
  * Three controls stand in front of these routes and none replaces another. The token (#350) is
  * what the caller carries, and it is a `VIBEMAXXING_NO_AUTH` away from not being there — which
  * is the state every check in `scripts/` runs in. The origin gate
  * (`src/core/origin-gate.ts`) asks a browser question, `Origin` and `Host`, and its own comment
- * says a program that can set headers can set any header. This asks about the **bind**, which is
- * the one thing about a caller that nobody can forge, and it answers 403 to a request holding a
- * perfectly good token.
+ * says a program that can set headers can set any header. This asks where the packets came from,
+ * which is the one thing about a caller that nobody can forge, and it answers 403 to a remote
+ * request holding a perfectly good token.
  */
 function offLoopback(res: Response, what: string): boolean {
-  if (boundToLoopback()) return false;
+  if (callerIsLocal(res.req)) return false;
   res.status(403).json({
     success: false,
-    error: `${what} only while the server is bound to loopback.`
+    error: `${what} only for a caller on this machine. This request came from `
+      + `${res.req.socket?.remoteAddress ?? 'an address this server could not read'}, `
+      + 'which is not loopback.'
   });
   return true;
 }
@@ -6694,9 +6712,11 @@ app.post('/api/pair/refuse', (req: Request, res: Response) => {
  * says how to become one — and asking any other route the same question would mean reading a
  * refusal about the scene and guessing that it was about admission.
  *
- * Deliberately not one of `PAIRING_OPEN_PATHS`, and deliberately not guarded on the *bind* the
- * way the board's reads are: a caller with a credential this server accepts has to get 200 here,
- * which is what makes this the seam #501 widens rather than a second copy of the guard.
+ * Deliberately not one of `PAIRING_OPEN_PATHS`, and deliberately carrying no guard of its own:
+ * a caller this server admits has to get 200 here, so the answer stays the guards' rather than
+ * becoming a second copy of them that can disagree with them. That is also what makes it
+ * forward-compatible with the rest of this milestone — the day the caller guard learns to read a
+ * device's record, this route says so without being edited.
  */
 app.get('/api/pair/admission', (_req: Request, res: Response) => {
   res.json({ success: true, admitted: true });

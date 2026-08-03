@@ -48,6 +48,7 @@ import { tmpdir } from 'node:os';
 
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
+import { remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 let failures = 0;
 
@@ -304,16 +305,34 @@ try {
         readRegistry().note === 'hand-written, and it stays that way',
         JSON.stringify(readRegistry()));
 
-  console.log('\n8. a board that is not bound to loopback may not remove a project');
+  // Since #501 the guard asks who is calling rather than where the server opened, so the case is
+  // a caller reaching a board from somewhere that is not this machine, rather than the board's
+  // own bind.
+  console.log('\n8. a caller that is not on this machine may not remove a project');
   writeRegistry();
-  const open = startCanvas(openPort, { host: '0.0.0.0' });
-  await waitForHealth(OPEN_BASE, open.child, open.read);
-  const before = rawRegistry();
-  const refused = await remove(OPEN_BASE, 'beta');
-  check('403 for the DELETE', refused.status === 403,
-        `got ${refused.status} ${JSON.stringify(refused.body)}`);
-  check('and the refusal names loopback', /loopback/i.test(refused.body?.error ?? ''), refused.body?.error);
-  check('with the file byte for byte what it was', rawRegistry() === before, rawRegistry());
+  const remote = await remoteInterfaceAddress((line) => console.log(`  note  ${line}`));
+  if (!remote) {
+    console.log('  note  this machine has no non-loopback address to be called on, so this case '
+                + 'could not be run at all');
+  } else {
+    // A request to `http://<interface>:<port>` names that authority in `Host`, which a board
+    // bound to `0.0.0.0` does not answer for. The origin gate is a different control from the
+    // caller guard, and a case that wants the second refusal has to get past the first.
+    const open = startCanvas(openPort, {
+      host: '0.0.0.0',
+      extra: { EXCALIDRAW_ALLOWED_HOSTS: `${remote}:${openPort}` },
+    });
+    await waitForHealth(OPEN_BASE, open.child, open.read);
+    const before = rawRegistry();
+    const refused = await remove(`http://${remote}:${openPort}`, 'beta');
+    check('403 for the DELETE', refused.status === 403,
+          `got ${refused.status} ${JSON.stringify(refused.body)}`);
+    check('and the refusal names the caller, not the origin gate',
+          /machine/i.test(refused.body?.error ?? '')
+          && !/DNS rebinding/i.test(refused.body?.error ?? ''),
+          refused.body?.error);
+    check('with the file byte for byte what it was', rawRegistry() === before, rawRegistry());
+  }
 
   console.log('\n9. a project with a run in flight is refused rather than orphaned');
   // A real git repository and a stub agent, because there is no other way to hold a run

@@ -24,13 +24,18 @@
  *     of those.** The list is short by design, so it is the one written out route by route; the
  *     refused set is the complement and `rest-api.md` is where it is catalogued.
  *
- * There are two guards and they answer different questions. **The bind** — `offLoopback`, the
- * two feature helpers that answer 404-if-disabled before 403-if-remote (`terminalRefused`,
- * `implementingRefused`), and the inline test the GitHub routes were written with — refuses
+ * There are two guards and they answer different questions. **The bind** — the two feature
+ * helpers that answer 404-if-disabled before 403-if-remote (`terminalRefused`,
+ * `implementingRefused`) and the inline test the GitHub routes were written with — refuses
  * everybody on an interface-bound board, the operator's own browser included. **The caller** —
- * `notTheHost`, which #503 added for the pairing routes — refuses a socket that did not come
- * from this machine, wherever the server is bound. Marking one as the other would tell a reader
- * the wrong thing about precisely the configuration this milestone exists to make usable.
+ * `notTheHost`, which #503 added for the pairing routes, and since #501 `offLoopback`, which is
+ * the funnel in front of everything else — refuses a socket that did not come from this machine,
+ * wherever the server is bound. Marking one as the other would tell a reader the wrong thing
+ * about precisely the configuration this milestone exists to make usable.
+ *
+ * The set moved when #501 landed rather than the rule: `offLoopback` was written here as a bind
+ * shape because that is what it asked, and it asks the other question now, so the two lists and
+ * every mark in `rest-api.md` that rests on them moved with it.
  *
  * A third shape added tomorrow makes its routes read as *open* here, and section 2 is what turns
  * that into a failure rather than a quiet reclassification: every route this file calls open or
@@ -40,11 +45,14 @@
  * server on a port the kernel just handed out and kills it. No browser. Run
  * `./node_modules/.bin/tsc` first.
  *
- * The off-loopback server is bound to `127.0.0.2` for the reason `check-board-writes-guard.mjs`
- * gives: the guard's question is `LOOPBACK_ADDRESSES.includes(HOST)` over a list that is
- * `127.0.0.1` and `::1` exactly, so `127.0.0.2` is off loopback to the code under test while
- * never leaving this machine. Where a platform will not bind a loopback alias, the first real
- * interface is the fallback and the check says so on stdout.
+ * The off-loopback server is bound to `127.0.0.2`, and since #501 that address does two jobs at
+ * once rather than one. The bind shapes ask `LOOPBACK_ADDRESSES.includes(HOST)` over a list that
+ * is `127.0.0.1` and `::1` exactly, so a server there is off loopback to them; a *caller*
+ * reaching it is inside `127.0.0.0/8` and is therefore on this machine, which is exactly the
+ * board this section wants — one where the two guards give different answers, without anything
+ * leaving the machine. The half this cannot ask is a genuinely remote socket being refused, and
+ * it says below whose job that is. Where a platform will not bind a loopback alias, the first
+ * real interface is the fallback and the check says so on stdout.
  *
  * Usage: node scripts/check-guarded-routes-documented.mjs
  *
@@ -79,7 +87,6 @@ function check(name, condition, detail = '') {
  * gives: matching `offLoopback` alone counts the declaration of the funnel as a use of it.
  */
 const BIND_SHAPES = [
-  /offLoopback\(res,\s*['"]/,
   /terminalRefused\(res\)/,
   /implementingRefused\(res\)/,
   /!LOOPBACK_ADDRESSES\.includes\(HOST\)/,
@@ -94,7 +101,16 @@ const BIND_SHAPES = [
  * caller-guarded one to the operator while still refusing the network. The two pairing routes it
  * sits on are the first of these; #501 is where the rest of the funnel becomes one.
  */
-const CALLER_SHAPES = [/notTheHost\(req, res,\s*['"]/];
+const CALLER_SHAPES = [
+  /notTheHost\(req, res,\s*['"]/,
+  // #501 moved this one. `offLoopback` was the largest bind shape here — the funnel in front of
+  // the board's contents, the registry, the picker and the restart route — and it now reads
+  // `res.req.socket.remoteAddress` like `notTheHost` does. Everything it fronts therefore
+  // answers the operator on an interface-bound board and refuses the network, which is a
+  // different sentence from the one those rows used to carry and is why `rest-api.md` marks
+  // them the other way now.
+  /offLoopback\(res,\s*['"]/,
+];
 
 /**
  * Every `app.<method>('<path>', …)` in a source file, with the body each one runs to.
@@ -147,7 +163,8 @@ app.get('/api/pair/pending', (req: Request, res: Response) => {
 `;
 
 const synthetic = new Map(routesOf(SYNTHETIC).map((route) => [route.name, route.guard]));
-check('the offLoopback funnel is a bind guard', synthetic.get('GET /api/funnelled') === 'bind');
+check('the offLoopback funnel is a caller guard since #501',
+      synthetic.get('GET /api/funnelled') === 'caller');
 check('terminalRefused is a bind guard', synthetic.get('POST /api/terminal') === 'bind');
 check('implementingRefused is a bind guard', synthetic.get('POST /api/implement') === 'bind');
 check('the inline test the GitHub routes use is a bind guard',
@@ -186,6 +203,9 @@ console.log(`  note  reachable from the network: ${openRoutes.join(', ')}`);
 const ISSUE_URL = 'https://github.com/vitorengers/vibemaxxing/issues/1';
 const PROBES = new Map([
   ['GET /', { path: '/' }],
+  // Caller-guarded since #501, and asked here rather than among the refused: on the
+  // interface-bound server below, reached from this machine, the whole funnel answers.
+  ['GET /api/elements', { path: '/api/elements' }],
   ['GET /health', { path: '/health' }],
   ['GET /api/sync/status', { path: '/api/sync/status' }],
   ['GET /api/issue-block/:id/run', { path: '/api/issue-block/guarded-routes-block/run' }],
@@ -209,19 +229,41 @@ const PROBES = new Map([
   ['GET /api/pair/admission', { path: '/api/pair/admission' }],
 ]);
 
-/** One route per bind-guard shape, so section 2 is evidence about the guarded half as well. */
+/**
+ * One route per bind-guard shape, so section 2 is evidence about the refused half as well.
+ *
+ * `GET /api/elements` used to be here and is not any more: since #501 the funnel it sits behind
+ * asks the caller, so on the interface-bound server below — reached from this machine — it
+ * answers. It moved to `CALLER_SHAPE_PROBES`, where that is the assertion.
+ */
 const GUARDED_PROBES = new Map([
-  ['GET /api/elements', { path: '/api/elements' }],
   ['GET /api/github-status', { path: '/api/github-status' }],
   ['GET /api/terminal', { path: '/api/terminal' }],
   ['POST /api/implement', { path: '/api/implement', method: 'POST', body: { url: ISSUE_URL } }],
 ]);
 
-const answering = [...openRoutes, ...callerGuarded];
-const unprobed = answering.filter((name) => !PROBES.has(name));
-check('every route this check calls open or caller-guarded is one section 2 asks',
+/**
+ * One caller-guarded route per shape, asked beside the open ones.
+ *
+ * Every **open** route is asked individually below, because that list is the one `SECURITY.md`
+ * publishes and a guard shape this file cannot see would land a route in it silently. The
+ * caller-guarded set is asked by shape instead: #501 made it the whole `offLoopback` funnel —
+ * some thirty routes that answer for exactly one reason — and thirty probes would be thirty
+ * spellings of one fact, each needing a body and a fixture. What the trap needs is that a route
+ * with a shape nobody here knows reads as *open* and is then asked, which is unchanged.
+ */
+const CALLER_SHAPE_PROBES = ['GET /api/elements', 'GET /api/pair/pending'];
+
+const answering = [...openRoutes, ...CALLER_SHAPE_PROBES];
+const unprobed = openRoutes.filter((name) => !PROBES.has(name));
+check('every route this check calls open is one section 2 asks',
       unprobed.length === 0,
       `${unprobed.join(', ')} — add it to PROBES, or it is a guard shape this file cannot see`);
+const unrepresented = CALLER_SHAPE_PROBES
+  .filter((name) => !callerGuarded.includes(name) || !PROBES.has(name));
+check('and one route per caller-guard shape is asked beside them',
+      unrepresented.length === 0,
+      `${unrepresented.join(', ')} — no longer caller-guarded, or missing from PROBES`);
 
 // ─── 2. And a real server answers the way it says ─────────────
 
@@ -272,11 +314,13 @@ writeFileSync(join(projectPath, 'board.config.json'), JSON.stringify({
   name: 'guarded',
   board: 'board.excalidraw',
   repo: 'vitorengers/vibemaxxing',
-  // A project to mirror, so the GitHub routes are refused by the guard rather than by 404. The
-  // owner is `someone` like every other fixture in this directory, and that is a rule rather
-  // than a style: `check-shipped-config-neutral.mjs` refuses any tracked file that names a
-  // project board owned by this repository's owner, so a realistic-looking URL here is a red
-  // run somewhere else.
+  // A project to mirror, so the GitHub routes are refused by the guard rather than by 404.
+  //
+  // Owned by nobody in particular, and that is the point rather than taste:
+  // `check-shipped-config-neutral.mjs` reads every *tracked* file for a project board owned by
+  // whoever owns this repository, and this fixture named them — so `main` went red on a rule
+  // about shipping somebody's board, over a URL nothing ever fetches (#511's own note that a
+  // new check's fixtures are tracked files). Any well-formed project URL does the job here.
   githubProject: 'https://github.com/users/someone/projects/5',
 }), 'utf8');
 writeFileSync(join(projectPath, 'board.excalidraw'), JSON.stringify({

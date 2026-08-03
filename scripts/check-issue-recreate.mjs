@@ -47,6 +47,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
+import { remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -312,11 +313,15 @@ const BARE = `http://127.0.0.1:${barePort}`;
 
 const running = [];
 
-function startCanvas(thisPort, host, { agent = true } = {}) {
+function startCanvas(thisPort, host, { agent = true, allowedHosts = null } = {}) {
   const env = {
     PORT: String(thisPort),
     HOST: host,
     LOG_LEVEL: 'error',
+    // A request to `http://<interface>:<port>` names that authority in `Host`, which a board
+    // bound to `0.0.0.0` does not answer for. The origin gate is a different control from the
+    // caller guard, and a case that wants the second refusal has to get past the first.
+    ...(allowedHosts ? { EXCALIDRAW_ALLOWED_HOSTS: allowedHosts } : {}),
     EXCALIDRAW_WORKSPACES: registryPath,
     EXCALIDRAW_GH_COMMAND: `node "${ghStub.replace(/\\/g, '/')}"`,
     EXCALIDRAW_IMPLEMENT_AGENT: `node "${implementStub.replace(/\\/g, '/')}" -p`,
@@ -603,13 +608,26 @@ try {
         afterReset.issueState === 'created' && afterReset.issueUrl === issueUrl(101),
         JSON.stringify(afterReset));
 
-  console.log('\n16. it spawns an agent, so it refuses off loopback and without one configured');
-  const remote = startCanvas(remotePort, '0.0.0.0');
-  await waitForHealth(REMOTE, remote);
-  const off = await recreate(101, 'from the network', { base: REMOTE });
-  check('403 Forbidden off loopback', off.status === 403,
-        `got ${off.status}: ${JSON.stringify(off.body).slice(0, 200)}`);
-  check('and it says loopback', /loopback/i.test(off.body?.error ?? ''), off.body?.error);
+  // Since #501 the guard asks who is calling rather than where the server opened, so the caller
+  // this route refuses is one that did not reach the board from the machine it runs on.
+  console.log('\n16. it spawns an agent, so it refuses a caller off this machine and a board with '
+              + 'no agent configured');
+  const remoteAddress = await remoteInterfaceAddress((line) => console.log(`  note  ${line}`));
+  if (!remoteAddress) {
+    console.log('  note  this machine has no non-loopback address to be called on, so the caller '
+                + 'half of this case could not be run at all');
+  } else {
+    const remote = startCanvas(remotePort, '0.0.0.0',
+                               { allowedHosts: `${remoteAddress}:${remotePort}` });
+    await waitForHealth(REMOTE, remote);
+    const off = await recreate(101, 'from the network',
+                               { base: `http://${remoteAddress}:${remotePort}` });
+    check('403 Forbidden for a caller that is not on this machine', off.status === 403,
+          `got ${off.status}: ${JSON.stringify(off.body).slice(0, 200)}`);
+    check('and it says so, rather than being the origin gate',
+          /machine/i.test(off.body?.error ?? '') && !/DNS rebinding/i.test(off.body?.error ?? ''),
+          off.body?.error);
+  }
 
   const bare = startCanvas(barePort, '127.0.0.1', { agent: false });
   await waitForHealth(BARE, bare);

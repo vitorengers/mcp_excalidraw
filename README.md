@@ -106,10 +106,11 @@ on a server that at the time had no authentication, and carried neither `gh` nor
 of what this tool is could not have run inside it.
 
 **Security note:** the canvas server binds `127.0.0.1` only by default, and the whole tool is
-bound to that — off loopback every GitHub-backed route answers `403`, and so does every read of
-what the board holds, down to the WebSocket that would have streamed the scene, and every write
-of it: a board on a network interface can be neither read nor drawn on, and says so on itself
-rather than showing you an empty region. Everything under `/api` is behind a secret the server writes to your state
+bound to the machine it runs on: a caller whose own address is not loopback gets `403` from every
+GitHub-backed route, from every read of what the board holds — down to the WebSocket that would
+have streamed the scene — and from every write of it, so a board on a network interface can be
+neither read nor drawn on by a stranger, and says so on itself rather than showing them an empty
+region. Everything under `/api` is behind a secret the server writes to your state
 directory at startup and the launcher hands to your browser; you never type it, and nothing that
 cannot read that file can drive the board. If you expose it on a network interface
 (`HOST=0.0.0.0`) anyway, put network-level access controls in front: that secret is one shared

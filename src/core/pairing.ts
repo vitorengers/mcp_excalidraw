@@ -2,6 +2,7 @@ import { randomInt, randomUUID } from 'crypto';
 
 import { deviceCredential } from './device-registry.js';
 import type { DeviceApproval, DeviceRecord, PairedDevice } from './device-registry.js';
+import { isLoopbackAddress } from './caller-gate.js';
 
 /**
  * The pairing handshake: a device asks, the host approves, and only the host may approve.
@@ -328,18 +329,13 @@ export function createPairingDesk({ mint }: { mint: DeviceMinter }): PairingDesk
  * The whole of `127.0.0.0/8` rather than `127.0.0.1` alone, and the IPv6-mapped spelling of it
  * that Node hands back on a dual-stack socket, because those are the same machine under three
  * names.
+ *
+ * **The arithmetic is `core/caller-gate.ts`'s, and this is the name the desk calls it by.** #503
+ * and #501 were written against the same `main` and each wrote this predicate out — one for the
+ * approval routes, one for the funnel in front of the other forty. Two copies of the question
+ * *who is on this machine* is two chances for one of them to learn something the other does not;
+ * the name stays because the desk and its check read better for it, and the body is one line.
  */
 export function isLoopbackCaller(address: string | undefined | null): boolean {
-  if (!address) return false;
-  let candidate = address.trim().toLowerCase();
-  if (!candidate) return false;
-  // A scope suffix on a link-local IPv6 address — `fe80::1%eth0` — is not part of the address.
-  const scope = candidate.indexOf('%');
-  if (scope >= 0) candidate = candidate.slice(0, scope);
-  if (candidate === '::1' || candidate === '[::1]') return true;
-  if (candidate.startsWith('::ffff:')) candidate = candidate.slice('::ffff:'.length);
-  const octets = candidate.split('.');
-  if (octets.length !== 4) return false;
-  if (octets.some(octet => !/^\d{1,3}$/.test(octet) || Number(octet) > 255)) return false;
-  return octets[0] === '127';
+  return isLoopbackAddress(address);
 }

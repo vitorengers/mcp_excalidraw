@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * A board bound off loopback publishes nothing of what it holds.
+ * A board publishes nothing of what it holds to a caller that is not on this machine.
  *
  * #278 guarded `GET /api/workspaces` — the map of every project — and said in the same breath
  * that the wider question should not wait for it. This is that question, and #366 is where it
- * was answered: **the reads are guarded too.** A non-loopback bind is therefore useless for
- * anything rather than useful for exactly one thing, which is the honest end of the direction
- * #278 started; after it, such a bind could no longer list projects, so the tab strip and the
- * picker were already broken on one.
+ * was answered: **the reads are guarded too.** Nothing a stranger reaches is left readable rather
+ * than exactly one thing being left readable, which is the honest end of the direction #278
+ * started; after it, such a caller could no longer list projects, so the tab strip and the picker
+ * were already broken for them.
  *
  * The reads are not one route. `GET /api/elements` is the whole board, and so is
  * `GET /api/elements/search` with no query at all — guarding the first and leaving the second
@@ -28,28 +28,36 @@
  * any header. A network caller with `curl` supplies whatever `Host` it likes and is waved
  * through, which is why the socket case below connects with no browser anywhere near it.
  *
+ * Since #501 the question is who is calling rather than where the server opened. The reads are
+ * refused to a caller that is not on this machine, and a board that also listens somewhere else
+ * serves them to the browser on the host machine — which the bind test refused along with
+ * everybody else, its request being loopback all the same.
+ *
  * Three servers over one registry and one seeded project:
  *
  *   1. bound to loopback — every read answers exactly as it does today, carrying the seeded
  *      board, the image, the document and the library shape, and the socket hands over the
  *      scene. This is what the guard has to keep working, and it is half the check.
- *   2. bound off loopback — every one answers 403, the refusal names the bind, none of the
- *      seeded strings is anywhere in the body, and the upgrade is refused.
- *   3. **bound off loopback with the token on**, which is the shipped configuration since #350:
- *      a caller carrying this start's own secret, read out of the state directory the server
- *      wrote it to, is refused all the same. The bind guard is a second answer rather than the
+ *   2. bound to `0.0.0.0` and called on an address that is not loopback — every one answers 403,
+ *      the refusal names the caller, none of the seeded strings is anywhere in the body, and the
+ *      upgrade is refused.
+ *   3. **the same, with the token on**, which is the shipped configuration since #350: a remote
+ *      caller carrying this start's own secret, read out of the state directory the server wrote
+ *      it to, is refused all the same. The caller guard is a second answer rather than the
  *      token's shadow — and it is the only one left where `VIBEMAXXING_NO_AUTH` is set, which
  *      is every check in this directory.
  *   4. read off `src/server.ts` rather than off a server: each of those routes carries an
  *      `offLoopback` call, so a tenth read added beside them cannot be the next one left out.
  *
- * **The off-loopback server is bound to `127.0.0.2`, not to a real interface**, for the reason
- * `check-workspaces-guard.mjs` gives at length: the guard's question is
- * `LOOPBACK_ADDRESSES.includes(HOST)` over a list that is `127.0.0.1` and `::1` exactly, so
- * `127.0.0.2` is off loopback to the code under test while never leaving this machine.
- * Publishing a board on the LAN for a second to assert that it refuses would be a strange way to
- * prove a security property. Where a platform will not bind a loopback alias, the first real
- * interface is the fallback and the check says so on stdout.
+ * **The remote caller is a real one, and it did not have to be.** While the guard tested the
+ * bind, this check bound `127.0.0.2` — off loopback to a list of `127.0.0.1` and `::1` exactly,
+ * and never leaving the machine. Now that the guard tests the caller, `127.0.0.2` is a loopback
+ * address like the rest of `127.0.0.0/8`, and there is no substitute left for an address a
+ * second machine could in principle use. `scripts/lib/remote-caller.mjs` prefers a host-only
+ * adapter — a Hyper-V or WSL virtual switch, a Docker bridge — over a real interface, says on
+ * stdout when it had to take a real one, and answers `null` on a machine that has nothing but
+ * loopback, where the refusal sections say they could not run rather than passing as though they
+ * had.
  *
  * Self-contained: it builds a throwaway project and registry in a temp directory, starts its own
  * servers on ports the kernel just handed out and kills them. No browser. Run
@@ -60,9 +68,8 @@
  * Tier: fast
  */
 
-import { createServer } from 'node:net';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { networkInterfaces, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -70,6 +77,7 @@ import WebSocket from 'ws';
 
 import { freePorts } from './lib/free-port.mjs';
 import { startCanvas } from './lib/spawn-canvas.mjs';
+import { looksLikeLoopback, peerAddressSeenOn, remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const startupTimeoutMs = 15000;
@@ -81,27 +89,8 @@ function check(name, condition, detail = '') {
   else { failures++; console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`); }
 }
 
-/** Whether this machine will let a server sit on `host`. */
-function canBind(host) {
-  return new Promise((resolve) => {
-    const probe = createServer();
-    probe.once('error', () => resolve(false));
-    probe.listen(0, host, () => probe.close(() => resolve(true)));
-  });
-}
-
-/** An address the guard calls "not loopback" and this machine will bind. */
-async function offLoopbackHost() {
-  if (await canBind('127.0.0.2')) return '127.0.0.2';
-  for (const entries of Object.values(networkInterfaces())) {
-    for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal && (await canBind(entry.address))) {
-        console.log(`  note  127.0.0.2 is not bindable here; using the interface ${entry.address}`);
-        return entry.address;
-      }
-    }
-  }
-  throw new Error('No non-loopback address on this machine could be bound.');
+function note(line) {
+  console.log(`  note  ${line}`);
 }
 
 async function waitForHealth(base, child) {
@@ -157,8 +146,8 @@ async function post(base, path, body) {
  * Connect a plain WebSocket and report what the server said, or how it refused.
  *
  * No browser and no `Origin` header: this is the caller the origin gate deliberately allows —
- * a program, which can set any header it likes — and therefore the caller only a bind-address
- * guard can turn away.
+ * a program, which can set any header it likes — and therefore the caller only an address the
+ * kernel filled in can turn away.
  */
 function socketVerdict(url) {
   return new Promise((resolve) => {
@@ -195,7 +184,7 @@ const workdir = mkdtempSync(join(tmpdir(), 'check-board-reads-guard-'));
 const projectPath = join(workdir, 'a-board-the-network-should-not-read');
 mkdirSync(join(projectPath, 'notes'), { recursive: true });
 
-/** The four strings. Each one is served by a different route, and none may leave off loopback. */
+/** The four strings. Each one is served by a different route, and none may leave this machine. */
 const SECRET_TEXT = 'the-drawing-the-network-should-not-read';
 const SECRET_DOC = 'the-document-the-network-should-not-read';
 const SECRET_SHAPE = 'the-library-shape-the-network-should-not-read';
@@ -284,13 +273,13 @@ function conventionalTokenFile(port) {
   return join(home, leaf, `server-${port}.token`);
 }
 
+const remote = await remoteInterfaceAddress(note);
+
 let loopback;
 let off;
 let authed;
 
 try {
-  const offHost = await offLoopbackHost();
-
   // ─── 1. Bound to loopback, every read answers as it does today ───
 
   console.log('\n1. bound to loopback, every read answers exactly as it does today');
@@ -343,87 +332,116 @@ try {
 
   loopback.stop();
 
-  // ─── 2. Bound anywhere else, every one of them refuses ───
+  // ─── 2. Called from anywhere else, every one of them refuses ───
 
-  console.log(`\n3. bound to ${offHost}, every read refuses before it reads anything`);
-  off = startCanvas({ port: offPort, cwd: workdir, env: { ...env, HOST: offHost } });
-  const offBase = `http://${offHost}:${offPort}`;
-  await waitForHealth(offBase, off.child);
+  if (!remote) {
+    note('this machine has no non-loopback address to be called on, so sections 3, 4 and 5 — the '
+         + 'caller that is not on this machine, its socket, and the one holding a token — could '
+         + 'not be run at all');
+  } else {
+    console.log(`\n3. bound to 0.0.0.0 and called on ${remote}, every read refuses before it `
+                + 'reads anything');
+    off = startCanvas({
+      port: offPort,
+      cwd: workdir,
+      env: {
+        ...env,
+        HOST: '0.0.0.0',
+        // The origin gate is a different control and this check is not about it. A request to
+        // `http://<interface>:<port>` names that authority in `Host`, which a board bound to
+        // `0.0.0.0` does not answer for, so without this every case below would be refused by the
+        // wrong gate and would pass for the wrong reason.
+        EXCALIDRAW_ALLOWED_HOSTS: `${remote}:${offPort}`,
+      },
+    });
+    const offBase = `http://${remote}:${offPort}`;
+    await waitForHealth(`http://127.0.0.1:${offPort}`, off.child);
 
-  // The same snapshot, so the refusal below is a refusal to hand over something that is there.
-  // The writes are not this issue's subject and are not guarded here; if that changes, this
-  // server simply holds no snapshot and the read still has to answer 403.
-  await post(offBase, '/api/snapshots', { name: 'before-the-network' });
+    // The premise, established with a server of this check's own rather than with the code under
+    // test: a connection to one of this machine's interface addresses reports that interface as
+    // its source, not 127.0.0.1.
+    const peer = await peerAddressSeenOn(remote);
+    check(`a server on ${remote} sees a peer that is not loopback (${peer})`,
+          Boolean(peer) && !looksLikeLoopback(peer), peer);
 
-  const health = await get(offBase, '/health');
-  check('the canvas itself is up — this is a guard, not a broken server', health.status === 200,
-        `${health.status} ${health.text.slice(0, 120)}`);
+    // The same snapshot, from the caller that may take one, so the refusal below is a refusal to
+    // hand over something that is there. The writes are not this issue's subject and are not
+    // guarded here; if that changes, this server simply holds no snapshot and the read still has
+    // to answer 403.
+    await post(`http://127.0.0.1:${offPort}`, '/api/snapshots', { name: 'before-the-network' });
 
-  for (const [name, path] of READS) {
-    const refused = await get(offBase, path);
-    check(`${name} answers 403`, refused.status === 403,
-          `got ${refused.status} — ${refused.text.slice(0, 160)}`);
-    check(`  ${name} refuses in the words of the bind`, /loopback/i.test(refused.text),
-          refused.text.slice(0, 160));
-    const leaked = SECRETS.filter((secret) => refused.text.includes(secret));
-    check(`  ${name} leaks none of the board into the refusal`, leaked.length === 0,
-          leaked.join(', '));
+    const health = await get(offBase, '/health');
+    check('the canvas itself is up — this is a guard, not a broken server', health.status === 200,
+          `${health.status} ${health.text.slice(0, 120)}`);
+
+    for (const [name, path] of READS) {
+      const refused = await get(offBase, path);
+      check(`${name} answers 403`, refused.status === 403,
+            `got ${refused.status} — ${refused.text.slice(0, 200)}`);
+      check(`  ${name} refuses in the words of the caller, not of the origin gate`,
+            /machine/i.test(refused.text) && !/DNS rebinding/i.test(refused.text),
+            refused.text.slice(0, 200));
+      const leaked = SECRETS.filter((secret) => refused.text.includes(secret));
+      check(`  ${name} leaks none of the board into the refusal`, leaked.length === 0,
+            leaked.join(', '));
+    }
+
+    // ─── 3b. The socket, from off this machine ───
+
+    console.log('\n4. and the socket, which is the same read by a door HTTP guards cannot see');
+    const refusedSocket = await socketVerdict(`ws://${remote}:${offPort}/?workspace=reads`);
+    check('the upgrade is refused', refusedSocket.outcome === 'refused',
+          JSON.stringify(refusedSocket).slice(0, 240));
+    check('no initial_elements arrived, so no board did either',
+          !String(refusedSocket.text ?? '').includes(SECRET_TEXT),
+          String(refusedSocket.text ?? '').slice(0, 200));
+
+    off.stop();
+
+    // ─── The caller guard is not the token's shadow ───
+
+    console.log('\n5. and a caller holding this start\'s token is refused there just the same');
+    authed = startCanvas({
+      port: authedPort,
+      cwd: workdir,
+      env: {
+        ...env,
+        HOST: '0.0.0.0',
+        EXCALIDRAW_ALLOWED_HOSTS: `${remote}:${authedPort}`,
+        // `canvasEnvironment` turns the token off for every check in this directory; this is the
+        // one server here that has to take it back on, because the question of this section is
+        // whether the caller guard survives the control that was supposed to make it unnecessary.
+        EXCALIDRAW_NO_AUTH: undefined,
+        HOME: fakeHome,
+        USERPROFILE: fakeHome,
+        LOCALAPPDATA: fakeHome,
+        XDG_STATE_HOME: fakeHome,
+      },
+    });
+    const authedBase = `http://${remote}:${authedPort}`;
+    await waitForHealth(`http://127.0.0.1:${authedPort}`, authed.child);
+
+    const tokenFile = conventionalTokenFile(authedPort);
+    const token = existsSync(tokenFile) ? readFileSync(tokenFile, 'utf8').trim() : '';
+    check('this start wrote a token, so the caller below is an entitled one', token.length > 0,
+          tokenFile);
+
+    const entitled = await fetch(`${authedBase}/api/elements`, {
+      headers: { ...BOARD, 'x-vibemaxxing-token': token },
+    });
+    const entitledText = await entitled.text();
+    check('GET /api/elements answers 403 even with the token', entitled.status === 403,
+          `got ${entitled.status} — ${entitledText.slice(0, 200)}`);
+    check('and the board is not in that answer', !entitledText.includes(SECRET_TEXT),
+          entitledText.slice(0, 160));
+
+    const entitledSocket = await socketVerdict(
+      `ws://${remote}:${authedPort}/?workspace=reads&token=${encodeURIComponent(token)}`);
+    check('and so is the socket it could have opened', entitledSocket.outcome === 'refused',
+          JSON.stringify(entitledSocket).slice(0, 240));
+
+    authed.stop();
   }
-
-  // ─── 3b. The socket, off loopback ───
-
-  console.log(`\n4. and the socket, which is the same read by a door HTTP guards cannot see`);
-  const refusedSocket = await socketVerdict(`ws://${offHost}:${offPort}/?workspace=reads`);
-  check('the upgrade is refused', refusedSocket.outcome === 'refused',
-        JSON.stringify(refusedSocket).slice(0, 240));
-  check('no initial_elements arrived, so no board did either',
-        !String(refusedSocket.text ?? '').includes(SECRET_TEXT),
-        String(refusedSocket.text ?? '').slice(0, 200));
-
-  off.stop();
-
-  // ─── The bind guard is not the token's shadow ───
-
-  console.log('\n5. and a caller holding this start\'s token is refused there just the same');
-  authed = startCanvas({
-    port: authedPort,
-    cwd: workdir,
-    env: {
-      ...env,
-      HOST: offHost,
-      // `canvasEnvironment` turns the token off for every check in this directory; this is the
-      // one server here that has to take it back on, because the question of this section is
-      // whether the bind guard survives the control that was supposed to make it unnecessary.
-      EXCALIDRAW_NO_AUTH: undefined,
-      HOME: fakeHome,
-      USERPROFILE: fakeHome,
-      LOCALAPPDATA: fakeHome,
-      XDG_STATE_HOME: fakeHome,
-    },
-  });
-  const authedBase = `http://${offHost}:${authedPort}`;
-  await waitForHealth(authedBase, authed.child);
-
-  const tokenFile = conventionalTokenFile(authedPort);
-  const token = existsSync(tokenFile) ? readFileSync(tokenFile, 'utf8').trim() : '';
-  check('this start wrote a token, so the caller below is an entitled one', token.length > 0,
-        tokenFile);
-
-  const entitled = await fetch(`${authedBase}/api/elements`, {
-    headers: { ...BOARD, 'x-vibemaxxing-token': token },
-  });
-  const entitledText = await entitled.text();
-  check('GET /api/elements answers 403 even with the token', entitled.status === 403,
-        `got ${entitled.status} — ${entitledText.slice(0, 160)}`);
-  check('and the board is not in that answer', !entitledText.includes(SECRET_TEXT),
-        entitledText.slice(0, 160));
-
-  const entitledSocket = await socketVerdict(
-    `ws://${offHost}:${authedPort}/?workspace=reads&token=${encodeURIComponent(token)}`);
-  check('and so is the socket it could have opened', entitledSocket.outcome === 'refused',
-        JSON.stringify(entitledSocket).slice(0, 240));
-
-  authed.stop();
 } catch (error) {
   failures++;
   console.error(`  FAIL  ${error instanceof Error ? error.message : String(error)}`);
@@ -472,12 +490,12 @@ check('no read in that set lacks an offLoopback call', unguarded.length === 0, u
 
 const upgradeStart = source.indexOf('new WebSocketServer(');
 const upgrade = source.slice(upgradeStart, source.indexOf('// Middleware', upgradeStart));
-check('and the socket upgrade asks the same question of the bind',
-      /boundToLoopback\(\)/.test(upgrade), upgrade.slice(0, 200));
+check('and the socket upgrade asks the same question of the caller',
+      /callerIsLocal\(/.test(upgrade), upgrade.slice(0, 200));
 
 console.log('');
 if (failures) {
   console.error(`${failures} case(s) failed`);
   process.exit(1);
 }
-console.log('All cases passed: a board bound off loopback publishes none of what it holds.');
+console.log('All cases passed: a board publishes none of what it holds to a caller that is not on this machine.');
