@@ -188,6 +188,7 @@ src/core/peer-workspaces.ts        one peer's projects as tabs, and what is left
 src/core/reply-ledger.ts           which machine a reply belongs to, when it names only a request
 src/core/peer-client.ts            one board's HTTP call to another, and what each failure means
 src/core/peer-request-rewrite.ts   what a request says by the time it belongs to the peer
+src/core/peer-files.ts             which pictures a remote board's scene refers to, and where they come from
 src/core/peer-proxy.ts             the seam that sends a request to the machine that owns the board
 ```
 
@@ -268,7 +269,29 @@ process and every agent it hosts whichever board asked, the directory picker can
 disk its own process reaches, and the reply half of a render carries an id and no board at all. A
 rewriter that will rewrite anything handed to it is one bug away from forwarding each of those.
 
-The proxy is the seam, and it is the file the eight above were written for. It is a **middleware
+The files module is the one place that answers *which pictures cross*, and it has no caller
+either. The store here is deliberately not keyed by project — a file is content-addressed, and
+both the serve and the save scope it by walking the elements that name it — so there is no
+per-board bucket to hand over, and the set that has to cross can only be computed from the
+elements. It is computed with the same walk rather than a second one, because two walks that
+disagree present as missing images on one machine only. Every picture it names is then fetched
+**through the peer, by id**, and never looked for here first: a content-addressed store makes a
+local hit look correct, and a local hit for another machine's id means either that two different
+pictures share an id or that this board has quietly been handed something. Asking by id rather
+than for that board's file listing is the same decision from the other end — before #343 a board
+answered `GET /api/files` with every dataURL its process held, so a forwarder trusting the peer's
+listing would hand one board another board's pictures against that build and nothing anywhere
+would say so. Nothing is cached: a peer's bytes are not written into a store keyed by workspace,
+which would be inventing that per-board bucket on the machine that owns none of it. And the three
+frames a forwarded link carries about pictures and shapes — `files_added`, `file_deleted` and
+`elements_synced`, each naming its own board since #526 — are stated there with what a forwarder
+does with them, so the HTTP one and the socket one implement one decision rather than two: the
+board on the frame is relabelled to this board's name for the project, a frame that cannot be
+relabelled is dropped rather than broadcast without one, and none of the three writes anything
+into a store on this machine.
+
+The proxy is the seam, and it is the file the others were written for — the files module above
+excepted, which is its own decision and still has no caller. It is a **middleware
 rather than a route**: it adds nothing to the route list, so `rest-api.md` and the structure map
 do not move, and the whole of what `src/server.ts` learns about federation is an import and one
 `app.use` placed after the token gate. Everything it does is the order of its questions. The
