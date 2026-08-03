@@ -173,7 +173,7 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-The first four of them have landed; the rest are named here so the reader of a pull request can
+The first five of them have landed; the rest are named here so the reader of a pull request can
 see where each decision lands.
 
 ```
@@ -181,6 +181,7 @@ src/core/peer-liveness.ts          the four answers above, and which refusal you
 src/core/remote-workspace-id.ts    what this board calls a peer's project, and the inverse
 src/core/remote-workspace-view.ts  which fields of a project cross, and what replaces the path
 src/core/peer-registry.ts          what this board keeps about a board that approved it
+src/core/peer-workspaces.ts        one peer's projects as tabs, and what is left when it sleeps
 src/core/peer-client.ts            one board's HTTP call to another, and what each failure means
 src/core/peer-proxy.ts             the seam that sends a request to the machine that owns the board
 ```
@@ -201,6 +202,19 @@ is absent from the wire until somebody edits this. It also decides what replaces
 tab's tooltip, since a peer's project has none here: the project's own name and the name this
 board calls the machine by, which is enough to tell two projects of the same name apart and is
 this board's own word rather than anything the owner sent.
+
+The tabs module is the three above composed into one answer, and it is where *a machine that
+stops answering is not a broken project* stops being a paragraph. It asks one peer for its
+projects, names each one through the id module, reduces each record through the view module — on
+the reading end too, because this board does not get to assume the peer runs the same version of
+itself — and attaches one liveness state. A peer that is not `online` contributes **zero projects
+and one state**: there is no `error` field on its answer for a fact about a network to land in,
+and the whole answer is held to a budget composed from the liveness ones, so a laptop in a bag
+does not hold the strip. It touches no per-id store, which is a decision rather than an accident:
+an unknown id yields an *empty* store by design, so a stray local read would not fail — it would
+manufacture a plausible blank board for a project another machine owns. It has no caller yet
+either, and its transport is a defaulted argument nothing passes, which is the seam the client
+module in the list above replaces when it lands.
 
 The registry is a module with no caller: it owns `peers.json` beside the state directory's other
 files, and nothing yet adds a row to it or presents what a row holds. What it settles is the

@@ -219,7 +219,7 @@ const DESK = { id: 'desk', name: 'The desktop', baseUrl: 'http://desk.example:37
   const transport = transportSaying({
     ok: true,
     workspaces: [
-      { id: 'board-tool', name: 'Board Tool', error: null },
+      { id: 'notebook', name: 'Notebook', error: null },
       { id: 'notes', name: 'Notes', error: 'board.config.json could not be read' }
     ]
   });
@@ -234,11 +234,11 @@ const DESK = { id: 'desk', name: 'The desktop', baseUrl: 'http://desk.example:37
         answer.workspaces.every((tab) => normalizeWorkspaceId(tab.id) === tab.id),
         JSON.stringify(answer.workspaces.map((tab) => tab.id)));
   check('the peer\'s own spelling is retained beside the local one rather than re-derived',
-        answer.workspaces.map((tab) => tab.remoteId).join(',') === 'board-tool,notes',
+        answer.workspaces.map((tab) => tab.remoteId).join(',') === 'notebook,notes',
         JSON.stringify(answer.workspaces.map((tab) => tab.remoteId)));
   check('and it is the spelling the peer\'s own normaliser hands back',
         answer.workspaces.every((tab) => splitRemoteWorkspaceId(tab.id)?.workspaceId === tab.remoteId));
-  check('the name a person reads crossed', answer.workspaces.map((tab) => tab.name).join(',') === 'Board Tool,Notes',
+  check('the name a person reads crossed', answer.workspaces.map((tab) => tab.name).join(',') === 'Notebook,Notes',
         JSON.stringify(answer.workspaces.map((tab) => tab.name)));
   check('a project that really is misconfigured keeps its own error',
         answer.workspaces[1]?.error === 'board.config.json could not be read',
@@ -246,7 +246,7 @@ const DESK = { id: 'desk', name: 'The desktop', baseUrl: 'http://desk.example:37
   check('and a project that is not has none', answer.workspaces[0]?.error === null,
         JSON.stringify(answer.workspaces[0]));
   check('what replaces the path names the project and the machine',
-        answer.workspaces[0]?.location === 'Board Tool on The desktop',
+        answer.workspaces[0]?.location === 'Notebook on The desktop',
         JSON.stringify(answer.workspaces[0]?.location));
   check('the answer carries one liveness state', STATES.includes(answer.liveness?.state),
         JSON.stringify(answer.liveness));
@@ -269,8 +269,8 @@ console.log('\n2. a fat record contributes three fields and nothing else');
     transport: transportSaying({
       ok: true,
       workspaces: [{
-        id: 'board-tool',
-        name: 'Board Tool',
+        id: 'notebook',
+        name: 'Notebook',
         error: null,
         path: 'C:/Users/somebody/marker-absolute-path',
         innerPath: '/home/somebody/marker-inner-path',
@@ -291,8 +291,8 @@ console.log('\n2. a fat record contributes three fields and nothing else');
     'marker-model'].filter((marker) => serialised.includes(marker));
   check('nothing the projection did not name reached the tab', leaked.length === 0,
         leaked.join(', '));
-  check('and the three that were named did', answer.workspaces[0]?.name === 'Board Tool'
-        && answer.workspaces[0]?.remoteId === 'board-tool' && answer.workspaces[0]?.error === null,
+  check('and the three that were named did', answer.workspaces[0]?.name === 'Notebook'
+        && answer.workspaces[0]?.remoteId === 'notebook' && answer.workspaces[0]?.error === null,
         JSON.stringify(answer.workspaces[0]));
 }
 
@@ -301,7 +301,7 @@ console.log('\n2. a fat record contributes three fields and nothing else');
 console.log('\n3. two peers holding a folder of the same name are two tabs, not one');
 
 {
-  const sameFolder = { ok: true, workspaces: [{ id: 'board-tool', name: 'Board Tool', error: null }] };
+  const sameFolder = { ok: true, workspaces: [{ id: 'notebook', name: 'Notebook', error: null }] };
   const onDesk = await listPeerWorkspaces(DESK, {
     liveness: deskSaying('online'), transport: transportSaying(sameFolder)
   });
@@ -328,7 +328,7 @@ console.log('\n3. two peers holding a folder of the same name are two tabs, not 
 console.log('\n4. a peer that is not there is zero projects and one state, and never an error');
 
 for (const state of ['unreachable', 'refused']) {
-  const transport = transportSaying({ ok: true, workspaces: [{ id: 'board-tool', name: 'Board Tool', error: null }] });
+  const transport = transportSaying({ ok: true, workspaces: [{ id: 'notebook', name: 'Notebook', error: null }] });
   const answer = await listPeerWorkspaces(DESK, {
     liveness: deskSaying(state, 'The machine did not answer a connection within 250 ms.'),
     transport
@@ -395,7 +395,7 @@ const workdir = mkdtempSync(join(tmpdir(), 'check-peer-workspaces-'));
 
 try {
   const peerProjects = [
-    { id: 'board-tool', name: 'Board Tool', dir: join(workdir, 'peer-board-tool') },
+    { id: 'notebook', name: 'Notebook', dir: join(workdir, 'peer-notebook') },
     { id: 'notes', name: 'Notes', dir: join(workdir, 'peer-notes') }
   ];
   for (const project of peerProjects) {
@@ -427,13 +427,13 @@ try {
   check('and both of its projects came back as tabs', alive.workspaces.length === 2,
         JSON.stringify(alive.workspaces));
   check('named as the peer names them',
-        alive.workspaces.map((tab) => tab.name).sort().join(',') === 'Board Tool,Notes',
+        alive.workspaces.map((tab) => tab.name).sort().join(',') === 'Notebook,Notes',
         JSON.stringify(alive.workspaces.map((tab) => tab.name)));
   check('with ids nothing local could collide with',
         alive.workspaces.every((tab) => splitRemoteWorkspaceId(tab.id)?.peerId === 'desk'),
         JSON.stringify(alive.workspaces.map((tab) => tab.id)));
   check('and no path of the peer\'s reached this machine — not even through a real server',
-        !JSON.stringify(alive).includes('peer-board-tool')
+        !JSON.stringify(alive).includes('peer-notebook')
         && !JSON.stringify(alive).includes('peer-notes'),
         JSON.stringify(alive).slice(0, 400));
 
