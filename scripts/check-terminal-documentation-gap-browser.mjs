@@ -490,6 +490,58 @@ try {
         Math.abs(scene.blocks[0].x - (before.x + moved)) < 1,
         `${scene.blocks[0].x} vs ${before.x + moved}`);
 
+  console.log('\n7. a gap that has gone too wide closes itself back to one gap');
+
+  /**
+   * The case #494 was opened about, and the one the arithmetic used to have no answer for.
+   *
+   * `documentationClearance` was clamped at zero, so a region standing clear of the content
+   * asked for nothing: `TERMINAL_GAP` was a floor and not a distance. A block dragged away
+   * from the documentation — or, as measured on a real board, one restored at a rect
+   * remembered from a layout the content has since moved out of — left a gap of whatever the
+   * arithmetic gave, and opening blocks changed nothing until the region had grown back
+   * across where the content stands.
+   *
+   * The asymmetry below is deliberate and is the one case 6 states from the other side. The
+   * reconcile path may **give room back and never ask for more**, because it runs on a poll
+   * and on every scene replaced, neither of which is a decision about the geometry. So a
+   * block dragged *into* the content keeps the reader's placement (case 6), and a block
+   * dragged *away* from it brings the content along rather than leaving a hole.
+   */
+  scene = await evaluate(PROBE);
+  const away = scene.cards[0].header;
+  await drag(away, { x: away.x - 260, y: away.y });
+  await sleep(900);
+  scene = await evaluate(PROBE);
+  const opened = scene.documentation - scene.regionRight;
+  check('the drag opened a gap wider than one gap', opened > GAP + 50,
+        `${opened} rather than ${GAP}`);
+
+  // A drag is not by itself a pass through the layout funnel — case 6 makes its point with a
+  // shell opened and closed for the same reason. So the settle is asked for the way the board
+  // asks for it: a reconcile. This one drops no *block* — the block keeps the session it
+  // started with — which is exactly the pass the old guard refused to settle on, and the
+  // whole of why a gap that had gone too wide stayed too wide.
+  await click(scene.cards[0].add.x, scene.cards[0].add.y);
+  await waitFor(async () => (await sessions()).length === 2, 'a shell to reconcile against');
+  await waitFor(async () => (await evaluate(PROBE)).cards[0].tabs.length === 2, 'its chip');
+  scene = await evaluate(PROBE);
+  const spare = scene.cards[0].tabs.find((tab) => tab.id !== first);
+  await click(spare.close.x, spare.close.y);
+  await waitFor(async () => (await sessions()).length === 1, 'the spare shell to go');
+  await sleep(900);
+  scene = await evaluate(PROBE);
+  await shot('06-gap-reclaimed');
+
+  check('still one block, so nothing here is about a block being dropped',
+        scene.blocks.length === 1, JSON.stringify(scene.blocks.map((one) => one.sessions)));
+  check('and the documentation came back to exactly one gap',
+        Math.abs(scene.documentation - (scene.regionRight + GAP)) < 1,
+        JSON.stringify({ documentation: scene.documentation, regionRight: scene.regionRight,
+                         gap: scene.documentation - scene.regionRight, wanted: GAP }));
+  check('which is a pull, written down as a negative shift',
+        typeof scene.shift === 'number' && scene.shift < 0, String(scene.shift));
+
   if (consoleLines.length > 0) {
     console.log('\n(the page said)');
     for (const line of consoleLines.slice(-12)) console.log(`  ${line}`);
