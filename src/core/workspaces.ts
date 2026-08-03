@@ -340,18 +340,31 @@ export interface WorkspaceConfig {
    */
   projectTodoColumn?: string;
   /**
-   * Column the work only a person can do is collected in.
+   * Column a founder action is published into, as a draft item — the work only a person can do.
    *
-   * Unset, the option named `Founder Actions` is used — this tool's own suggestion rather
-   * than one of GitHub's, because no project GitHub creates has such a column. A project
-   * that keeps one under another name says so here.
+   * Unset, the option named `Founder Actions` is used — this tool's own suggestion rather than
+   * one of GitHub's, because no project GitHub creates has such a column. A project that keeps
+   * one under another name says so here, and a project with neither gets no draft item rather
+   * than one dropped in a guessed column.
    *
-   * It may not be either of the two above, as configured or as defaulted. The implement
-   * queue drains a column by name, so a founder action sitting in that column would be
-   * picked up as work an agent can start; the two settings above and this one are refused
-   * together rather than allowed to coincide.
+   * It may not be either of the two above, as configured or as defaulted. The implement queue
+   * drains a column by name, so a founder action sitting in that column would be picked up as
+   * work an agent can start; the two settings above and this one are refused together rather
+   * than allowed to coincide.
    */
   projectFounderColumn?: string;
+  /**
+   * Stop publishing founder actions to the project at all.
+   *
+   * A **suppression** rather than a switch, and the asymmetry with the implement queue is the
+   * decision: that one starts coding agents against a repository and is rightly off until
+   * somebody says so, while this one writes a draft item to a column. A draft spawns nothing —
+   * `startableCards` cannot pick one up — and the column exists precisely so that a blocker is
+   * seen without anybody going to look for it, so a feature whose whole point is visibility must
+   * not ship invisible. Unset is therefore publishing, and this is for a board that wants its
+   * project left alone.
+   */
+  projectFounderPublishOff?: boolean;
   /** Per-project model, effort, ceiling and workflow for each agent. See WorkspaceAgentConfig. */
   agents?: WorkspaceAgentsConfig;
 }
@@ -378,6 +391,8 @@ export interface Workspace {
   projectTodoColumn: string | null;
   /** Null means "the column named Founder Actions, if the project has one". */
   projectFounderColumn: string | null;
+  /** True stops founder actions being published to the project. Unset publishes. */
+  projectFounderPublishOff: boolean;
   /** Per-agent overrides; null fields fall through to the board's own environment. */
   agents: WorkspaceAgents;
   /** Populated when this workspace could not be fully loaded. */
@@ -598,6 +613,7 @@ async function loadWorkspace(
     projectInProgressColumn: null,
     projectTodoColumn: null,
     projectFounderColumn: null,
+    projectFounderPublishOff: false,
     agents: { issue: NO_AGENT_SETTINGS, implement: NO_AGENT_SETTINGS },
     error: null,
   };
@@ -694,6 +710,9 @@ async function loadWorkspace(
     projectInProgressColumn: config.projectInProgressColumn?.trim() || null,
     projectTodoColumn: config.projectTodoColumn?.trim() || null,
     projectFounderColumn: config.projectFounderColumn?.trim() || null,
+    // Only `true` suppresses. Anything else — unset, absent, or a value somebody typed that is
+    // not a boolean — is a board that publishes, which is what the default has to be.
+    projectFounderPublishOff: config.projectFounderPublishOff === true,
     agents: readAgents(id, config, board, enabled),
     error: escaped.length
       ? `Config field(s) outside the workspace, ignored: ${escaped.join(', ')}`

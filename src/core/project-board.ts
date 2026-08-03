@@ -483,7 +483,8 @@ export class NotOnThisBoard extends Error {}
  * The third is not GitHub's — no project it creates has a founder column — so it is this
  * tool's own suggestion for what to call one, and it is a default in exactly the same sense:
  * a project that already has such a column under another name says so, and nothing here
- * creates it.
+ * creates it. A board with neither publishes nothing and says so, which is the same answer
+ * `moveIssueToColumn` gives a project missing the column it was sent to.
  */
 export const DEFAULT_IN_PROGRESS_COLUMN = 'In Progress';
 export const DEFAULT_TODO_COLUMN = 'Todo';
@@ -514,18 +515,19 @@ export function todoColumn(workspace: Workspace): ColumnTarget {
 }
 
 /**
- * Where the work only a person can do is collected — and it is never the queue's own column.
+ * Where a founder action is published — the column a person reads, not one a queue drains.
  *
- * A `ColumnTarget` like the two above, for the same reason: a project that already keeps such
- * a column under a name of its own says so, and a project that has none is told which key
- * would name it rather than having one guessed for it.
+ * Beside its two siblings so that a founder column is identified the way every other column in
+ * this file is: a case-insensitive name plus the `board.config.json` key that would fix it. A
+ * project that already keeps such a column under a name of its own says so, and a project that
+ * has none is told which key would name it rather than having one guessed for it.
  *
- * The distinct name is the whole guard. `dispatchQueue` drains exactly one column, resolved
- * by name through `findColumn`, so a founder column that is not that column is invisible to
- * the start loop by construction. That holds only while the two names differ, which is why
- * `loadWorkspace` and `validateWorkspaceConfigPatch` refuse a config that makes them the
- * same: a misconfiguration is the only route by which a founder card could reach the drained
- * column.
+ * The distinct name is the whole guard. `dispatchQueue` drains exactly one column, resolved by
+ * name through `findColumn`, so a founder column that is not that column is invisible to the
+ * start loop by construction — and that holds only while the two names differ. The refusal of a
+ * board that makes them the same belongs where a config is read rather than here, because this
+ * function answers what one column is called and nothing it can see says what any other column
+ * is called: `loadWorkspace` and `validateWorkspaceConfigPatch` are where it lives.
  */
 export function founderColumn(workspace: Workspace): ColumnTarget {
   return {

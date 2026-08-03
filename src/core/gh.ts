@@ -17,7 +17,8 @@
 import { spawn } from 'child_process';
 import logger from '../utils/logger.js';
 import { Workspace } from './workspaces.js';
-import { agentPath, buildAgentCommand } from './issue-agent.js';
+import { agentPath, buildAgentCommand, singleQuoted, tokenizeCommand } from './issue-agent.js';
+import type { AgentInvocation } from './agent-adapter.js';
 import { env } from './settings.js';
 
 /**
@@ -283,11 +284,12 @@ export interface RunGhOptions {
  * interpolates only ids matched against a pattern first.
  *
  * Text that cannot be validated that way — anything a person typed — goes in
- * `options.stdin` instead, paired with the flag that reads it.
+ * `options.stdin` instead, paired with the flag that reads it, or on an **argv** rather than
+ * on a line: see the array form just below.
  */
 export async function runGh(
   workspace: Workspace,
-  commandLine: string,
+  commandLine: string | readonly string[],
   options: RunGhOptions
 ): Promise<string> {
   const attempts = options.attempts ?? ATTEMPTS;
@@ -313,11 +315,45 @@ export async function runGh(
   throw lastError;
 }
 
-function runOnce(workspace: Workspace, commandLine: string, options: RunGhOptions): Promise<string> {
+/**
+ * The same call as an argv, for text no command line can carry.
+ *
+ * The third way in, and the narrowest. `options.stdin` is the answer wherever `gh` has a
+ * `--body-file -` to read, and it is the answer for everything a person typed — but
+ * `gh project item-create` has `--title` and `--body` and no file flag of any kind, so a
+ * founder action's rendered body has to arrive as an *argument*. A line cannot carry it: a
+ * native workspace parses one with `tokenizeCommand`, where a value holding a single quote
+ * cannot be spelled at all, and a WSL workspace parses it with `bash`, where a backtick or a
+ * `$(…)` in somebody's stderr would be executed rather than posted.
+ *
+ * So the elements are kept apart to the end. Natively `spawn` hands them to the process as they
+ * are, quotes, newlines and dollars included; inside a distro each one is `singleQuoted`, which
+ * is the one quoting in `sh` that means no expansion at all. The workspace's own `gh` command is
+ * left exactly as the operator wrote it — it may itself be several tokens, `node "<stub>"` in
+ * every check that stubs one — and only what this caller adds is quoted.
+ */
+function ghInvocation(gh: string, argv: readonly string[]): AgentInvocation {
+  const [command, ...rest] = tokenizeCommand(gh);
+  return {
+    command: command ?? gh,
+    args: [...rest, ...argv],
+    // Nothing here delivers a prompt: `buildAgentCommand` is asked for none, so this says only
+    // what is to become of stdin, and `options.stdin` above is what writes to it.
+    prompt: { via: 'argv', stdin: 'closed' },
+    line: `${gh} ${argv.map(singleQuoted).join(' ')}`,
+  };
+}
+
+function runOnce(
+  workspace: Workspace,
+  commandLine: string | readonly string[],
+  options: RunGhOptions
+): Promise<string> {
   const timeoutMs = options.timeoutMs ?? 30_000;
+  const gh = ghCommandFor(workspace);
   const { command, args, cwd } = buildAgentCommand(
     workspace,
-    `${ghCommandFor(workspace)} ${commandLine}`
+    typeof commandLine === 'string' ? `${gh} ${commandLine}` : ghInvocation(gh, commandLine)
   );
 
   logger.info(`Running ${options.what} for workspace "${workspace.id}"`);
