@@ -162,6 +162,16 @@ check('and it is at least what the liveness probe alone may take',
 
 const source = readFileSync(sourcePath, 'utf8');
 
+/**
+ * The module with its prose taken out.
+ *
+ * The banner has to be able to say *why* nothing here reads an element store, and a rule that
+ * matched the promise as well as the breach would make writing the promise down the thing that
+ * fails. `check-liveness-states.mjs` states the same principle about `process.env` and settles it
+ * by matching a read rather than the words; this settles it by looking only at the code.
+ */
+const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
 // Direct imports only, and deliberately so: `core/remote-workspace-id.ts` borrows the *normaliser*
 // from the element store, which is a pure function of a string, and a transitive ban would forbid
 // the one import this module is built on. What must not appear here is a module that owns per-id
@@ -170,18 +180,18 @@ const FORBIDDEN = [
   'element-store', 'board-state', 'board-files', 'terminal-session', 'terminal-block',
   'implement-state', 'implement-queue', 'implement-agent', 'implement-worktree', 'scene-io'
 ];
-const imported = [...source.matchAll(/from '\.\/([a-z-]+)\.js'/g)].map(([, name]) => name);
+const imported = [...code.matchAll(/from '\.\/([a-z-]+)\.js'/g)].map(([, name]) => name);
 const reached = FORBIDDEN.filter((name) => imported.includes(name));
 check('it imports no module that owns per-id state', reached.length === 0,
       `${reached.join(', ')} — an unknown id yields an empty store by design, so a stray read `
       + 'manufactures a blank board for a project another machine owns');
-check('and it names no store, board state, terminal or implement record at all',
+check('and its code calls into no store, board state, terminal or implement record',
       !/elementsFor|elementStore|boardStateFor|terminalSession|implementRecord|implementState/
-        .test(source), 'the names are what a reviewer greps for');
-check('it reads no process.env', !/process\.env\s*[.[]/.test(source));
+        .test(code), 'the names are what a reviewer greps for');
+check('it reads no process.env', !/process\.env\s*[.[]/.test(code));
 check('it reads no file',
-      !/from '(node:)?fs/.test(source) && !/readFileSync|writeFileSync|fs\.promises/.test(source));
-check('and no setting name appears in it', !/VIBEMAXXING_|settingName|settings\.js/.test(source),
+      !/from '(node:)?fs/.test(code) && !/readFileSync|writeFileSync|fs\.promises/.test(code));
+check('and no setting name appears in it', !/VIBEMAXXING_|settingName|settings\.js/.test(code),
       'a budget that became a variable would be a documentation table away from here');
 
 // The transport is a defaulted argument for the reason the connector, the fetch and the clock are
