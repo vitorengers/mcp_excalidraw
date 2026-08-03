@@ -55,7 +55,9 @@
  * which ends this process and every agent it hosts whichever board asked. {@link
  * PATHS_THAT_STAY_HERE} names each of them with the reason beside it, and the refusal quotes
  * that reason, because *this one is not yours to forward* is a different repair from *that board
- * is not on this machine*.
+ * is not on this machine*. The reply halves are on that list for a different reason from the
+ * rest: they carry a `requestId` and no board at all, so there is no workspace key to route them
+ * on, and `core/reply-ledger.ts` is the thing that knows where each of them belongs.
  */
 
 import { TOKEN_HEADER, TOKEN_QUERY } from './board-token.js';
