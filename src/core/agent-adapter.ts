@@ -387,6 +387,156 @@ export function withoutAnyFullAccess(args: readonly string[]): string[] {
 }
 
 /**
+ * The `gh` commands a run narrowed by `withoutGhWrites` may not reach.
+ *
+ * Written as the leading words of a sub-command rather than as whole rules, because a rule can
+ * name the verb at any width — `Bash(gh issue create:*)`, `Bash(gh issue:*)`, `Bash(gh:*)` — and
+ * all three reach `gh issue create`. A list rather than a regular expression so that a verb
+ * added to `CLAUDE_ISSUE_ALLOWED_TOOLS` is one line here and one row in the check that iterates
+ * it.
+ *
+ * `gh project` is bare on purpose: every verb that command has writes — `item-add`,
+ * `item-create`, `item-edit`, `item-delete` — so naming them one by one would be a list that
+ * goes stale the next time that CLI grows another.
+ */
+export const GH_WRITE_COMMANDS: readonly string[] = [
+  'gh issue create', 'gh issue edit', 'gh issue comment', 'gh project',
+];
+
+/**
+ * What became of an attempt to take the GitHub writes off a run.
+ *
+ * `narrowed` is the whole of it, and it is a report rather than a guarantee because on two
+ * boards there is nothing to narrow — see `withoutGhWrites`. A caller that gets `false` has to
+ * refuse the run: an argv that was handed back unchanged is one whose posture is somebody
+ * else's, and starting a chat on it would be starting it with the grant this narrowing exists
+ * to remove.
+ */
+export interface GhWriteNarrowing {
+  /** The argv to spawn: narrowed where it could be, and the input unchanged where it could not. */
+  args: string[];
+  /** True only when the run this argv describes can no longer write anything on GitHub. */
+  narrowed: boolean;
+  /** Why not, in the words a refusal can print. Null when it narrowed. */
+  reason: string | null;
+}
+
+/**
+ * The same argv, with every `gh` write taken out of the grant this board wrote — or a refusal.
+ *
+ * A narrowing of one *invocation* rather than a fourth `AgentRole`, for the reason
+ * `withoutFullAccess` above is one: a role costs a union member, an arm in `postureFor`,
+ * per-backend flags, an environment grant of its own and a key in `AgentsHealth` that nothing
+ * would fill. What is wanted here is smaller than a role — the issue agent's own read-only
+ * grant, minus the four commands that file something — so it is written where the other
+ * per-invocation narrowing already lives.
+ *
+ * **It only ever removes.** No rule that was not in the input appears in the output, which is
+ * what makes it safe to apply to an argv nobody has read: the worst it can do is refuse a read.
+ *
+ * **And on two boards it can do nothing at all, which it says rather than hides.** `raw` is
+ * `DEFAULT_AGENT_BACKEND`, has no `AGENT_PERMISSIONS` entry and writes no permission flags, so
+ * on such a board the posture is whatever the operator typed into their agent variable and
+ * there is no grant here to narrow. And `permissionArgs` returns nothing when that command line
+ * already carries a `decided` flag, so on a board whose operator pinned their own
+ * `--allowedTools` the list on the argv is theirs — narrowing it would be this board overruling
+ * a grant it was handed rather than filling one in, which is the rule `PermissionPosture`
+ * states. Both come back `narrowed: false`, and a caller that runs anyway has a chat with write
+ * access it never asked for.
+ */
+export function withoutGhWrites(args: readonly string[]): GhWriteNarrowing {
+  const unchanged = [...args];
+  const refused = (reason: string): GhWriteNarrowing => ({ args: unchanged, narrowed: false, reason });
+
+  const lists = valuedArguments(args, ['--allowedTools', '--allowed-tools']);
+  if (lists.length > 1) {
+    return refused('the run carries more than one --allowedTools, so which list is the posture '
+      + 'is a question this board cannot answer for whoever wrote the second one');
+  }
+  const list = lists[0];
+  if (list) {
+    // The board's own grant, and nothing else. Any other list is a posture its author decided,
+    // and this is the one narrowing that must not silently rewrite one.
+    if (list.value !== CLAUDE_ISSUE_ALLOWED_TOOLS) {
+      return refused('the run carries an --allowedTools this board did not write, so the grant '
+        + 'is the operator\'s own and narrowing it would overrule a posture rather than fill one in');
+    }
+    const kept = permissionRules(list.value).filter((rule) => !grantsGhWrite(rule)).join(' ');
+    const narrowed = [...args];
+    if (list.joined) narrowed[list.index] = `${list.name}=${kept}`;
+    else narrowed[list.index + 1] = kept;
+    return { args: narrowed, narrowed: true, reason: null };
+  }
+
+  const sandboxes = valuedArguments(args, ['--sandbox', '-s']);
+  // Codex grants a mode rather than a list, and `read-only` is already a mode with no network in
+  // it — `gh` cannot reach github.com from one, which is the Codex half of the trap document.
+  // So there is nothing to remove and the answer is still yes.
+  if (sandboxes.length === 1 && sandboxes[0]?.value === 'read-only') {
+    return { args: unchanged, narrowed: true, reason: null };
+  }
+  if (sandboxes.length) {
+    return refused('the run carries a sandbox that is not read-only, so the posture is the '
+      + 'operator\'s own and this board did not write it');
+  }
+  return refused('the run carries no permission posture at all — a raw board spawns the command '
+    + 'line it was given, and there is nothing here for this board to narrow');
+}
+
+/** One valued flag on an argv: where it is, what it says, and which spelling was used. */
+interface ValuedArgument {
+  index: number;
+  name: string;
+  value: string;
+  /** True for `--flag=value`, false for `--flag value`. */
+  joined: boolean;
+}
+
+/** Every occurrence of these flags on an argv, in either spelling. */
+function valuedArguments(
+  args: readonly string[],
+  names: readonly string[]
+): ValuedArgument[] {
+  const found: ValuedArgument[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] ?? '';
+    for (const name of names) {
+      if (argument === name) found.push({ index, name, value: args[index + 1] ?? '', joined: false });
+      else if (argument.startsWith(`${name}=`)) {
+        found.push({ index, name, value: argument.slice(name.length + 1), joined: true });
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * The rules of a Claude Code permission list, split the way that CLI splits them.
+ *
+ * On the parentheses rather than on the whitespace: a scoped rule has spaces *inside* it,
+ * `Bash(gh issue list:*)`, and a whitespace split shatters every one of them into three rules
+ * that match nothing. `docs/trap-allowed-tools.md` records the run that confirmed the CLI reads
+ * several such rules out of one argument.
+ */
+function permissionRules(list: string): string[] {
+  return list.match(/[A-Za-z_]\w*\([^)]*\)|\S+/g) ?? [];
+}
+
+/** Whether one rule of a permission list reaches a command this narrowing takes away. */
+function grantsGhWrite(rule: string): boolean {
+  const named = /^Bash\((.*)\)$/.exec(rule);
+  if (!named) return false;
+  const pattern = (named[1] ?? '').trim();
+  const wildcard = pattern.endsWith(':*');
+  const command = (wildcard ? pattern.slice(0, -2) : pattern).trim();
+  return GH_WRITE_COMMANDS.some((verb) => command === verb
+    || command.startsWith(`${verb} `)
+    // A rule that names *less* than the verb still reaches it when it ends `:*` —
+    // `Bash(gh:*)` is `gh issue create` with the narrowness left off.
+    || (wildcard && verb.startsWith(`${command} `)));
+}
+
+/**
  * The full-access flag a command line carries, or null — whichever backend spells it.
  *
  * Read off the operator's own string rather than off an invocation, because the caller is the

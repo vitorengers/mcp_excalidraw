@@ -16,6 +16,7 @@ failure by a different road. What each one needs, per role:
 | | Claude Code | Codex CLI |
 |---|---|---|
 | **Issue agent — reads, opens issues, writes no code** | `--allowedTools "<the list below>"`, one rule per sub-command | `--sandbox read-only` is the safe posture and **cannot reach github.com**; a run that has to open an issue needs `--sandbox workspace-write -c sandbox_workspace_write.network_access=true`, under which `.git` still stays read-only |
+| **Founder chat — reads and answers a founder's question, files nothing** | the issue agent's list above, minus `gh issue create`, `gh issue edit`, `gh issue comment` and every `gh project` verb — written by `withoutGhWrites` in `src/core/agent-adapter.ts`, not by a role of its own | `--sandbox read-only`, which is already a mode with no network in it, so this narrowing has nothing to take away |
 | **Implement agent — writes code, builds, commits** | `--allowedTools "Read Grep Glob Write Edit NotebookEdit Task TodoWrite WebFetch WebSearch Bash(git:*) Bash(gh:*) Bash(npm:*) Bash(npx:*) Bash(node:*)"` | `--sandbox workspace-write -c sandbox_workspace_write.network_access=true`, which still refuses `git commit`; committing needs the full-access grant below |
 | **Everything, no checks at all** | `--dangerously-skip-permissions` | `--sandbox danger-full-access`, alias `--yolo` / `--dangerously-bypass-approvals-and-sandbox` |
 | **What a missing grant costs** | a tool outside the list is refused with no prompt, so the run exits 0 having quietly not looked | the same, one sandbox along: a refused write or a blocked socket, no prompt, exit 0 |
@@ -165,6 +166,38 @@ wrong:
   authentication in front of it. A named `codex-cli` backend removes it from an issue-role run
   for that reason; the `raw` backend cannot, because its contract is to spawn what it was given,
   so it warns instead.
+
+## The founder chat, and the two boards where this narrows nothing
+
+A founder chat runs a coding agent against a founder's free-typed question, and what it is handed
+is the issue role's grant — the one that files issues. Nothing in the allow-list grammar can
+express "only issue #N", so an agent that decides the right answer to "which plan should I buy?"
+is to open a tracking issue will open one, onto a project whose column the implement queue
+drains. `withoutGhWrites` takes those writes off that one invocation: no `gh issue create`, no
+`gh issue edit`, no `gh issue comment`, and no `gh project` verb at all. Every read is left
+exactly as it was, because a refused read is the trap at the top of this document — an agent that
+cannot read the issue it is being asked about answers from nothing, silently, exiting 0.
+
+It is a narrowing of an *invocation* rather than a fourth role, for the reason the module records
+beside it: a role would cost a union member, per-backend flags, an environment grant of its own
+and a key in `/health` that nothing would fill.
+
+**On two boards it enforces nothing, and on both of them the chat has to be refused rather than
+run.**
+
+- **A `raw` board**, which is every board configured today. `raw` is the default backend and
+  writes no permission flags at all, so the posture is whatever the operator typed into their
+  agent variable and there is no grant of this board's here to narrow.
+- **A board whose operator pinned their own posture.** Nothing is appended when the command line
+  already carries `--allowedTools`, `--permission-mode` or a `--sandbox`, because a posture its
+  author stated is not overruled — that rule is what keeps this repository's own hand-pinned
+  board working. The grant on the argv is then theirs, and narrowing it would be this board
+  rewriting something it was handed rather than filling one in.
+
+In both cases the helper reports that it could not narrow, and a chat started anyway is a coding
+agent with GitHub write access, driven by text nobody reviewed. A chat that silently has write
+access is worse than no chat. `scripts/check-founder-chat-posture.mjs` holds all of it, asserted
+against the argv the adapter really builds rather than against the constant it writes.
 
 ## Why quoting matters
 
