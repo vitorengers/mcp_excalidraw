@@ -98,7 +98,7 @@ export interface FounderActionRecord {
   lastSeenAt: string;
   resolvedAt?: string;
   resolvedBy?: FounderActionResolver;
-  /** The GitHub project draft item this was published as, once #540 publishes one. */
+  /** The GitHub project draft item this was published as. Written by `core/founder-publish.ts`. */
   publishedItemId?: string;
   chat: FounderChatTurn[];
 }
@@ -313,7 +313,7 @@ function renameOver(from: string, to: string): void {
 /**
  * Write one workspace's records out now, atomically.
  *
- * The only place in this module that touches the file, which is what makes the seven doors the
+ * The only place in this module that touches the file, which is what makes the eight doors the
  * only way in: everything else changes the map and asks this to land it.
  */
 function saveWorkspace(id: string, records: Map<string, FounderActionRecord>): void {
@@ -446,6 +446,34 @@ export function dismissFounderAction(workspaceId: string, key: string): FounderA
   record.state = 'dismissed';
   record.resolvedAt = new Date().toISOString();
   record.resolvedBy = 'person';
+  saveWorkspace(id, records);
+  return copy(record);
+}
+
+/**
+ * Remember which draft item on the project this record was published as.
+ *
+ * A door of its own rather than a field a publisher could set on the record it was handed,
+ * because the record a caller holds is a **copy** — writing through it would change nothing on
+ * disk, and the next start would file the same card again. That is the failure this whole file
+ * exists to prevent, so the id lands the same way every other change does.
+ *
+ * The first id wins. A record that already carries one is left exactly as it is: a second id
+ * would mean two draft items exist for one blocker, and forgetting the first is what would make
+ * the second one possible. `core/founder-publish.ts` reads this before it spawns anything.
+ */
+export function markFounderActionPublished(
+  workspaceId: string,
+  key: string,
+  itemId: string
+): FounderActionRecord | null {
+  const id = normalizeWorkspaceId(workspaceId);
+  const records = forWorkspace(id);
+  const record = records.get(key);
+  if (!record) return null;
+  if (record.publishedItemId) return copy(record);
+
+  record.publishedItemId = itemId;
   saveWorkspace(id, records);
   return copy(record);
 }
