@@ -331,6 +331,27 @@ export interface WorkspaceConfig {
    * such column gets no move rather than a guess.
    */
   projectTodoColumn?: string;
+  /**
+   * Column a founder action is published into, as a draft item.
+   *
+   * Unset, the option named `Founder Actions` is used. Unlike the two above, GitHub invents no
+   * such column on a project it creates, so a board that wants the work only a person can do
+   * mirrored onto its project either adds an option under that name or names its own here. A
+   * project with neither gets no draft item rather than one dropped in a guessed column.
+   */
+  projectFounderColumn?: string;
+  /**
+   * Stop publishing founder actions to the project at all.
+   *
+   * A **suppression** rather than a switch, and the asymmetry with the implement queue is the
+   * decision: that one starts coding agents against a repository and is rightly off until
+   * somebody says so, while this one writes a draft item to a column. A draft spawns nothing —
+   * `startableCards` cannot pick one up — and the column exists precisely so that a blocker is
+   * seen without anybody going to look for it, so a feature whose whole point is visibility must
+   * not ship invisible. Unset is therefore publishing, and this is for a board that wants its
+   * project left alone.
+   */
+  projectFounderPublishOff?: boolean;
   /** Per-project model, effort, ceiling and workflow for each agent. See WorkspaceAgentConfig. */
   agents?: WorkspaceAgentsConfig;
 }
@@ -355,6 +376,10 @@ export interface Workspace {
   projectInProgressColumn: string | null;
   /** Null means "the column named Todo, if the project has one". */
   projectTodoColumn: string | null;
+  /** Null means "the column named Founder Actions, if the project has one". */
+  projectFounderColumn: string | null;
+  /** True stops founder actions being published to the project. Unset publishes. */
+  projectFounderPublishOff: boolean;
   /** Per-agent overrides; null fields fall through to the board's own environment. */
   agents: WorkspaceAgents;
   /** Populated when this workspace could not be fully loaded. */
@@ -574,6 +599,8 @@ async function loadWorkspace(
     projectCardLimit: null,
     projectInProgressColumn: null,
     projectTodoColumn: null,
+    projectFounderColumn: null,
+    projectFounderPublishOff: false,
     agents: { issue: NO_AGENT_SETTINGS, implement: NO_AGENT_SETTINGS },
     error: null,
   };
@@ -657,6 +684,10 @@ async function loadWorkspace(
       : null,
     projectInProgressColumn: config.projectInProgressColumn?.trim() || null,
     projectTodoColumn: config.projectTodoColumn?.trim() || null,
+    projectFounderColumn: config.projectFounderColumn?.trim() || null,
+    // Only `true` suppresses. Anything else — unset, absent, or a value somebody typed that is
+    // not a boolean — is a board that publishes, which is what the default has to be.
+    projectFounderPublishOff: config.projectFounderPublishOff === true,
     agents: readAgents(id, config, board, enabled),
     error: escaped.length
       ? `Config field(s) outside the workspace, ignored: ${escaped.join(', ')}`
