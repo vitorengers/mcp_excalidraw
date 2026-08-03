@@ -173,14 +173,15 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-The first of them has landed; the rest are named here so the reader of a pull request can see
-where each decision lands.
+The first two of them have landed; the rest are named here so the reader of a pull request can
+see where each decision lands.
 
 ```
-src/core/peer-liveness.ts    the four answers above, and which refusal an operator is looking at
-src/core/peer-registry.ts    what this board keeps about a board that approved it
-src/core/peer-client.ts      one board's HTTP call to another, and what each failure means
-src/core/peer-proxy.ts       the seam that sends a request to the machine that owns the board
+src/core/peer-liveness.ts        the four answers above, and which refusal you are looking at
+src/core/remote-workspace-id.ts  what this board calls a peer's project, and the inverse
+src/core/peer-registry.ts        what this board keeps about a board that approved it
+src/core/peer-client.ts          one board's HTTP call to another, and what each failure means
+src/core/peer-proxy.ts           the seam that sends a request to the machine that owns the board
 ```
 
 The milestone that files them is *One tab strip, two machines*, and the design decisions above
