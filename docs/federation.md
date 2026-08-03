@@ -202,7 +202,7 @@ cannot be named inside the length a workspace id has is refused by a sentence ra
 shortened into a valid id for a different board.
 
 The view module is the paragraph above — *what does not cross* — as code, and it has no caller
-either. Three fields of a project cross, named one at a time; the other fourteen are on a
+either. Three fields of a project cross, named one at a time; the other fifteen are on a
 withheld list in that file with the reason beside each, so a field added to a project next year
 is absent from the wire until somebody edits this. It also decides what replaces the path in the
 tab's tooltip, since a peer's project has none here: the project's own name and the name this

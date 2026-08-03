@@ -106,8 +106,10 @@ export interface RemoteWorkspaceView {
  *   machine's run.
  * - `language` — the language *that* board writes issues in, used where the issue is written.
  * - `repo`, `githubProject`, `projectField`, `projectCardLimit`, `projectInProgressColumn`,
- *   `projectTodoColumn` — the project board is read by the machine that owns the project, and
- *   what crosses is the board it produced rather than the settings that produced it.
+ *   `projectTodoColumn`, `projectFounderColumn` — the project board is read by the machine that
+ *   owns the project, and what crosses is the board it produced rather than the settings that
+ *   produced it. The three column names are that machine's spelling of the columns it drains and
+ *   the one it never drains; a strip here acts on none of them.
  */
 export const WITHHELD_FROM_PEERS = [
   'path',
@@ -123,6 +125,7 @@ export const WITHHELD_FROM_PEERS = [
   'projectCardLimit',
   'projectInProgressColumn',
   'projectTodoColumn',
+  'projectFounderColumn',
   'agents'
 ] as const;
 
