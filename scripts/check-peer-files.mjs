@@ -201,8 +201,17 @@ check('and it opens no socket of its own',
 
 const tracked = execFileSync('git', ['ls-files', '-z', 'src'], { cwd: repoRoot, encoding: 'utf8' })
   .split('\0').filter(Boolean);
-const supplying = tracked.filter((file) => !file.endsWith('core/peer-files.ts')
-  && /fetchPeerFiles\([^)]*,[^)]*,[^)]*\)/.test(readFileSync(join(repoRoot, file), 'utf8')));
+// What is banned is a *transport*, not a third argument, and the shape of this rule is
+// `check-peer-client.mjs`'s after #563 found the naive one calling a sibling module a breach for
+// having named the fields of a request. Comments are blanked first for the same reason: a module
+// explaining in prose which transport it defaults to is a module doing the right thing.
+const withoutComments = (text) =>
+  text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+const supplying = tracked.filter((file) => {
+  if (file.endsWith('core/peer-files.ts')) return false;
+  const text = withoutComments(readFileSync(join(repoRoot, file), 'utf8'));
+  return /fetchPeerFiles\(/.test(text) && /(transport\s*:|PeerFilesTransport)/.test(text);
+});
 check('nothing in src/ passes the transport', supplying.length === 0,
       `${supplying.join(', ')} — a board that can be told who answered is a board that can be `
       + 'lied to about a peer');
@@ -295,8 +304,8 @@ try {
 
   const askedA = recording(callPeer);
   const askedB = recording(callPeer);
-  const alpha = await fetchPeerFiles(peerA, { workspaceId: BOARD_ALPHA }, { call: askedA });
-  const beta = await fetchPeerFiles(peerB, { workspaceId: BOARD_BETA }, { call: askedB });
+  const alpha = await fetchPeerFiles(peerA, { workspaceId: BOARD_ALPHA }, { transport: askedA });
+  const beta = await fetchPeerFiles(peerB, { workspaceId: BOARD_BETA }, { transport: askedB });
 
   check('the first machine answered for its own board', alpha?.ok === true,
         `${JSON.stringify(alpha)}\n${machineA.read().slice(-400)}`);
@@ -374,7 +383,7 @@ try {
 
   {
     const again = recording(callPeer);
-    const second = await fetchPeerFiles(peerA, { workspaceId: BOARD_ALPHA }, { call: again });
+    const second = await fetchPeerFiles(peerA, { workspaceId: BOARD_ALPHA }, { transport: again });
     check('a second call asks the peer again rather than answering from something kept here',
           again.asked.length > 0 && again.asked.length === askedA.asked.length,
           JSON.stringify(again.asked.length));
@@ -396,7 +405,7 @@ try {
     await seed(machineB.base, BOARD_BETA, [], [
       shape('beta-image-with-nothing-behind-it', { fileId: 'image-the-second-machine-lost' }),
     ]);
-    const answer = await fetchPeerFiles(peerB, { workspaceId: BOARD_BETA }, { call: recording(callPeer) });
+    const answer = await fetchPeerFiles(peerB, { workspaceId: BOARD_BETA }, { transport: recording(callPeer) });
     check('a picture the peer no longer holds is named as missing rather than failing the call',
           answer?.ok === true && answer.missing.includes('image-the-second-machine-lost'),
           JSON.stringify(answer));
@@ -408,7 +417,7 @@ try {
   {
     const local = mintRemoteWorkspaceId('the-first-machine', BOARD_ALPHA);
     const asked = recording(callPeer);
-    const answer = await fetchPeerFiles(peerA, { workspaceId: local.id }, { call: asked });
+    const answer = await fetchPeerFiles(peerA, { workspaceId: local.id }, { transport: asked });
     check('this board\'s own name for a peer\'s board is refused rather than sent upstream',
           answer?.ok === false, JSON.stringify(answer));
     check('and nothing was sent, because that id would land on a board nobody named',
@@ -419,7 +428,7 @@ try {
 
   {
     const asked = recording(callPeer);
-    const answer = await fetchPeerFiles(peerA, { workspaceId: 'a board:with a colon' }, { call: asked });
+    const answer = await fetchPeerFiles(peerA, { workspaceId: 'a board:with a colon' }, { transport: asked });
     check('a spelling the owning board would rewrite is refused rather than sent',
           answer?.ok === false && asked.asked.length === 0,
           `${JSON.stringify(answer)} — a rewritten id lands the request on that machine's shared `
@@ -441,7 +450,7 @@ try {
       ok: true, kind: 'answered', liveness: 'online', status: 200, headers: {},
       body: Buffer.from('<html>a proxy sign-in page</html>'),
     });
-    const answer = await fetchPeerFiles(peerA, { workspaceId: BOARD_ALPHA }, { call: answered });
+    const answer = await fetchPeerFiles(peerA, { workspaceId: BOARD_ALPHA }, { transport: answered });
     check('a machine that answers something that is not a scene is a failure with a sentence',
           answer?.ok === false && typeof answer.reason === 'string', JSON.stringify(answer));
     check('and it is still online, because it answered',
@@ -457,7 +466,7 @@ try {
     const answer = await fetchPeerFiles(
       peerA,
       { workspaceId: BOARD_ALPHA, elements: [shape('held', { fileId: ALPHA_ISSUE_IMAGE })] },
-      { call: asked });
+      { transport: asked });
     check('a scene the caller already holds is walked rather than fetched again',
           same(answer?.ids, [ALPHA_ISSUE_IMAGE]) && asked.asked.length === 1,
           `${JSON.stringify(answer?.ids)} after ${JSON.stringify(asked.asked.map((r) => r.path))}`);

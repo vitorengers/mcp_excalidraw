@@ -107,9 +107,15 @@ export interface PeerScene {
   elements?: Iterable<FileBearingElement>;
 }
 
-/** How a request reaches the peer. Defaulted, and nothing in `src/` passes it. */
+/**
+ * How a request reaches the peer: `core/peer-client.ts`'s own call, under the name
+ * `core/peer-workspaces.ts` gives the same seam.
+ */
+export type PeerFilesTransport = (peer: PeerCallTarget, call: PeerCall) => Promise<PeerCallResult>;
+
+/** Defaulted, and nothing in `src/` passes it. */
 export interface PeerFilesDeps {
-  call?: (peer: PeerCallTarget, call: PeerCall) => Promise<PeerCallResult>;
+  transport?: PeerFilesTransport;
 }
 
 /** The pictures a remote board's scene refers to, and the bytes that machine holds for them. */
@@ -292,7 +298,7 @@ export async function fetchPeerFiles(
   scene: PeerScene,
   deps: PeerFilesDeps = {}
 ): Promise<PeerFilesResult> {
-  const call = deps.call ?? callPeer;
+  const send = deps.transport ?? callPeer;
   const workspaceId = scene?.workspaceId as string;
 
   const wrongBoard = notABoardOn(workspaceId);
@@ -300,7 +306,7 @@ export async function fetchPeerFiles(
 
   let elements = scene?.elements;
   if (!elements) {
-    const answer = await call(peer, { path: scenePath(workspaceId) });
+    const answer = await send(peer, { path: scenePath(workspaceId) });
     if (!answer.ok) return answer as PeerFailure;
     const body = answer.status === 200 ? jsonBody(answer.body) : null;
     const served = body?.elements;
@@ -319,7 +325,7 @@ export async function fetchPeerFiles(
   const missing: string[] = [];
 
   for (const id of ids) {
-    const answer = await call(peer, { path: picturePath(workspaceId, id) });
+    const answer = await send(peer, { path: picturePath(workspaceId, id) });
     if (!answer.ok) return answer as PeerFailure;
     if (answer.status === 404) { missing.push(id); continue; }
     const file = fileFrom(jsonBody(answer.body)?.file, id);
