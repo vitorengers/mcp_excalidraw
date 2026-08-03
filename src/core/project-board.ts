@@ -474,23 +474,20 @@ export class NotOnThisBoard extends Error {}
 /**
  * The columns a run lands in when a project does not name them.
  *
- * These are the only two constants in this file that name a column, and they are fallbacks
- * rather than rules: they are what GitHub calls the columns on a project it created, the same
- * default the `+` already leans on when it drops a draft into the first option. A board that
- * renamed one says so in `board.config.json`; a board that has no such column gets no move,
- * because a guess would move somebody's card into a column they never asked for.
+ * These are the only three constants in this file that name a column, and they are fallbacks
+ * rather than rules: the first two are what GitHub calls the columns on a project it created,
+ * the same default the `+` already leans on when it drops a draft into the first option. A
+ * board that renamed one says so in `board.config.json`; a board that has no such column gets
+ * no move, because a guess would move somebody's card into a column they never asked for.
+ *
+ * The third is not GitHub's — no project it creates has a founder column — so it is this
+ * tool's own suggestion for what to call one, and it is a default in exactly the same sense:
+ * a project that already has such a column under another name says so, and nothing here
+ * creates it. A board with neither publishes nothing and says so, which is the same answer
+ * `moveIssueToColumn` gives a project missing the column it was sent to.
  */
 export const DEFAULT_IN_PROGRESS_COLUMN = 'In Progress';
 export const DEFAULT_TODO_COLUMN = 'Todo';
-
-/**
- * And where the work only a person can do goes.
- *
- * A third fallback on the same terms as the two above, and the one column here GitHub did not
- * invent — a project it created has no such option, so a board that wants one either adds it
- * under this name or names its own. A board with neither publishes nothing and says so, which
- * is the same answer `moveIssueToColumn` gives a project missing the column it was sent to.
- */
 export const DEFAULT_FOUNDER_COLUMN = 'Founder Actions';
 
 /** A column to move to, and the setting that would name it if the default is wrong. */
@@ -521,10 +518,16 @@ export function todoColumn(workspace: Workspace): ColumnTarget {
  * Where a founder action is published — the column a person reads, not one a queue drains.
  *
  * Beside its two siblings so that a founder column is identified the way every other column in
- * this file is: a case-insensitive name plus the `board.config.json` key that would fix it. The
- * refusal of a board that points this at the drained column is #536's, and it belongs there
- * rather than here: this function answers what the column is called, and nothing it can see
- * says what any other column is called.
+ * this file is: a case-insensitive name plus the `board.config.json` key that would fix it. A
+ * project that already keeps such a column under a name of its own says so, and a project that
+ * has none is told which key would name it rather than having one guessed for it.
+ *
+ * The distinct name is the whole guard. `dispatchQueue` drains exactly one column, resolved by
+ * name through `findColumn`, so a founder column that is not that column is invisible to the
+ * start loop by construction — and that holds only while the two names differ. The refusal of a
+ * board that makes them the same belongs where a config is read rather than here, because this
+ * function answers what one column is called and nothing it can see says what any other column
+ * is called: `loadWorkspace` and `validateWorkspaceConfigPatch` are where it lives.
  */
 export function founderColumn(workspace: Workspace): ColumnTarget {
   return {
