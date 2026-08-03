@@ -110,6 +110,10 @@ export interface RemoteWorkspaceView {
  *   owns the project, and what crosses is the board it produced rather than the settings that
  *   produced it. The three column names are that machine's spelling of the columns it drains and
  *   the one it never drains; a strip here acts on none of them.
+ * - `projectFounderPublishOff` — whether the owning machine writes a founder action to its own
+ *   project is that machine's behaviour, taken by the process that would do the writing. Nothing
+ *   here publishes or suppresses on a peer's behalf, so the flag answers a question this side of
+ *   the wire never asks.
  */
 export const WITHHELD_FROM_PEERS = [
   'path',
@@ -126,6 +130,7 @@ export const WITHHELD_FROM_PEERS = [
   'projectInProgressColumn',
   'projectTodoColumn',
   'projectFounderColumn',
+  'projectFounderPublishOff',
   'agents'
 ] as const;
 
