@@ -186,6 +186,7 @@ src/core/remote-workspace-view.ts  which fields of a project cross, and what rep
 src/core/peer-registry.ts          what this board keeps about a board that approved it
 src/core/reply-ledger.ts           which machine a reply belongs to, when it names only a request
 src/core/peer-client.ts            one board's HTTP call to another, and what each failure means
+src/core/peer-request-rewrite.ts   what a request says by the time it belongs to the peer
 src/core/peer-proxy.ts             the seam that sends a request to the machine that owns the board
 ```
 
@@ -236,6 +237,20 @@ and the two 403s are five different repairs, and the budget a connection is give
 stated separately from the budget the answer is given to arrive, because a machine that is asleep
 and a board that is answering slowly are not the same thing. A redirect is not followed and is
 reported as its own outcome, since a peer answering 3xx is not the board this device paired with.
+
+The rewriter is the decision about what that call *says*, and it is a pure function with no
+`fetch` in it and no caller yet either. Three things give it its shape. **The board is named in
+exactly one place on the way out**, for the same reason the credential is: this server reads a
+board off a query parameter, off a body field and off a header, so all three spellings come off
+the request and the peer's own id goes back on once — which makes one request expressed three
+ways one outbound request byte for byte, rather than three that agree about the board and differ
+everywhere else. **What it built is read back by the reader that will read it**, `workspaceIdFrom`
+itself rather than a restatement of it, because a spelling the peer dislikes is not refused there,
+it is answered from the shared `default` board. **And a request that belongs to the machine it was
+asked of is refused rather than rewritten**, each with the reason quoted: a restart ends that
+process and every agent it hosts whichever board asked, the directory picker can only read the
+disk its own process reaches, and the reply half of a render carries an id and no board at all. A
+rewriter that will rewrite anything handed to it is one bug away from forwarding each of those.
 
 The milestone that files them is *One tab strip, two machines*, and the design decisions above
 are each a done-when bullet on one of its issues rather than a preference stated here.
