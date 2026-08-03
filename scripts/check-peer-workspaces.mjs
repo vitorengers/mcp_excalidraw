@@ -478,17 +478,32 @@ try {
   // ─── And nothing was manufactured on this machine ───────────
   console.log('\n   and this board has no idea any of it happened');
 
+  // Asked of the local board from outside, which is the half this module cannot answer about
+  // itself. **The observation moved with #530 and the property did not.** Until that issue every
+  // board-scoped route answered a namespaced id out of the empty store `elementsFor` makes for
+  // an unknown one, so *the store is empty* was the reading that proved nothing had been
+  // manufactured. That is now the very thing refused — 421 and a sentence, because a blank canvas
+  // answered for a live remote project is indistinguishable from a project with nothing on it.
+  // A refusal is the stronger evidence of the same property: the request never reaches a handler,
+  // so no store, board-state file, terminal session or implement record can be made for it, and
+  // `/health` is asked underneath for the elements this whole exchange did not create.
   const asked = [...deskIds, ...laptopIds];
   const manufactured = [];
   for (const id of asked) {
     const response = await fetch(`${local.base}/api/elements?workspace=${encodeURIComponent(id)}`);
     const body = await response.json();
-    if (!response.ok || body.count !== 0 || body.elements?.length !== 0) {
+    const refused = response.status === 421 && typeof body.error === 'string' && body.error.length > 20;
+    const empty = response.ok && body.count === 0 && body.elements?.length === 0;
+    if (!refused && !empty) {
       manufactured.push(`${id}: ${response.status} ${JSON.stringify(body).slice(0, 120)}`);
     }
   }
-  check('every namespaced id is an empty store on the local board — nothing was manufactured',
+  check('no namespaced id has a board on this machine — nothing was manufactured',
         manufactured.length === 0 && asked.length === 4, manufactured.join('; ') || `asked ${asked.length}`);
+
+  const health = await (await fetch(`${local.base}/health`)).json();
+  check('and this board holds no elements at all after the whole exchange',
+        health.elements_count === 0, JSON.stringify(health.elements_count));
 
   const localList = await (await fetch(`${local.base}/api/workspaces`)).json();
   check('and no peer project was written into this board\'s own registry',

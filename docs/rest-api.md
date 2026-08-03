@@ -1,6 +1,6 @@
 # REST API
 
-`src/server.ts`. 67 routes, and the only surface that is workspace-aware — everything the
+`src/server.ts`. 70 routes, and the only surface that is workspace-aware — everything the
 browser does, and everything this board was built with, goes through here.
 
 The table below is the whole set, one row per route. It used to be a summary of thirty, under a
@@ -98,6 +98,31 @@ machine.
 | `GET /api/devices` | Every approved device, with `self` naming the entry a request came from when it came from one of them. Refused to a caller that is not on this machine, a paired device included (loopback caller only) |
 | `PATCH /api/devices/:id` | Rename one. The host's only — a device renaming its neighbours has no standing to (loopback caller only) |
 | `DELETE /api/devices/:id` | Revoke one, refusing it from its next request and closing the sockets it holds. The host's, and a device's own: signing this machine out is legitimate and is not special-cased into a refusal (loopback caller only) |
+
+## Peer boards
+
+The other machine on this strip — see [federation.md](federation.md). The registry behind these
+is `src/core/peer-registry.ts`, the gesture is `src/core/peer-pairing-ask.ts`, and no route hands
+out the secret a peer record holds.
+
+**They are the host's, from this machine, full stop**, and through the same `notTheHost` the
+device routes above use rather than a second copy of it. Registering a peer is how this board
+learns to carry a credential to another machine, so a paired device asking this board to pair
+with a third would be a chain nobody at either keyboard approved.
+
+`POST /api/peers` answers **twice**, which is why it is not one blocking call. The first answer is
+the code, and it is the whole of what the operator has to do: read it here and approve the request
+showing the same six digits on the other machine. The second answer is the peer itself, on
+`GET /api/peers`, once that machine has approved it. A machine that does not answer is
+**registered** all the same — unreachable is a state and not a rejection — while a string that is
+not an address is refused outright, because that is a typo and a typo recorded as a state is a row
+somebody then has to work out how to get rid of.
+
+| Route | What it does |
+|---|---|
+| `POST /api/peers` | Point this board at another one, by `baseUrl` and the `name` you call that machine. Answers 202 with the code to compare over there and no peer; 400 for an address that is not one, 409 for a machine already paired or already being asked (loopback **caller** only) |
+| `GET /api/peers` | Every board that approved this one, each with its liveness state and a reason, and every attempt still in flight with its code. Never the secret (loopback **caller** only) |
+| `DELETE /api/peers/:id` | Forget a peer, or give up on an attempt to become one. The secret leaves this machine's file; the device record on the other machine is untouched and is that operator's to revoke (loopback **caller** only) |
 
 ## Issue blocks
 
