@@ -250,12 +250,17 @@ console.log('\n9. the resolver does not reach into the store');
   // opens files resolves that module's graph and fails the frontend type check in files nobody
   // touched. The founder target's shape is therefore declared here or taken from the pure
   // register module, never from the store.
+  // Over the module specifiers rather than over the whole file: a comment saying why the store
+  // is not imported is the thing this rule wants written down, not a violation of it.
+  const specifiers = (text) => [...text.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)].map(([, name]) => name);
+
   const source = readFileSync(join(repoRoot, 'src', 'core', 'panel-target.ts'), 'utf8');
-  check('src/core/panel-target.ts names no founder store',
-        !/founder-store/.test(source),
-        'a type imported from the store drags `fs` into the browser build');
+  const imported = specifiers(source);
+  check('src/core/panel-target.ts imports nothing from the founder store',
+        imported.length > 0 && !imported.some((name) => /founder-store/.test(name)),
+        `a type imported from the store drags \`fs\` into the browser build — ${imported.join(', ')}`);
   check('and the compiled module imports none either',
-        !/founder-store/.test(readFileSync(modulePath, 'utf8')));
+        !specifiers(readFileSync(modulePath, 'utf8')).some((name) => /founder-store/.test(name)));
   check('the founder target is declared where the browser can read it',
         /FounderTargetData/.test(source), 'no FounderTargetData in the module');
 }
