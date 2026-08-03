@@ -36,7 +36,7 @@
  * Tier: fast
  */
 
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import {
   chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync,
   writeFileSync
@@ -415,13 +415,23 @@ const crowded = readFileSync(registryFile, 'utf8').length;
 check(`the registry is large enough for a partial write to be visible — ${crowded} bytes`,
       crowded > 10000, `${crowded} bytes`);
 
-const reader = spawn(process.execPath,
-                     [readerFile, registryFile, readyFile, stopFile, String(Date.now() + 60000)],
-                     { env: childEnv });
+/**
+ * `execFile` rather than a stream: what is wanted from this child is one line of stdout at the
+ * end of it, which is exactly the shape `execFile` collects. It opens no socket and takes no port
+ * — the only thing it does is read one file over and over.
+ */
 let readerOut = '';
 let readerErr = '';
-reader.stdout.on('data', (chunk) => { readerOut += chunk; });
-reader.stderr.on('data', (chunk) => { readerErr += chunk; });
+const readerDone = new Promise((resolve) => {
+  execFile(process.execPath,
+           [readerFile, registryFile, readyFile, stopFile, String(Date.now() + 60000)],
+           { env: childEnv, encoding: 'utf8' },
+           (error, stdout, stderr) => {
+             readerOut = stdout ?? '';
+             readerErr = `${stderr ?? ''}${error ? `\n${error.message}` : ''}`;
+             resolve();
+           });
+});
 
 for (let attempt = 0; attempt < 400 && !existsSync(readyFile); attempt++) await sleep(10);
 check('the reader in the other process started', existsSync(readyFile), readerErr.slice(0, 400));
@@ -435,7 +445,7 @@ for (let n = 0; n < CROWD; n++) {
   if (n % 3 === 0 && forgetPeer(id)) updates++;
 }
 writeFileSync(stopFile, 'stop', 'utf8');
-await new Promise((resolve) => reader.on('close', resolve));
+await readerDone;
 
 const watched = JSON.parse(readerOut.trim() || '{}');
 check(`the updates and the reads overlapped — ${updates} writes, ${watched.reads ?? 0} reads`,
