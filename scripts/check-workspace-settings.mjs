@@ -43,6 +43,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
+import { remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -162,12 +163,17 @@ const PLAIN_IMPLEMENT_ARGV = ['-p', '--output-format', 'stream-json'];
 
 const running = [];
 
-function startCanvas(port, { host = '127.0.0.1', implement = true, issue = true } = {}) {
+function startCanvas(port, { host = '127.0.0.1', implement = true, issue = true,
+                             allowedHosts = null } = {}) {
   const env = {
     PORT: String(port),
     HOST: host,
     LOG_LEVEL: 'error',
     EXCALIDRAW_WORKSPACES: registryPath,
+    // A request to `http://<interface>:<port>` names that authority in `Host`, which a board
+    // bound to `0.0.0.0` does not answer for. The origin gate is a different control from the
+    // caller guard, and a case that wants the second refusal has to get past the first.
+    ...(allowedHosts ? { EXCALIDRAW_ALLOWED_HOSTS: allowedHosts } : {}),
     // Deliberately generous: the ceilings under test are the per-project ones, and they
     // have to win over these rather than merely coexist.
     EXCALIDRAW_ISSUE_AGENT_TIMEOUT: '900',
@@ -464,16 +470,27 @@ try {
   check('404 for a workspace that is not registered', unknownWorkspace.status === 404,
         `got ${unknownWorkspace.status}`);
 
-  console.log('\n7. and only while the board is bound to loopback');
-  const open = startCanvas(openPort, { host: '0.0.0.0' });
-  await waitForHealth(OPEN_BASE, open.child, open.read);
-  const refusedSave = await call(OPEN_BASE, '/api/workspaces/editable/config', {
-    method: 'PUT', body: JSON.stringify({ config: { name: 'From The Network' } }),
-  });
-  check('403 for the save', refusedSave.status === 403,
-        `got ${refusedSave.status} ${JSON.stringify(refusedSave.body)}`);
-  check('and the refusal names loopback', /loopback/i.test(refusedSave.body?.error ?? ''),
-        refusedSave.body?.error);
+  // Since #501 the guard asks who is calling rather than where the server opened, so the case is
+  // a caller reaching a board from somewhere that is not this machine, rather than the board's
+  // own bind.
+  console.log('\n7. and only for a caller on this machine');
+  const remote = await remoteInterfaceAddress((line) => console.log(`  note  ${line}`));
+  if (!remote) {
+    console.log('  note  this machine has no non-loopback address to be called on, so this case '
+                + 'could not be run at all');
+  } else {
+    const open = startCanvas(openPort, { host: '0.0.0.0', allowedHosts: `${remote}:${openPort}` });
+    await waitForHealth(OPEN_BASE, open.child, open.read);
+    const refusedSave = await call(`http://${remote}:${openPort}`, '/api/workspaces/editable/config', {
+      method: 'PUT', body: JSON.stringify({ config: { name: 'From The Network' } }),
+    });
+    check('403 for the save', refusedSave.status === 403,
+          `got ${refusedSave.status} ${JSON.stringify(refusedSave.body)}`);
+    check('and the refusal names the caller, not the origin gate',
+          /machine/i.test(refusedSave.body?.error ?? '')
+          && !/DNS rebinding/i.test(refusedSave.body?.error ?? ''),
+          refusedSave.body?.error);
+  }
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);

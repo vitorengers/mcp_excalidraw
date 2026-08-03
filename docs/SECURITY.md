@@ -175,22 +175,23 @@ past to the next free port, not a pin ([running.md](running.md)).
 interface, or a Tailscale `100.x.y.z` — puts it on one network instead. Today that difference
 buys nothing, and the reason is the rest of this section. The token goes with either, and it is
 one secret with no sessions and no accounts behind it: anyone who has it is the operator as far
-as this server is concerned, and anyone who has not is refused. Underneath that, the bind is its
-own guard and a second answer: off loopback the reply is **403** to nearly every route worth
-reaching — not only the GitHub half, the agents and the terminal, but since #366 every read of
-what the board holds and since #456 every write of it. Do not do it on a network you do not
+as this server is concerned, and anyone who has not is refused. Underneath that, **who is
+calling** is its own guard and a second answer: a caller whose own address is not loopback — one
+that did not reach this server from the machine it runs on — gets **403** from nearly every route
+worth reaching, not only the GitHub half, the agents and the terminal, but since #366 every read
+of what the board holds and since #456 every write of it. Do not do it on a network you do not
 control, and put access control in front of it if you do it at all.
 [running.md](running.md#which-addresses-it-answers-on) is the operator's half of the same
-question — which of the two shapes to write, and why neither is worth writing yet.
+question — which of the two shapes to write, and what each is worth.
 
 The two are not the same control and neither stands in for the other. The token is what a caller
-carries; the bind is what this server opened itself to, and it is still the answer with
+carries; the caller's address is what the kernel filled in, and it is still the answer with
 `VIBEMAXXING_NO_AUTH=1` set, which is the one configuration where the token is not there to help.
 
-What a non-loopback bind actually leaves, now that the reads and the writes are behind the same
-guard:
+What a non-loopback bind actually leaves a caller who is not on this machine, now that the reads
+and the writes are behind the same guard:
 
-- **Refused with 403 off loopback** — the issue block and the implement run, the terminal, the
+- **Refused with 403** — the issue block and the implement run, the terminal, the
   workspace registry and project settings, the directory picker, the GitHub project mirror and
   card moves, `/api/github-status`, `/api/agent-limits`, the restart route, and the board's own
   contents in both directions: the reads `GET /api/elements`, `/api/elements/search`,
@@ -198,8 +199,10 @@ guard:
   snapshot reads, and the writes `POST /api/elements`, `PUT`/`DELETE /api/elements/:id`,
   `DELETE /api/elements/clear`, `/api/elements/batch`, `/api/elements/from-mermaid`,
   `/api/elements/sync`, `POST /api/files`, `DELETE /api/files/:id`, `POST /api/snapshots` and the
-  four browser round-trips. The **WebSocket upgrade** is refused there too, because it sends the
-  whole scene on connect and an HTTP guard cannot see it.
+  four browser round-trips. The **WebSocket upgrade** is refused too, because it sends the whole
+  scene on connect and an HTTP guard cannot see it. Since #501 most of that list is refused on
+  the caller rather than on the bind, so it is you it stops being refused to — the terminal, the
+  agents and the GitHub half still test the bind and are refused to everybody on such a board.
 <!-- routes: answered-off-loopback -->
 - **Still reached by a caller on the network** — `GET /`, the page itself, which cannot read a
   token out of an address bar it has not loaded yet; `GET /health`, which is how anything finds
@@ -212,18 +215,20 @@ guard:
   it left on this machine — together with the two routes that reset such a record,
   `DELETE /api/implement` and `DELETE /api/issue-block/:id/implement`.
 <!-- /routes: answered-off-loopback -->
-- **Answered to you, refused to them** — `GET /api/pair/pending` and `POST /api/pair/approve`.
-  These are the exception to everything above: they ask **who is calling** rather than where the
-  server opened, so an interface-bound board still lets you approve a device from your own
-  keyboard while refusing the network the same route. That is #503's `notTheHost`, and it is the
-  shape #501 gives the rest of the funnel.
+- **Answered to you, refused to them** — `GET /api/pair/pending` and `POST /api/pair/approve`,
+  written that way by #503, and since #501 the whole of the `offLoopback` funnel beside them:
+  the board's own contents, the registry, the picker, the restart route and the rest of the first
+  list. They ask **who is calling** rather than where the server opened, so an interface-bound
+  board serves them from your own keyboard while refusing the network the same route. What is
+  left on the bind is the terminal, the two agent helpers and the GitHub routes, which such a
+  board refuses to everybody including you.
 
 So the sentence this used to end on — that a board bound that way is inert — was not true, and it
-is the kind of claim worth being exact about. What is inert is the **board**: nothing bound off
-loopback publishes a drawing or takes one. What is not is the record of what the agents have done
-with your repository, which such a caller can read, and can reset. The pairing pair is deliberate
-and bounded; that one is not deliberate at all — it is a gap in the guard rather than a decision
-anybody wrote down, and it is filed as
+is the kind of claim worth being exact about. What is inert **to a stranger** is the board:
+nothing on one publishes a drawing to them or takes one from them. What is not is the record of
+what the agents have done with your repository, which such a caller can read, and can reset. The
+pairing pair is deliberate and bounded; that one is not deliberate at all — it is a gap in the
+guard rather than a decision anybody wrote down, and it is filed as
 [#508](https://github.com/vitorengers/vibemaxxing/issues/508).
 `scripts/check-guarded-routes-documented.mjs` derives these lists from `src/server.ts`, so they
 and the tables in [rest-api.md](rest-api.md) cannot drift from the code again without a check
@@ -231,10 +236,9 @@ going red — including on the day #508 closes and the first list gets shorter.
 
 Before #366 the second list was the whole drawing canvas — elements, files, documents, the
 library and the snapshots. The two honest options were to guard them or to write down that a
-board bound to an interface publishes its contents; they are guarded, and what that costs is the
-last thing a non-loopback bind was good for. The token had landed by then and does not make the
-question go away: it is a switch away from being off, and a control that only holds while a
-second one is set is not one that was decided.
+board bound to an interface publishes its contents; they are guarded. The token had landed by
+then and does not make the question go away: it is a switch away from being off, and a control
+that only holds while a second one is set is not one that was decided.
 
 #456 is the same paragraph about the other direction. Guarding the reads alone had left the
 writes as the shape the routes happened to have: nobody on the network could read such a board,
@@ -242,10 +246,25 @@ and anybody reaching the port could still draw on it, empty it — `DELETE /api/
 copies the board first, and it still empties it — and fill its file store. The two options were
 the same two, and so is the answer.
 
-The guard is a test of the **bind address**, not of the caller's address: a server bound to an
-interface refuses those routes for the loopback client on the same machine too. A reverse proxy
-is the configuration that still works, because a proxy reaches this server on loopback and
-`EXCALIDRAW_ALLOWED_HOSTS` is what tells the origin gate about the name in front of it.
+**Since #501 the guard is a test of the caller's address, not of the bind.** It was the bind
+until then, and the cost of that was a board on any interface being inert for *everybody* —
+including the browser on the host machine, whose request comes from loopback and was refused all
+the same. `HOST=0.0.0.0` and an address on a private overlay were punished identically, so a
+non-loopback bind answered nothing worth having in any configuration, however narrow. Now the
+board on the interface works for you and refuses the network. What lets a second machine in is a
+device credential: #502 is the registry it lives in, #503 the pairing that puts one there. Until
+a device is paired, remote and refused are the same answer, so nothing a stranger could not reach
+before is reachable now.
+
+**`X-Forwarded-For` is not read, and it must not be.** A reverse proxy reaches this server *on
+loopback*, which is why a proxy configuration worked before that change and is untouched by it,
+and `EXCALIDRAW_ALLOWED_HOSTS` is what tells the origin gate about the name in front of it.
+Trusting a forwarded header would turn the one property of a caller nobody can forge into one
+anybody can set: a remote caller would simply claim to be loopback. If proxy-awareness is ever
+wanted it is a separate, opt-in decision with the proxy's own address pinned. IPv6-mapped IPv4
+(`::ffff:127.0.0.1`) is read as loopback, because that is what a dual-stack listener reports for
+an ordinary local client. `scripts/check-caller-guard.mjs` holds all of this, including a real
+caller on a non-loopback address being refused with a forwarded header in hand.
 
 ## The origin gate, and why a bind test is not enough
 
@@ -265,13 +284,13 @@ there is a gate in front of every route, refusing with 403 before the route runs
   a refusal names the authority it expected so a lockout says what to put there.
 - The **WebSocket upgrade** goes through the same gate. It streams the scene and every live
   shell's scrollback on connect, and it is a door CORS never covered at all. Since #366 it is
-  asked about the bind first, because a program on the network sends no `Origin` and names
+  asked who is calling first, because a program on the network sends no `Origin` and names
   whatever `Host` it likes — the case this gate deliberately allows, and therefore the one only
-  a bind test can turn away.
+  an address the kernel filled in can turn away.
 
 `scripts/check-cross-origin.mjs` holds both sides of this;
-`scripts/check-board-reads-guard.mjs` holds the bind side of the same two doors, and
-`scripts/check-board-writes-guard.mjs` the bind side of everything that changes a board.
+`scripts/check-board-reads-guard.mjs` holds the caller side of the same two doors, and
+`scripts/check-board-writes-guard.mjs` the caller side of everything that changes a board.
 
 **What the gate does not defend against is a local program.** Any process that can open a socket
 to the port sends no `Origin` at all, so nothing here sees it — which is why the token above

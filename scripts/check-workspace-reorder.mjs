@@ -41,6 +41,7 @@ import { fileURLToPath } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
+import { remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 let failures = 0;
 
@@ -99,8 +100,13 @@ const fileOrder = () => readRegistry().workspaces.map((entry) => entry.id);
 
 const running = [];
 
-function startCanvas(port, { host = '127.0.0.1', registry = registryPath, stateHome = null } = {}) {
+function startCanvas(port, { host = '127.0.0.1', registry = registryPath, stateHome = null,
+                             allowedHosts = null } = {}) {
   const env = { PORT: String(port), HOST: host, LOG_LEVEL: 'error' };
+  // A request to `http://<interface>:<port>` names that authority in `Host`, which a board bound
+  // to `0.0.0.0` does not answer for. The origin gate is a different control from the caller
+  // guard, and a case that wants the second refusal has to get past the first.
+  if (allowedHosts) env.EXCALIDRAW_ALLOWED_HOSTS = allowedHosts;
   // A server with no registry named resolves the per-user default one. A state directory of
   // its own keeps that inside this check's temporary directory, well away from whoever is
   // running it.
@@ -225,15 +231,28 @@ try {
   const front = (await listed(BASE))[0];
   check('the first of the list is the project that was dragged to the front', front === 'gamma', String(front));
 
-  console.log('\n6. a board that is not bound to loopback may not write the order');
-  const open = startCanvas(openPort, { host: '0.0.0.0' });
-  await waitForHealth(OPEN_BASE, open.child, open.read);
-  const refused = await reorder(OPEN_BASE, { ids: ['alpha', 'beta', 'gamma'] });
-  check('403 for the PUT', refused.status === 403, `got ${refused.status} ${JSON.stringify(refused.body)}`);
-  check('and the refusal names loopback', /loopback/i.test(refused.body?.error ?? ''), refused.body?.error);
-  check('with the file untouched',
-        JSON.stringify(fileOrder()) === JSON.stringify(['gamma', 'alpha', 'beta']),
-        JSON.stringify(fileOrder()));
+  // Since #501 the guard asks who is calling rather than where the server opened, so the case is
+  // a caller reaching a board from somewhere that is not this machine, rather than the board's
+  // own bind.
+  console.log('\n6. a caller that is not on this machine may not write the order');
+  const remote = await remoteInterfaceAddress((line) => console.log(`  note  ${line}`));
+  if (!remote) {
+    console.log('  note  this machine has no non-loopback address to be called on, so this case '
+                + 'could not be run at all');
+  } else {
+    const open = startCanvas(openPort, { host: '0.0.0.0', allowedHosts: `${remote}:${openPort}` });
+    await waitForHealth(OPEN_BASE, open.child, open.read);
+    const refused = await reorder(`http://${remote}:${openPort}`, { ids: ['alpha', 'beta', 'gamma'] });
+    check('403 for the PUT', refused.status === 403,
+          `got ${refused.status} ${JSON.stringify(refused.body)}`);
+    check('and the refusal names the caller, not the origin gate',
+          /machine/i.test(refused.body?.error ?? '')
+          && !/DNS rebinding/i.test(refused.body?.error ?? ''),
+          refused.body?.error);
+    check('with the file untouched',
+          JSON.stringify(fileOrder()) === JSON.stringify(['gamma', 'alpha', 'beta']),
+          JSON.stringify(fileOrder()));
+  }
 
   console.log('\n7. a board with no projects refuses an order naming some, with a reason');
   const bare = startCanvas(barePort, { registry: null, stateHome: join(workDir, 'state-home') });

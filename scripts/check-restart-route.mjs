@@ -40,6 +40,7 @@ import { fileURLToPath } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas } from './lib/spawn-canvas.mjs';
+import { remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 let failures = 0;
 
@@ -92,9 +93,20 @@ const toKill = [];
  * through the shell can decide the answer — is `scripts/lib/spawn-canvas.mjs`'s job now,
  * together with the `.env` this used to miss.
  */
-async function canvasWith(extraEnv, host = '127.0.0.1') {
+async function canvasWith(extraEnv, host = '127.0.0.1', reachOn = '127.0.0.1') {
   const port = await freePort();
-  const { child } = startCanvas({ port, env: { HOST: host, LOG_LEVEL: 'error', ...extraEnv } });
+  const { child } = startCanvas({
+    port,
+    env: {
+      HOST: host,
+      LOG_LEVEL: 'error',
+      // A request to `http://<interface>:<port>` names that authority in `Host`, which a board
+      // bound to `0.0.0.0` does not answer for. The origin gate is a different control from the
+      // caller guard, and a case that wants the second refusal has to get past the first.
+      ...(reachOn === '127.0.0.1' ? {} : { EXCALIDRAW_ALLOWED_HOSTS: `${reachOn}:${port}` }),
+      ...extraEnv,
+    },
+  });
   toKill.push(child.pid);
   const health = await healthOf(port);
   return { port, health, pid: child.pid };
@@ -190,32 +202,43 @@ try {
     && fresh?.agents?.implement?.configured === board.health?.agents?.implement?.configured,
     `${JSON.stringify(fresh)} vs ${JSON.stringify(board.health)}`);
 
-  // ─── Off loopback it is refused ───────────────────────────────
+  // ─── A caller off this machine is refused ─────────────────────
 
-  console.log('\n6. off loopback the route is refused');
+  // Since #501 the guard asks who is calling rather than where the server opened, so the case is
+  // a board on every interface reached from somewhere that is not this machine, rather than the
+  // board's own bind. A restart spawns a detached process; nobody but this machine asks for one.
 
-  const open = await canvasWith(BOARD_ENV, '0.0.0.0');
-  check('the open-bound server is up', open.health !== null);
-  let refusedStatus = 0;
-  let refusedBody = null;
-  try {
-    const response = await fetch(`http://127.0.0.1:${open.port}/api/restart`, {
-      method: 'POST',
-      signal: AbortSignal.timeout(5000),
-    });
-    refusedStatus = response.status;
-    refusedBody = await response.json();
-  } catch (error) {
-    refusedBody = { error: String(error) };
+  console.log('\n6. a caller that is not on this machine is refused');
+
+  const remote = await remoteInterfaceAddress((line) => console.log(`  note  ${line}`));
+  if (!remote) {
+    console.log('  note  this machine has no non-loopback address to be called on, so this case '
+      + 'could not be run at all');
+  } else {
+    const open = await canvasWith(BOARD_ENV, '0.0.0.0', remote);
+    check('the open-bound server is up', open.health !== null);
+    let refusedStatus = 0;
+    let refusedBody = null;
+    try {
+      const response = await fetch(`http://${remote}:${open.port}/api/restart`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(5000),
+      });
+      refusedStatus = response.status;
+      refusedBody = await response.json();
+    } catch (error) {
+      refusedBody = { error: String(error) };
+    }
+    check('the restart is refused with 403', refusedStatus === 403,
+      `status ${refusedStatus} — ${JSON.stringify(refusedBody)}`);
+    check('and it says why', typeof refusedBody?.error === 'string'
+      && /machine/i.test(refusedBody.error) && !/DNS rebinding/i.test(refusedBody.error),
+      JSON.stringify(refusedBody));
+    // The proof it was the guard rather than a crash: it is still there afterwards.
+    const stillUp = await healthNow(open.port);
+    check('the refusing server is still running', stillUp?.pid === open.health?.pid,
+      `${JSON.stringify(stillUp?.pid)} vs ${JSON.stringify(open.health?.pid)}`);
   }
-  check('the restart is refused with 403', refusedStatus === 403,
-    `status ${refusedStatus} — ${JSON.stringify(refusedBody)}`);
-  check('and it says why', typeof refusedBody?.error === 'string' && /loopback/i.test(refusedBody.error),
-    JSON.stringify(refusedBody));
-  // The proof it was the guard rather than a crash: it is still there afterwards.
-  const stillUp = await healthNow(open.port);
-  check('the refusing server is still running', stillUp?.pid === open.health?.pid,
-    `${JSON.stringify(stillUp?.pid)} vs ${JSON.stringify(open.health?.pid)}`);
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.stack ?? error.message}`);

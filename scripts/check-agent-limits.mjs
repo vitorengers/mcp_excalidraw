@@ -56,6 +56,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas } from './lib/spawn-canvas.mjs';
+import { remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -154,14 +155,26 @@ const started = [];
  * child — so the machine running the check cannot decide the answer — is
  * `scripts/lib/spawn-canvas.mjs`'s job now, together with the `.env` this used to miss.
  */
-async function canvasWith(extraEnv, host = '127.0.0.1') {
+async function canvasWith(extraEnv, host = '127.0.0.1', reachOn = '127.0.0.1') {
   const port = await freePort();
-  const { child } = startCanvas({ port, env: { HOST: host, LOG_LEVEL: 'error', ...extraEnv } });
+  const { child } = startCanvas({
+    port,
+    env: {
+      HOST: host,
+      LOG_LEVEL: 'error',
+      // A request to `http://<interface>:<port>` names that authority in `Host`, which a board
+      // bound to `0.0.0.0` does not answer for. The origin gate is a different control from the
+      // caller guard, and a case that wants the second refusal has to get past the first.
+      ...(reachOn === '127.0.0.1' ? {} : { EXCALIDRAW_ALLOWED_HOSTS: `${reachOn}:${port}` }),
+      ...extraEnv,
+    },
+  });
   started.push(child);
-  const base = `http://127.0.0.1:${port}`;
+  const health = `http://127.0.0.1:${port}`;
+  const base = `http://${reachOn}:${port}`;
   for (let attempt = 0; attempt < 120; attempt++) {
     try {
-      const response = await fetch(`${base}/health`);
+      const response = await fetch(`${health}/health`);
       if (response.ok) return base;
     } catch { /* not up yet */ }
     await sleep(100);
@@ -310,18 +323,28 @@ try {
   check('and the refusal names the variable that would turn it on',
     /VIBEMAXXING_AGENT_LIMITS/.test(missing.text), missing.text.slice(0, 200));
 
-  console.log('\n10. and never off loopback, because it carries an email');
+  // Since #501 the guard asks who is calling rather than where the server opened, so a board on
+  // every interface is not the case any more: the caller reaching it from somewhere else is.
+  console.log('\n10. and never to a caller that is not on this machine, because it carries an email');
 
-  const open = await canvasWith({
-    EXCALIDRAW_WORKSPACES: registryPath,
-    EXCALIDRAW_AGENT_LIMITS: limitsDir,
-  }, '0.0.0.0');
-  const refused = await get(open, '/api/agent-limits');
-  check('403 for a board that is not bound to loopback', refused.status === 403,
-    `got ${refused.status} — ${refused.text.slice(0, 200)}`);
-  check('the refusal names loopback', /loopback/i.test(refused.text), refused.text.slice(0, 200));
-  check('and no account came back with it',
-    !refused.text.includes('@example.com'), 'an email was served off loopback');
+  const remote = await remoteInterfaceAddress((line) => console.log(`  note  ${line}`));
+  if (!remote) {
+    console.log('  note  this machine has no non-loopback address to be called on, so this case '
+                + 'could not be run at all');
+  } else {
+    const open = await canvasWith({
+      EXCALIDRAW_WORKSPACES: registryPath,
+      EXCALIDRAW_AGENT_LIMITS: limitsDir,
+    }, '0.0.0.0', remote);
+    const refused = await get(open, '/api/agent-limits');
+    check('403 for a caller that is not on this machine', refused.status === 403,
+      `got ${refused.status} — ${refused.text.slice(0, 200)}`);
+    check('the refusal names the caller, and is not the origin gate\'s',
+      /machine/i.test(refused.text) && !/DNS rebinding/i.test(refused.text),
+      refused.text.slice(0, 200));
+    check('and no account came back with it',
+      !refused.text.includes('@example.com'), 'an email was served to a caller off this machine');
+  }
 
   // ─── Reading is a capability, not a fact about the board ─────
 
