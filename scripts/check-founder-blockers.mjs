@@ -14,10 +14,11 @@
  * Seven sections:
  *
  *  1. **every kind is reached, keyed and composable.** All ten of the register's kinds have
- *     a producer, a key that is the same on two calls, and a record `validateFounderAction`
- *     accepts — asserted over what `founderActionFor` produced, never over a record written
- *     by hand here. The holes a run fills in — the repository, the permission, the binary,
- *     the environment, the variable — are asserted present in the produced text.
+ *     a producer, a key that is the same on two calls and that `founderActionKey` composes
+ *     the same way, and a record `validateFounderAction` accepts — asserted over what
+ *     `founderActionFor` produced, never over a record written by hand here. The holes a run
+ *     fills in — the repository, the permission, the binary, the environment, the variable —
+ *     are asserted present in the produced text.
  *  2. **`said` does not cross.** A distinctive sentinel is planted in a `TerminalGhFailure`'s
  *     stderr, where its `message` is the stderr and the remedy glued together. The sentinel
  *     has to appear in `evidence` and in no founder field, and the fixture carries an
@@ -97,6 +98,10 @@ const { verifyAgainst } = verify;
 const { FOUNDER_ACTION_KINDS, FOUNDER_ACTION_CORPUS, validateFounderAction } = register;
 const { TerminalGhFailure, REMEDY, classifyGhFailure } = gh;
 const { fullAccessFlag } = adapter;
+const { founderActionKey } = await load('founder-store');
+
+/** A board id for the key the store composes. Lower case, so nothing here normalises it. */
+const BOARD = 'pantry';
 
 const EXPORTS = [
   ['founder-blockers', blockers, ['blockerForGhFailure', 'blockerForGithubStatus',
@@ -237,6 +242,14 @@ for (const [kind, produce, facts] of PRODUCERS) {
         JSON.stringify(blocker.key));
   check(`and the same input keys the same way twice`, produce()?.key === blocker.key,
         `${produce()?.key} then ${blocker.key}`);
+  check(`and it is the kind and the discriminator, in that order`,
+        blocker.key === (blocker.discriminator ? `${kind}:${blocker.discriminator}` : kind),
+        `${blocker.key} against ${kind} and ${blocker.discriminator ?? 'no discriminator'}`);
+  // The store composes its own key with the board in front, which is why the discriminator is
+  // held apart from the key rather than left to be split back out of it.
+  check(`and the store composes the same key from the two`,
+        founderActionKey(BOARD, blocker.kind, blocker.discriminator) === `${BOARD}:${blocker.key}`,
+        founderActionKey(BOARD, blocker.kind, blocker.discriminator));
   keys.set(kind, blocker.key);
 
   const fields = founderActionFor(blocker);
