@@ -205,6 +205,16 @@ export const SETTINGS = [
     description: 'How long one answer about `gh` *itself* — installed, logged in, which scopes — is reused before `GET /api/github-status` asks again. `0` turns the memo off. The canvas asks on a failing poll, so without it a board whose `gh` is broken would spawn two processes every twenty seconds to be told the same thing'
   },
   {
+    name: 'FOUNDER_PASS_MS',
+    fallback: '`300000`',
+    description: 'How often the board looks for blockers only a person can clear, and closes the ones a re-probe says are gone. One `gh --version` and one `gh auth status` per project per pass, which is why it is minutes rather than seconds. `0` turns the pass off, and the blockers a refused run notices are still recorded'
+  },
+  {
+    name: 'FOUNDER_PUBLISH',
+    fallback: 'unset',
+    description: '`1` also publishes a founder action to the GitHub project as a draft item. Unset, a blocker is recorded and drawn on this board and no GitHub write of any kind is made for it'
+  },
+  {
     name: 'GH_COMMAND',
     fallback: '`gh`',
     description: 'The GitHub CLI on **this machine**, when it is not on `PATH` — [trap-gh-path.md](trap-gh-path.md)'
