@@ -173,15 +173,25 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-The first two of them have landed; the rest are named here so the reader of a pull request can
+The first three of them have landed; the rest are named here so the reader of a pull request can
 see where each decision lands.
 
 ```
-src/core/peer-liveness.ts    the four answers above, and which refusal an operator is looking at
-src/core/peer-registry.ts    what this board keeps about a board that approved it
-src/core/peer-client.ts      one board's HTTP call to another, and what each failure means
-src/core/peer-proxy.ts       the seam that sends a request to the machine that owns the board
+src/core/peer-liveness.ts        the four answers above, and which refusal you are looking at
+src/core/remote-workspace-id.ts  what this board calls a peer's project, and the inverse
+src/core/peer-registry.ts        what this board keeps about a board that approved it
+src/core/peer-client.ts          one board's HTTP call to another, and what each failure means
+src/core/peer-proxy.ts           the seam that sends a request to the machine that owns the board
 ```
+
+The id module is where a peer's project gets the name it wears here, and it is a pure pair of
+functions with no caller either. What it settles is that the name survives the *other* board's
+normaliser: that function does not reject a spelling it dislikes, it rewrites it to the shared
+`default` board, so a scheme punctuated with anything outside `.`, `-` and `_` would put a socket
+on the wrong scene and log nothing. It answers both directions, because the second one is what
+the wire needs — given a local id, the spelling the peer itself expects back — and a project that
+cannot be named inside the length a workspace id has is refused by a sentence rather than
+shortened into a valid id for a different board.
 
 The registry is a module with no caller: it owns `peers.json` beside the state directory's other
 files, and nothing yet adds a row to it or presents what a row holds. What it settles is the
