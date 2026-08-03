@@ -162,6 +162,7 @@ import { hostname as osHostname } from 'os';
 
 import { createPairingDesk, isLoopbackCaller } from './core/pairing.js';
 import { addDevice, deviceRegistryPath } from './core/device-registry.js';
+import { peerProxy } from './core/peer-proxy.js';
 import {
   addPeer,
   forgetPeer,
@@ -626,24 +627,35 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use(express.json({ limit: '10mb' }));
 
 /**
- * A board another machine owns is refused here, rather than answered out of a store made up on
- * the spot.
+ * The forwarding seam, first: a request naming a peer's board leaves this machine here.
  *
- * This is the one guard in the file whose absence would be **silent**. `elementsFor` yields an
- * empty store for an id nothing registered — deliberately, and eleven sibling maps behave the
- * same way — so a request naming a peer's project would be answered locally with a blank board.
- * The operator would see an empty canvas for a project that is alive on the other machine, and
- * one pointer press arming the autosync would write that blank scene back into a local store and
- * into a local `.excalidraw`. Nothing would log and there would be no thread to pull.
+ * `core/peer-proxy.ts` (#565) reads the board off the request, finds the machine that owns it and
+ * sends the request there. It is deliberately above the refusal below rather than beside it: a
+ * board this one still holds a credential for is **answered by its owner**, and the refusal is
+ * for what that seam does not route.
+ */
+app.use(peerProxy);
+
+/**
+ * And a board nobody can be asked about is refused, rather than answered out of a store made up
+ * on the spot.
  *
- * So it refuses with a **stated status and a sentence**: 421, which is the status for a request
- * that reached a server that cannot produce the answer, and a sentence a page can render
- * verbatim. That refusal is what a forwarder later turns into a forward — the two are
- * independently shippable precisely because this one exists in the meantime.
+ * The forwarder above deliberately lets an id it cannot route **fall through** — a peer that has
+ * been forgotten, the row a peer with no projects wears on the strip, a near miss inside the
+ * namespace. Falling through used to mean being answered locally, and that is the one failure in
+ * this milestone that is **silent**: `elementsFor` yields an empty store for an id nothing
+ * registered — deliberately, and eleven sibling maps behave the same way — so the operator would
+ * see a blank canvas for a project that is alive somewhere, and one pointer press arming the
+ * autosync would write that blank scene into a local store and into a local `.excalidraw`.
+ * Nothing would log and there would be no thread to pull.
+ *
+ * So it refuses with a **stated status and a sentence**: 421, the status for a request that
+ * reached a server which cannot produce the answer, and prose a page can render verbatim. A
+ * forwarded request never gets here; what does is exactly the set for which there is nobody to
+ * ask, and the two branches below are the two ways that happens.
  *
  * **The whole reserved namespace, not only the ids that parse.** `REMOTE_WORKSPACE_ID_PREFIX` is
- * reserved by `core/remote-workspace-id.ts`, and a near miss inside it — the row a peer with no
- * projects wears, a truncated id, a spelling from a future scheme — would otherwise read as a
+ * reserved by `core/remote-workspace-id.ts`, and a near miss inside it would otherwise read as a
  * local project and manufacture exactly the store this exists to prevent.
  *
  * In front of every route rather than inside them, because "every board-scoped route" is some
@@ -657,26 +669,18 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   if (!named.startsWith(REMOTE_WORKSPACE_ID_PREFIX)) return next();
 
   const pair = splitRemoteWorkspaceId(named);
-  const owner = pair
-    ? listPeers().find((peer) => peer.id === pair.peerId) ?? null
-    : null;
 
   logger.warn(`Refused ${req.method} ${req.path}: it names the board "${named}", which is not `
-    + 'one of this board\'s own.');
+    + 'one of this board\'s own and is not on a machine this board can ask.');
   res.status(421).json({
     success: false,
-    error: owner
-      ? `"${named}" is a project on ${owner.name}, and this board answers only for its own. `
-        + 'Requests about another machine\'s projects are not forwarded yet, so nothing was read '
-        + 'and nothing was written here — an empty board answered in its place would look exactly '
-        + `like a project with nothing on it. Open it on ${owner.name} until this board forwards.`
-      : pair
-        ? `"${named}" is a project on a machine this board no longer holds a credential for, so `
-          + 'there is nothing to ask and nothing here to answer with. Pair with that machine '
-          + 'again, or remove the tab.'
-        : `"${named}" is inside the "${REMOTE_WORKSPACE_ID_PREFIX}" namespace, which names a `
-          + 'project on another machine and is not a board this one keeps. Nothing was read and '
-          + 'nothing was written.'
+    error: pair
+      ? `"${named}" is a project on a machine this board holds no credential for, so there is `
+        + 'nothing to ask and nothing here to answer with. An empty board answered in its place '
+        + 'would look exactly like a project with nothing on it. Pair with that machine again, or '
+        + 'take the tab off the strip.'
+      : `"${named}" is inside the "${REMOTE_WORKSPACE_ID_PREFIX}" namespace, which names another `
+        + 'machine rather than a board this one keeps. Nothing was read and nothing was written.'
   });
 });
 

@@ -394,10 +394,51 @@ try {
   check(`a sleeping peer does not delay the strip past ${ANSWER_BUDGET_MS} ms`,
         timed.status === 200 && took < ANSWER_BUDGET_MS, `took ${took} ms`);
 
-  // ─── 5. A peer-owned id is refused, never answered ──────────
+  // Still a registered peer, so this id is the forwarder's to answer (#565) rather than this
+  // board's to refuse. Whichever of them answers, what must never come back is 200 with an empty
+  // board: that is the reading an operator cannot tell from a project with nothing on it.
+  const asleep = await call(here, `/api/elements?workspace=${encodeURIComponent(remoteId)}`,
+                            { headers: asA });
+  check('a peer-owned id on a machine that is asleep answers a stated status, never a blank board',
+        asleep.status !== 200 && asleep.status !== 500,
+        `${asleep.status} ${asleep.text.slice(0, 200)}`);
+  check('and it is a sentence rather than a stack trace',
+        typeof asleep.body?.error === 'string' && asleep.body.error.length > 20,
+        asleep.text.slice(0, 200));
 
-  console.log('\n5. a board-scoped route refuses a peer-owned id rather than making one up');
+  // ─── 5. Forgetting a peer takes the secret with it ──────────
 
+  console.log('\n5. forgetting a peer removes the secret from the file, and only from this end');
+
+  const forgotten = await call(here, `/api/peers/${encodeURIComponent(peer?.id ?? 'none')}`,
+                               { method: 'DELETE', headers: asA });
+  check('DELETE /api/peers/:id answers', forgotten.status === 200,
+        `${forgotten.status} ${forgotten.text.slice(0, 300)}`);
+
+  const withoutSecret = existsSync(peersFile) ? readFileSync(peersFile, 'utf-8') : '';
+  check('and the secret is gone from the file\'s bytes',
+        !withoutSecret.includes(`"${peer?.id ?? 'no-peer'}"`) && !/"secret"/.test(withoutSecret),
+        withoutSecret.slice(0, 300));
+
+  const emptied = await call(here, '/api/peers', { headers: asA });
+  check('the peer is off the list', (emptied.body?.peers ?? []).length === 0,
+        emptied.text.slice(0, 200));
+
+  const stripAfter = await settles(async () => {
+    const answer = await call(here, '/api/workspaces', { headers: asA });
+    const rows = answer.body?.workspaces ?? [];
+    return rows.every((row) => !row.id.startsWith(REMOTE_PREFIX)) ? rows : null;
+  });
+  check('and its row is off the strip', Boolean(stripAfter), JSON.stringify(stripAfter));
+
+  // ─── 6. A board nobody can be asked about is refused ────────
+
+  console.log('\n6. a board-scoped route refuses a peer-owned id rather than making one up');
+
+  // With the peer forgotten, `core/peer-proxy.ts` (#565) deliberately stops routing this id and
+  // lets it fall through — which is exactly the request that used to be answered out of the empty
+  // store `elementsFor` makes for an unknown id. That fall-through is the surviving half of the
+  // hazard, and it is what these cases are about; the forwarded half is #565's own check.
   const read = await call(here, `/api/elements?workspace=${encodeURIComponent(remoteId)}`,
                           { headers: asA });
   check('GET /api/elements for a peer-owned id is refused with a stated status',
@@ -434,31 +475,6 @@ try {
   const runs = await call(here, '/api/implement', { headers: asA });
   check('no implement record was made for it either',
         !JSON.stringify(runs.body ?? {}).includes(REMOTE_PREFIX), runs.text.slice(0, 200));
-
-  // ─── 6. Forgetting a peer takes the secret with it ──────────
-
-  console.log('\n6. forgetting a peer removes the secret from the file, and only from this end');
-
-  const forgotten = await call(here, `/api/peers/${encodeURIComponent(peer?.id ?? 'none')}`,
-                               { method: 'DELETE', headers: asA });
-  check('DELETE /api/peers/:id answers', forgotten.status === 200,
-        `${forgotten.status} ${forgotten.text.slice(0, 300)}`);
-
-  const withoutSecret = existsSync(peersFile) ? readFileSync(peersFile, 'utf-8') : '';
-  check('and the secret is gone from the file\'s bytes',
-        !withoutSecret.includes(`"${peer?.id ?? 'no-peer'}"`) && !/"secret"/.test(withoutSecret),
-        withoutSecret.slice(0, 300));
-
-  const emptied = await call(here, '/api/peers', { headers: asA });
-  check('the peer is off the list', (emptied.body?.peers ?? []).length === 0,
-        emptied.text.slice(0, 200));
-
-  const stripAfter = await settles(async () => {
-    const answer = await call(here, '/api/workspaces', { headers: asA });
-    const rows = answer.body?.workspaces ?? [];
-    return rows.every((row) => !row.id.startsWith(REMOTE_PREFIX)) ? rows : null;
-  });
-  check('and its row is off the strip', Boolean(stripAfter), JSON.stringify(stripAfter));
 
   // ─── 7. Only the operator, on this machine ──────────────────
 

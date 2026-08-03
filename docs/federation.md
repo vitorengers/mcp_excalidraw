@@ -15,14 +15,14 @@ machine asks, you approve it on the machine the board is actually running on, an
 credential of its own afterwards. [SECURITY.md](SECURITY.md#pairing-a-second-machine) is the
 gesture and [devices.md](devices.md) is the list it writes into.
 
-The half this page describes is now half here. **The operator's end of a peer link works**: this
-board can be pointed at another one, the asking half of the same handshake runs as a process here
-rather than as a page, and the tab strip afterwards carries both machines' projects with a
-liveness state on each. What has **not** landed is the forwarding — a tab belonging to another
-machine is refused with a sentence rather than opened, because a board-scoped route that answered
-one would answer it from an empty store of its own. The rest of this page is the design the whole
-thing is being built to, and the parts that are not running yet say so where it matters. If a
-sentence here and the board in front of you disagree, the board is right and this page is the
+The half this page describes is here. **The operator's end of a peer link works**: this board can
+be pointed at another one, the asking half of the same handshake runs as a process here rather
+than as a page, the tab strip afterwards carries both machines' projects with a liveness state on
+each, and a request naming another machine's board is sent to the machine that owns it. What is
+left over is the one case there is nobody to ask about — a peer that was forgotten, or a row in
+the reserved namespace that names no project — and that is **refused**, with a stated status and a
+sentence, rather than answered out of the empty store this board makes for an id it does not know.
+If a sentence here and the board in front of you disagree, the board is right and this page is the
 defect; [development-log.md](development-log.md) is the dated record of what actually landed.
 
 ## Each machine runs its own board
@@ -180,8 +180,8 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-All but the last of them have landed; it is named here so the reader of a pull request can see
-where each decision lands.
+All of them have landed, and the last one is the one that gave the rest a caller. They are named
+here so the reader of a pull request can see where each decision lands.
 
 ```
 src/core/peer-liveness.ts          the four answers above, and which refusal you are looking at
@@ -231,10 +231,13 @@ is decided in one file rather than in each of the modules that eventually calls 
 The asking module and the strip are the two the operator reaches, and they are the ones with
 routes on them. The asking module runs the device half of the handshake from here: it answers the
 **code** first and the peer only once the other machine has approved, because a route that blocked
-until somebody walked to another keyboard would be a request held open for minutes. The strip is
-what keeps each peer's last answer between calls, on a timer of its own — so the page reads a
-snapshot rather than waiting on a machine, and a page polling the strip is never what wakes a
-sleeping peer up.
+until somebody walked to another keyboard would be a request held open for minutes, and an
+address nothing answers on is registered rather than refused — unreachable is a state. The strip
+is what keeps each peer's last answer between calls, on a timer of its own, so `GET
+/api/workspaces` reads a snapshot rather than waiting on a machine and a page polling the strip is
+never what wakes a sleeping peer up. It is also where the peer's own row comes from: when a
+machine stops answering its projects stop being tabs and one row is left, labelled and carrying
+the reason.
 
 The registry owns `peers.json` beside the state directory's other files, and `POST /api/peers` is
 what puts a row in it — after the other machine has approved this one, and not before. What it
@@ -303,6 +306,40 @@ does with them, so the HTTP one and the socket one implement one decision rather
 board on the frame is relabelled to this board's name for the project, a frame that cannot be
 relabelled is dropped rather than broadcast without one, and none of the three writes anything
 into a store on this machine.
+
+The proxy is the seam, and it is the file the others were written for — the files module above
+excepted, which is its own decision and still has no caller. It is a **middleware
+rather than a route**: it adds nothing to the route list, so `rest-api.md` and the structure map
+do not move, and the whole of what `src/server.ts` learns about federation is an import and one
+`app.use` placed after the token gate. Everything it does is the order of its questions. The
+page, the static mounts and `/health` are asked about first and never touched, because they
+describe the machine serving them. Then the paths that belong to this machine, from the
+rewriter's own list rather than a second copy of it. Then the reply halves, which are the one
+shape that belongs here *conditionally* — the ledger above is what says whether the request they
+answer came down a link, and a reply nobody asked for through this board is still this board's
+own. Only then which board, read with the compiled `workspaceIdFrom` so a request naming its
+project by header routes exactly like one naming it by query, and which machine that board is on.
+
+Two things about it are worth knowing as an operator. **A peer that is not answering produces an
+answer**: never a hang, because the client's two budgets turn one into a value, and never a 500,
+because a 500 says this board broke and this board did what it was asked — a machine that is not
+there is a gateway timeout and one that refuses is a bad gateway, both carrying the sentence the
+client wrote for a person. And **a project naming a peer this board no longer knows is answered
+from here**, with a line in the log saying so, rather than refused: an id this board cannot route
+is an id it has no peer for, and that is also what makes *the local store for that id is still
+empty* a question this server can be asked at all.
+
+The frontend needed no line changed for any of it, and that is the result the whole design rests
+on: `apiUrlOn` in `frontend/src/App.tsx` is a query-string decorator returning a **relative**
+path, so every board-scoped request already carries the one routing key this needs and is already
+same-origin. `frontend/src/auth.ts` installs the token header for same-origin targets only and
+deliberately sends nothing cross-origin — which is exactly why a page fetching a peer directly
+would send no credential, and why the browser goes on talking only to its own server.
+
+What is still ahead of it is the socket. The scene arrives over the WebSocket on an ordinary
+connection, and a peer's board is drawn today from the HTTP read the page makes beside it; the
+forwarder for the socket is a later issue in the same milestone, and it is the second consumer of
+the ledger above.
 
 The milestone that files them is *One tab strip, two machines*, and the design decisions above
 are each a done-when bullet on one of its issues rather than a preference stated here.
