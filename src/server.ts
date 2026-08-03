@@ -171,6 +171,15 @@ import {
   TOKEN_QUERY
 } from './core/auth-token.js';
 import {
+  listDevices,
+  renameDevice,
+  revokeDevice,
+  touchDevice,
+  verifyDeviceSecret,
+  viewOf,
+  type PairedDevice
+} from './core/paired-devices.js';
+import {
   backupBoardBefore,
   boardStateExists,
   boardStateFile,
@@ -262,6 +271,23 @@ function offeredToken(headers: IncomingHttpHeaders, url: string | undefined): st
   return null;
 }
 
+/**
+ * Which paired device offered this secret, if any.
+ *
+ * Wrapped rather than called directly because it reads a file on every request that missed the
+ * board token, and a registry that cannot be read is not a reason to stop answering: the caller
+ * is refused, which is what would have happened anyway, and the operator gets a line saying the
+ * file is the reason rather than a stack trace on a request they made.
+ */
+function deviceFor(offered: string | null): PairedDevice | null {
+  try {
+    return verifyDeviceSecret(offered);
+  } catch (error) {
+    logger.warn(`The paired-device registry could not be read: ${(error as Error).message}`);
+    return null;
+  }
+}
+
 // The socket is the same hole as the routes by a door CORS does not cover at all: it declared
 // no `verifyClient`, so a page at any origin got `initial_elements` and every live shell's
 // scrollback on connect. Both gates have to exist; either one alone leaves the board readable.
@@ -289,10 +315,19 @@ const wss = new WebSocketServer({
     // is one of the two things the token has to cover — the other being everything under `/api`.
     // Refused here rather than after `connection`, because a socket that opens and is then closed
     // has already been handed `initial_elements`.
-    if (AUTH_REQUIRED && !sameToken(offeredToken(req.headers, req.url), AUTH_TOKEN)) {
-      logger.warn('Refused a WebSocket upgrade: it carried no valid board token.');
-      done(false, 401, 'Unauthorized');
-      return;
+    if (AUTH_REQUIRED) {
+      const offered = offeredToken(req.headers, req.url);
+      // A paired device's secret opens the socket as the board token does, and the socket is
+      // where revocation has to reach: an upgrade that has already been accepted keeps streaming
+      // the scene and every live shell's scrollback whatever the registry says afterwards. Which
+      // device it was is resolved again in `connection` below rather than stashed on `req`, so
+      // that the record of who holds a socket does not depend on two callbacks being handed the
+      // same object.
+      if (!sameToken(offered, AUTH_TOKEN) && !deviceFor(offered)) {
+        logger.warn('Refused a WebSocket upgrade: it carried no valid board token.');
+        done(false, 401, 'Unauthorized');
+        return;
+      }
     }
     done(true);
   }
@@ -339,7 +374,28 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (!AUTH_REQUIRED) return next();
   if (req.path !== '/api' && !req.path.startsWith('/api/')) return next();
-  if (sameToken(offeredToken(req.headers, req.url), AUTH_TOKEN)) return next();
+  const offered = offeredToken(req.headers, req.url);
+  if (sameToken(offered, AUTH_TOKEN)) return next();
+
+  // The second credential, and the whole reason the registry exists: a device approved on this
+  // board holds a secret of its own, so that the operator has something to revoke short of a
+  // restart. Verified after the board token and never instead of it — the operator on loopback
+  // is the host and is not on the list.
+  //
+  // `res.locals.device` is what the routes below read to tell the two apart. Absent means the
+  // host, which is also what a board with the opt-out gives every caller: no authentication at
+  // all is no way to be less than the operator.
+  const device = deviceFor(offered);
+  if (device) {
+    res.locals.device = device;
+    // On the request rather than on a timer, and rate-limited inside `touchDevice`: "last seen"
+    // is what tells a laptop in use from one nobody has opened in months, and the only moment
+    // this server can observe is a request arriving.
+    try { touchDevice(device.id); } catch (error) {
+      logger.warn(`Could not record when ${device.name} was last seen: ${(error as Error).message}`);
+    }
+    return next();
+  }
 
   // The path, never the token: a refusal that echoed what it was offered would put a near-miss
   // in the log file, and the log file is not where a secret goes.
@@ -480,6 +536,20 @@ const socketWatching = new WeakMap<WebSocket, boolean>();
  */
 const socketClients = new WeakMap<WebSocket, string>();
 
+/**
+ * Which paired device holds a socket, for the sockets a paired device holds.
+ *
+ * A `Map` rather than a `WeakMap` like the three above, because this one has to be *walked*:
+ * revoking a device means finding its open sockets and closing them, and a weak map answers
+ * questions about a key somebody already has. Deleted on close beside the others, so it holds
+ * exactly the live ones.
+ *
+ * Why it exists at all: revocation that only refuses the next HTTP request leaves the scene and
+ * every live shell's scrollback flowing over an upgrade that was accepted before the device was
+ * removed. The socket is the half a person cannot see, and it is the half that is still sending.
+ */
+const socketDevices = new Map<WebSocket, string>();
+
 /** Who a request says it is, for the one purpose of not answering it back to itself. */
 function clientIdFrom(req: Request): string | undefined {
   const named = req.headers['x-client-id'];
@@ -556,6 +626,11 @@ wss.on('connection', (ws: WebSocket, request) => {
   // not say who it is is simply told everything.
   const clientId = requestUrl.searchParams.get('client')?.trim();
   if (clientId) socketClients.set(ws, clientId);
+  // Asked again rather than carried over from `verifyClient`: the upgrade only had to decide
+  // whether to accept, and what is wanted here is a name to close this socket by later. A
+  // socket the board token opened is the operator's own page and is not on the list.
+  const holder = AUTH_REQUIRED ? deviceFor(offeredToken(request.headers, request.url)) : null;
+  if (holder) socketDevices.set(ws, holder.id);
   // A socket is watching until its own client says it is in the background: a browser opens
   // one for the board it is about to show.
   socketWatching.set(ws, true);
@@ -620,6 +695,7 @@ wss.on('connection', (ws: WebSocket, request) => {
     socketWorkspaces.delete(ws);
     socketWatching.delete(ws);
     socketClients.delete(ws);
+    socketDevices.delete(ws);
     logger.info('WebSocket connection closed');
   });
 
@@ -629,6 +705,7 @@ wss.on('connection', (ws: WebSocket, request) => {
     socketWorkspaces.delete(ws);
     socketWatching.delete(ws);
     socketClients.delete(ws);
+    socketDevices.delete(ws);
   });
 });
 
@@ -1565,6 +1642,131 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       error: (error as Error).message,
       details: 'Internal server error during sync operation'
     });
+  }
+});
+
+// ─── Paired devices (who else can reach this board) ───────────
+//
+// The management half of the registry in `core/paired-devices.ts`. Once a second machine can be
+// paired there is a third, and a laptop that was sold, and a phone paired at an airport that
+// should not still be on the list — so the list, the name and the revoke are the feature and the
+// pairing is only its first minute.
+//
+// Two credentials reach these routes and they are not the same caller. The **host** is the
+// operator: the board token, which is a file only this account can read, and it is not on the
+// list. A **paired device** carries its own secret and `res.locals.device` names which one. The
+// split below is that distinction and nothing else:
+//
+//   - the **list** is answered to either, because a device that cannot see the list cannot see
+//     that it is on one, and "sign this machine out" needs somewhere to press;
+//   - a **rename** is the host's, because the name is the operator's word for a machine and a
+//     device renaming its neighbours is not a thing it has any standing to do;
+//   - a **revoke** is the host's, and a device's own — revoking the device you are reading this
+//     on is allowed and is not special-cased into a refusal. The operator on loopback cannot
+//     lock themselves out (the board token is a file, not a device), and a paired device signing
+//     itself out is the ordinary case rather than the dangerous one.
+//
+// `offLoopback` in front of all three, like every other route that answers with something this
+// machine owns — see the comment on that function. The consequence, said plainly: on a board
+// bound to an interface these answer 403 the way the rest of the API does, so this surface is
+// the operator's on their own machine. Which credential a caller holds and which address the
+// server bound are separate questions and both are asked.
+
+/** Every socket a device holds, closed. The count, so a caller is told what it disconnected. */
+function closeSocketsOfDevice(deviceId: string, reason: string): number {
+  let closed = 0;
+  for (const [socket, held] of [...socketDevices.entries()]) {
+    if (held !== deviceId) continue;
+    socketDevices.delete(socket);
+    try {
+      // 4003, an application code: 1008 (policy violation) is reserved for the endpoint that is
+      // *rejecting a message*, and nothing this socket sent is what is wrong with it. The reason
+      // travels to the other end, where it is the only explanation the device will get.
+      socket.close(4003, reason);
+    } catch { /* already going */ }
+    closed++;
+  }
+  return closed;
+}
+
+app.get('/api/devices', (_req: Request, res: Response) => {
+  if (offLoopback(res, 'Paired devices are listed')) return;
+  try {
+    const asked = res.locals.device as PairedDevice | undefined;
+    res.json({
+      success: true,
+      // Never the hashes. The surface has no use for them and a management page that carried
+      // every device's verifier would put the whole registry through the browser to draw a list.
+      devices: listDevices().map(viewOf),
+      // Which of them is the caller, so the surface can say "this is the device you are reading
+      // this on" before it offers to revoke it. Null for the host, which is not on the list.
+      self: asked?.id ?? null
+    });
+  } catch (error) {
+    logger.error('Could not list paired devices:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.patch('/api/devices/:id', (req: Request, res: Response) => {
+  if (offLoopback(res, 'A paired device is renamed')) return;
+  if (res.locals.device) {
+    res.status(403).json({
+      success: false,
+      error: 'Only this board\'s own machine may rename a device.'
+    });
+    return;
+  }
+  const name = typeof req.body?.name === 'string' ? req.body.name : '';
+  if (!name.trim()) {
+    res.status(400).json({ success: false, error: 'A device needs a name.' });
+    return;
+  }
+  try {
+    const renamed = renameDevice(req.params.id ?? '', name);
+    if (!renamed) {
+      res.status(404).json({ success: false, error: 'No device on this board has that id.' });
+      return;
+    }
+    logger.info(`Renamed a paired device to ${renamed.name}.`);
+    res.json({ success: true, device: viewOf(renamed), devices: listDevices().map(viewOf) });
+  } catch (error) {
+    logger.error('Could not rename a paired device:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.delete('/api/devices/:id', (req: Request, res: Response) => {
+  if (offLoopback(res, 'A paired device is revoked')) return;
+  const asked = res.locals.device as PairedDevice | undefined;
+  if (asked && asked.id !== req.params.id) {
+    res.status(403).json({
+      success: false,
+      error: 'A paired device may sign itself out, and only itself.'
+    });
+    return;
+  }
+  try {
+    const removed = revokeDevice(req.params.id ?? '');
+    if (!removed) {
+      res.status(404).json({ success: false, error: 'No device on this board has that id.' });
+      return;
+    }
+    // After the record is gone, so a socket that reconnects in the gap between the two is
+    // refused by the gate rather than let back in and closed again.
+    const closed = closeSocketsOfDevice(removed.id, 'This device was revoked.');
+    logger.info(`Revoked ${removed.name}; ${closed} open socket(s) closed.`);
+    res.json({
+      success: true,
+      device: viewOf(removed),
+      socketsClosed: closed,
+      // So a device that signed itself out knows the page it is looking at is now a stranger.
+      self: asked?.id === removed.id,
+      devices: listDevices().map(viewOf)
+    });
+  } catch (error) {
+    logger.error('Could not revoke a paired device:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
   }
 });
 
