@@ -93,8 +93,50 @@ export type QueuePassReason =
    * healthy queue over seven frozen cards, which is the same silence #263 exists to end.
    */
   | 'deadlocked'
+  /**
+   * Every card it could have started was refused by `POST /api/implement`, and the refusal is
+   * one the next pass will get again.
+   *
+   * A stall, and the plainest one in the register: nothing about the board changes between
+   * passes, so the same oldest card is refused for ever. The refusal this exists for is the
+   * `403` an account that cannot push to `origin` gets — a decision about a login and a remote,
+   * which no amount of waiting alters, and which a person is the only one who can act on. A
+   * `409` is deliberately *not* here: the slot is held by a run somebody asked for, so it is
+   * the cap, and `cap-full` is what a queue at capacity is called.
+   *
+   * The detail names how many cards were refused and the first refusal's status and sentence,
+   * because the sentence is the whole remedy — `pushRefusal` names the repository, the
+   * permission, forking, and the `git remote set-url` that follows it.
+   */
+  | 'refused'
   /** The board read failed — `gh` unresolvable, an expired login, a GitHub outage. */
   | 'unreadable';
+
+/**
+ * Every member of `QueuePassReason`, keyed by itself.
+ *
+ * The union has no runtime representation, so "every reason is classified" is a claim nothing
+ * could assert without it — a check can only iterate names it has, and a list written out in a
+ * check is the same list drifting in two places. Written as a record keyed by the union rather
+ * than as an array literal because that is what makes it **total**: a member added above with no
+ * entry here does not compile, so the taxonomy cannot quietly grow a reason nothing knows about.
+ */
+const EVERY_REASON: { readonly [K in QueuePassReason]: K } = {
+  'started': 'started',
+  'nothing-startable': 'nothing-startable',
+  'cap-full': 'cap-full',
+  'reclaimed': 'reclaimed',
+  'no-column': 'no-column',
+  'no-project': 'no-project',
+  'blocked': 'blocked',
+  'deadlocked': 'deadlocked',
+  'refused': 'refused',
+  'unreadable': 'unreadable',
+};
+
+/** The taxonomy as a value, frozen: it is a register to read, not a list to edit. */
+export const QUEUE_PASS_REASONS: readonly QueuePassReason[] =
+  Object.freeze(Object.values(EVERY_REASON));
 
 export interface QueuePass {
   reason: QueuePassReason;
@@ -115,7 +157,18 @@ export interface QueuePass {
 
 const passes = new Map<string, QueuePass>();
 
-/** Whether a reason means the queue wanted to start something and could not. */
+/**
+ * Whether a reason means the queue wanted to start something and could not.
+ *
+ * **A deny-list, not a switch**, and `reasonAnnounces` below is one too. Anything not named
+ * here stalls, and anything not named there is announced — so a reason added to the union is
+ * both by default, with no edit to either function. That is deliberate: the reasons that are
+ * quiet are the few that describe a queue working, and every other way a pass can end is
+ * something a reader has to be told about. `refused` is the case that made it worth writing
+ * down: it wants exactly the default, so it has no arm here, and an arm added for it would be
+ * a line that reads like a decision while changing nothing. `QUEUE_PASS_REASONS` is what lets
+ * a check assert the answers for every member rather than trusting that reading.
+ */
 export function reasonStalls(reason: QueuePassReason): boolean {
   return reason !== 'started' && reason !== 'nothing-startable' && reason !== 'blocked'
     && reason !== 'reclaimed';
