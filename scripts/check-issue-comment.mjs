@@ -57,20 +57,31 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * compares a button against a sentence about a button, which is how this case went red
  * with the row in exactly the order it means to assert. Reading the row itself is the
  * only substring where a label is a label.
+ *
+ * **The row is found by what is in it, not by being the first one.** This file draws more than
+ * one panel now — a founder action is a body of its own, and its Done sits in a row of the same
+ * class — so "the first `element-docs__actions`" stopped naming the row this case is about the
+ * moment a second body was added above it. What it is about is the row holding **Add
+ * observations**, and asking for that is a helper nothing can be moved out from under.
  */
-function actionRow(source) {
-  const start = source.indexOf('<div className="element-docs__actions">');
-  if (start < 0) return '';
-  // Depth over `<div`/`</div>`; JSX here never self-closes a div, and a nested one would
-  // otherwise end the row early.
-  const tag = /<div\b|<\/div>/g;
-  tag.lastIndex = start;
-  let depth = 0;
-  for (let match = tag.exec(source); match; match = tag.exec(source)) {
-    depth += match[0] === '</div>' ? -1 : 1;
-    if (depth === 0) return source.slice(start, match.index + match[0].length);
+function actionRow(source, holding = 'Add observations') {
+  for (let from = 0; ;) {
+    const start = source.indexOf('<div className="element-docs__actions">', from);
+    if (start < 0) return '';
+    // Depth over `<div`/`</div>`; JSX here never self-closes a div, and a nested one would
+    // otherwise end the row early.
+    const tag = /<div\b|<\/div>/g;
+    tag.lastIndex = start;
+    let depth = 0;
+    for (let match = tag.exec(source); match; match = tag.exec(source)) {
+      depth += match[0] === '</div>' ? -1 : 1;
+      if (depth !== 0) continue;
+      const row = source.slice(start, match.index + match[0].length);
+      if (row.includes(holding)) return row;
+      break;
+    }
+    from = start + 1;
   }
-  return '';
 }
 
 function git(cwd, args) {
