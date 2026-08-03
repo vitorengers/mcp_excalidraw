@@ -170,22 +170,66 @@ with `evil.example` written in it, which is the row this dialog exists for you t
 `Origin`, when a browser sends one, still has to name the same authority as `Host`, so a page at
 some other origin cannot put rows on your screen at all.
 
-**What a paired device can do today.** The token gate accepts its credential, after the board
-token and never instead of it, on `/api` and on the WebSocket upgrade — so an approved device is
-a caller that got past the gate, exactly as the operator's own page is. What it still cannot do
-is reach this board **from another machine**. Two things stand there, and #501 moved only the
-first of them: the caller guard now asks who is calling rather than where the server bound, but
-its answer to a remote socket is still *refused*, credential or no credential — reading the
-registry there is the next issue in this milestone. And the `Host` pin is the second half, because
-the authority a second machine reaches this board under is not one `allowedAuthorities` builds,
-though the device's record has carried it since #502. Until both move, a device paired from a
-second machine is a credential that works only from this one.
+**What a paired device reaches**, and what it does not. Three gates stood between the credential
+and the board and each of them was a whole refusal on its own, so until #522 moved all three a
+device could complete the entire gesture, hold a secret nothing rejected, and reach not one
+route:
 
-That is a state the device can now *say*, rather than one it shows as an empty board.
+- the **caller guard** refused every socket that did not come from this machine, whatever it
+  carried. It now admits a caller the token gate resolved to an approved device, and nothing
+  else — a remote request holding the board's own token is still refused, because the board
+  token is a file this account owns and not a device you approved.
+- the **token gate** takes the credential after the board token and never instead of it, on
+  `/api` and on the WebSocket upgrade.
+- the **`Host` pin** is built from `HOST`, `PORT` and `ALLOWED_HOSTS`, and takes each approved
+  device's own recorded authority as well — the name you read off the pairing card before you
+  approved it. One name per device and never a wildcard, rebuilt when the registry changes so
+  that approving a device and this board answering for its name are the same moment, and gone
+  again when you revoke it.
+
+What it then reaches is the whole `offLoopback` funnel, which is a lot, and is meant to be —
+what you approved is a machine driving this board:
+
+- the board's contents in both directions, the scene, the files, the images, the documents, the
+  library, the snapshots, the exports and the viewport, and the **WebSocket upgrade**, which is
+  where the scene and every live terminal's scrollback actually arrive;
+- the workspace registry, the project settings and `GET /api/fs/directories`, which lists folder
+  names on this machine;
+- what the agents have been doing — `GET /api/implement` carries every run's pull request, its
+  error text and the absolute path of the worktree it left here;
+- the **terminal** and the **implement queue**: a shell and a coding agent on this machine, which
+  is what the approval dialog says in as many words;
+- `POST /api/restart`.
+
+What it does **not** reach, on any board:
+
+- **the pairing desk.** `GET /api/pair/pending`, `POST /api/pair/approve` and
+  `POST /api/pair/refuse` are yours, from this machine. A device that could approve could let in
+  the next one, and the gesture would be a formality.
+- **the device list, the rename and the revoke.** `GET`, `PATCH` and `DELETE /api/devices` are
+  host-only for the same reason and by the same guard — see [devices.md](devices.md). They read
+  the same way from a paired device as from anywhere else off this machine: refused.
+- **the routes that shell out to `gh`** with your credentials — the issue block's run and read,
+  the issue read and its comment, the project mirror and card moves, `/api/github-status`. Those
+  still test the **bind**, so an interface-bound board refuses them to everybody, you included.
+
+The terminal and the implement agent test the bind too, and that test now has a second way to
+pass: the board is bound where only this machine can reach it, **or** the caller is an approved
+device. So on an interface-bound board those two are refused to a caller with no credential —
+including you, at your own keyboard, who have a loopback board a restart away — and answered to
+a device you approved. That is the asymmetry working rather than an oversight: the bind was
+standing in for the absence of anybody to identify, and a device is somebody.
+
+A refusal is a state the device can *say*, rather than one it shows as an empty board.
 `GET /api/pair/admission` answers with the gates' own verdict, and a device that holds a
 credential and is refused shows a screen saying so and offering to pair again — which is also
 what stops it asking on its own and writing a second record into your registry for a machine
 that is already in it.
+
+`scripts/check-device-accepted.mjs` holds all of this from the only place it can be asked, a
+socket that did not come from this machine: the device is paired through the real `/api/pair/*`
+routes, driven from this machine's own interface address, and revoked between two otherwise
+identical calls — 200 and then 401, with the socket it was holding closed in between.
 
 **Taking one away** is [devices.md](devices.md): the list, the name and the revoke. A revocation
 refuses the device on its **next request** — every verification reads the registry, so there is
@@ -207,8 +251,10 @@ becomes of a device afterwards.
 past to the next free port, not a pin ([running.md](running.md)).
 
 `HOST=0.0.0.0` puts the board on **every network interface**; a single address — one physical
-interface, or a Tailscale `100.x.y.z` — puts it on one network instead. Today that difference
-buys nothing, and the reason is the rest of this section. The token goes with either, and it is
+interface, or a Tailscale `100.x.y.z` — puts it on one network instead. What that buys is a
+device you have [approved](#pairing-a-second-machine) being able to reach this board at all, and
+nothing else: to a caller you have not approved it buys them nothing, which is the rest of this
+section. The token goes with either, and it is
 one secret with no sessions and no accounts behind it: anyone who has it is the operator as far
 as this server is concerned, and anyone who has not is refused. Underneath that, **who is
 calling** is its own guard and a second answer: a caller whose own address is not loopback — one
@@ -236,8 +282,11 @@ and the writes are behind the same guard:
   `/api/elements/sync`, `POST /api/files`, `DELETE /api/files/:id`, `POST /api/snapshots` and the
   four browser round-trips. The **WebSocket upgrade** is refused too, because it sends the whole
   scene on connect and an HTTP guard cannot see it. Since #501 most of that list is refused on
-  the caller rather than on the bind, so it is you it stops being refused to — the terminal, the
-  agents and the GitHub half still test the bind and are refused to everybody on such a board.
+  the caller rather than on the bind, so it is you it stops being refused to; since #522 it is
+  also a device you approved, which is the one caller off this machine any of it is answered to.
+  The GitHub routes still test the bind and are refused to everybody on such a board. The
+  terminal and the implement agent test it too, and an approved device is the second way that
+  test passes — see [above](#pairing-a-second-machine).
 <!-- routes: answered-off-loopback -->
 - **Still reached by a caller on the network** — `GET /`, the page itself, which cannot read a
   token out of an address bar it has not loaded yet; `GET /health`, which is how anything finds
@@ -254,11 +303,15 @@ and the writes are behind the same guard:
   been doing are here too — `GET /api/implement`, which carries every run's pull request, its
   error text and the **absolute path of the worktree** it left on this machine,
   `GET /api/issue-block/:id/run`, `GET /api/issue/recreate`, and the two routes that reset such a
-  record, `DELETE /api/implement` and `DELETE /api/issue-block/:id/implement`. They ask **who is
+  record, `DELETE /api/implement` and `DELETE /api/issue-block/:id/implement`, along with
+  `DELETE /api/issue-block/:id`, which had been answering a caller on the network for as long as
+  it existed and was invisible to the check that derives these lists (#522). They ask **who is
   calling** rather than where the server opened, so an interface-bound board serves them from
-  your own keyboard while refusing the network the same route. What is left on the bind is the
-  terminal, the two agent helpers and the GitHub routes, which such a board refuses to everybody
-  including you.
+  your own keyboard while refusing the network the same route — and since #522 serves them to a
+  device you approved, which is the whole of what that credential is for. What is left on the
+  bind is the two agent helpers and the GitHub routes, which such a board refuses to everybody
+  including you, and the terminal and the implement agent, which it refuses to everybody except
+  an approved device.
 
 So the sentence this used to end on — that a board bound that way is inert — was not true, and it
 is the kind of claim worth being exact about. What is inert **to a stranger** is the board:
@@ -293,9 +346,10 @@ including the browser on the host machine, whose request comes from loopback and
 the same. `HOST=0.0.0.0` and an address on a private overlay were punished identically, so a
 non-loopback bind answered nothing worth having in any configuration, however narrow. Now the
 board on the interface works for you and refuses the network. What lets a second machine in is a
-device credential: #502 is the registry it lives in, #503 the pairing that puts one there. Until
-a device is paired, remote and refused are the same answer, so nothing a stranger could not reach
-before is reachable now.
+device credential: #502 is the registry it lives in, #503 the pairing that puts one there, and
+#522 is where this guard reads it. Until a device is paired, remote and refused are still the
+same answer, so nothing a stranger could not reach before is reachable now — what changed is
+that there is now something to be other than a stranger.
 
 **`X-Forwarded-For` is not read, and it must not be.** A reverse proxy reaches this server *on
 loopback*, which is why a proxy configuration worked before that change and is untouched by it,
