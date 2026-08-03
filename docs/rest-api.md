@@ -200,6 +200,14 @@ asserts all of that, including the 403 off loopback.
 field, or the `x-workspace-id` header. Omitting it is not an error; it means the `default`
 store.
 
+The three spellings are interchangeable, and on one route that used to be untrue.
+`GET /api/elements/search` reads whatever query parameter it does not recognise as an
+exact-match filter over element fields, so `?workspace=X` chose the right board and then asked
+it for elements carrying a `workspace` property — which none has, so a full board answered
+empty while `x-workspace-id: X` answered all of it (#457). That route now excludes the names the
+transport has already spent, `workspace` and `token`, from its filter set; neither is a property
+an element can have, so nothing that could ever have matched is lost.
+
 **`GET /api/files` answers with one board's files.** The store behind it is not per-board — a
 file is content-addressed by id, and two boards may legitimately reference the same one — so the
 scoping is by reference: the ids the workspace's own image elements and issue blocks name. It
