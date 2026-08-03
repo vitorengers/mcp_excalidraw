@@ -709,6 +709,25 @@ function clientIdFrom(req: Request): string | undefined {
  * Omitting `workspaceId` reaches every client — right for server-wide notices, wrong
  * for element events, which would make one board redraw with another board's shapes.
  *
+ * **Which calls legitimately omit it, enumerated here so the next reader does not have to
+ * re-derive the distinction from the call sites.** Today the answer is none: there is no
+ * server-wide notice on this socket, and every element and file event below names its board.
+ * `elements_synced`, `files_added` and `file_deleted` did not until #526 — `files_added`
+ * carries dataURLs and the client applies them unconditionally, so an image pasted on one
+ * project was pushed into every other project open in the same browser. A frame carrying no
+ * board is also a frame nothing can route: the day a socket crosses a network, a forwarder
+ * holding one has to choose between dropping it and fanning it wider than it goes here, and
+ * neither of those is a behaviour anybody decided.
+ *
+ * One call still omits it and it is **not** one of the legitimate kind: `mermaid_convert`,
+ * which asks whichever board is in front to draw a diagram. Scoping it would change what
+ * `create_from_mermaid` does when the named board is not the one on screen — from drawing on
+ * the wrong board to drawing nowhere — and that is a decision about a tool's contract rather
+ * than about who is told, so #526 deliberately left it where it was.
+ *
+ * `initial_elements` on connect does not come through here at all: it is sent to the one
+ * socket that just declared its board, which is the same scoping arrived at from the other end.
+ *
  * `exceptClientId` leaves out the sockets of the client that asked for this, and nobody
  * else. An id no socket answers to excludes nobody, which is what makes it safe to send
  * from anything: a client that never names itself is told everything, as every client was
@@ -1780,7 +1799,7 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       count: successCount,
       timestamp: new Date().toISOString(),
       source: 'manual_sync'
-    });
+    }, syncWorkspaceId);
 
     // 4. Return sync results
     res.json({
@@ -6028,7 +6047,7 @@ app.post('/api/files', (req: Request, res: Response) => {
     }
   }
   // Broadcast files to connected clients
-  broadcast({ type: 'files_added', files: fileList });
+  broadcast({ type: 'files_added', files: fileList }, workspaceIdFrom(req));
   res.json({ success: true, count: fileList.length });
 });
 
@@ -6038,7 +6057,7 @@ app.delete('/api/files/:id', (req: Request, res: Response) => {
 
   const id = req.params.id as string;
   if (files.delete(id)) {
-    broadcast({ type: 'file_deleted', fileId: id });
+    broadcast({ type: 'file_deleted', fileId: id }, workspaceIdFrom(req));
     res.json({ success: true });
   } else {
     res.status(404).json({ success: false, error: `File with ID ${id} not found` });
