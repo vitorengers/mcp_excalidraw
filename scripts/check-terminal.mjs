@@ -357,9 +357,40 @@ try {
     check('a board with no block at all leaves the documentation where it was authored',
           documentationClearance(null, bounds.minX) === 0,
           String(documentationClearance(null, bounds.minX)));
-    check('and nothing here ever pulls the content leftward onto a block',
-          documentationClearance({ ...oneBlock, maxX: oneBlock.maxX - 5000 }, bounds.minX) === 0,
-          String(documentationClearance({ ...oneBlock, maxX: oneBlock.maxX - 5000 }, bounds.minX)));
+
+    // ── The gap is a distance, not a floor (#494) ─────────────
+    //
+    // This is where the clamp used to be, and the assertion that stood here said the
+    // opposite: a region standing clear of the documentation asked for nothing, so a block
+    // placed against content that has since moved — or one the reader dragged left — left a
+    // gap of whatever the arithmetic gave, and opening blocks changed nothing until the
+    // region had grown back across `natural`. The canvas reads `mirror | terminals |
+    // documentation`, and the first of those gaps is `MIRROR_GAP` by construction; the
+    // second was measured several times wider on a real board.
+    const wellLeft = { ...oneBlock, maxX: oneBlock.maxX - 5000 };
+    const pull = documentationClearance(wellLeft, bounds.minX);
+    check('a region standing well left of the content asks the documentation to come back',
+          pull < 0, String(pull));
+    check('and by exactly enough to leave one gap, no more',
+          bounds.minX + pull - wellLeft.maxX === TERMINAL_GAP,
+          `${bounds.minX + pull - wellLeft.maxX} rather than ${TERMINAL_GAP}`);
+
+    // The property the whole thing is for, said once over the range rather than case by
+    // case: wherever the region's right edge is, the answer puts the documentation one gap
+    // right of it. `MIRROR_GAP` and `TERMINAL_GAP` are the same number, which is what makes
+    // the two gaps on the canvas one distance.
+    const everywhere = [-9000, -1200, -1, 0, 1, 750, 4000]
+      .map((offset) => ({ ...oneBlock, maxX: oneBlock.maxX + offset }))
+      .map((region) => bounds.minX + documentationClearance(region, bounds.minX) - region.maxX);
+    check('and that holds wherever the region stands',
+          everywhere.every((measured) => measured === TERMINAL_GAP), JSON.stringify(everywhere));
+    // Read from the mirror's own module rather than restated, so the two cannot drift apart
+    // silently: "the same gap" is the claim, and a constant copied here would only prove
+    // that this file agrees with itself.
+    const layout = await importDist(join('core', 'project-board-layout.js'), 'the mirror layout module');
+    check('which is the same distance the mirror keeps',
+          Boolean(layout) && TERMINAL_GAP === layout.MIRROR_GAP,
+          `${TERMINAL_GAP} and ${layout ? layout.MIRROR_GAP : '(module missing)'}`);
 
     const element = terminalBlockElement(origin, TERMINAL_SIZE);
     check('the block is marked derived', element.customData?.kind === TERMINAL_KIND,

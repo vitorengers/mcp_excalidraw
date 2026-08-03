@@ -511,8 +511,22 @@ export function terminalOrigin(
  *     "enough room" is recomputed against the region's current extent every time rather than
  *     against whatever block happened to be added.
  *
- * Never negative: a region that is already clear of the documentation asks for nothing, and
- * this is not a rule that pulls a board's content leftward onto a terminal.
+ * **Signed, since #494**, and that reverses what stood here. It used to be clamped at zero,
+ * so a region already clear of the documentation asked for nothing — the reasoning being that
+ * this is not a rule that pulls a board's content leftward onto a terminal. What that
+ * produced is a `TERMINAL_GAP` which is a floor and not a distance: a block placed against a
+ * board whose content has since moved, or one the reader dragged left, leaves a gap of
+ * whatever the arithmetic happens to give, and no number of blocks opened changes it until
+ * the region has grown far enough right to cross `natural` again. The canvas reads
+ * `mirror | terminals | documentation` and the first of those two gaps is exactly
+ * `MIRROR_GAP` by construction; the observation is that the second one should be the same
+ * distance and was several times wider.
+ *
+ * So it answers where the documentation has to stand for the gap to *be* `TERMINAL_GAP`,
+ * which on a region standing well left of the content is a negative displacement. The caller
+ * decides whether it may act on one — `commitTerminalLayout` still refuses to move anything
+ * on a pass that is not the tool's own decision about the geometry, which is what keeps the
+ * board from chasing a block the reader is dragging.
  *
  * The x axis only, per the observation. Each region is placed level with the top of what it
  * measures, so there is no case here where two of them share a column and miss each other
@@ -523,7 +537,7 @@ export function documentationClearance(
   natural: number
 ): number {
   if (!region || !Number.isFinite(region.maxX) || !Number.isFinite(natural)) return 0;
-  return Math.max(0, region.maxX + TERMINAL_GAP - natural);
+  return region.maxX + TERMINAL_GAP - natural;
 }
 
 /**
