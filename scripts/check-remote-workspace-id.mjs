@@ -6,7 +6,7 @@
  * `normalizeWorkspaceId` in `core/element-store.ts` does not reject: anything failing
  * `[a-z0-9]` and friends is **rewritten to the literal id `default`**, and the WebSocket
  * upgrade path applies it to `?workspace=` with no registry lookup at all. So a namespacing
- * scheme spelled `pc:board-tool` does not error — it lands that socket on the host's shared
+ * scheme spelled `pc:field-notes` does not error — it lands that socket on the host's shared
  * `default` board and starts streaming it, and nothing logs. The page just shows the wrong
  * scene. That is the failure this module exists to make impossible, and the assertion that
  * catches it is a **composition**, not a round trip: minting and splitting can agree with each
@@ -132,9 +132,9 @@ const WORKSPACE_IDS = [
   'a',
   '0',
   'z9',
-  'board-tool',
-  'board.tool',
-  'board_tool',
+  'field-notes',
+  'field.notes',
+  'field_notes',
   'a.b-c_d',
   'a---b',
   'a...b',
@@ -221,9 +221,9 @@ check('no two pairs mint the same id', collisions.length === 0, collisions.slice
 
 console.log('\n2. two peers, one folder name — and the join a separator cannot invert');
 
-const macBoard = mintRemoteWorkspaceId('mac', 'board-tool');
-const pcBoard = mintRemoteWorkspaceId('pc', 'board-tool');
-check('two peers each holding a folder called board-tool both mint',
+const macBoard = mintRemoteWorkspaceId('mac', 'field-notes');
+const pcBoard = mintRemoteWorkspaceId('pc', 'field-notes');
+check('two peers each holding a folder called field-notes both mint',
       macBoard.ok && pcBoard.ok, JSON.stringify([macBoard, pcBoard]));
 check('and the two local ids are different', macBoard.ok && pcBoard.ok && macBoard.id !== pcBoard.id,
       macBoard.ok && pcBoard.ok ? macBoard.id : '');
@@ -251,16 +251,16 @@ console.log('\n3. an id the class does not admit is refused with a sentence');
 
 /** One case for each way an id fails the class the peer applies. */
 const NOT_ADMITTED = [
-  ['uppercase', 'Board'],
-  ['a leading underscore', '_board'],
-  ['a leading dot', '.board'],
-  ['a leading hyphen', '-board'],
-  ['a leading space', ' board'],
+  ['uppercase', 'Notes'],
+  ['a leading underscore', '_notes'],
+  ['a leading dot', '.notes'],
+  ['a leading hyphen', '-notes'],
+  ['a leading space', ' notes'],
   ['the empty string', ''],
   ['whitespace alone', '   '],
-  ['a colon — the obvious first spelling', 'pc:board-tool'],
-  ['a slash', 'pc/board-tool'],
-  ['an inner space', 'board tool'],
+  ['a colon — the obvious first spelling', 'pc:field-notes'],
+  ['a slash', 'pc/field-notes'],
+  ['an inner space', 'field notes'],
   ['a character outside the class', 'boarð'],
   ['a name past 64 characters', 'a'.repeat(65)],
 ];
@@ -269,7 +269,7 @@ for (const [what, spelling] of NOT_ADMITTED) {
   // The premise: this is genuinely something the peer's normaliser would rewrite.
   const rewritten = normalizeWorkspaceId(spelling) !== spelling;
   const asWorkspace = mintRemoteWorkspaceId('mac', spelling);
-  const asPeer = mintRemoteWorkspaceId(spelling, 'board-tool');
+  const asPeer = mintRemoteWorkspaceId(spelling, 'field-notes');
   const refusedBoth = asWorkspace?.ok === false && asPeer?.ok === false;
   const saidSomething = typeof asWorkspace?.refusal === 'string' && asWorkspace.refusal.length > 20
     && typeof asPeer?.refusal === 'string' && asPeer.refusal.length > 20;
@@ -334,7 +334,7 @@ console.log('\n5. a local id is not a namespaced one, and a near miss is not eit
 
 /** Ids this module never minted. Splitting one has to answer "not mine", not a guess. */
 const NOT_OURS = [
-  ['an ordinary local project', 'board-tool'],
+  ['an ordinary local project', 'field-notes'],
   ['the shared board', COLLAPSE_TARGET],
   ['the empty string', ''],
   ['the prefix alone', 'peer.'],
