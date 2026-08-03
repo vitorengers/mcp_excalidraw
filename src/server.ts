@@ -2354,7 +2354,9 @@ app.delete('/api/peers/:id', (req: Request, res: Response) => {
   try {
     const held = listPeers().find((peer) => peer.id === id) ?? null;
     if (held && forgetPeer(id)) {
-      peerStrip.forget(id);
+      peerStrip.forget({
+        id: held.id, name: held.name, baseUrl: held.baseUrl, secret: held.secret
+      });
       return res.json({
         success: true,
         forgotten: { id: held.id, name: held.name, baseUrl: held.baseUrl },

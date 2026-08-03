@@ -180,19 +180,21 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-All but the last two have landed; those are named here so the reader of a pull request can see
+All but the last of them have landed; it is named here so the reader of a pull request can see
 where each decision lands.
 
 ```
 src/core/peer-liveness.ts          the four answers above, and which refusal you are looking at
-src/core/peer-pairing-ask.ts       the asking end of the handshake, as a process rather than a page
-src/core/peer-strip.ts             what each peer last said about its projects, kept between calls
 src/core/remote-workspace-id.ts    what this board calls a peer's project, and the inverse
 src/core/remote-workspace-view.ts  which fields of a project cross, and what replaces the path
 src/core/peer-registry.ts          what this board keeps about a board that approved it
+src/core/peer-workspaces.ts        one peer's projects as tabs, and what is left when it sleeps
+src/core/peer-pairing-ask.ts       the asking end of the handshake, as a process rather than a page
+src/core/peer-strip.ts             what every peer last said, kept between calls and drawn as tabs
 src/core/reply-ledger.ts           which machine a reply belongs to, when it names only a request
 src/core/peer-client.ts            one board's HTTP call to another, and what each failure means
 src/core/peer-request-rewrite.ts   what a request says by the time it belongs to the peer
+src/core/peer-files.ts             which pictures a remote board's scene refers to, and where they come from
 src/core/peer-proxy.ts             the seam that sends a request to the machine that owns the board
 ```
 
@@ -213,8 +215,30 @@ tab's tooltip, since a peer's project has none here: the project's own name and 
 board calls the machine by, which is enough to tell two projects of the same name apart and is
 this board's own word rather than anything the owner sent.
 
+The tabs module is the three above composed into one answer, and it is where *a machine that
+stops answering is not a broken project* stops being a paragraph. It asks one peer for its
+projects, names each one through the id module, reduces each record through the view module — on
+the reading end too, because this board does not get to assume the peer runs the same version of
+itself — and attaches one liveness state. A peer that is not `online` contributes **zero projects
+and one state**: there is no `error` field on its answer for a fact about a network to land in,
+and the whole answer is held to a budget composed from the liveness ones, so a laptop in a bag
+does not hold the strip. It touches no per-id store, which is a decision rather than an accident:
+an unknown id yields an *empty* store by design, so a stray local read would not fail — it would
+manufacture a plausible blank board for a project another machine owns. How a peer is asked is a
+defaulted argument nothing passes — defaulted to the client below, so that the header discipline
+is decided in one file rather than in each of the modules that eventually calls a peer.
+
+The asking module and the strip are the two the operator reaches, and they are the ones with
+routes on them. The asking module runs the device half of the handshake from here: it answers the
+**code** first and the peer only once the other machine has approved, because a route that blocked
+until somebody walked to another keyboard would be a request held open for minutes. The strip is
+what keeps each peer's last answer between calls, on a timer of its own — so the page reads a
+snapshot rather than waiting on a machine, and a page polling the strip is never what wakes a
+sleeping peer up.
+
 The registry owns `peers.json` beside the state directory's other files, and `POST /api/peers` is
-what puts a row in it — after the other machine has approved this one and not before. What it settles is the
+what puts a row in it — after the other machine has approved this one, and not before. What it
+settles is the
 asymmetry above — the record here keeps the secret rather than a hash, so the file is owner-only
 and every update swaps it whole rather than rewriting it in place, and a reader looking at it
 while a peer is renamed or forgotten never finds it missing or half-written.
@@ -232,9 +256,10 @@ thing the reply carries and everything else is a key two live requests can share
 later than the request it describes, on that request's own budget, so a peer that sleeps mid-render
 leaves nothing behind. It has no caller either.
 
-The client is the thing that performs the call, and the strip is its first caller: one round per
-peer, on this board's own timer. Two decisions give it its shape. **The header discipline is the whole of its security**: the outgoing
-request is built by naming the headers that cross, so this board's own token stops here in both
+The client is the thing that performs the call. It has no route of its own, and the tabs module
+above is what reaches it — once per peer per round, driven by the strip's timer. Two decisions
+give it its shape. **The header discipline is the whole of its security**: the outgoing request is
+built by naming the headers that cross, so this board's own token stops here in both
 of the spellings a caller can offer it in, exactly one credential reaches the peer, and
 `x-client-id` arrives byte-identical — a substituted one would get the reader its own writes
 echoed back. **And a failure comes back as a value rather than as an exception**, carrying one of
@@ -257,6 +282,27 @@ asked of is refused rather than rewritten**, each with the reason quoted: a rest
 process and every agent it hosts whichever board asked, the directory picker can only read the
 disk its own process reaches, and the reply half of a render carries an id and no board at all. A
 rewriter that will rewrite anything handed to it is one bug away from forwarding each of those.
+
+The files module is the one place that answers *which pictures cross*, and it has no caller
+either. The store here is deliberately not keyed by project — a file is content-addressed, and
+both the serve and the save scope it by walking the elements that name it — so there is no
+per-board bucket to hand over, and the set that has to cross can only be computed from the
+elements. It is computed with the same walk rather than a second one, because two walks that
+disagree present as missing images on one machine only. Every picture it names is then fetched
+**through the peer, by id**, and never looked for here first: a content-addressed store makes a
+local hit look correct, and a local hit for another machine's id means either that two different
+pictures share an id or that this board has quietly been handed something. Asking by id rather
+than for that board's file listing is the same decision from the other end — before #343 a board
+answered `GET /api/files` with every dataURL its process held, so a forwarder trusting the peer's
+listing would hand one board another board's pictures against that build and nothing anywhere
+would say so. Nothing is cached: a peer's bytes are not written into a store keyed by workspace,
+which would be inventing that per-board bucket on the machine that owns none of it. And the three
+frames a forwarded link carries about pictures and shapes — `files_added`, `file_deleted` and
+`elements_synced`, each naming its own board since #526 — are stated there with what a forwarder
+does with them, so the HTTP one and the socket one implement one decision rather than two: the
+board on the frame is relabelled to this board's name for the project, a frame that cannot be
+relabelled is dropped rather than broadcast without one, and none of the three writes anything
+into a store on this machine.
 
 The milestone that files them is *One tab strip, two machines*, and the design decisions above
 are each a done-when bullet on one of its issues rather than a preference stated here.

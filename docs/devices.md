@@ -29,6 +29,12 @@ Each row carries the four things you cannot judge a device without:
 | From | The address the approval was made from, verbatim |
 | Host | The authority that device was approved *for*. Recorded per device rather than globally, so approving a laptop that reaches this board under one name does not bless that name for everybody. A row naming something you do not recognise is worth reading twice |
 
+The whole panel works without a mouse. Tab reaches **Devices** on the bar and Enter opens it;
+the caret then moves into the dialog and stays there until you leave, so a press aimed at a
+control you can see cannot land on Clear Canvas behind it; a confirmation takes the caret on
+**Keep it**, which is the answer that costs nothing; and Escape closes the dialog and puts the
+caret back on the control you opened it from.
+
 Nothing on this page shows a device's secret, and no route hands one out. The registry stores a
 SHA-256 of it and the server only ever verifies: the device is what holds the credential, and
 after the approval there is no copy anywhere else. A `devices.json` somebody reads is therefore
