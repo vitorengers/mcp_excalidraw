@@ -377,7 +377,14 @@ try {
   const said = String(pass.detail ?? '');
   check('the detail says how many cards were refused', /\b2 card/.test(said), said || '(no detail)');
   check('and the status the first refusal came back with', said.includes('403'), said);
-  check('and the sentence that refusal carried', /\bfork/i.test(said) && said.includes(READ_ONLY), said);
+  // The founder action's own title since #541, not `gh`'s wording. The refusal names a
+  // permission, a repository and a `git remote set-url` — all true, and none of it the thing to
+  // say to somebody looking at a queue that has stopped. The card is where the steps live, and
+  // the detail's job is to point at it. The repository is still named, because the card's title
+  // carries it: `founderActionFor` puts this run's repository where the corpus says "the
+  // project repository".
+  check('and the founder action that refusal filed',
+        said.includes(READ_ONLY) && /may not push/i.test(said), said);
   check('nothing was started for either card', !started(601) && !started(602),
         `601: ${started(601)}, 602: ${started(602)}`);
 
