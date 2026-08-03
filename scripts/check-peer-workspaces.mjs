@@ -150,15 +150,23 @@ const { splitRemoteWorkspaceId } = await import(
 const { PEER_CONNECT_BUDGET_MS, PEER_REQUEST_BUDGET_MS } = await import(
   pathToFileURL(join(repoRoot, 'dist', 'core', 'peer-liveness.js')).href
 );
+const { PEER_CALL_CONNECT_BUDGET_MS, PEER_CALL_BUDGET_MS } = await import(
+  pathToFileURL(join(repoRoot, 'dist', 'core', 'peer-client.js')).href
+);
 
 check('core/peer-workspaces exports listPeerWorkspaces', typeof listPeerWorkspaces === 'function',
       `got ${typeof listPeerWorkspaces}`);
 check('the budget an unreachable peer is held to is a named constant',
       typeof PEER_WORKSPACES_BUDGET_MS === 'number' && PEER_WORKSPACES_BUDGET_MS > 0,
       `got ${JSON.stringify(PEER_WORKSPACES_BUDGET_MS)}`);
-check('and it is at least what the liveness probe alone may take',
-      PEER_WORKSPACES_BUDGET_MS >= PEER_CONNECT_BUDGET_MS + 2 * PEER_REQUEST_BUDGET_MS,
-      `${PEER_WORKSPACES_BUDGET_MS} against ${PEER_CONNECT_BUDGET_MS} + 2 × ${PEER_REQUEST_BUDGET_MS}`);
+// Composed rather than picked: a ceiling smaller than what the two steps may spend would cut off
+// a peer that is answering slowly and report it as one that is not there — the confusion the
+// whole liveness vocabulary exists to prevent, arriving through the back door.
+check('and it is at least what the two steps it is made of may take',
+      PEER_WORKSPACES_BUDGET_MS >= PEER_CONNECT_BUDGET_MS + 2 * PEER_REQUEST_BUDGET_MS
+        + PEER_CALL_CONNECT_BUDGET_MS + PEER_CALL_BUDGET_MS,
+      `${PEER_WORKSPACES_BUDGET_MS} against a liveness probe of ${PEER_CONNECT_BUDGET_MS} + 2 × `
+      + `${PEER_REQUEST_BUDGET_MS} and a call of ${PEER_CALL_CONNECT_BUDGET_MS} + ${PEER_CALL_BUDGET_MS}`);
 
 const source = readFileSync(sourcePath, 'utf8');
 
@@ -353,7 +361,9 @@ for (const state of ['unreachable', 'refused']) {
   // error on a project: it is a fact about the machine, so it lands on the state.
   const answer = await listPeerWorkspaces(DESK, {
     liveness: deskSaying('online'),
-    transport: transportSaying({ ok: false, refused: true, reason: 'It refused this board\'s credential (403).' })
+    transport: transportSaying({
+      ok: false, liveness: 'refused', reason: 'It refused this board\'s credential (403).'
+    })
   });
   check('a peer that answers and then will not serve its projects contributes none',
         answer.workspaces.length === 0, JSON.stringify(answer.workspaces));

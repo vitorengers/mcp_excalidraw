@@ -197,8 +197,14 @@ function authorityOf(url: string): Authority | null {
   }
 }
 
-/** The peer's own words, trimmed to what a tooltip can hold and never invented. */
-function saidBy(body: string): string {
+/**
+ * The peer's own words, trimmed to what a tooltip can hold and never invented.
+ *
+ * Exported for `core/peer-client.ts`, which reads a refusal off a real call rather than off a
+ * probe and has the same sentence to quote — and, more to the point, has to reach
+ * {@link refusedTheName} with the same string this passes it.
+ */
+export function saidBy(body: string): string {
   let said = body.trim();
   try {
     const parsed = JSON.parse(said) as { error?: unknown };
@@ -208,7 +214,16 @@ function saidBy(body: string): string {
   return said.length > QUOTE_BUDGET ? `${said.slice(0, QUOTE_BUDGET)}…` : said;
 }
 
-function refusedTheName(said: string): boolean {
+/**
+ * Whether a refusal is about the name this board was reached by rather than about what it
+ * carries — the one classification in this milestone worth keeping to a single owner.
+ *
+ * Exported rather than copied into `core/peer-client.ts`: {@link ORIGIN_GATE_MARKERS} is a
+ * coupling to another module's prose, and a second list of those markers is the one that stops
+ * being updated. A probe and a real call are two callers of one rule, and the check that holds
+ * the rule honest — a board standing up and refusing for real — then holds it for both.
+ */
+export function refusedTheName(said: string): boolean {
   const lowered = said.toLowerCase();
   return ORIGIN_GATE_MARKERS.some(marker => lowered.includes(marker));
 }

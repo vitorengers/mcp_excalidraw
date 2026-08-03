@@ -173,8 +173,8 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-The first five of them have landed; the rest are named here so the reader of a pull request can
-see where each decision lands.
+All but the last of them have landed; it is named here so the reader of a pull request can see
+where each decision lands.
 
 ```
 src/core/peer-liveness.ts          the four answers above, and which refusal you are looking at
@@ -213,8 +213,9 @@ and the whole answer is held to a budget composed from the liveness ones, so a l
 does not hold the strip. It touches no per-id store, which is a decision rather than an accident:
 an unknown id yields an *empty* store by design, so a stray local read would not fail — it would
 manufacture a plausible blank board for a project another machine owns. It has no caller yet
-either, and its transport is a defaulted argument nothing passes, which is the seam the client
-module in the list above replaces when it lands.
+either, and how a peer is asked is a defaulted argument nothing passes — defaulted to the client
+below, so that the header discipline is decided in one file rather than in each of the modules
+that eventually calls a peer.
 
 The registry is a module with no caller: it owns `peers.json` beside the state directory's other
 files, and nothing yet adds a row to it or presents what a row holds. What it settles is the
@@ -222,8 +223,34 @@ asymmetry above — the record here keeps the secret rather than a hash, so the 
 and every update swaps it whole rather than rewriting it in place, and a reader looking at it
 while a peer is renamed or forgotten never finds it missing or half-written.
 
+The client is the thing that performs the call. It has no route of its own, and the tabs module
+above is the first thing to reach it. Two decisions give it its shape. **The header discipline is the whole of its security**: the outgoing
+request is built by naming the headers that cross, so this board's own token stops here in both
+of the spellings a caller can offer it in, exactly one credential reaches the peer, and
+`x-client-id` arrives byte-identical — a substituted one would get the reader its own writes
+echoed back. **And a failure comes back as a value rather than as an exception**, carrying one of
+the four states above and a sentence for the operator: a connect timeout, a read timeout, a 401
+and the two 403s are five different repairs, and the budget a connection is given to open is
+stated separately from the budget the answer is given to arrive, because a machine that is asleep
+and a board that is answering slowly are not the same thing. A redirect is not followed and is
+reported as its own outcome, since a peer answering 3xx is not the board this device paired with.
+
 The milestone that files them is *One tab strip, two machines*, and the design decisions above
 are each a done-when bullet on one of its issues rather than a preference stated here.
+
+The far end of the chain has landed too: the tab strip has the slot to draw a state in.
+`WorkspaceSummary.status` in `frontend/src/components/WorkspaceTabs.tsx` is what a tab reads,
+and nothing supplies it yet — a project without it draws the row it always drew. See
+[canvas-frontend.md](canvas-frontend.md) for how a liveness state and a config error sit on one
+tab without displacing each other.
+
+**The union is written twice, and that is a constraint rather than a choice.**
+`WorkspaceStatusState` there and `PeerLivenessState` in `src/core/peer-liveness.ts` are the same
+four words. The frontend cannot import the second: that module opens sockets, so it imports
+`net`, and the frontend's own `tsconfig` compiles everything it can reach. Two copies of four
+words is two chances for one of them to learn a fifth, so
+`scripts/check-workspace-tab-status-browser.mjs` reads both files and fails if they stop
+agreeing.
 
 ## Related
 

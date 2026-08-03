@@ -47,12 +47,17 @@
  * about a peer. It reads no file and no `process.env`, and the budget below is a constant here
  * rather than a setting, because a setting drags in the generated tables in `docs/running.md`,
  * the generator that writes them, and two rules that red any prose stating a count of the
- * variable set. The default transport is the smallest honest one — a `GET` with the peer's
- * credential on it — and it is the seam `core/peer-client.ts` replaces when it lands, without a
- * caller having to learn anything.
+ * variable set. The default is `core/peer-client.ts`'s `callPeer`, which is where the header
+ * discipline lives — this board's own token crosses in neither spelling, the device credential
+ * replaces it in exactly one place, and a redirect is not followed — so none of that is decided
+ * again here.
  */
 
-import { TOKEN_HEADER } from './board-token.js';
+import {
+  PEER_CALL_BUDGET_MS,
+  PEER_CALL_CONNECT_BUDGET_MS,
+  callPeer
+} from './peer-client.js';
 import {
   PEER_CONNECT_BUDGET_MS,
   PEER_REQUEST_BUDGET_MS,
@@ -144,8 +149,16 @@ export type PeerWorkspacesReply =
   | { ok: true; workspaces: unknown }
   | {
       ok: false;
-      /** It answered and would not serve this board, as against nothing usable answering. */
-      refused: boolean;
+      /**
+       * Which of the four answers this failure is, in `core/peer-liveness.ts`'s vocabulary.
+       *
+       * A transport reports the state rather than a boolean because *it answered and would not
+       * have this board* and *nothing usable answered* are two different repairs, and
+       * `core/peer-client.ts` has already made that classification — including which of the two
+       * 403s a 403 is. Anything but `refused` is read as `unreachable`: a failure is never
+       * `online`, and `checking` is a thing a desk says rather than a thing a call comes back as.
+       */
+      liveness: PeerLivenessState;
       reason: string;
     };
 
@@ -166,14 +179,19 @@ export interface PeerWorkspacesDeps {
 /**
  * The longest a peer may hold this answer.
  *
- * Composed from the budgets it is made of rather than picked: `createPeerLiveness` spends at most
- * one connect and two requests deciding whether a board is there and whether this one is allowed
- * on it, and the project list is a third request. A machine that is asleep does not refuse a
+ * Composed from the budgets it is made of rather than picked, so that it cannot drift from what
+ * the two steps actually spend: `createPeerLiveness` allows one connect and two requests deciding
+ * whether a board is there and whether this one is allowed on it, and `callPeer` allows one
+ * connect and one read for the list itself. A machine that is asleep does not refuse a
  * connection, it hangs — so without a ceiling here a tab strip would wait on a laptop in a bag.
- * It is enforced rather than argued: the answer past this point is a liveness state and zero
- * projects.
+ *
+ * It is enforced rather than argued: past this point the answer is a liveness state and zero
+ * projects. The number is the worst case of a peer that keeps accepting and keeps not answering,
+ * not what an unreachable one costs — that one is refused or times out at the *connect* budget,
+ * because the project list is never asked for at all until liveness says `online`.
  */
-export const PEER_WORKSPACES_BUDGET_MS = PEER_CONNECT_BUDGET_MS + 3 * PEER_REQUEST_BUDGET_MS;
+export const PEER_WORKSPACES_BUDGET_MS = PEER_CONNECT_BUDGET_MS + 2 * PEER_REQUEST_BUDGET_MS
+  + PEER_CALL_CONNECT_BUDGET_MS + PEER_CALL_BUDGET_MS;
 
 /**
  * The read a peer is asked for.
@@ -199,47 +217,44 @@ function said(body: string): string {
 }
 
 /**
- * The default transport: one `GET`, with the credential this board holds on that peer.
+ * The default transport: `core/peer-client.ts`, asked for the one path.
  *
- * `refused` is set for the two statuses that mean *it answered and would not have this board* —
- * which is a different thing for an operator to do something about from a machine that said
- * nothing — and the peer's own sentence is carried through rather than replaced, because it is
- * the half that names the setting or the credential to repair.
+ * Everything about *how* a board is called belongs to that module and is deliberately not decided
+ * again here — which headers cross, that this board's own token crosses in neither spelling, that
+ * a redirect is not followed, and which of the two 403s a 403 is. What is left for this function
+ * is the one thing that is about *workspaces*: a 2xx whose body is a list of projects is the only
+ * answer that is one, and every other status the peer's own routes produced is a peer that
+ * answered and did not serve this. That reads as `refused` rather than as a machine that is
+ * asleep, because something on the other end plainly is not.
  */
-async function askOverHttp(target: PeerTarget): Promise<PeerWorkspacesReply> {
-  const where = `${target.url}${PEER_WORKSPACES_PATH}`;
-  try {
-    const response = await fetch(where, {
-      headers: target.token ? { [TOKEN_HEADER]: target.token } : {},
-      signal: AbortSignal.timeout(PEER_REQUEST_BUDGET_MS)
-    });
-    const body = await response.text();
-    if (response.status < 200 || response.status > 299) {
-      return {
-        ok: false,
-        refused: response.status === 401 || response.status === 403,
-        reason: `${where} answered ${response.status}, so this board cannot read that machine's `
-          + `projects. It said: ${said(body)}`
-      };
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(body);
-    } catch {
-      return {
-        ok: false,
-        refused: false,
-        reason: `${where} answered ${response.status} and what came back was not JSON.`
-      };
-    }
-    return { ok: true, workspaces: (parsed as { workspaces?: unknown } | null)?.workspaces };
-  } catch (error) {
+async function askThePeer(target: PeerTarget): Promise<PeerWorkspacesReply> {
+  const result = await callPeer(
+    { baseUrl: target.url, secret: target.token ?? '' },
+    { path: PEER_WORKSPACES_PATH, headers: { accept: 'application/json' } }
+  );
+  if (!result.ok) return { ok: false, liveness: result.liveness, reason: result.reason };
+
+  const body = result.body.toString('utf8');
+  if (result.status < 200 || result.status > 299) {
     return {
       ok: false,
-      refused: false,
-      reason: `${where} could not be read: ${(error as Error).message}.`
+      liveness: 'refused',
+      reason: `${target.url}${PEER_WORKSPACES_PATH} answered ${result.status}, so this board `
+        + `cannot read that machine's projects. It said: ${said(body)}`
     };
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return {
+      ok: false,
+      liveness: 'refused',
+      reason: `${target.url}${PEER_WORKSPACES_PATH} answered ${result.status} and what came back `
+        + 'was not JSON, so it is not a project list this board can draw.'
+    };
+  }
+  return { ok: true, workspaces: (parsed as { workspaces?: unknown } | null)?.workspaces };
 }
 
 /**
@@ -314,7 +329,7 @@ export function listPeerWorkspaces(
 ): Promise<PeerWorkspaces> {
   const now = deps.now ?? Date.now;
   const liveness = deps.liveness ?? createPeerLiveness();
-  const transport = deps.transport ?? askOverHttp;
+  const transport = deps.transport ?? askThePeer;
   const target: PeerTarget = {
     url: peer.baseUrl,
     ...(peer.secret ? { token: peer.secret } : {})
@@ -329,8 +344,11 @@ export function listPeerWorkspaces(
     const reply = await transport(target);
     if (!reply.ok) {
       // It was there a moment ago and the list did not arrive. Still a fact about the machine,
-      // so it lands on the state — one of the four, and never on a project.
-      return nothingFrom(peer, answer(reply.refused ? 'refused' : 'unreachable', reply.reason));
+      // so it lands on the state — one of the four, and never on a project. Clamped rather than
+      // trusted: a failure is not `online`, and `checking` is what a desk says about a probe that
+      // is still out rather than something a finished call can come back as.
+      return nothingFrom(peer,
+        answer(reply.liveness === 'refused' ? 'refused' : 'unreachable', reply.reason));
     }
     if (!Array.isArray(reply.workspaces)) {
       return nothingFrom(peer, answer('unreachable',
