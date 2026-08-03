@@ -4359,6 +4359,18 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
       };
     }
 
+    /**
+     * The cards this pass asked for and was told no about, other than by the cap.
+     *
+     * Counted rather than logged and forgotten. A refusal that is not `202` or `409` is a
+     * decision about this board — an account that cannot push to `origin` is the one that
+     * exists today, answered `403` — and nothing between two passes changes it, so the same
+     * card is refused every interval for ever while `outcome` sits at its default and the
+     * board draws a healthy idle queue.
+     */
+    let refusals = 0;
+    let firstRefusal = '';
+
     for (const card of startableCards(column.cards, blocked)) {
       // Re-read on every iteration rather than counted once: the queue is not the only thing
       // that can take a slot, and turning it off has to stop the pass it is in the middle of.
@@ -4383,6 +4395,23 @@ async function dispatchQueue(workspaceId: string): Promise<void> {
         return;
       }
       logger.warn(`Queue: ${issueUrl} was refused (${answer.status}): ${answer.body.error}`);
+      refusals++;
+      if (!firstRefusal) {
+        firstRefusal = `${issueUrl} was refused ${answer.status} — ${answer.body.error ?? ''}`;
+      }
+    }
+
+    if (refusals > 0) {
+      // Above whatever the dependency pass found, because those cards are the ones this queue
+      // could *not* try and these are the ones it did: a card refused every interval is the
+      // sharper fact, and it is the one nothing will resolve on its own. A pass that also
+      // started something is reported as `started` regardless — that is the `finally` below,
+      // and a queue that is draining is not stalled however many of the rest it was refused.
+      outcome = {
+        reason: 'refused',
+        detail: `${refusals} card(s) in "${target.name}" were refused, and the next pass will be `
+          + `refused the same way. The first: ${firstRefusal}`
+      };
     }
   } catch (error) {
     // A board that cannot be read is a `gh` blip or a project that has gone; either way the
