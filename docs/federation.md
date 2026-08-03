@@ -15,11 +15,15 @@ machine asks, you approve it on the machine the board is actually running on, an
 credential of its own afterwards. [SECURITY.md](SECURITY.md#pairing-a-second-machine) is the
 gesture and [devices.md](devices.md) is the list it writes into.
 
-The half this page describes — a strip that answers for two machines — is being built, and this
-document was written before it rather than after it. What follows is the design it is being
-built to, and the parts that are not running yet say so where it matters. If a sentence here and
-the board in front of you disagree, the board is right and this page is the defect;
-[development-log.md](development-log.md) is the dated record of what actually landed.
+The half this page describes is now half here. **The operator's end of a peer link works**: this
+board can be pointed at another one, the asking half of the same handshake runs as a process here
+rather than as a page, and the tab strip afterwards carries both machines' projects with a
+liveness state on each. What has **not** landed is the forwarding — a tab belonging to another
+machine is refused with a sentence rather than opened, because a board-scoped route that answered
+one would answer it from an empty store of its own. The rest of this page is the design the whole
+thing is being built to, and the parts that are not running yet say so where it matters. If a
+sentence here and the board in front of you disagree, the board is right and this page is the
+defect; [development-log.md](development-log.md) is the dated record of what actually landed.
 
 ## Each machine runs its own board
 
@@ -176,11 +180,13 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-The first six of them have landed; the rest are named here so the reader of a pull request can
-see where each decision lands.
+All but the last two have landed; those are named here so the reader of a pull request can see
+where each decision lands.
 
 ```
 src/core/peer-liveness.ts          the four answers above, and which refusal you are looking at
+src/core/peer-pairing-ask.ts       the asking end of the handshake, as a process rather than a page
+src/core/peer-strip.ts             what each peer last said about its projects, kept between calls
 src/core/remote-workspace-id.ts    what this board calls a peer's project, and the inverse
 src/core/remote-workspace-view.ts  which fields of a project cross, and what replaces the path
 src/core/peer-registry.ts          what this board keeps about a board that approved it
@@ -207,8 +213,8 @@ tab's tooltip, since a peer's project has none here: the project's own name and 
 board calls the machine by, which is enough to tell two projects of the same name apart and is
 this board's own word rather than anything the owner sent.
 
-The registry is a module with no caller: it owns `peers.json` beside the state directory's other
-files, and nothing yet adds a row to it or presents what a row holds. What it settles is the
+The registry owns `peers.json` beside the state directory's other files, and `POST /api/peers` is
+what puts a row in it — after the other machine has approved this one and not before. What it settles is the
 asymmetry above — the record here keeps the secret rather than a hash, so the file is owner-only
 and every update swaps it whole rather than rewriting it in place, and a reader looking at it
 while a peer is renamed or forgotten never finds it missing or half-written.
@@ -226,8 +232,8 @@ thing the reply carries and everything else is a key two live requests can share
 later than the request it describes, on that request's own budget, so a peer that sleeps mid-render
 leaves nothing behind. It has no caller either.
 
-The client is the thing that performs the call, and it too has no route and no caller yet. Two
-decisions give it its shape. **The header discipline is the whole of its security**: the outgoing
+The client is the thing that performs the call, and the strip is its first caller: one round per
+peer, on this board's own timer. Two decisions give it its shape. **The header discipline is the whole of its security**: the outgoing
 request is built by naming the headers that cross, so this board's own token stops here in both
 of the spellings a caller can offer it in, exactly one credential reaches the peer, and
 `x-client-id` arrives byte-identical — a substituted one would get the reader its own writes
@@ -256,8 +262,11 @@ The milestone that files them is *One tab strip, two machines*, and the design d
 are each a done-when bullet on one of its issues rather than a preference stated here.
 
 The far end of the chain has landed too: the tab strip has the slot to draw a state in.
-`WorkspaceSummary.status` in `frontend/src/components/WorkspaceTabs.tsx` is what a tab reads,
-and nothing supplies it yet — a project without it draws the row it always drew. See
+`WorkspaceSummary.status` in `frontend/src/components/WorkspaceTabs.tsx` is what a tab reads, and
+`GET /api/workspaces` supplies it for every project a peer owns. A project on **this** machine
+carries none, and that is the decision rather than an omission: this board is answering, always,
+so a state on every local tab would be a badge that never says anything. A project without one
+draws the row it always drew. See
 [canvas-frontend.md](canvas-frontend.md) for how a liveness state and a config error sit on one
 tab without displacing each other.
 
