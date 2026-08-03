@@ -185,6 +185,14 @@ src/core/peer-proxy.ts       the seam that sends a request to the machine that o
 The milestone that files them is *One tab strip, two machines*, and the design decisions above
 are each a done-when bullet on one of its issues rather than a preference stated here.
 
+One piece of it has landed already, and it is the end of the chain rather than the start: the
+tab strip has the slot to draw a state in. `WorkspaceStatusState` in
+`frontend/src/components/WorkspaceTabs.tsx` is the union in the table above, declared once so
+that the module producing these states and the route carrying them name a type rather than each
+inventing one, and `WorkspaceSummary.status` is where a tab reads it. Nothing supplies that
+field yet; a project without it draws the row it always drew. See
+[canvas-frontend.md](canvas-frontend.md) for how the two marks sit on one tab.
+
 ## Related
 
 - [SECURITY.md](SECURITY.md) — the trust model, the token, the gates, and the pairing gesture
