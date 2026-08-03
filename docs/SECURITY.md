@@ -111,14 +111,17 @@ bar no longer carries the secret.
 `HOST` defaults to **`127.0.0.1`**, and `PORT` to 3737 — a preference the launch path walks
 past to the next free port, not a pin ([running.md](running.md)).
 
-`HOST=0.0.0.0` puts the board on **every network interface**. The token goes with it, and it is
+`HOST=0.0.0.0` puts the board on **every network interface**; a single address — one physical
+interface, or a Tailscale `100.x.y.z` — puts it on one network instead. Today that difference
+buys nothing, and the reason is the rest of this section. The token goes with either, and it is
 one secret with no sessions and no accounts behind it: anyone who has it is the operator as far
 as this server is concerned, and anyone who has not is refused. Underneath that, the bind is its
-own guard and a second answer: off loopback the reply is **403** to every route worth reaching —
-not only the GitHub half, the agents and the terminal, but since #366 every read of what the
-board holds and since #456 every write of it. There is nothing left to publish that way and
-nothing left to change. Do not do it on a network you do not control, and put access control in
-front of it if you do it at all.
+own guard and a second answer: off loopback the reply is **403** to nearly every route worth
+reaching — not only the GitHub half, the agents and the terminal, but since #366 every read of
+what the board holds and since #456 every write of it. Do not do it on a network you do not
+control, and put access control in front of it if you do it at all.
+[running.md](running.md#which-addresses-it-answers-on) is the operator's half of the same
+question — which of the two shapes to write, and why neither is worth writing yet.
 
 The two are not the same control and neither stands in for the other. The token is what a caller
 carries; the bind is what this server opened itself to, and it is still the answer with
@@ -137,9 +140,26 @@ guard:
   `/api/elements/sync`, `POST /api/files`, `DELETE /api/files/:id`, `POST /api/snapshots` and the
   four browser round-trips. The **WebSocket upgrade** is refused there too, because it sends the
   whole scene on connect and an HTTP guard cannot see it.
-- **Still answered** — `/health`, which is how anything finds out whether a canvas is on a port
-  at all, and `GET /api/sync/status`. A board bound that way is inert: it publishes nothing and
-  takes nothing.
+<!-- routes: answered-off-loopback -->
+- **Still answered off loopback** — `GET /`, the page itself, which cannot read a token out of an
+  address bar it has not loaded yet; `GET /health`, which is how anything finds out whether a
+  canvas is on a port at all; `GET /api/sync/status`; and the records of what the agents have been
+  doing, which live in this process's memory rather than behind that guard —
+  `GET /api/issue-block/:id/run`, `GET /api/issue/recreate` and `GET /api/implement`, the last of
+  which carries every run's pull request, its error text and the **absolute path of the worktree**
+  it left on this machine — together with the two routes that reset such a record,
+  `DELETE /api/implement` and `DELETE /api/issue-block/:id/implement`.
+<!-- /routes: answered-off-loopback -->
+
+So the sentence this used to end on — that a board bound that way is inert — was not true, and
+it is the kind of claim worth being exact about. What is inert is the **board**: nothing bound
+off loopback publishes a drawing or takes one. What is not is the record of what the agents have
+done with your repository, which such a caller can read, and can reset. That is a gap in the
+guard rather than a decision anybody wrote down, and it is filed as
+[#508](https://github.com/vitorengers/vibemaxxing/issues/508).
+`scripts/check-guarded-routes-documented.mjs` derives both lists from `src/server.ts`, so this
+one and the tables in [rest-api.md](rest-api.md) cannot drift from the code again without a
+check going red — including on the day #508 closes and this list gets shorter.
 
 Before #366 the second list was the whole drawing canvas — elements, files, documents, the
 library and the snapshots. The two honest options were to guard them or to write down that a
@@ -191,6 +211,28 @@ exists and why it is a file with owner-only permissions rather than a header the
 checked. Between the two, another account on a machine you share is refused; a process running as
 you is not, because it can read the file.
 
+## The controls in front of it, and what each one stops
+
+Separate answers to separate questions. None of them stands in for another, and a board is only
+as closed as the weakest one that is actually switched on.
+
+| Control | What it asks | What it stops | What it does not |
+|---|---|---|---|
+| **The token** (#350) | What the caller *carries* | Anything that cannot read a file in your state directory — another account on a machine you share, a sandboxed process, a page nobody handed the secret to | A process running as you, which reads that file exactly as it reads your SSH keys. And it is one `VIBEMAXXING_NO_AUTH=1` away from not being there, which is the state every check in `scripts/` runs in |
+| **The origin gate** (#270) | What a *browser* has to admit — its `Origin`, and the `Host` it asked for | A page at any other origin reaching `127.0.0.1` through your browser, and the DNS-rebinding version of the same trick | A local program. It sends no `Origin` at all, and anything that can set headers can set any of them |
+| **The bind** | What this server *opened itself to* | Every caller that is not on this machine, because the guarded routes refuse before they run. It is the one still answering with the token switched off | Nothing on this machine — and nothing off it, either, on the routes listed above as still answered. It tests the bind address rather than the caller, so an interface-bound board refuses your own browser too |
+
+The bind is the crude one on purpose: it is the only property in that table nobody can forge, and
+the only one left standing when `VIBEMAXXING_NO_AUTH` is set. What it costs is that it cannot
+tell a laptop of yours from anybody else's, which is why there is no configuration today in which
+this board is reachable from a second machine, however narrowly you bind it.
+
+Changing that needs a control this table does not have — a credential a *device* holds, asked of
+the caller rather than of the bind. That is the pairing milestone: #501 is the seam in the guard,
+and #502 through #505 are the registry, the handshake, the approval and the management of it.
+`src/core/device-registry.ts` is here already; nothing reads it yet. Until something does, this
+table is the whole of the model, and the paragraphs above are what is actually running.
+
 ## What a run does to your repository
 
 An implement run is the sharpest edge here, so plainly: it gets a **git worktree of its own**
@@ -209,6 +251,14 @@ afternoon, and that is the exposure.
 The registry, the per-board scene state, the pidfile, the running server's token and
 `config.json` sit in a per-user state directory ([configuration.md](configuration.md)); the log
 file goes where `LOG_FILE_PATH` says.
+
+`devices.json` sits there too, owner-only, since #502. It is the registry a paired device will
+be checked against, and it holds a **SHA-256 of each device's secret and never the secret** — the
+device is what holds that, and this side only ever verifies. Today nothing verifies against it:
+the file exists, `src/core/device-registry.ts` owns it, and no route reads it yet, so a board
+that has never paired anything has no such file and a board that has one is not thereby reachable
+from anywhere new. The control it is half of is #501 through #505 of the pairing milestone, and
+this document describes what is running rather than what is coming.
 The board holds whatever you drew on it. None of it is encrypted, and none of it is sent
 anywhere by this tool — the network calls it makes are `gh` to GitHub, and whatever the agent
 command line you configured does on its own account.
