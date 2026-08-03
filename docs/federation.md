@@ -87,15 +87,18 @@ is put where the other can reach it.
 Two guards stand between the machines, and they refuse for different reasons. **Who is calling**
 is `src/core/caller-gate.ts`: a request that did not arrive from the machine the server runs on
 is answered **403** by nearly every route worth reaching. That guard is what a paired device has
-to get past, and today it does not — the credential is minted, the token gate accepts it, and
-the caller guard still refuses a remote socket whether or not one is held. Until that lands
-(#522), the two machines can complete the whole approval and reach nothing with it. **What the
-caller asked for** is the origin gate's `Host` pin, and it is the trap in this design that looks
-like a credential failure and is not: a board reached under its name on a private overlay is
-being asked for an authority it does not answer for, and refuses with a 403 that has nothing to
-do with any secret. `EXCALIDRAW_ALLOWED_HOSTS` is what tells it about that name. A link that is
-refused for that reason and reported as a credential problem sends its operator to fix something
-that was never broken, which is why the states in the next section separate the two.
+to get past, and since #522 an approved device is the one caller that does — the credential is
+minted, the token gate accepts it, and this guard reads the same record. A caller holding
+anything else, the other board's own token included, is refused there exactly as before.
+**What the caller asked for** is the origin gate's `Host` pin, and it is the trap in this design
+that looks like a credential failure and is not: a board reached under its name on a private
+overlay is being asked for an authority it does not answer for, and refuses with a 403 that has
+nothing to do with any secret. Approving a device is now what tells it about that name — the
+record carries the authority the device arrived under, and the set is rebuilt when the registry
+changes — so `EXCALIDRAW_ALLOWED_HOSTS` is for the names no approval put there, an alias or a
+proxy in front of this board. A link that is refused for that reason and reported as a credential
+problem sends its operator to fix something that was never broken, which is why the states in the
+next section separate the two.
 
 ## What stops when the laptop sleeps
 
