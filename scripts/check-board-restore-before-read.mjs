@@ -27,12 +27,13 @@
  *   so making it wait, or answering 503 from it, would refuse the board rather than delay it.
  *   Making the board come up late instead of the read wait is the other way this could have
  *   been "fixed", and it is the one this case rules out.
- * - The writes are not, and that is not an oversight: a write that lands before the seed is a
- *   worse failure than a read that does — the store is no longer empty, so `seedBoard` declines
- *   to load over it and returns *before* `persistBoardFor`, which costs the board its saved
- *   scene and its permission to save for the rest of the process. That is a different decision,
- *   over `PUT`, `DELETE` and the per-second autosync as well, and it is **#468** rather than
- *   something folded in here.
+ * - The writes are not, and that is not an oversight either. A write that lands before the seed
+ *   was the worse failure of the two — the store was no longer empty, so `seedBoard` declined to
+ *   load over it and returned *before* `persistBoardFor`, which cost the board its saved scene
+ *   and its permission to save for the rest of the process — and it was a different decision,
+ *   over `PUT`, `DELETE` and the per-second autosync as well. It was taken in **#468**, and not
+ *   by putting the writes behind this wait: the seed loads the saved scene underneath whatever
+ *   arrived early instead. `scripts/check-board-write-before-restore.mjs` is that half.
  *
  * The cases:
  *

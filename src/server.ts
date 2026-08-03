@@ -3912,12 +3912,6 @@ async function seedBoard(
     => Promise<{ scene: BoardScene; from: string } | null>
 ): Promise<void> {
   const store = elementsFor(workspaceId);
-  if (store.size) {
-    // Empty at startup, which is when this runs. Said out loud rather than assumed, because
-    // the one thing this must never do is land on top of a board somebody is working on.
-    logger.warn(`Not loading a saved board: "${workspaceId}" already holds ${store.size} element(s).`);
-    return;
-  }
 
   const [saved, fromFile] = await Promise.all([
     readBoardState(workspaceId),
@@ -3929,21 +3923,48 @@ async function seedBoard(
   // to read before anybody has seen it.
   persistBoardFor(workspaceId);
 
+  // Empty at startup, which is when this runs — except for the twenty-odd milliseconds between
+  // the port accepting and the boards being back, and one `POST /api/elements` in there is
+  // enough (#468). The autosync is the likeliest caller: a browser reconnecting to a board that
+  // has just restarted syncs its whole scene, every second.
+  //
+  // That used to return, and returning was the seed cancelling itself rather than declining to
+  // overwrite. The saved scene was never loaded; the `return` was above the line that grants
+  // this board permission to save, so nothing drawn on it for the rest of the process reached
+  // the disk either; and the file was left holding the old scene, which the next start brought
+  // back over everything the session did. So the scene goes *underneath* what is already there
+  // instead. The one thing this must never do — land on top of a board somebody is working on —
+  // it still cannot: `store.has` below is the whole of the guard this replaces, element by
+  // element rather than all-or-nothing.
+  const written = store.size;
+  if (written) {
+    logger.warn(`A write arrived before its saved board did: "${workspaceId}" already holds `
+      + `${written} element(s), and the saved scene is being loaded underneath them.`);
+    // That write reported a change to a board that had no permission to save yet, and a
+    // dropped notification is not repeated. Said again now the permission exists, so a board
+    // that took one write and is then left alone is still written out.
+    scheduleBoardStateSave(workspaceId);
+  }
+
   const chosen = chooseSeed(workspaceId, boardFile, saved, fromFile)
     ?? (fallback ? await fallback(workspaceId, boardFile) : null);
   if (!chosen) return;
   const scene = chosen.scene;
 
-  for (const element of scene.elements) store.set(element.id, element);
+  const restored = scene.elements.filter((element) => !store.has(element.id));
+  for (const element of restored) store.set(element.id, element);
   // Content-addressed and process-wide, so a file already held is the same file.
   for (const [id, file] of Object.entries(scene.files)) if (!files.has(id)) files.set(id, file);
 
   // A direct store write tells nobody. A browser that connected while the read was in
   // flight took its `initial_elements` from an empty store, and would sit on a blank canvas
-  // until something else made it refetch.
-  broadcast({ type: 'elements_batch_created', elements: scene.elements } as BatchCreatedMessage, workspaceId);
+  // until something else made it refetch. What it is told is what was actually put in: an
+  // element the board already held is one that browser sent, and it is not news to anybody.
+  broadcast({ type: 'elements_batch_created', elements: restored } as BatchCreatedMessage, workspaceId);
 
-  logger.info(`Loaded ${scene.elements.length} element(s) into "${workspaceId}" from ${chosen.from}`);
+  const kept = scene.elements.length - restored.length;
+  logger.info(`Loaded ${restored.length} element(s) into "${workspaceId}" from ${chosen.from}`
+    + (kept ? `, leaving ${kept} the board already held` : ''));
 }
 
 /**
@@ -4039,6 +4060,13 @@ let restoreCeilingSaid = false;
  * poll, and `core/canvas-client.ts` reads a non-200 from it as a foreign service on the port
  * rather than as a canvas still starting — delaying it, or answering 503 from it, would refuse
  * the board instead of the request.
+ *
+ * Nor do the writes, and #468 is where that was decided rather than assumed. A write in the
+ * window used to destroy the session, which is worse than a read answering short — but the
+ * repair belongs in `seedBoard`, which now loads the saved scene underneath whatever arrived
+ * early instead of standing down. Waiting here would have cost every write the ceiling below on
+ * a board whose restore has hung, on a canvas that syncs its whole scene once a second, and
+ * would have left the case where that ceiling *expires* exactly as broken as it was.
  */
 async function whenBoardsRestored(): Promise<void> {
   if (boardsAreBack) return;
