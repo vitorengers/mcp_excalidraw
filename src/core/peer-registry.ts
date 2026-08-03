@@ -35,11 +35,15 @@ import logger from '../utils/logger.js';
  * *inode* it also carries the narrow permissions onto a target somebody had widened by hand,
  * which is the job the unlink does in the token file.
  *
- * It lives beside `config.json`, `workspaces.json`, `server-<port>.pid`, `server-<port>.token`
- * and `devices.json`: written with `stateDir()` and read across `stateDirCandidates()`, so the
- * eventual directory rename does not orphan somebody's peers. A file rather than a setting,
- * because a peer is a thing added and forgotten at runtime and a variable is a thing an operator
- * pins once.
+ * It lives beside `config.json`, `workspaces.json`, the pidfile, the token file and the device
+ * registry: written with `stateDir()` and read across `stateDirCandidates()`, so the eventual
+ * directory rename does not orphan somebody's peers. A file rather than a setting, because a peer
+ * is a thing added and forgotten at runtime and a variable is a thing an operator pins once.
+ *
+ * The name of that neighbouring file is deliberately not spelled here. `check-device-registry.mjs`
+ * holds it to one owner by reading every source for its name, and this module has no business
+ * reading it — a comment that named it would trip that rule for a sentence, which is the rule
+ * working rather than an obstacle to route around.
  *
  * Nothing outside this module reads or writes the file. Everything that has a question about a
  * peer asks one of the six functions below, and `scripts/check-peer-registry.mjs` holds the
@@ -112,7 +116,7 @@ interface RegistryFile {
 const REGISTRY_VERSION = 1;
 const REGISTRY_FILE = 'peers.json';
 
-/** Beside `config.json`, `devices.json` and the pidfile, and for the same reason. */
+/** Beside `config.json`, the pidfile and the device registry, and for the same reason. */
 export function peerRegistryPath(): string {
   return path.join(stateDir(), REGISTRY_FILE);
 }
