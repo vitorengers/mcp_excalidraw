@@ -462,16 +462,21 @@ try {
   check('the refusal is one of them', listed.includes('refused'), JSON.stringify(listed));
 
   console.log('\n5. the reason is not sticky: push access granted starts the run');
+  // What is asserted here is the run and the reason it is no longer, rather than the pass that
+  // says `started`. That pass exists for one interval: both cards start in it, which fills a cap
+  // of two, and the pass after it truthfully reports `cap-full`. Polling for a state that lasts
+  // 400 ms is a race under load rather than a claim about stickiness — the same trap
+  // `check-implement-queue-newcard.mjs` records. The run having happened is permanent.
   writeFileSync(permissionPath, 'WRITE', 'utf8');
-  const draining = await waitForPass('board-refused', (queue) => queue.lastPass.reason === 'started',
-                                     'the queue to start the card it had been refused');
-  check('the pass now reports what it started', draining?.lastPass?.reason === 'started',
-        JSON.stringify(draining));
-  check('which is not a stall', draining?.stalled === false, JSON.stringify(draining));
-  check('nor announced', draining?.announce === false, JSON.stringify(draining));
-  await waitForStarted([601], 'the card that had been refused to reach the agent');
-  check('and the oldest refused card is the one that ran', started(601),
-        JSON.stringify(await queueOf('board-refused')));
+  await waitForStarted([601, 602], 'the cards that had been refused to reach the agent');
+  check('the cards that were refused for ever are the ones that ran', started(601) && started(602),
+        `601: ${started(601)}, 602: ${started(602)}`);
+  await severalPasses();
+  const drained = await queueOf('board-refused');
+  check('and no later pass still reports the refusal', drained?.lastPass?.reason !== 'refused',
+        JSON.stringify(drained));
+  check('nor is the reader still being interrupted', drained?.announce === false,
+        JSON.stringify(drained));
   await setQueue('board-refused', false);
 } catch (error) {
   failures++;
