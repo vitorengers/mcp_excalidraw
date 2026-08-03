@@ -62,20 +62,22 @@ One project per board — see [workspaces.md](workspaces.md).
 ## Issue blocks
 
 An observation on the canvas becomes a GitHub issue — see [issue-block.md](issue-block.md).
-Every route here shells out to `gh` holding the user's credentials, so every route here is
-loopback only.
+Every route here that shells out to `gh` does so holding the user's credentials, and each of
+those is marked below. The two that are not marked read this process's own memory and answer
+wherever the server is bound; see [SECURITY.md](SECURITY.md#where-it-listens) for what that is
+worth to a caller on the network.
 
 | Route | What it does |
 |---|---|
-| `POST /api/issue-block/:id` | Run the research agent and open the issue |
-| `POST /api/issue-block/:id/adopt` | Attach an issue that already exists, without creating one |
-| `DELETE /api/issue-block/:id` | Forget the run, so the block can be tried again |
-| `GET /api/issue-block/:id/issue` | The issue behind a block, read live rather than copied onto it |
-| `GET /api/issue-block/:id/run` | What that block's research run has spent, polled while it is going. Reads memory, so it is the one route here with no `gh` behind it |
-| `GET /api/issue` | The issue behind a *mirrored card*, which has no element id, plus what is known about implementing it |
-| `POST /api/issue/comment` | Add a comment — the one way to answer an issue agent's open questions without leaving the board |
-| `POST /api/issue/recreate` | Research the issue again and rewrite it in place, while its card is still in Todo |
-| `GET /api/issue/recreate` | What that run has done so far, with no `gh` behind it |
+| `POST /api/issue-block/:id` | Run the research agent and open the issue (loopback only) |
+| `POST /api/issue-block/:id/adopt` | Attach an issue that already exists, without creating one (loopback only) |
+| `DELETE /api/issue-block/:id` | Forget the run, so the block can be tried again (loopback only) |
+| `GET /api/issue-block/:id/issue` | The issue behind a block, read live rather than copied onto it (loopback only) |
+| `GET /api/issue-block/:id/run` | What that block's research run has spent, polled while it is going. Reads memory, so it is the one route here with no `gh` behind it — and therefore one of the two here with no bind guard on it either |
+| `GET /api/issue` | The issue behind a *mirrored card*, which has no element id, plus what is known about implementing it (loopback only) |
+| `POST /api/issue/comment` | Add a comment — the one way to answer an issue agent's open questions without leaving the board (loopback only) |
+| `POST /api/issue/recreate` | Research the issue again and rewrite it in place, while its card is still in Todo (loopback only) |
+| `GET /api/issue/recreate` | What that run has done so far, with no `gh` behind it, and no bind guard either |
 
 ## Implementations
 
@@ -84,11 +86,11 @@ The implement agent, its worktree and the queue that feeds it — see
 
 | Route | What it does |
 |---|---|
-| `POST /api/issue-block/:id/implement` | Implement the issue on a block |
-| `POST /api/implement` | Implement an issue by URL, for a mirrored card the server has never seen; `resume: true` continues an interrupted attempt |
-| `DELETE /api/issue-block/:id/implement` | Reset a block's record, refused while its run is alive |
-| `GET /api/implement` | One record by `?url=`, or every record for the workspace, with the concurrency cap and the queue state |
-| `DELETE /api/implement` | The same reset, by URL |
+| `POST /api/issue-block/:id/implement` | Implement the issue on a block (loopback only) |
+| `POST /api/implement` | Implement an issue by URL, for a mirrored card the server has never seen; `resume: true` continues an interrupted attempt (loopback only) |
+| `DELETE /api/issue-block/:id/implement` | Reset a block's record, refused while its run is alive. No bind guard |
+| `GET /api/implement` | One record by `?url=`, or every record for the workspace, with the concurrency cap and the queue state. No bind guard — the `queue` half is dropped off loopback, the records are not |
+| `DELETE /api/implement` | The same reset, by URL. No bind guard |
 | `POST /api/implement/queue` | Turn this workspace's queue on or off (loopback only, and off unless implementing is enabled) |
 
 ## Project board mirror
@@ -289,10 +291,16 @@ arrived over the network. Three kinds of route carry that mark, and the second w
 
 The choice was the same one both times: guard them, or write down that a board bound to an
 interface publishes its contents to whoever reaches the port and takes whatever they draw on it.
-They are guarded. The consequence is stated rather than hidden: a non-loopback bind now answers
-nothing worth having — #278 had already taken the tab strip and the picker with the registry, and
-this takes the canvas itself, in both directions. A reverse proxy is unaffected, because it
-reaches this server on loopback, which is the shape `EXCALIDRAW_ALLOWED_HOSTS` exists for.
+They are guarded. The consequence is stated rather than hidden: a non-loopback bind gives up the
+board — #278 had already taken the tab strip and the picker with the registry, and this takes the
+canvas itself, in both directions. A reverse proxy is unaffected, because it reaches this server
+on loopback, which is the shape `EXCALIDRAW_ALLOWED_HOSTS` exists for.
+
+What it does not give up is the handful of rows above marked **no bind guard**: the research and
+implement records, which are in this process's memory rather than behind the funnel, and the two
+routes that reset one. `scripts/check-guarded-routes-documented.mjs` is what keeps that list here
+the same as the one in the code, and [SECURITY.md](SECURITY.md#where-it-listens) is where it says
+what such a caller can read and change.
 
 The guard tests the **bind address**, which is the one thing about a caller that cannot be
 forged. The origin gate beside it tests `Origin` and `Host`, which is a question only a browser
@@ -306,4 +314,7 @@ the bind is the only one of the three still answering wherever `VIBEMAXXING_NO_A
 For a while the writes were not behind the bind guard, and this said so in a sentence rather
 than deciding anything: a board bound off loopback could not be read by anybody and could still
 be drawn on and emptied by anybody who reached the port. #456 put the same question to them and
-gave it the same answer. A board bound to an interface is now inert in both directions.
+gave it the same answer. The *board* is now refused in both directions off loopback — which is
+not the same claim as the one this paragraph used to end on, that such a board is inert. The
+rows marked no bind guard are why, and they are named one by one in
+[SECURITY.md](SECURITY.md#where-it-listens).
