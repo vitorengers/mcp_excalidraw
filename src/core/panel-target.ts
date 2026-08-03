@@ -14,6 +14,7 @@
 
 import { PanelRunState } from './issue-appearance.js';
 import { MIRROR_KIND } from './project-board-layout.js';
+import type { FounderActionKind } from './founder-action-text.js';
 
 export interface PanelElement {
   id: string;
@@ -78,6 +79,46 @@ export interface IssueTargetData {
   recreatable: boolean;
 }
 
+/**
+ * Where a founder action is in its life, as the card carries it.
+ *
+ * The same three names `FounderActionState` holds in `core/founder-store.ts`, deliberately
+ * written out again rather than imported: that module opens files, and `frontend/tsconfig.json`
+ * sets `"types": []`, so even an `import type` from it resolves its graph and fails the frontend
+ * type check in files nobody touched. This is a fact read off a shape in the browser, and the
+ * browser is where it has to be nameable.
+ */
+export type FounderTargetState = 'open' | 'resolved' | 'dismissed';
+
+/**
+ * What a founder card can say about its action on its own.
+ *
+ * A card exists because a person is being asked for something, so what the panel needs before
+ * the network answers is which record this is and whether it is still asking. Everything a
+ * reader actually reads — the what, the why, the steps, the confirm sentence, the chat — is held
+ * against `key` by the store and fetched, exactly as an issue body is fetched against a URL. The
+ * mirror redraws a card from the store on every poll, so the card is the wrong place to remember
+ * any of it.
+ */
+export interface FounderTargetData {
+  /** The store's own key for this action, which is what every route is addressed by. */
+  key: string;
+  /** Which blocker it is, or null on a card that names none. */
+  kind: FounderActionKind | null;
+  state: FounderTargetState;
+  /** The card's own face — the one line a person reads before opening the panel. */
+  title: string | null;
+  /**
+   * Always false, and a field rather than an absence so that a reader can see the rule.
+   *
+   * A founder action is not an issue anybody may build or re-research: nothing here is work a
+   * coding agent may pick up, and "research it again" is meaningless for a missing payment. The
+   * target already resolves with `issue` null, which leaves the controls nothing to attach to;
+   * this states the same thing where somebody adding a control would look for it.
+   */
+  recreatable: false;
+}
+
 export interface CollapsibleTargetData {
   id: string;
   collapsed: boolean;
@@ -90,6 +131,7 @@ export interface PanelTarget {
   /** Heading for a document that does not exist yet; the shape's own text. */
   title: string | null;
   issue: IssueTargetData | null;
+  founder: FounderTargetData | null;
   collapsible: CollapsibleTargetData | null;
 }
 
@@ -120,6 +162,73 @@ function asRunState(value: unknown): PanelRunState {
 function asIdList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+}
+
+/**
+ * A state, or `open` for anything that is not one.
+ *
+ * Narrowed the way `asRunState` is, and for the same reason: a `founderState` the store cannot
+ * write must not become a fourth state the panel has no branch for. The fallback is `open`
+ * rather than null because a card is drawn because something is being asked for — an unmarked
+ * card is one nobody has settled, which is precisely `open`.
+ */
+function asFounderState(value: unknown): FounderTargetState {
+  return value === 'resolved' || value === 'dismissed' ? value : 'open';
+}
+
+/**
+ * Shapes that stand for a founder action: a card the mirror drew carrying a store key.
+ *
+ * Not a kind of its own and not a role of its own — a founder card is an ordinary `role: 'card'`
+ * under the mirror's kind, which is what keeps every derived-element strip point and the drag
+ * settler working on it unchanged. What tells it apart from a mirrored issue card is the key,
+ * and nothing else does.
+ *
+ * The same walk-up `issueShapeOf` does, because a click landing on a card's bound label has to
+ * resolve to the card: that was a real defect once and it compiled perfectly.
+ */
+function founderShapeOf(
+  element: PanelElement,
+  elements: readonly PanelElement[]
+): PanelElement | undefined {
+  const stands = (candidate: PanelElement | undefined): boolean => {
+    const custom = candidate?.customData ?? {};
+    return custom.kind === MIRROR_KIND && Boolean(asString(custom.founderKey));
+  };
+
+  if (stands(element)) return element;
+  if (element.containerId) {
+    const container = elements.find((candidate) => candidate.id === element.containerId);
+    if (stands(container)) return container;
+  }
+  return undefined;
+}
+
+/**
+ * What a founder card can say on its own: which record it is, and whether it is still asking.
+ *
+ * The title is read off the card's bound label when the shape carries no text of its own, the
+ * same way `mirrorCardIssue` reads one — the mirror draws a card's face into a separate text
+ * element bound to it, so the rectangle's own `text` is empty.
+ */
+function founderCardAction(
+  card: PanelElement,
+  elements: readonly PanelElement[]
+): FounderTargetData | null {
+  const key = asString(card.customData?.founderKey);
+  if (!key) return null;
+
+  const label = elements.find((candidate) => candidate.containerId === card.id);
+  return {
+    key,
+    // Cast rather than checked against the register, the way `issueState` is below: the kind is
+    // written by the store through the one door that validates it, and a card naming something
+    // else is a card the panel will fetch nothing for anyway.
+    kind: asString(card.customData?.founderKind) as FounderActionKind | null,
+    state: asFounderState(card.customData?.founderState),
+    title: asString(card.text) ?? asString(label?.text),
+    recreatable: false,
+  };
 }
 
 /**
@@ -204,8 +313,9 @@ function mirrorCardIssue(
  * Resolve the selection to what the panel should show.
  *
  * Returns `null` when there is nothing to show — nothing selected, several things
- * selected, or a shape that carries no document, is not an issue block and is not an
- * image. A shape with nothing to say should get no card rather than an empty one.
+ * selected, or a shape that carries no document, is not an issue block, is not a founder
+ * card and is not an image. A shape with nothing to say should get no card rather than an
+ * empty one.
  *
  * A multiple selection deliberately resolves to nothing: showing one shape's document
  * while several are highlighted reads as if it described all of them.
@@ -249,7 +359,15 @@ export function resolvePanelTarget(
   const docKey = docKeyOf(holder);
   const custom = element.customData ?? {};
 
-  const issueShape = issueShapeOf(element, elements);
+  // Read before the issue, and the order is the rule rather than an accident of where it was
+  // typed. A founder card is a `role: 'card'` under the mirror's kind, so `issueShapeOf` accepts
+  // it; `offersImplement` takes only `{ githubState, implementState }` and knows nothing about
+  // columns, so it cannot be trusted to keep the Implement control off one. The target must
+  // simply not look like an issue, and the only way to guarantee that is to answer here first.
+  const founderShape = founderShapeOf(element, elements);
+  const founder = founderShape ? founderCardAction(founderShape, elements) : null;
+
+  const issueShape = founder ? undefined : issueShapeOf(element, elements);
   const issueCustom = issueShape?.customData ?? {};
   const issue: IssueTargetData | null = !issueShape
     ? null
@@ -284,15 +402,16 @@ export function resolvePanelTarget(
       ? { id: element.id, collapsed: custom.collapsed === true }
       : null;
 
-  if (!docKey && !issue && !collapsible) return null;
+  if (!docKey && !issue && !founder && !collapsible) return null;
 
   return {
     // The card hangs off the shape the panel is about, which is not always the shape that
     // was clicked: a click on a label resolves to the box or the card holding it.
-    anchorId: docKey && holder ? holder.id : (issueShape?.id ?? element.id),
+    anchorId: docKey && holder ? holder.id : (founderShape?.id ?? issueShape?.id ?? element.id),
     docKey,
     title: asString(element.text),
     issue,
+    founder,
     collapsible,
   };
 }
