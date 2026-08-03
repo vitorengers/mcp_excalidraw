@@ -19,10 +19,14 @@
  *
  * ## What is asserted
  *
- * - **The accessible name of each marker**, computed by Chrome itself over
- *   `Accessibility.getPartialAXTree` rather than guessed from the DOM. Against the code before
- *   the fix the error marker's name is empty and it is *ignored* by the accessibility tree
- *   outright, which is the one thing `aria-hidden="true"` is designed to make true.
+ * - **What each marker is worth to a reader who cannot see it**, computed by Chrome itself over
+ *   `Accessibility.getPartialAXTree` rather than guessed from the DOM. Two readings, because
+ *   a mark on a tab is not a named thing in its own right: a plain `<span>` is a generic
+ *   container that Chrome ignores as `uninteresting`, and its text is folded into the name of
+ *   the `role="tab"` button it sits inside. So the assertions are that no mark is taken out of
+ *   the tree — `ariaHiddenElement` is the reason Chrome gives, and the reason the old code
+ *   fails — and that the sentence each mark stands for is *in the name the tab is read by*.
+ *   Before the fix that name is the project's name and nothing else.
  * - **A workspace carrying no status renders what it renders today** — no status element at
  *   all, the row still badge-then-name-then-marker, named child by child.
  * - **Each of the four states carries a readable text label**, not a colour and not an
@@ -359,15 +363,22 @@ async function shot(name) {
 }
 
 /**
- * What an assistive technology would call this element, asked of the browser.
+ * What the accessibility tree says about one element, asked of the browser rather than guessed.
  *
- * Not the `textContent`, and not a search for `aria-label`: the accessible name is the product
- * of a computation with about a dozen steps in it, and `aria-hidden="true"` does not merely
- * suppress a name — it takes the element out of the tree altogether. So the answer here is a
- * pair, and the second half is the one the old code fails: `ignored` is what an `aria-hidden`
- * marker is, whatever text it happens to contain.
+ * Two answers, and they are answers to two different questions.
+ *
+ * `name` is the accessible name Chrome computed, with all dozen-odd steps of the algorithm run.
+ * It is only interesting on an element that has one: a plain `<span>` is a *generic container*
+ * and Chrome ignores it as `uninteresting` whatever text it holds — which is not a defect, it
+ * is how the text inside it comes to belong to the control the span is part of. So the name
+ * that matters for a mark on a tab is the **tab's**, and that is what `announcedFor` reads.
+ *
+ * `reasons` is where the defect is visible. `aria-hidden="true"` does not merely suppress a
+ * name — it takes the element and everything under it out of the tree, and Chrome says so by
+ * name: `ariaHiddenElement`. That is the difference between a span nobody needed to hear about
+ * and a sentence deliberately kept from a reader.
  */
-async function accessible(selector) {
+async function axOf(selector) {
   const { root } = await send('DOM.getDocument', { depth: -1 });
   const { nodeId } = await send('DOM.querySelector', { nodeId: root.nodeId, selector });
   if (!nodeId) return null;
@@ -375,8 +386,17 @@ async function accessible(selector) {
   const { nodes } = await send('Accessibility.getPartialAXTree', { nodeId, fetchRelatives: false });
   const found = nodes.find((entry) => entry.backendDOMNodeId === node.backendNodeId) ?? nodes[0];
   if (!found) return null;
-  return { name: found.name?.value ?? '', ignored: Boolean(found.ignored) };
+  return {
+    name: found.name?.value ?? '',
+    ignored: Boolean(found.ignored),
+    reasons: (found.ignoredReasons ?? []).map((reason) => reason.name),
+  };
 }
+
+/** True when this element, or the subtree it is in, was hidden from an assistive technology. */
+const hiddenFromReaders = (ax) => !ax
+  || ax.reasons.includes('ariaHiddenElement')
+  || ax.reasons.includes('ariaHiddenSubtree');
 
 /**
  * The one answer the whole strip is drawn from, rewritten on its way past.
@@ -488,6 +508,20 @@ const MEASURE = `(() => {
 
 /** The tab whose project this is, by the name its config gives it. */
 const tabOf = (scene, id) => scene.tabs.find((tab) => tab.name === LABEL[id]);
+
+/**
+ * The sentence a screen reader reads out when it reaches this project's tab.
+ *
+ * The `role="tab"` button is the named thing on the row — a mark inside it is a generic span,
+ * and its text becomes part of *this* name rather than a name of its own. So this is the one
+ * string that answers "what is a reader who cannot see the strip actually told", and against
+ * the code before the fix it is the project's name and nothing else.
+ */
+const announcedFor = (scene, id) => {
+  const at = scene.tabs.findIndex((tab) => tab.name === LABEL[id]);
+  if (at < 0) return Promise.resolve(null);
+  return axOf(`.workspace-tabs > div:nth-of-type(${at + 1}) .workspace-tab__select`);
+};
 
 /** Is this rectangle somewhere a reader could actually be looking? */
 const onScreen = (box, viewport) => Boolean(box)
@@ -606,12 +640,13 @@ try {
   check('and it is marked broken', brokenTab?.broken === true);
   check('and it carries a marker', Boolean(brokenTab?.warn));
 
-  const warnName = await accessible('.workspace-tab--broken .workspace-tab__warn');
-  check('the marker is in the accessibility tree at all',
-    warnName !== null && warnName.ignored === false, JSON.stringify(warnName));
-  check('and its accessible name is the reason the config could not be resolved',
-    Boolean(warnName?.name) && warnName.name.includes(REASON),
-    `name=${JSON.stringify(warnName?.name)} reason=${JSON.stringify(REASON)}`);
+  const warnAx = await axOf('.workspace-tab--broken .workspace-tab__warn');
+  check('the marker is no longer taken out of the accessibility tree',
+    !hiddenFromReaders(warnAx), JSON.stringify(warnAx));
+  const brokenName = await announcedFor(scene, BROKEN);
+  check('and the reason the config could not be resolved is in the name the tab is read by',
+    Boolean(brokenName?.name) && brokenName.name.includes(REASON),
+    `name=${JSON.stringify(brokenName?.name)} reason=${JSON.stringify(REASON)}`);
   check('the reason is still in the tooltip as well, for a reader who hovers',
     (brokenTab?.title ?? '').includes(REASON), JSON.stringify(brokenTab?.title));
 
@@ -648,14 +683,18 @@ try {
         (tab?.title ?? '').includes(wanted.reason), JSON.stringify(tab?.title));
       check(`${wanted.state}: the marker is somewhere on the screen`,
         onScreen(mark?.box, scene.viewport), JSON.stringify(mark?.box));
+
+      const announced = await announcedFor(scene, id);
+      check(`${wanted.state}: the state is in the name the tab is read by`,
+        (announced?.name ?? '').toLowerCase().includes(wanted.state),
+        JSON.stringify(announced?.name));
+      check(`${wanted.state}: and the reason with it, word for word`,
+        (announced?.name ?? '').includes(wanted.reason), JSON.stringify(announced?.name));
     }
 
-    const first = Object.values(plan.table)[0];
-    const statusName = await accessible('.workspace-tab__status');
-    check(`${first.state}: the marker's own accessible name says so`,
-      Boolean(statusName?.name) && statusName.ignored === false
-      && statusName.name.toLowerCase().includes(first.state),
-      JSON.stringify(statusName));
+    const statusAx = await axOf('.workspace-tab__status');
+    check(`${Object.values(plan.table)[0].state}: the marker is not hidden from the tree`,
+      !hiddenFromReaders(statusAx), JSON.stringify(statusAx));
 
     // ─── pixels, both themes, in the round that painted them ──
     for (const theme of ['light', 'dark']) {
@@ -710,11 +749,15 @@ try {
     (together?.title ?? '').includes(REASON) && (together?.title ?? '').includes('No answer in 250ms'),
     JSON.stringify(together?.title));
 
-  const warnHere = await accessible('.workspace-tab--broken .workspace-tab__warn');
-  const statusHere = await accessible('.workspace-tab--broken .workspace-tab__status');
-  check('and an assistive technology is told both, separately',
-    Boolean(warnHere?.name) && Boolean(statusHere?.name) && warnHere.name !== statusHere.name,
-    `${JSON.stringify(warnHere?.name)} / ${JSON.stringify(statusHere?.name)}`);
+  const announced = await announcedFor(scene, BROKEN);
+  check('and an assistive technology is told both, as two separate things',
+    (announced?.name ?? '').includes(REASON)
+    && (announced?.name ?? '').includes('No answer in 250ms')
+    && (announced?.name ?? '').toLowerCase().includes('unreachable'),
+    JSON.stringify(announced?.name));
+  check('neither of the two marks is hidden from the tree',
+    !hiddenFromReaders(await axOf('.workspace-tab--broken .workspace-tab__warn'))
+    && !hiddenFromReaders(await axOf('.workspace-tab--broken .workspace-tab__status')));
 
   // ─── 5 ──────────────────────────────────────────────────────
 

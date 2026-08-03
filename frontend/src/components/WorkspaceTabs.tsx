@@ -1,6 +1,30 @@
 import React, { useState } from 'react'
 import './WorkspaceTabs.css'
 
+/**
+ * Whether the machine that owns a project is answering, which is four answers and not two.
+ *
+ * `checking` is a state the strip can be *in* rather than the absence of one: a tab that says
+ * nothing while a probe is out is a tab that looks decided. `unreachable` is a machine that
+ * never replied — a laptop with its lid shut does not refuse a connection, it hangs — and
+ * `refused` is one that replied and would not have us.
+ *
+ * Declared here, closed, so that the module which produces these states and the route which
+ * carries them are naming a type rather than each inventing one.
+ */
+export type WorkspaceStatusState = 'checking' | 'online' | 'unreachable' | 'refused'
+
+export interface WorkspaceStatus {
+  state: WorkspaceStatusState
+  /**
+   * Why, in the words of whatever decided it, shown verbatim.
+   *
+   * A reason rather than a code, because the four states are deliberately coarse and what
+   * separates *this* sleeping machine from that one is never going to fit in the union.
+   */
+  reason?: string | null
+}
+
 export interface WorkspaceSummary {
   id: string
   name: string
@@ -14,7 +38,36 @@ export interface WorkspaceSummary {
   projectField: string | null
   projectCardLimit: number | null
   error: string | null
+  /**
+   * Whether the machine holding this project is answering — absent for every project this
+   * board owns, and for every project until something starts supplying it.
+   *
+   * Deliberately **not** folded into `error`. That field is a config-resolution failure and it
+   * gates real behaviour: an implement run refuses outright on a workspace carrying one, and
+   * the queue treats such a board as unusable. A machine that happens to be asleep written
+   * there would make projects that have nothing to do with it start refusing runs, and it
+   * would be indistinguishable afterwards from a project whose config is genuinely broken.
+   */
+  status?: WorkspaceStatus | null
 }
+
+/**
+ * The word each state prints, because colour is not a message.
+ *
+ * A reader who cannot tell green from amber, or who is listening to the page rather than
+ * looking at it, gets the same four answers as everybody else — which is exactly what the `!`
+ * glyph beside it failed to do for the whole of its existence.
+ */
+const STATUS_LABELS: Record<WorkspaceStatusState, string> = {
+  checking: 'Checking',
+  online: 'Online',
+  unreachable: 'Unreachable',
+  refused: 'Refused',
+}
+
+/** One line a tooltip can carry, and the accessible name of the marker, from one place. */
+const statusSays = (status: WorkspaceStatus): string =>
+  (status.reason ? `${STATUS_LABELS[status.state]} — ${status.reason}` : STATUS_LABELS[status.state])
 
 interface Props {
   workspaces: WorkspaceSummary[]
@@ -102,11 +155,14 @@ export const WorkspaceTabs: React.FC<Props> = ({
               + (isTarget ? (from < at ? ' workspace-tab--drop-after' : ' workspace-tab--drop-before') : '')
             }
             // The path is what disambiguates two projects with the same name, the error is
-            // why a tab looks broken, and the chord is the half of "reorder" that a pointer
-            // never discovers — all three belong in the tooltip.
+            // why a tab looks broken, the status is why it may not be answering, and the chord
+            // is the half of "reorder" that a pointer never discovers — all four belong in the
+            // tooltip. None of them lives *only* here any more: everything on this row that
+            // carries meaning is also text somebody listening to the page is told.
             title={[
               workspace.path,
               workspace.error,
+              workspace.status ? statusSays(workspace.status) : null,
               `Drag to reorder, or ${MOVE_KEYS}`,
             ].filter(Boolean).join('\n')}
             draggable
@@ -161,8 +217,44 @@ export const WorkspaceTabs: React.FC<Props> = ({
               onClick={() => onSelect(workspace.id)}
             >
               {isWsl && <span className="workspace-tab__badge">WSL</span>}
+              {/*
+                Beside the WSL badge rather than folded into the marker at the end, because
+                these are two independent facts about one project and a tab may carry both:
+                a project whose config is broken can also be on a machine that is asleep, and
+                a reader who sees one mark disappear when the other arrives has been told
+                something untrue.
+              */}
+              {workspace.status && (
+                <span
+                  className={
+                    'workspace-tab__badge workspace-tab__status'
+                    + ` workspace-tab__status--${workspace.status.state}`
+                  }
+                >
+                  {STATUS_LABELS[workspace.status.state]}
+                  {workspace.status.reason
+                    && <span className="workspace-tab__aside">{` — ${workspace.status.reason}`}</span>}
+                </span>
+              )}
               <span className="workspace-tab__name">{workspace.name}</span>
-              {workspace.error && <span className="workspace-tab__warn" aria-hidden="true">!</span>}
+              {/*
+                The `!` was `aria-hidden="true"` with its meaning in the `title`, which is to
+                say: the one mark on the screen that says this project is broken was hidden
+                from the accessibility tree, and what it stood for was reachable only by
+                hovering a pointer over the tab. A keyboard user never got there and a screen
+                reader was told to skip it.
+
+                So the glyph keeps the `aria-hidden` — it is decoration, and `!` read aloud is
+                noise — and the reason goes beside it as real text, off screen but in the tree.
+                That makes the marker's accessible name the sentence the tooltip was keeping
+                to itself.
+              */}
+              {workspace.error && (
+                <span className="workspace-tab__warn">
+                  <span aria-hidden="true">!</span>
+                  <span className="workspace-tab__aside">{`Configuration error: ${workspace.error}`}</span>
+                </span>
+              )}
             </button>
             {/*
               Only on the tab in front. A gear on every tab would offer to edit a project
