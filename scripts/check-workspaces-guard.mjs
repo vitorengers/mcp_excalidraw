@@ -184,7 +184,11 @@ try {
   if (loopback) loopback.stop();
   if (off) off.stop();
   await new Promise((resolve) => setTimeout(resolve, 200));
-  rmSync(workdir, { recursive: true, force: true });
+  // Forgiven: on Windows a killed server's handles on its state directory are
+  // released asynchronously, and a run that reported failure because it could not
+  // delete a temporary directory would be wrong about the thing it measured (#472).
+  try { rmSync(workdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
+  catch { /* a teardown is not a verdict (#472); run-checks.mjs reaps it */ }
 }
 
 // ─── 3. Nothing in that block is unguarded ────────────────────
