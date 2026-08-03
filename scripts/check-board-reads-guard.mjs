@@ -432,7 +432,13 @@ try {
   if (off) off.stop();
   if (authed) authed.stop();
   await new Promise((resolve) => setTimeout(resolve, 200));
-  rmSync(workdir, { recursive: true, force: true });
+  // Retried, and then forgiven. Three canvas servers were just killed, and on Windows their
+  // handles on this directory are released asynchronously, so under a loaded run this arrives
+  // while it is still locked: every assertion above green, and the script dead in its teardown
+  // with `EPERM` (#472). Housekeeping does not get to decide the verdict — `run-checks.mjs`
+  // reaps the `check-*` directories left in `os.tmpdir()`, so a leak costs one directory.
+  try { rmSync(workdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
+  catch { /* still held; the next run's reaper collects it */ }
 }
 
 // ─── 6. A tenth read cannot be the next one left out ──────────
