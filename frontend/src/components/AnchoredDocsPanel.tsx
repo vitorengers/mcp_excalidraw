@@ -58,7 +58,7 @@ export const AnchoredDocsPanel: React.FC<AnchoredDocsPanelProps> = ({
   // The anchor says *where* a card would go; it must not also decide *whether* there is
   // one. Letting it decide left an empty card with a close button on screen after the
   // shape was deselected — a shell with nothing in it.
-  const hasSomethingToShow = Boolean(body.docKey || body.issue || body.collapsible)
+  const hasSomethingToShow = Boolean(body.docKey || body.issue || body.founder || body.collapsible)
   if (!anchor || !hasSomethingToShow) return null
 
   const height = cardHeightFor(viewport, MAX_CARD_HEIGHT)

@@ -79,6 +79,7 @@ import {
   moveCard,
   moveIssueToColumn,
   findColumn,
+  founderColumn,
   inProgressColumn,
   todoColumn,
   DEFAULT_TODO_COLUMN,
@@ -99,13 +100,17 @@ import {
 } from './core/founder-blockers.js';
 import {
   FounderActionRecord,
+  FounderActionResolver,
+  appendChatTurn,
   founderActionKey,
   openFounderActions,
   readFounderAction,
   recordFounderAction,
+  reviseFounderAction,
   resolveFounderAction
 } from './core/founder-store.js';
 import { FounderSnapshot, verifyAgainst } from './core/founder-verify.js';
+import { founderChatInvocation, runFounderChatTurn } from './core/founder-chat-agent.js';
 import { publishFounderAction as publishFounderActionTo } from './core/founder-publish.js';
 import { setTerminalGhReporter } from './core/gh.js';
 import {
@@ -6135,6 +6140,345 @@ app.post('/api/project-board/move', async (req: Request, res: Response) => {
     logger.warn(`Project board move failed: ${(error as Error).message}`);
     res.status(502).json({ success: false, error: (error as Error).message });
   }
+});
+
+// ─── Founder actions: list, settle, and the chat about one ────
+//
+// Four routes, in one contiguous block, all loopback-only. What they answer with names
+// accounts, repositories and remedies — the very facts `core/agent-preflight.ts` forbids
+// `/health` from carrying — so a canvas reachable from the network must not hand them out.
+//
+// **They read a local file and must keep answering when GitHub is the thing that is broken.**
+// That is the whole point of the column: the first founder action this product will ever
+// produce is "sign `gh` in", and a route that needed `gh` to list it would be empty on exactly
+// the board it exists for. The list therefore answers 200 on a board with no `githubProject`
+// and spawns nothing at all.
+//
+// **Position 12 (#547) is the issue that owns this surface**, and it had not landed when the
+// panel that needs it was written. What is here is the smallest set of answers the panel's
+// contract names, written where #547 says they belong; the retention rule, the exclusion of a
+// re-opened blocker and the `docs/rest-api.md` half are that issue's and are not anticipated.
+
+/** The runs, by workspace and key. One chat in flight per action, as `recreateRuns` does. */
+interface FounderChatRunRecord {
+  state: 'running' | 'done' | 'failed';
+  error: string | null;
+  /**
+   * The one plain sentence a refused revision earns, or null.
+   *
+   * Kept on the run and not in the transcript, and the split is #547's: **the transcript is in
+   * the store and survives a restart; the run does not.** A refusal is a fact about one turn of
+   * one process — the founder has the agent's answer either way, and what a restart loses is
+   * only the note saying the card was left alone, which by then it visibly was.
+   */
+  refusal: string | null;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+const founderChatRuns = new Map<string, FounderChatRunRecord>();
+const founderChatKey = (workspaceId: string, key: string): string => `${workspaceId}\n${key}`;
+
+/**
+ * The workspace a founder request is about, or nothing.
+ *
+ * Deliberately **not** `projectWorkspace`: that one refuses a board with no `githubProject`,
+ * which is right for a route that mirrors a project and wrong for every route here. A founder
+ * action is this board's own record and needs no project to exist, to be settled or to be
+ * talked about.
+ */
+async function founderWorkspace(req: Request): Promise<Workspace | null> {
+  const workspaceId = workspaceIdFrom(req);
+  const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+  return workspace && !workspace.error ? workspace : null;
+}
+
+/**
+ * What the panel may offer, answered before anything is pressed.
+ *
+ * **Controls are driven by this and never by probing a POST.** A probe against a route that
+ * exists would perform the write it was probing for — a `resolve` probe settles a card, and a
+ * `chat` probe starts an agent — so what a board can do is stated rather than discovered.
+ *
+ * `chat` is false on a board with no issue agent granted, and on one whose run cannot have its
+ * GitHub writes taken away. See `core/founder-chat-agent.ts`: #543's narrowing reports that it
+ * could not narrow, and a caller that ran anyway would be holding a conversation with an agent
+ * that can still file on somebody's repository.
+ */
+function founderCapabilities(
+  workspace: Workspace
+): { resolve: boolean; chat: boolean; chatRefusal: string | null } {
+  const agent = ISSUE_AGENT_CONFIGURED
+    ? agentGrantFor(workspace, ISSUE_AGENT_GRANTS, 'issue')
+    : null;
+  if (!agent) {
+    return {
+      resolve: true,
+      chat: false,
+      chatRefusal: `No agent is granted for this board. Set ${settingName('ISSUE_AGENT')} to `
+        + 'the agent command to be able to ask about a founder action.',
+    };
+  }
+  const { refusal } = founderChatInvocation(workspace, agent);
+  return { resolve: true, chat: !refusal, chatRefusal: refusal };
+}
+
+/**
+ * The open actions this canvas is to draw, and what to call the column they go in.
+ *
+ * Records carrying a `publishedItemId` are left out: such an action is already a draft item on
+ * the project and the mirror draws it from there, so listing it here as well would put two
+ * cards on the board for one blocker.
+ */
+app.get('/api/founder-actions', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'Founder actions are read')) return;
+
+  const workspaceId = workspaceIdFrom(req);
+  const workspace = await founderWorkspace(req);
+  if (!workspace) {
+    return res.status(404).json({
+      success: false,
+      reason: 'no-workspace',
+      error: `Workspace "${workspaceId}" is not registered, so it holds no founder actions.`,
+    });
+  }
+
+  res.json({
+    success: true,
+    workspace: workspaceId,
+    columnName: founderColumn(workspace).name,
+    actions: openFounderActions(workspaceId).filter((record) => !record.publishedItemId),
+    capabilities: founderCapabilities(workspace),
+  });
+});
+
+/**
+ * Settle one action — by looking again, or on the founder's word.
+ *
+ * **It invalidates the memo and then probes, rather than reading through it.** A founder who has
+ * just run `gh auth login` and pressed Done would otherwise be told they are still blocked for
+ * up to thirty seconds, and would press again; the click is not the last word precisely so that
+ * the answer can be "no, still", and an answer thirty seconds stale is not that answer.
+ *
+ * Three verdicts and three outcomes. `satisfied` closes it as the probe's. `still-blocked`
+ * answers 409 with the probe's own sentence and leaves the record open. `cannot-say` closes it
+ * as the **person's**, which is the honest record for a bill or a rate limit — nothing here can
+ * watch either clear, and a board that recorded that as verified would be claiming to have
+ * checked something it could not.
+ *
+ * Then the queue is nudged. Nothing about a fix is event-driven, so without it a founder who has
+ * just settled the thing that stopped every run waits out the next interval for nothing.
+ */
+app.post('/api/founder-actions/resolve', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'A founder action is settled')) return;
+
+  const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
+  if (!key) return res.status(400).json({ success: false, error: 'A founder action needs a key.' });
+  const how: FounderActionResolver = req.body?.how === 'person' ? 'person' : 'probe';
+
+  const workspaceId = workspaceIdFrom(req);
+  const workspace = await founderWorkspace(req);
+  if (!workspace) {
+    return res.status(404).json({
+      success: false,
+      reason: 'no-workspace',
+      error: `Workspace "${workspaceId}" is not registered, so it holds no founder actions.`,
+    });
+  }
+
+  const record = readFounderAction(workspaceId, key);
+  if (!record) {
+    return res.status(404).json({ success: false, error: `No founder action "${key}" on this board.` });
+  }
+  // Already settled is not an error and not a second settlement: the first one is the one that
+  // happened, and a reader who pressed twice gets the same answer both times.
+  if (record.state !== 'open') {
+    return res.json({ success: true, action: record, verified: record.resolvedBy === 'probe', why: null });
+  }
+
+  if (how === 'person') {
+    const settled = resolveFounderAction(workspaceId, key, 'person');
+    void dispatchQueue(workspaceId);
+    return res.json({
+      success: true,
+      action: settled,
+      verified: false,
+      why: 'Taken on your word — the board did not look again.',
+    });
+  }
+
+  // The memo goes first. Everything below is the freshest answer this machine can give, which
+  // is the whole of why the button is worth pressing rather than waiting.
+  ghStatusMemo.forget(workspace.id, GH_STATUS_KEY);
+  let github: GithubStatus | null = null;
+  try {
+    github = await readGithubStatus(workspace);
+  } catch (error) {
+    logger.warn(`Founder resolve "${key}": gh could not be read — ${(error as Error).message}`);
+  }
+
+  // Only for the one kind that turns on it, because it is a second `gh` and every other kind is
+  // settled by the status already read.
+  let push: PushAccess | null = null;
+  if (record.kind === 'push-denied') {
+    ghPushMemo.forget(workspaceId, GH_PUSH_KEY);
+    push = await readPushAccess(workspace).catch(() => null);
+  }
+
+  const verdict = verifyAgainst(record.kind, {
+    github, push, agent: implementAgentHealth(workspace),
+  });
+  if (verdict.settled === 'still-blocked') {
+    return res.status(409).json({
+      success: false, settled: verdict.settled, error: verdict.why, action: record,
+    });
+  }
+
+  const settled = resolveFounderAction(
+    workspaceId, key, verdict.settled === 'satisfied' ? 'probe' : 'person'
+  );
+  logger.info(`Founder action "${key}" was settled from the panel: ${verdict.why}`);
+  void dispatchQueue(workspaceId);
+  res.json({
+    success: true,
+    action: settled,
+    verified: verdict.settled === 'satisfied',
+    why: verdict.settled === 'satisfied'
+      ? verdict.why
+      : `${verdict.why} It is recorded as taken on your word.`,
+  });
+});
+
+/**
+ * Ask about one action, and let the answer revise it.
+ *
+ * **The founder's own words reach the store before anything is spawned.** The recreate route's
+ * precedent and its reason: a run that dies has still left what somebody typed where they put
+ * it. One run in flight per action, and a second POST answers 409 rather than starting a
+ * second agent against the same card.
+ */
+app.post('/api/founder-actions/chat', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'A founder action is asked about')) return;
+
+  const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
+  if (!key) return res.status(400).json({ success: false, error: 'A founder action needs a key.' });
+  // Kept exactly as typed. The chat is prose in a panel rather than card text, and
+  // `appendChatTurn` is deliberately not register-validated for that reason.
+  const message = typeof req.body?.message === 'string' ? req.body.message : '';
+  if (!message.trim()) {
+    return res.status(400).json({ success: false, error: 'There is nothing to ask.' });
+  }
+
+  const workspaceId = workspaceIdFrom(req);
+  const workspace = await founderWorkspace(req);
+  if (!workspace) {
+    return res.status(404).json({
+      success: false,
+      reason: 'no-workspace',
+      error: `Workspace "${workspaceId}" is not registered, so it holds no founder actions.`,
+    });
+  }
+
+  const record = readFounderAction(workspaceId, key);
+  if (!record) {
+    return res.status(404).json({ success: false, error: `No founder action "${key}" on this board.` });
+  }
+
+  const runKey = founderChatKey(workspaceId, key);
+  if (founderChatRuns.get(runKey)?.state === 'running') {
+    return res.status(409).json({
+      success: false,
+      error: 'A question about this item is already being answered.',
+    });
+  }
+
+  const agent = ISSUE_AGENT_CONFIGURED ? agentGrantFor(workspace, ISSUE_AGENT_GRANTS, 'issue') : null;
+  const capabilities = founderCapabilities(workspace);
+  if (!agent || !capabilities.chat) {
+    return res.status(404).json({ success: false, error: capabilities.chatRefusal });
+  }
+
+  // Before the spawn, and before the answer: this is the only copy of what was typed.
+  const withQuestion = appendChatTurn(workspaceId, key, { role: 'founder', text: message });
+  const transcript = withQuestion?.chat ?? record.chat;
+
+  founderChatRuns.set(runKey, {
+    state: 'running', error: null, refusal: null,
+    startedAt: new Date().toISOString(), endedAt: null,
+  });
+  // Answered at once: a turn takes as long as an agent takes, and a request held open that long
+  // is indistinguishable from a hang. The panel polls the GET below.
+  res.status(202).json({ success: true, state: 'running', action: withQuestion ?? record });
+
+  const settle = (state: 'done' | 'failed', error: string | null, refusal: string | null): void => {
+    const existing = founderChatRuns.get(runKey);
+    founderChatRuns.set(runKey, {
+      state,
+      error,
+      refusal,
+      startedAt: existing?.startedAt ?? new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+    });
+  };
+
+  try {
+    const result = await runFounderChatTurn(
+      workspace,
+      { key: record.key, kind: record.kind, fields: record.fields },
+      record.evidence,
+      // The founder's own turn included: it is the thing being answered.
+      transcript.map((turn) => ({ role: turn.role, text: turn.text, at: turn.at })),
+      message,
+      { agent, notFoundVariable: settingName('ISSUE_AGENT_WSL') }
+    );
+
+    if (!result.ok || !result.answer) {
+      settle('failed', result.error ?? 'The agent answered with nothing at all.', null);
+      return;
+    }
+
+    appendChatTurn(workspaceId, key, { role: 'agent', text: result.answer.reply });
+
+    // A patch that survived the register is applied to the card in place, so "I did it, what
+    // now?" changes the instructions in front of the reader. A refused one leaves the card
+    // exactly as it was and says so — the founder is told, rather than silently getting an
+    // unchanged card.
+    if (result.answer.patch) {
+      const revised = reviseFounderAction(workspaceId, key, result.answer.patch);
+      if (!revised.ok) {
+        settle('done', null, 'The revision was not applied, so the item was left as it is.');
+        return;
+      }
+      logger.info(`Founder action "${key}" was revised by the chat`);
+    }
+    settle('done', null, result.answer.refusal?.said ?? null);
+  } catch (error) {
+    settle('failed', (error as Error).message, null);
+  }
+});
+
+/**
+ * What the chat has done so far, and the item as it now stands.
+ *
+ * The run is in memory and the **transcript is not**: the conversation comes back from the
+ * store on every read, so reloading the page shows all of it while a run nobody is waiting for
+ * is simply gone. That split is why this hands back the record as well as the run — the panel
+ * has one place to read the steps, the state and the turns from, whether it has been open for
+ * an hour or for a second.
+ */
+app.get('/api/founder-actions/chat', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'A founder chat is read')) return;
+
+  const key = typeof req.query.key === 'string' ? req.query.key.trim() : '';
+  if (!key) return res.status(400).json({ success: false, error: 'A founder action needs a key.' });
+
+  const workspaceId = workspaceIdFrom(req);
+  const action = readFounderAction(workspaceId, key);
+  if (!action) {
+    return res.status(404).json({ success: false, error: `No founder action "${key}" on this board.` });
+  }
+  res.json({ success: true, run: founderChatRuns.get(founderChatKey(workspaceId, key)) ?? null, action });
 });
 
 // ─── Library API (shared shapes) ──────────────────────────────

@@ -156,6 +156,88 @@ export interface CollapsibleTarget {
   collapsed: boolean
 }
 
+// ─── The work only a person can do ────────────────────────────
+
+/** The card's own face: which record this is, and whether it is still asking. */
+export interface FounderTarget {
+  key: string
+  kind?: string | null
+  state: 'open' | 'resolved' | 'dismissed'
+  /** The one line drawn on the card, which is all a card carries. */
+  title?: string | null
+}
+
+/** The fields the register is a schema for. Plain sentences, never markup. */
+export interface FounderFields {
+  title: string
+  what: string
+  why: string
+  steps: string[]
+  confirm: string
+}
+
+/** What the machine saw, which is the one part written for an engineer. */
+export interface FounderEvidence {
+  command?: string
+  said?: string
+  source?: string
+}
+
+/** One turn of the conversation, exactly as it was said. */
+export interface FounderChatTurn {
+  role: 'founder' | 'agent'
+  text: string
+  at: string
+}
+
+/** A founder action as `GET /api/founder-actions` hands it over. */
+export interface FounderAction {
+  key: string
+  kind?: string | null
+  state: 'open' | 'resolved' | 'dismissed'
+  fields: FounderFields
+  evidence?: FounderEvidence | null
+  chat?: FounderChatTurn[]
+  resolvedBy?: 'probe' | 'person' | null
+}
+
+/**
+ * What this board can offer for a founder action.
+ *
+ * **Read from `GET /api/founder-actions`, never discovered by pressing something.** A POST
+ * probe against a route that exists would perform the write it was probing for: a resolve
+ * probe settles the card, and a chat probe starts an agent.
+ */
+export interface FounderControls {
+  resolve: boolean
+  chat: boolean
+  /** Why there is no chat here, for a panel that would otherwise show an empty space. */
+  chatRefusal?: string | null
+}
+
+/** What pressing Done answered. */
+export interface FounderResolved {
+  ok: boolean
+  /** The probe's own sentence when it refused, which is what the panel shows in place. */
+  error?: string | null
+  /** Why it settled, when it did. */
+  why?: string | null
+  /** False when nothing could check it, which the panel says out loud. */
+  verified?: boolean
+  action?: FounderAction | null
+}
+
+/** What one chat turn has done so far, and the item as the store now holds it. */
+export interface FounderChatState {
+  run: {
+    state: 'running' | 'done' | 'failed'
+    error: string | null
+    /** The plain sentence a refused revision earns, or null. */
+    refusal: string | null
+  } | null
+  action: FounderAction | null
+}
+
 export interface DocsPanelBodyProps {
   /** `customData.docKey` of the selected element, or null when nothing is selected. */
   docKey: string | null
@@ -214,6 +296,320 @@ export interface DocsPanelBodyProps {
    * to show, or null; the outcome arrives minutes later and is polled for.
    */
   onRecreateIssue?: (issue: IssueTarget, observations: string) => Promise<string | null>
+  /**
+   * Set when the selected shape is a founder card — a thing only a person can do.
+   *
+   * Never set at the same time as `issue`: `resolvePanelTarget` answers the founder question
+   * first precisely so that a founder card cannot look like an issue, because every control
+   * that offers to build something keys off `issue` alone.
+   */
+  founder?: FounderTarget | null
+  /** The record behind that card, as the poll last read it. Null until the first read lands. */
+  founderAction?: FounderAction | null
+  founderControls?: FounderControls | null
+  /** Press Done. Answers the probe's refusal, or the settled record. */
+  onResolveFounder?: (key: string) => Promise<FounderResolved>
+  /** Ask a question about it. Answers an error to show, or null; the reply arrives later. */
+  onSendFounderChat?: (key: string, message: string) => Promise<string | null>
+  /** What that turn has done so far, and the item as the store now holds it. */
+  onReadFounderChat?: (key: string) => Promise<FounderChatState | null>
+}
+
+/**
+ * A step as the reader gets it: any ordinal a producer transcribed belongs to the list.
+ *
+ * The same strip `renderFounderAction` makes, written again here rather than imported, for the
+ * reason `FounderTargetState` is written out again in `core/panel-target.ts`: this is browser
+ * code, and the register is enforced at the write. The numbering is therefore the `<ol>`'s —
+ * which is the numbering the record was stored with, because the register refuses a run of
+ * ordinals that is not consecutive.
+ */
+const founderStep = (step: string): string =>
+  (step ?? '').replace(/^\s*(?:step\s+)?(\d+)\s*[.):\-–—]\s+/i, '').trim()
+
+/** A turn's time, in the reader's own format, or nothing when it was never stamped. */
+function turnTime(iso: string): string {
+  if (!iso) return ''
+  const when = new Date(iso)
+  return Number.isNaN(when.getTime()) ? '' : when.toLocaleTimeString()
+}
+
+/**
+ * The whole of a founder action, in the reading column the docs card already is.
+ *
+ * **Inside the anchored card rather than as an overlay of its own**, which is what keeps #241
+ * from happening a second time: two overlays sharing `--board-z-overlay` are stacked by DOM
+ * order, and a second one added here would cover the docs card it was drawn beside. Nothing is
+ * added to `obstacles` because there is nothing new on that layer.
+ *
+ * The card is 720 pixels wide — the same reading column a whole GitHub issue body uses — and a
+ * founder action is deliberately far shorter than that. So it is laid out to look finished at
+ * that length: short blocks with room between them, the steps carrying most of the height, and
+ * **no second scrollable region**. A transcript with a scrollbar of its own inside a card that
+ * already has one is two places to be lost in.
+ *
+ * `Evidence` is closed. It is the one part written for an engineer, and a founder action that
+ * opens showing a command line and a tool's stderr has undone the feature on its first frame.
+ */
+const FounderPanel: React.FC<{
+  target: FounderTarget
+  action: FounderAction | null
+  controls: FounderControls | null
+  onResolve?: (key: string) => Promise<FounderResolved>
+  onSend?: (key: string, message: string) => Promise<string | null>
+  onRead?: (key: string) => Promise<FounderChatState | null>
+}> = ({ target, action, controls, onResolve, onSend, onRead }) => {
+  /**
+   * The record as this panel now knows it, which is not always what the poll last drew.
+   *
+   * Done settles it and a chat may revise it, and both answers come back from the route that
+   * did the work — so the panel takes them rather than waiting out a poll. The board's own copy
+   * catches up on its next pass; until then this is the newer of the two.
+   */
+  const [live, setLive] = useState<FounderAction | null>(action)
+  const [resolving, setResolving] = useState(false)
+  /** The probe's own sentence when it refused. Shown in place; the panel stays open. */
+  const [refusal, setRefusal] = useState<string | null>(null)
+  /** What settling it said, once it settled. */
+  const [settledWhy, setSettledWhy] = useState<string | null>(null)
+  const [verified, setVerified] = useState<boolean | null>(null)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [chatError, setChatError] = useState<string | null>(null)
+  const [run, setRun] = useState<FounderChatState['run']>(null)
+  /** The turns this panel has shown, ahead of the store when one has just been typed. */
+  const [turns, setTurns] = useState<FounderChatTurn[]>(action?.chat ?? [])
+
+  // A record belongs to the card it was read for, and the panel outlives the selection — so
+  // everything above is written again when the selected key changes, during render rather than
+  // in an effect. An effect runs after the paint, and one frame late is the previous card's
+  // steps under this card's title.
+  const [shownFor, setShownFor] = useState(target.key)
+  if (shownFor !== target.key) {
+    setShownFor(target.key)
+    setLive(action)
+    setTurns(action?.chat ?? [])
+    setRefusal(null)
+    setSettledWhy(null)
+    setVerified(null)
+    setDraft('')
+    setChatError(null)
+    setRun(null)
+  }
+
+  // The poll caught up, and nothing local is newer: take it. A record the panel has already
+  // changed is left alone until the selection does, or a settle would be undone by the tick
+  // that follows it.
+  useEffect(() => {
+    if (!action || live) return
+    setLive(action)
+    setTurns(action.chat ?? [])
+  }, [action, live])
+
+  /**
+   * Follow the run until it settles, then take the item as the store now holds it.
+   *
+   * Polled rather than pushed, exactly as a recreate is: there is no element for the socket to
+   * update — a founder card is redrawn from the server on every pass — and the reply, the
+   * revised steps and the refusal all arrive at once, from the store.
+   */
+  useEffect(() => {
+    if (!onRead || run?.state !== 'running') return
+    let cancelled = false
+    const read = (): void => {
+      void onRead(target.key).then((state) => {
+        if (cancelled || !state) return
+        setRun(state.run)
+        if (state.action) {
+          setLive(state.action)
+          setTurns(state.action.chat ?? [])
+        }
+      })
+    }
+    const timer = setInterval(read, 1200)
+    read()
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [onRead, target.key, run?.state])
+
+  const record = live ?? action
+  const fields = record?.fields ?? null
+  const evidence = record?.evidence ?? null
+  const settled = (record?.state ?? target.state) !== 'open'
+  const evidenceRows: [string, string][] = [
+    ['Command', evidence?.command ?? ''],
+    ['Said', evidence?.said ?? ''],
+    ['Where', evidence?.source ?? '']
+  ].filter((row): row is [string, string] => Boolean(row[1]))
+
+  const send = async (): Promise<void> => {
+    if (!onSend || sending || run?.state === 'running') return
+    const message = draft
+    setSending(true)
+    setChatError(null)
+    // Shown at once, before the network: the founder has to see what they said land, and the
+    // route writes it to the store before it spawns anything, so the two agree.
+    setTurns((current) => [...current, { role: 'founder', text: message, at: new Date().toISOString() }])
+    const error = await onSend(target.key, message)
+    setSending(false)
+    if (error) {
+      setChatError(error)
+      // Put the words back in the box: they are the only copy of themselves.
+      setTurns((current) => current.slice(0, -1))
+      return
+    }
+    setDraft('')
+    setRun({ state: 'running', error: null, refusal: null })
+  }
+
+  return (
+    <div className="element-docs__founder">
+      <h2 className="element-docs__title">{fields?.title ?? target.title ?? 'A thing only you can do'}</h2>
+
+      {!record && <p className="element-docs__hint">Reading this item…</p>}
+
+      {fields && (
+        <>
+          <p className="element-docs__founder-what">{fields.what}</p>
+          <p className="element-docs__founder-why">{fields.why}</p>
+
+          <ol className="element-docs__founder-steps">
+            {fields.steps.map((step, at) => (
+              <li key={`${at}-${step}`}>{founderStep(step)}</li>
+            ))}
+          </ol>
+
+          <p className="element-docs__founder-confirm">{fields.confirm}</p>
+
+          {/* Closed, and closed is the whole requirement: showing it by default undoes the
+              feature. `<details>` rather than a button of our own so that the disclosure is
+              the platform's — it opens on Enter and on Space, and a reader who never opens it
+              pays nothing for it. */}
+          {evidenceRows.length > 0 && (
+            <details className="element-docs__founder-evidence">
+              <summary>Evidence</summary>
+              <dl>
+                {evidenceRows.map(([name, value]) => (
+                  <React.Fragment key={name}>
+                    <dt>{name}</dt>
+                    <dd>{value}</dd>
+                  </React.Fragment>
+                ))}
+              </dl>
+            </details>
+          )}
+        </>
+      )}
+
+      <div className="element-docs__actions">
+        {!settled && controls?.resolve && onResolve && (
+          <button
+            type="button"
+            className="element-docs__collapse element-docs__action element-docs__founder-done"
+            disabled={resolving}
+            onClick={async () => {
+              setResolving(true)
+              setRefusal(null)
+              const answer = await onResolve(target.key)
+              setResolving(false)
+              if (!answer.ok) {
+                // In place, and the panel stays open — the rule the comment box already
+                // follows, where an error keeps the draft.
+                setRefusal(answer.error ?? 'It could not be settled.')
+                return
+              }
+              setRefusal(null)
+              setSettledWhy(answer.why ?? null)
+              setVerified(answer.verified === true)
+              if (answer.action) setLive(answer.action)
+            }}
+          >
+            {resolving ? 'Checking…' : 'Done'}
+          </button>
+        )}
+      </div>
+
+      {refusal && <p className="element-docs__error element-docs__founder-refusal">{refusal}</p>}
+
+      {settled && (
+        <p className="element-docs__hint element-docs__founder-settled">
+          {settledWhy
+            ?? (record?.resolvedBy === 'probe'
+              ? 'This was checked and it is done.'
+              : 'This was marked done.')}
+          {verified === false && ' Nothing here could check it, so it is recorded as taken on trust.'}
+        </p>
+      )}
+
+      {/* The conversation. Below the steps, because it is about them. */}
+      <section className="element-docs__founder-chat">
+        {turns.length > 0 && (
+          <div className="element-docs__founder-transcript">
+            {turns.map((turn, at) => (
+              <article
+                key={`${at}-${turn.at}`}
+                className={`element-docs__founder-turn element-docs__founder-turn--${turn.role}`}
+              >
+                <p className="element-docs__comment-meta">
+                  {[turn.role === 'founder' ? 'You' : 'The agent', turnTime(turn.at)]
+                    .filter(Boolean).join(' · ')}
+                </p>
+                {turn.role === 'agent'
+                  ? (
+                    // An agent's reply is markdown written by something this board started, so
+                    // it reaches the DOM the way every other such body does — through `marked`
+                    // and `DOMPurify`.
+                    <div
+                      className="element-docs__body"
+                      dangerouslySetInnerHTML={{ __html: render(turn.text) }}
+                    />
+                  )
+                  : <p className="element-docs__founder-said">{turn.text}</p>}
+              </article>
+            ))}
+          </div>
+        )}
+
+        {run?.state === 'running' && (
+          <p className="element-docs__hint">Asking…</p>
+        )}
+        {run?.state === 'failed' && (
+          <p className="element-docs__error">{run.error ?? 'The question was not answered.'}</p>
+        )}
+        {/* Said plainly, and separately from the reply: a revision the register refused leaves
+            the item as it was, and a founder who is not told has silently got an unchanged
+            card. */}
+        {run?.refusal && <p className="element-docs__hint">{run.refusal}</p>}
+
+        {controls?.chat && onSend && (
+          <div className="element-docs__compose">
+            <textarea
+              className="element-docs__draft element-docs__founder-draft"
+              value={draft}
+              placeholder="Ask about this — which plan to buy, whether the free one is enough, or say you have done it."
+              onChange={(event) => setDraft(event.target.value)}
+            />
+            <div className="element-docs__actions">
+              <button
+                type="button"
+                className="element-docs__collapse element-docs__action element-docs__founder-send"
+                // A second send while one is in flight is refused here rather than by the
+                // server's 409: the reader should not be able to start a second agent and
+                // then be told off for it.
+                disabled={sending || run?.state === 'running' || !draft.trim()}
+                onClick={() => { void send() }}
+              >
+                {sending || run?.state === 'running' ? 'Asking…' : 'Ask'}
+              </button>
+            </div>
+            {chatError && <p className="element-docs__error">{chatError}</p>}
+          </div>
+        )}
+        {controls && !controls.chat && controls.chatRefusal && (
+          <p className="element-docs__hint">{controls.chatRefusal}</p>
+        )}
+      </section>
+    </div>
+  )
 }
 
 /** What is known about implementing the issue, wherever it was learned. */
@@ -463,7 +859,8 @@ function knownAlready(
 export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
   docKey, title, workspace, collapsible, onToggleCollapse, issue, onCreateIssue,
   onImplementIssue, onResetImplement, onResetIssue, onAdoptIssue, onAddComment,
-  onRecreateIssue, onAttachImages, onDetachImage
+  onRecreateIssue, onAttachImages, onDetachImage,
+  founder, founderAction, founderControls, onResolveFounder, onSendFounderChat, onReadFounderChat
 }) => {
   const [doc, setDoc] = useState<DocState>({ status: 'empty' })
   const [atSelection] = useState(() => knownAlready(issue, workspace))
@@ -957,6 +1354,20 @@ export const DocsPanelBody: React.FC<DocsPanelBodyProps> = ({
 
   return (
     <div className="element-docs">
+      {/* First, and above the document: a founder card carries no `issue`, so nothing below
+          this can draw an Implement, Resume, Fix or Recreate control for one. */}
+      {founder && (
+        <FounderPanel
+          key={founder.key}
+          target={founder}
+          action={founderAction ?? null}
+          controls={founderControls ?? null}
+          onResolve={onResolveFounder}
+          onSend={onSendFounderChat}
+          onRead={onReadFounderChat}
+        />
+      )}
+
       {issue && (
         <div className="element-docs__issue">
           {issue.state === 'created' && issue.issueUrl && (
