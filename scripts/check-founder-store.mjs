@@ -103,7 +103,7 @@ const store = await import(storeUrl);
 const {
   appendChatTurn, dismissFounderAction, founderActionKey, founderActionsFile,
   listFounderActions, openFounderActions, readFounderAction, recordFounderAction,
-  resolveFounderAction,
+  resolveFounderAction, reviseFounderAction,
 } = store;
 
 /** A record the register accepts, so a fixture is exactly one field away from valid. */
@@ -136,7 +136,7 @@ function said(run) {
 
 // ─── 1. The doors ────────────────────────────────────────────
 
-console.log('1. eight doors in, and nothing else writes a record');
+console.log('1. nine doors in, and nothing else writes a record');
 
 const DOORS = [
   'recordFounderAction', 'readFounderAction', 'openFounderActions', 'listFounderActions',
@@ -145,6 +145,11 @@ const DOORS = [
   // rather than a field a publisher sets, because every record handed out of here is a copy —
   // see `markFounderActionPublished`, and `scripts/check-founder-publish.mjs` for what it is for.
   'markFounderActionPublished',
+  // The ninth, added by #548: what a card *says*, replaced when a chat has agreed something that
+  // changes it. A door rather than an edit through a handed-out record, for the reason above —
+  // and register-validated, because a second write path that was not would be the register
+  // enforced at one door and therefore at none. See section 12.
+  'reviseFounderAction',
 ];
 
 for (const door of DOORS) {
@@ -652,6 +657,56 @@ check('the file is written in exactly one place in the module',
 check('and it lands through a temporary file rather than over the reader\'s',
       /\.tmp/.test(source) && /renameSync/.test(source),
       'a plain write is what a reader sees half of');
+
+// ─── 12. What a card says can be replaced, and only through the register ────
+
+console.log('\n12. a revision goes through the same rules the first write went through');
+{
+  const REVISED = 'ws-revise';
+  const key = founderActionKey(REVISED, 'gh-login');
+  recordFounderAction({ workspaceId: REVISED, kind: 'gh-login', fields: GOOD });
+
+  const better = {
+    ...GOOD,
+    steps: [
+      'Run `gh auth login` and pick GitHub.com when it asks.',
+      'Pick a browser sign-in and paste the code it shows you.',
+      'Come back to the board and press Done.',
+    ],
+  };
+  const written = reviseFounderAction(REVISED, key, better);
+  check('a revision the register accepts is written', written.ok === true,
+        JSON.stringify(written.faults));
+  check('and it is what the record now says',
+        readFounderAction(REVISED, key)?.fields.steps.length === 3,
+        JSON.stringify(readFounderAction(REVISED, key)?.fields.steps));
+
+  // Eight steps, where the register allows seven. The rule that bites here spans fields, which
+  // is exactly why the whole card is measured rather than the part that changed.
+  const tooMany = { ...GOOD, steps: Array.from({ length: 8 }, (_, at) => `Step number ${at + 1}.`) };
+  const refused = reviseFounderAction(REVISED, key, tooMany);
+  check('a revision the register refuses is not written', refused.ok === false);
+  check('and it says which rule it broke',
+        refused.faults.some((fault) => fault.field === 'steps' && fault.rule === 'count'),
+        JSON.stringify(refused.faults));
+  check('the record is exactly what it was',
+        readFounderAction(REVISED, key)?.fields.steps.length === 3,
+        JSON.stringify(readFounderAction(REVISED, key)?.fields.steps));
+
+  // A settled record is a record of what was asked and what closed it. Rewriting one afterwards
+  // would make the column's own history disagree with the board that acted on it.
+  resolveFounderAction(REVISED, key, 'person');
+  const afterSettling = reviseFounderAction(REVISED, key, GOOD);
+  check('a settled record may not be revised at all', afterSettling.ok === false);
+  check('and it is left exactly as it was settled',
+        readFounderAction(REVISED, key)?.fields.steps.length === 3
+        && readFounderAction(REVISED, key)?.state === 'resolved',
+        JSON.stringify(readFounderAction(REVISED, key)?.state));
+
+  check('a key nothing was ever recorded under is not created by revising it',
+        reviseFounderAction(REVISED, `${REVISED}:gh-billing`, GOOD).ok === false
+        && readFounderAction(REVISED, `${REVISED}:gh-billing`) === null);
+}
 
 // ─── Teardown ────────────────────────────────────────────────
 //

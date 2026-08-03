@@ -327,6 +327,14 @@ async function request(url, options, attempts = 3) {
   throw last;
 }
 
+/** The run record and the item, straight from the route the panel polls. */
+async function chatRun(base, workspaceId, key) {
+  const response = await request(
+    `${base}/api/founder-actions/chat?workspace=${workspaceId}&key=${encodeURIComponent(key)}`
+  );
+  return response.json().catch(() => ({}));
+}
+
 const agentCalls = () =>
   readFileSync(agentLogPath, 'utf8').split('\n').filter((line) => line.trim()).length;
 
@@ -445,6 +453,7 @@ const PANEL = `(() => {
     hasBody: Boolean(body),
     insideCard: Boolean(card && body && card.contains(body)),
     box: boxOf(card),
+    window: { width: window.innerWidth, height: window.innerHeight },
   };
   if (!body) return out;
 
@@ -475,6 +484,7 @@ const PANEL = `(() => {
   out.refusal = text('.element-docs__founder-refusal');
   out.settled = text('.element-docs__founder-settled');
   out.hints = Array.from(body.querySelectorAll('.element-docs__hint')).map((node) => node.textContent.trim());
+  out.errors = Array.from(body.querySelectorAll('.element-docs__error')).map((node) => node.textContent.trim());
   out.turns = Array.from(body.querySelectorAll('.element-docs__founder-turn')).map((node) => ({
     who: node.className.includes('--founder') ? 'founder' : 'agent',
     text: node.textContent.trim(),
@@ -483,11 +493,19 @@ const PANEL = `(() => {
   out.draft = draft ? { value: draft.value, box: boxOf(draft) } : null;
 
   if (out.box) {
-    const box = out.box;
+    // Clamped into the window first. The card is anchored to a shape in the mirror, which sits
+    // at large negative scene coordinates, so placement can legitimately leave part of it off
+    // the left edge — and elementFromPoint answers null for a point that is not on the page,
+    // which is a fact about the viewport rather than about anything covering the card.
+    const visible = {
+      left: Math.max(out.box.left, 0), top: Math.max(out.box.top, 0),
+      right: Math.min(out.box.right, window.innerWidth), bottom: Math.min(out.box.bottom, window.innerHeight),
+    };
+    out.visible = visible;
     const points = [
-      { name: 'top left', x: box.left + 12, y: box.top + 12 },
-      { name: 'middle', x: box.left + box.width / 2, y: box.top + box.height / 2 },
-      { name: 'bottom right', x: box.right - 12, y: box.bottom - 12 },
+      { name: 'top left', x: visible.left + 12, y: visible.top + 12 },
+      { name: 'middle', x: (visible.left + visible.right) / 2, y: (visible.top + visible.bottom) / 2 },
+      { name: 'bottom right', x: visible.right - 12, y: visible.bottom - 12 },
     ];
     out.hits = points.map((point) => {
       const found = document.elementFromPoint(point.x, point.y);
@@ -498,14 +516,53 @@ const PANEL = `(() => {
   return out;
 })()`;
 
-/** A press where a reader would put it: hit-tested first, then dispatched at that point. */
-async function press(box) {
+/**
+ * A press where a reader would put it, hit-tested before it is dispatched.
+ *
+ * The hit test is not decoration. The card grows as the conversation does, so a box read a
+ * moment ago can have moved by the time it is pressed — and a press that misses lands on the
+ * canvas, empties the selection and takes the panel off the screen, which would be reported as
+ * whatever assertion came next rather than as a stale coordinate.
+ */
+async function press(box, what = 'a control') {
   const x = box.left + box.width / 2;
   const y = box.top + box.height / 2;
+  const onCard = await evaluate(`(() => {
+    const found = document.elementFromPoint(${x}, ${y});
+    const card = document.querySelector('.docs-card');
+    return Boolean(card && found && (card === found || card.contains(found)));
+  })()`);
+  if (!onCard) {
+    throw new Error(`the press for ${what} at ${Math.round(x)},${Math.round(y)} does not land on the card`);
+  }
   await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1, buttons: 1 });
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, buttons: 0 });
   await sleep(250);
 }
+
+/**
+ * The same, addressed by selector: scrolled into view, re-measured, then pressed.
+ *
+ * The card is a reading column with a ceiling on its height, so a control near the bottom of a
+ * growing conversation can be below the fold. Scrolling it into view first is what a reader
+ * does, and re-measuring afterwards is what keeps the coordinate honest.
+ */
+async function pressSelector(selector, what) {
+  const box = await evaluate(`(() => {
+    const node = document.querySelector(${JSON.stringify(selector)});
+    if (!node) return null;
+    node.scrollIntoView({ block: 'center' });
+    const box = node.getBoundingClientRect();
+    return { left: box.left, top: box.top, width: box.width, height: box.height };
+  })()`);
+  if (!box) throw new Error(`there is no ${what} on the page to press`);
+  await press(box, what);
+}
+
+const EVIDENCE_SUMMARY = 'details.element-docs__founder-evidence > summary';
+const DONE = '.element-docs__founder-done';
+const ASK = '.element-docs__founder-send';
+const DRAFT = '.element-docs__founder-draft';
 
 const select = async (id) => {
   await evaluate(`window.__founderApi.updateScene({ appState: { selectedElementIds: { '${id}': true } } })`);
@@ -615,10 +672,10 @@ try {
     check('and what it is hiding is the machine half',
           (panel.evidence?.text ?? '').includes(LOGIN_EVIDENCE.command),
           String(panel.evidence?.text));
-    await press(panel.evidence.box);
+    await pressSelector(EVIDENCE_SUMMARY, 'the Evidence disclosure');
     const opened = await evaluate(PANEL);
     check('pressing it opens it', opened.evidence?.open === true, `open=${opened.evidence?.open}`);
-    await press(opened.evidence.box);
+    await pressSelector(EVIDENCE_SUMMARY, 'the Evidence disclosure');
     panel = await evaluate(PANEL);
     check('and pressing it again puts it away', panel.evidence?.open === false,
           `open=${panel.evidence?.open}`);
@@ -638,14 +695,14 @@ try {
           `${panel.cardCount} .docs-card elements`);
     check('nothing on the page covers the card',
           (panel.hits ?? []).every((hit) => hit.onCard),
-          JSON.stringify(panel.hits));
+          `${JSON.stringify(panel.hits)} card ${JSON.stringify(panel.box)} in ${JSON.stringify(panel.window)}`);
   }
 
   console.log('\n6. a question reaches the transcript at once, and only one agent runs');
   {
     writeFileSync(chatModePath, 'clean', 'utf8');
     const before = agentCalls();
-    await press(panel.draft.box);
+    await pressSelector(DRAFT, 'the compose box');
     await send('Input.insertText', { text: 'I have just signed in — what now?' });
     await sleep(200);
     panel = await evaluate(PANEL);
@@ -653,7 +710,7 @@ try {
           String(panel.draft.value));
     check('and Ask is offered', panel.ask && panel.ask.disabled === false, JSON.stringify(panel.ask));
 
-    await press(panel.ask.box);
+    await pressSelector(ASK, 'Ask');
     const asking = await panelWhen(
       (seen) => seen.turns?.some((turn) => turn.who === 'founder'),
       'the question to appear in the transcript'
@@ -665,13 +722,25 @@ try {
     check('and a second Ask is refused while one is in flight',
           asking.ask === null || asking.ask.disabled === true, JSON.stringify(asking.ask));
 
-    // Pressed anyway, at the box the button had: the claim is that no second agent starts.
-    if (asking.ask?.box) await press(asking.ask.box);
+    // Pressed anyway, at the box the button has *now*: the claim is that no second agent
+    // starts, and a stale coordinate would prove nothing about it.
+    const stillAsking = await evaluate(PANEL);
+    if (stillAsking.ask) await pressSelector(ASK, 'the second Ask');
+
+    const settledRun = await waitFor(async () => {
+      const seen = await chatRun(BLOCKED_BASE, BLOCKED, LOGIN_KEY);
+      return seen?.run && seen.run.state !== 'running' ? seen : null;
+    }, 'the chat run to settle');
+    check('the run finished rather than failing', settledRun.run.state === 'done',
+          JSON.stringify(settledRun.run));
 
     const answered = await panelWhen(
-      (seen) => seen.turns?.some((turn) => turn.who === 'agent'),
+      (seen) => seen.turns?.some((turn) => turn.who === 'agent')
+        || (seen.errors ?? []).length > 0,
       'the agent to answer'
     );
+    check('and nothing was reported as an error', (answered.errors ?? []).length === 0,
+          JSON.stringify(answered.errors));
     check('the reply arrives when the run settles',
           answered.turns.some((turn) => turn.who === 'agent' && turn.text.includes('signed out')),
           JSON.stringify(answered.turns));
@@ -703,11 +772,11 @@ try {
   {
     writeFileSync(chatModePath, 'refused', 'utf8');
     const stepsBefore = JSON.stringify(panel.steps);
-    await press(panel.draft.box);
+    await pressSelector(DRAFT, 'the compose box');
     await send('Input.insertText', { text: 'Rewrite this as eight steps.' });
     await sleep(200);
     panel = await evaluate(PANEL);
-    await press(panel.ask.box);
+    await pressSelector(ASK, 'Ask');
 
     const answered = await panelWhen(
       (seen) => seen.turns?.filter((turn) => turn.who === 'agent').length === 2,
@@ -739,7 +808,7 @@ try {
   console.log('\n10. Done while the blocker is still there refuses in place');
   {
     check('Done is offered on an open action', Boolean(panel.done), JSON.stringify(panel.buttons));
-    await press(panel.done.box);
+    await pressSelector(DONE, 'Done');
     const refused = await panelWhen((seen) => Boolean(seen.refusal), 'the refusal to be shown');
     check('the probe\'s own sentence is shown in place',
           /still signed in to no account/i.test(refused.refusal ?? ''), String(refused.refusal));
@@ -757,7 +826,7 @@ try {
   {
     writeFileSync(authPath, 'in', 'utf8');
     panel = await evaluate(PANEL);
-    await press(panel.done.box);
+    await pressSelector(DONE, 'Done');
     const settled = await panelWhen((seen) => Boolean(seen.settled), 'the item to read as settled');
     check('the panel says it is done', /done|settled|signed in/i.test(settled.settled ?? ''),
           String(settled.settled));
@@ -778,7 +847,7 @@ try {
           trustBoard.cards[0].key);
     panel = await select(trustBoard.cards[0].id);
     panel = await panelWhen((seen) => Boolean(seen.done), 'the Done control on the trust board');
-    await press(panel.done.box);
+    await pressSelector(DONE, 'Done');
     const settled = await panelWhen((seen) => Boolean(seen.settled), 'the item to read as settled');
     check('it settled on the first press', Boolean(settled.settled), String(settled.settled));
     check('and the panel says it was taken on trust', /on (your word|trust)/i.test(settled.settled ?? ''),
