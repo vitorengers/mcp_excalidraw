@@ -11,7 +11,8 @@
  * So `core/founder-store.ts` writes, and this is the file that holds it to writing. Eleven
  * sections, in the order that makes the later ones mean anything:
  *
- *  1. **the doors.** Eight functions record, read, list, settle, publish and add to the chat, and
+ *  1. **the doors.** Nine functions record, read, list, settle, revise, publish and add to the
+ *     chat, and
  *     are the only way in. A producer that reaches past them is a producer whose text was
  *     never measured.
  *  2. **a record recorded is a record read back**, with the key the store composed rather than
@@ -136,7 +137,7 @@ function said(run) {
 
 // ─── 1. The doors ────────────────────────────────────────────
 
-console.log('1. eight doors in, and nothing else writes a record');
+console.log('1. nine doors in, and nothing else writes a record');
 
 const DOORS = [
   'recordFounderAction', 'readFounderAction', 'openFounderActions', 'listFounderActions',
@@ -145,6 +146,12 @@ const DOORS = [
   // rather than a field a publisher sets, because every record handed out of here is a copy —
   // see `markFounderActionPublished`, and `scripts/check-founder-publish.mjs` for what it is for.
   'markFounderActionPublished',
+  // The ninth, added by #547: a chat turn can end in the card itself needing to say something
+  // different, and `recordFounderAction` deliberately will not rewrite the fields of a key it
+  // already holds. A door of its own so that the register is still enforced at the write — the
+  // text it is offered comes out of a coding agent, which is the least trustworthy input this
+  // module will ever be handed.
+  'reviseFounderAction',
 ];
 
 for (const door of DOORS) {

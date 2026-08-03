@@ -313,7 +313,7 @@ function renameOver(from: string, to: string): void {
 /**
  * Write one workspace's records out now, atomically.
  *
- * The only place in this module that touches the file, which is what makes the eight doors the
+ * The only place in this module that touches the file, which is what makes the nine doors the
  * only way in: everything else changes the map and asks this to land it.
  */
 function saveWorkspace(id: string, records: Map<string, FounderActionRecord>): void {
