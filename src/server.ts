@@ -210,6 +210,24 @@ const __dirname = path.dirname(__filename);
 const PACKAGE_VERSION = packageVersion();
 
 const app = express();
+
+/**
+ * The router matches a path the way the gates read it, rather than more loosely.
+ *
+ * Both of these are off by Express's defaults, and both defaults are what made `/API/elements`
+ * reach a handler the token gate had already waved through as "not an API request". `gatePath`
+ * is the fix and this is the second half of it: with the router this strict there is no second
+ * spelling of a route for a gate to disagree with in the first place. Kept as belt *and*
+ * braces deliberately — a route added later, or a gate that grows a new literal comparison,
+ * must not be able to re-open #513 on its own.
+ *
+ * Nothing in this product ever asked for `/API/…` or `/api/elements/`: the frontend builds its
+ * paths in `apiUrl`, the CLI and the MCP server build theirs in `core/canvas-client.ts`, and
+ * every check spells them the way this file declares them.
+ */
+app.set('case sensitive routing', true);
+app.set('strict routing', true);
+
 const server = createServer(app);
 
 /**
@@ -382,7 +400,35 @@ const wss = new WebSocketServer({
  */
 const PAIRING_OPEN_PATHS = new Set(['/api/pair/request', '/api/pair/status']);
 
-const isPairingBootstrap = (req: Request): boolean => PAIRING_OPEN_PATHS.has(req.path);
+/**
+ * The path a gate decides on, which is not the path as it was typed.
+ *
+ * Every literal path comparison in this file goes through here, and the reason is that the
+ * gates and the router used to disagree about what a path is. Express's router is
+ * case-insensitive by default and nothing here set it otherwise, so `/API/elements` failed the
+ * token gate's `startsWith('/api/')`, took the `next()` meant for a request that is not an API
+ * request at all, and then matched `app.get('/api/elements')` perfectly. Measured
+ * unauthenticated against a running board: `/api/elements` 401, `/API/elements` 200 with the
+ * whole board, `/Api/elements` 200, `/api/../API/elements` 200.
+ *
+ * That was a session-lifetime bypass of the one control that stands between this server and
+ * another process on the same machine — the threat `core/auth-token.ts` names, and one that is
+ * on loopback, so every loopback guard passes for it. Since #510 it was more than that:
+ * `POST /API/pair/approve` reached its handler, and a local process could approve its own
+ * pairing request and keep a **persisted** device secret it never had to read a file for.
+ *
+ * A trailing slash is folded too, because `strict routing` is off by the same default and
+ * `/api/elements/` reaches the same handler. Percent-encoding is deliberately *not* decoded:
+ * `req.path` is the raw pathname and the router matches on the raw pathname, so the two already
+ * agree there — `/%41PI/elements` matches nothing and 404s, and decoding here would invent a
+ * disagreement rather than close one.
+ */
+function gatePath(req: Request): string {
+  const lowered = req.path.toLowerCase();
+  return lowered.length > 1 && lowered.endsWith('/') ? lowered.slice(0, -1) : lowered;
+}
+
+const isPairingBootstrap = (req: Request): boolean => PAIRING_OPEN_PATHS.has(gatePath(req));
 
 // Middleware
 //
@@ -435,7 +481,10 @@ app.use((req: Request, res: Response, next: NextFunction) => {
  */
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (!AUTH_REQUIRED) return next();
-  if (req.path !== '/api' && !req.path.startsWith('/api/')) return next();
+  // `gatePath`, never `req.path`: the two spellings of this comparison are what let `/API/…`
+  // past this gate and into a handler. See the note on that function.
+  const path = gatePath(req);
+  if (path !== '/api' && !path.startsWith('/api/')) return next();
   if (isPairingBootstrap(req)) return next();
   const offered = offeredToken(req.headers, req.url);
   if (sameToken(offered, AUTH_TOKEN)) return next();
