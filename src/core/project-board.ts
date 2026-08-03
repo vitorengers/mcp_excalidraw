@@ -26,6 +26,7 @@ import {
   ProjectBoard,
   NO_STATUS_OPTION_ID,
   NO_STATUS_NAME,
+  FOUNDER_NAME,
   githubProjectRefusal,
   parseProjectUrl,
 } from './project-board-types.js';
@@ -488,7 +489,11 @@ export class NotOnThisBoard extends Error {}
  */
 export const DEFAULT_IN_PROGRESS_COLUMN = 'In Progress';
 export const DEFAULT_TODO_COLUMN = 'Todo';
-export const DEFAULT_FOUNDER_COLUMN = 'Founder Actions';
+// `FOUNDER_NAME` itself, rather than the same string typed twice. The canvas draws a founder
+// column of its own under this name while nothing has published one (#539), and that constant
+// lives next door in `project-board-types.ts` because the browser needs it and this module
+// spawns `gh`. Two spellings of one column name is a duplicate column the day either moves.
+export const DEFAULT_FOUNDER_COLUMN = FOUNDER_NAME;
 
 /** A column to move to, and the setting that would name it if the default is wrong. */
 export interface ColumnTarget {
