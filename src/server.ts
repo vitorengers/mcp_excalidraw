@@ -772,19 +772,31 @@ function boundToLoopback(): boolean {
 /**
  * Refuse a caller that arrived over the network, and say which question was asked.
  *
- * Two kinds of route call this, and the second is the one worth explaining. Most of them write
+ * Three kinds of route call this, and the last two are the ones worth explaining. The first write
  * files this machine owns, spawn a process holding the operator's `gh` credentials, or list its
  * directories — reaching those from the network is obviously worse than reaching a route that
- * only reads. The rest are **reads of board contents**: the elements, the images, the documents,
- * the library and the snapshots. They were left open when the writes were guarded, on the
+ * only reads. The second are **reads of board contents**: the elements, the images, the documents,
+ * the library and the snapshots. They were left open when the first set was guarded, on the
  * reasoning that a read is the safe half; #366 decided that it is not. A board bound to an
  * interface was publishing everything on it to whoever reached the port, and the only honest
  * choice between guarding the reads and writing down that they are open was to guard them.
  *
+ * The third are the **writes of board contents**, and #456 is where the same question was put to
+ * them. Guarding the reads alone had left a board bound to an interface as something odd: nobody
+ * on the network could read it, and anybody reaching the port could still draw on it, empty it
+ * (`DELETE /api/elements/clear` copies first, and it still empties it) and fill its file store.
+ * The two answers on offer were to guard them as well or to write down that they are open, which
+ * `docs/rest-api.md` had been doing in one sentence; a sentence is not a decision, and the
+ * asymmetry was the shape the routes happened to have rather than anything anybody chose. They
+ * are guarded. The two `/result` routes go with them rather than being excused as "the browser
+ * answering back": the browser that would answer cannot open its socket off loopback at all since
+ * #366, so nothing is lost, and what is refused is a network caller resolving somebody else's
+ * pending export by guessing a request id.
+ *
  * The consequence is stated rather than hidden: a non-loopback bind is now useless for
  * everything, not merely for the GitHub half. #278 had already taken the tab strip and the
- * picker; this takes the canvas. A reverse proxy is unaffected — it reaches this server on
- * loopback, which is the configuration `EXCALIDRAW_ALLOWED_HOSTS` exists for.
+ * picker; this takes the canvas, in both directions. A reverse proxy is unaffected — it reaches
+ * this server on loopback, which is the configuration `EXCALIDRAW_ALLOWED_HOSTS` exists for.
  *
  * Three controls stand in front of these routes and none replaces another. The token (#350) is
  * what the caller carries, and it is a `VIBEMAXXING_NO_AUTH` away from not being there — which
@@ -829,6 +841,8 @@ app.get('/api/elements', async (req: Request, res: Response) => {
 
 // Create new element
 app.post('/api/elements', (req: Request, res: Response) => {
+  if (offLoopback(res, 'The board is drawn on')) return;
+
   try {
     const params = CreateElementSchema.parse(req.body);
     const workspaceId = workspaceIdFrom(req);
@@ -875,6 +889,8 @@ app.post('/api/elements', (req: Request, res: Response) => {
 
 // Update element
 app.put('/api/elements/:id', (req: Request, res: Response) => {
+  if (offLoopback(res, 'An element is changed')) return;
+
   try {
     const { id } = req.params;
     const body = req.body && typeof req.body === 'object' ? req.body : {};
@@ -979,6 +995,8 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
  * about is a backup nobody restores.
  */
 app.delete('/api/elements/clear', async (req: Request, res: Response) => {
+  if (offLoopback(res, 'The board is emptied')) return;
+
   try {
     const workspaceId = workspaceIdFrom(req);
     const store = elementsFor(workspaceId);
@@ -1011,6 +1029,8 @@ app.delete('/api/elements/clear', async (req: Request, res: Response) => {
 
 // Delete element
 app.delete('/api/elements/:id', (req: Request, res: Response) => {
+  if (offLoopback(res, 'An element is deleted')) return;
+
   try {
     const { id } = req.params;
 
@@ -1291,6 +1311,8 @@ function rerouteBoundArrows(
 
 // Batch create elements
 app.post('/api/elements/batch', (req: Request, res: Response) => {
+  if (offLoopback(res, 'The board is drawn on')) return;
+
   try {
     const { elements: elementsToCreate } = req.body;
     const batchWorkspaceId = workspaceIdFrom(req);
@@ -1350,6 +1372,8 @@ app.post('/api/elements/batch', (req: Request, res: Response) => {
 
 // Convert Mermaid diagram to Excalidraw elements
 app.post('/api/elements/from-mermaid', (req: Request, res: Response) => {
+  if (offLoopback(res, 'A diagram is converted onto the board')) return;
+
   try {
     const { mermaidDiagram, config } = req.body;
 
@@ -1391,6 +1415,8 @@ app.post('/api/elements/from-mermaid', (req: Request, res: Response) => {
 
 // Sync elements from frontend (overwrite sync)
 app.post('/api/elements/sync', (req: Request, res: Response) => {
+  if (offLoopback(res, 'The board is written back')) return;
+
   try {
     const { elements: frontendElements, timestamp } = req.body;
 
@@ -5537,6 +5563,8 @@ app.get('/api/files/:id', (req: Request, res: Response) => {
 
 // POST add/update files (batch)
 app.post('/api/files', (req: Request, res: Response) => {
+  if (offLoopback(res, 'A board\'s images are added to')) return;
+
   const body = req.body;
   const fileList: ExcalidrawFile[] = Array.isArray(body) ? body : (body?.files || []);
   for (const f of fileList) {
@@ -5551,6 +5579,8 @@ app.post('/api/files', (req: Request, res: Response) => {
 
 // DELETE a file
 app.delete('/api/files/:id', (req: Request, res: Response) => {
+  if (offLoopback(res, 'An image is deleted')) return;
+
   const id = req.params.id as string;
   if (files.delete(id)) {
     broadcast({ type: 'file_deleted', fileId: id });
@@ -5571,6 +5601,8 @@ interface PendingExport {
 const pendingExports = new Map<string, PendingExport>();
 
 app.post('/api/export/image', (req: Request, res: Response) => {
+  if (offLoopback(res, 'The board is exported')) return;
+
   try {
     const { format, background } = req.body;
 
@@ -5654,6 +5686,8 @@ app.post('/api/export/image', (req: Request, res: Response) => {
 
 // Image export: result (Frontend -> Express -> MCP)
 app.post('/api/export/image/result', (req: Request, res: Response) => {
+  if (offLoopback(res, 'An export is answered')) return;
+
   try {
     const { requestId, format, data, error } = req.body;
 
@@ -5745,6 +5779,8 @@ const viewportRequestSchema = z.object({
 });
 
 app.post('/api/viewport', (req: Request, res: Response) => {
+  if (offLoopback(res, 'The viewport is moved')) return;
+
   try {
     const {
       scrollToContent,
@@ -5814,6 +5850,8 @@ app.post('/api/viewport', (req: Request, res: Response) => {
 
 // Viewport control: result (Frontend -> Express -> MCP)
 app.post('/api/viewport/result', (req: Request, res: Response) => {
+  if (offLoopback(res, 'A viewport change is answered')) return;
+
   try {
     const { requestId, success, message, error } = req.body;
 
@@ -5852,6 +5890,8 @@ app.post('/api/viewport/result', (req: Request, res: Response) => {
 
 // Snapshots: save
 app.post('/api/snapshots', (req: Request, res: Response) => {
+  if (offLoopback(res, 'A snapshot is taken')) return;
+
   try {
     const { name } = req.body;
 
