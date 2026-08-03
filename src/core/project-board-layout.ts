@@ -25,12 +25,11 @@ import {
   NO_STATUS_OPTION_ID,
   NOTES_OPTION_ID,
   NOTES_NAME,
-  FOUNDER_OPTION_ID,
 } from './project-board-types.js';
 import { TERMINAL_KIND } from './terminal-block.js';
 
-// Re-exported so the canvas can name the canvas-owned columns without importing two modules.
-export { NOTES_OPTION_ID, NOTES_NAME, FOUNDER_OPTION_ID } from './project-board-types.js';
+// Re-exported so the canvas can name the notes column without importing two modules.
+export { NOTES_OPTION_ID, NOTES_NAME } from './project-board-types.js';
 
 /** The mark that says an element belongs to the mirror rather than to the board. */
 export const MIRROR_KIND = 'project-board';
@@ -216,38 +215,6 @@ export interface LayoutOptions {
    * once, as a toast, by whoever noticed the change.
    */
   queue?: { sectionOptionId: string; enabled: boolean; stalled?: boolean };
-  /**
-   * The founder actions this board is holding, and what the column they go in is called.
-   *
-   * Merged at draw time exactly as `implementing` is, and for the same reason: a mirrored
-   * element is rebuilt on every poll and can therefore remember nothing. The name is the
-   * caller's answer for the reason `queue.sectionOptionId` is — it is the workspace's own
-   * `projectFounderColumn`, and a layout that knew the string would be the constant this
-   * mirror exists to avoid.
-   *
-   * Absent, or carrying no cards, and nothing about the mirror changes at all: no column, no
-   * extra width, no extra line on the strip. A column drawn for an empty set would be this
-   * feature charging every board that has never been blocked a column of screen.
-   */
-  founder?: { columnName: string; cards: FounderCard[] };
-}
-
-/**
- * One founder action as the mirror draws it.
- *
- * The face and nothing else. Everything a reader actually reads — the what, the why, the
- * steps, the confirm sentence, the conversation — is held against `key` by the store and
- * fetched by the panel, exactly as an issue body is fetched against a URL. The mirror redraws
- * a card from the server on every poll, so the card is the wrong place to remember any of it.
- */
-export interface FounderCard {
-  /** The store's own key, which is what every founder route is addressed by. */
-  key: string;
-  /** Which blocker it is, or null on a card that names none. */
-  kind: string | null;
-  state: 'open' | 'resolved' | 'dismissed';
-  /** The one line a person reads before opening the panel. */
-  title: string;
 }
 
 /**
@@ -513,12 +480,6 @@ function label(
  * never what is *held*, so `, N hidden` qualifies the card side — the only side a cap
  * applies to — while the total includes them all the same.
  *
- * `own` is whatever the canvas put in the column itself rather than mirrored into it: the
- * drafts of the notes column, the founder actions of the founder column. One number rather
- * than one term per population, because the sum is the same question — how many things are
- * in this column — and a header that counted only what GitHub knows about is the defect #79
- * recorded, one column further along.
- *
  * It carried two numbers, `drafts / cards`, because two populations shared one column and
  * the header had to say which was which. They no longer share one: hand-written blocks land
  * in the notes column, which no card can be in at all, so the split is done by the columns
@@ -530,8 +491,8 @@ function label(
  * recorded. Reverting would move that defect one column left, onto the column the drafts now
  * have to themselves. The drafts stay in the sum; only the slash goes.
  */
-function headerText(section: BoardSection, own: number): string {
-  const count = own + section.cards.length + section.hidden;
+function headerText(section: BoardSection, drafts: number): string {
+  const count = drafts + section.cards.length + section.hidden;
   const hidden = section.hidden ? `, ${section.hidden} hidden` : '';
   return `${section.name} (${count}${hidden})`;
 }
@@ -645,14 +606,6 @@ export function layoutBoard(
     // naming a column the board no longer has is in neither: it is counted by no header
     // for the same reason it is placed nowhere.
     const columnDrafts = drafts.get(section.optionId) ?? [];
-    // The founder actions belong to whichever column carries them, canvas-owned or the
-    // project's own by that name — resolved by the caller, matched here the way every other
-    // column lookup in this file is.
-    const founderCards = section.optionId === FOUNDER_OPTION_ID
-      || (options.founder
-          && section.name.trim().toLowerCase() === options.founder.columnName.trim().toLowerCase())
-      ? (options.founder?.cards ?? [])
-      : [];
     const stroke = section.optionId === NO_STATUS_OPTION_ID
       ? NO_STATUS_STROKE
       : (COLUMN_STROKES[index % COLUMN_STROKES.length] as string);
@@ -672,9 +625,7 @@ export function layoutBoard(
       locked: true,
       customData: { kind: MIRROR_KIND, role: 'section', sectionOptionId: section.optionId },
     });
-    elements.push(header, label(header,
-                                headerText(section, columnDrafts.length + founderCards.length),
-                                HEADER_FONT_SIZE, stroke));
+    elements.push(header, label(header, headerText(section, columnDrafts.length), HEADER_FONT_SIZE, stroke));
 
     // `+` on the notes column, which is the canvas's own and the only column a block the
     // reader is still writing belongs in. It used to be drawn on `index === 0` — on
@@ -754,49 +705,6 @@ export function layoutBoard(
       placements.push({ id: draft.id, x, y, width: COLUMN_WIDTH, height: draft.height });
       y += draft.height + CARD_GAP;
     }
-    /**
-     * The founder actions, drawn above whatever GitHub mirrors into the same column.
-     *
-     * **A `role: 'card'` under this mirror's kind, and not a kind or a role of its own.** All
-     * five derived-element strip points key on `kind === MIRROR_KIND`, so a founder card is
-     * already kept out of the export, the autosync and every save without a line being written
-     * for it — and `settleMirrorDrag` skips anything whose role is not `'card'`, so a card
-     * under any other role would silently stay wherever it was dropped. It carries **no
-     * `itemId`**, which is what makes that settler snap it back with no request: there is no
-     * project item behind it and nothing for a move to be addressed to.
-     *
-     * Unlocked for the reason the `+` is: a locked shape cannot be selected, and selecting one
-     * is the whole of what a founder card is for.
-     */
-    for (const action of founderCards) {
-      const laid = layoutLabel(action.title, COLUMN_WIDTH, CARD_FONT_SIZE);
-      const height = Math.max(CARD_MIN_HEIGHT, laid.containerHeight + 8);
-      const settled = action.state !== 'open';
-      const shape = rectangle({
-        id: `pb-f-${action.key}`,
-        x,
-        y,
-        width: COLUMN_WIDTH,
-        height,
-        strokeColor: settled ? '#ced4da' : stroke,
-        // A settled action keeps the grey that says "nothing is being asked of you here",
-        // which is the same sentence a card that cannot be moved is drawn with.
-        backgroundColor: settled ? '#f8f9fa' : fill,
-        locked: false,
-        customData: {
-          kind: MIRROR_KIND,
-          role: 'card',
-          sectionOptionId: section.optionId,
-          founderKey: action.key,
-          founderKind: action.kind,
-          founderState: action.state,
-        },
-      });
-      elements.push(shape, label(shape, action.title, CARD_FONT_SIZE,
-                                 settled ? '#868e96' : '#1e1e1e'));
-      y += height + CARD_GAP;
-    }
-
     columns.push({
       optionId: section.optionId,
       name: section.name,
@@ -943,58 +851,13 @@ export function isNotesOnlyBoard(board: ProjectBoard | null | undefined): boolea
  * columns keep the positions they had when an option stood in for this one, so the hues
  * they are drawn in do not shift either.
  */
-export function mirrorSections(board: ProjectBoard, options: LayoutOptions = {}): BoardSection[] {
-  return [notesSection(), ...board.sections, ...founderSections(board, options)];
+export function mirrorSections(board: ProjectBoard): BoardSection[] {
+  return [notesSection(), ...board.sections];
 }
 
-/**
- * The founder column, when the canvas has to draw one — nothing, otherwise.
- *
- * **Appended, never inserted.** Every existing column keeps the index it had, and therefore
- * the hue it had: `COLUMN_STROKES[index % 5]` is what a reader recognises a column by, and a
- * feature that recoloured somebody's whole board the first time their `gh` expired would be
- * paying for itself with the one thing on the mirror that is stable.
- *
- * Nothing is drawn for a project that already declares a column of that name — the actions go
- * into that one, which is `layoutBoard`'s match on the same name. Two columns called the same
- * thing, one of them empty, is the mirror saying it does not know where the work is.
- */
-function founderSections(board: ProjectBoard, options: LayoutOptions): BoardSection[] {
-  const founder = options.founder;
-  if (!founder || founder.cards.length === 0) return [];
-  const wanted = founder.columnName.trim().toLowerCase();
-  const already = board.sections.some(
-    (section) => section.name.trim().toLowerCase() === wanted
-  );
-  if (already) return [];
-  return [{ optionId: FOUNDER_OPTION_ID, name: founder.columnName, cards: [], hidden: 0 }];
-}
-
-/**
- * The column the work only a person can do is collected in, when the canvas owns it.
- *
- * Empty of mirrored cards for the same reason the notes column is: nothing GitHub knows about
- * can land in a column GitHub has no name for. What fills it is `LayoutOptions.founder`, which
- * `layoutBoard` draws directly.
- */
-export function founderSection(columnName: string): BoardSection {
-  return { optionId: FOUNDER_OPTION_ID, name: columnName, cards: [], hidden: 0 };
-}
-
-/**
- * How wide the mirror is, the canvas's own columns included. The caller anchors by this.
- *
- * **The second parameter is optional and has to stay optional**: `mirrorWidth(board)` is called
- * from the canvas and from a check, and a required one would break both. A caller drawing a
- * founder column must pass the same options it passes to `layoutMirror`, or the region is
- * measured a column too narrow and overlaps whatever sits to its left.
- *
- * The region is pinned by its **right** edge with its origin remembered, so the poll that first
- * draws this column slides the whole mirror one column left. That is #200's accepted trade,
- * named here so the next reader does not read it as a defect.
- */
-export function mirrorWidth(board: ProjectBoard, options: LayoutOptions = {}): number {
-  return boardWidth(board.sections.length + 1 + founderSections(board, options).length);
+/** How wide the mirror is, the notes column included. The caller anchors by this. */
+export function mirrorWidth(board: ProjectBoard): number {
+  return boardWidth(board.sections.length + 1);
 }
 
 /**
@@ -1030,10 +893,7 @@ export function layoutMirror(
   origin: { x: number; y: number },
   options: LayoutOptions = {}
 ): MirrorLayout {
-  const sections = mirrorSections(board, options);
-  // Every draft still rehomes to the notes column, the founder column included and
-  // deliberately: a draft is an observation somebody wrote down, and a founder action is
-  // something the machine noticed and nobody may author by hand.
+  const sections = mirrorSections(board);
   const drafts = (options.drafts ?? []).map((draft) => (
     draft.sectionOptionId === NOTES_OPTION_ID
       ? draft

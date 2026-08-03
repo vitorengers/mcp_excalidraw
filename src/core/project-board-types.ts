@@ -100,21 +100,6 @@ export const NOTES_OPTION_ID = 'canvas:notes';
  */
 export const NOTES_NAME = 'My Notes';
 
-/**
- * The section the work only a person can do is collected in, which is the canvas's own too.
- *
- * Reserved on exactly the terms `NOTES_OPTION_ID` is reserved on, and for the same reason: a
- * founder action is recorded on this machine, by this board, at a moment when there may be no
- * project to file it into and no working `gh` to file it with — so the column it is drawn in
- * cannot be one GitHub declares. The `:` fails the `NODE_ID` pattern every project write is
- * validated against, so a card dropped here cannot be written back even by a caller that
- * tried.
- *
- * A project that *does* declare a column of this name keeps it: `mirrorSections` draws the
- * canvas-owned one only when the board has none, so the two never stand side by side.
- */
-export const FOUNDER_OPTION_ID = 'canvas:founder';
-
 export interface ProjectRef {
   ownerType: 'user' | 'organization';
   login: string;
