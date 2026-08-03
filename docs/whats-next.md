@@ -27,6 +27,34 @@ implement agent that wedges, and a block offering a reset is all a reader has to
 
 What its tab would not be is interactive, for the same measured reason — see `docs/terminal.md`.
 
+The founder chat is a third caller of that same run and passes no `host` either, so the seam is
+still the one unused parameter rather than three. There the omission is a decision rather than an
+order of work: a tab per founder action would exhaust a board's session allowance, and a tab never
+ends by itself, reports no token counts, and holds its slot until somebody closes it.
+
+## What the founder-actions milestone deliberately left out
+
+[founder-actions.md](founder-actions.md#what-this-deliberately-does-not-do) carries the three that
+are settled — no hand-authored actions, no images in the chat, no hotkey of its own. Two of them
+are open questions rather than closed decisions, and this is where they are kept.
+
+**An agent CLI that is installed but signed out is not detected.** The preflight runs `argv[0]` of
+each configured command with `--version` and nothing more clever than that, so it can tell a
+missing binary from a present one and cannot tell a signed-in one from a signed-out one. Widening
+the probe is not a matter of asking for more: the command string is the operator's, and re-running
+it whole would re-run their own permission flags at every boot — including
+`--dangerously-skip-permissions`, on a board that has just started. The same limit is why a
+wrapper is invisible to it: a command spelled `node ./agent.mjs` probes `node`. So the two agent
+blockers this product does file are about a binary that is absent or a grant that was never given,
+and *"your plan has run out"* is only ever learned from a run that was refused.
+
+**Image attachments in the chat.** An issue block takes reference images; a founder chat does not.
+The store, the prompt and the answer gate all handle text only, and adding bytes needs an answer
+to a question the issue block did not have to face: a screenshot of a billing page is the single
+most likely thing a founder would attach, and it is also the single most likely thing to carry an
+account number into a file this board writes and keeps. That is worth deciding on purpose rather
+than inheriting from whichever attachment path was nearest.
+
 ## Neither the MCP tools nor the CLI were workspace-aware
 
 `src/core/canvas-client.ts` never sent `?workspace=`, so both always acted on the `default` store

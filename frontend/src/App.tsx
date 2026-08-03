@@ -45,9 +45,13 @@ import {
   isNotesOnlyBoard,
   UNREADABLE_WIDTH,
   MIRROR_KIND,
-  NOTES_OPTION_ID
+  NOTES_OPTION_ID,
+  FOUNDER_NAME
 } from '../../src/core/project-board-layout'
-import type { CardImplementState, DraftBlock, MirrorAnchor, MirrorColumn } from '../../src/core/project-board-layout'
+import type {
+  CardImplementState, DraftBlock, LayoutOptions, MirrorAnchor, MirrorColumn
+} from '../../src/core/project-board-layout'
+import type { FounderCard } from '../../src/core/project-board-types'
 import type { ProjectBoard } from '../../src/core/project-board-types'
 import { TerminalPanel } from './components/TerminalPanel'
 import {
@@ -2498,8 +2502,21 @@ function App(): JSX.Element {
      * would last exactly one refresh.
      */
     queue: ImplementQueueState | null
+    /**
+     * The founder actions still waiting, and what this board calls the column they wait in.
+     *
+     * Null until the server has said, and null again the moment it says there are none — the
+     * column is drawn from this and never read back off the shapes, for the reason the queue
+     * toggle is: the mirror is rebuilt from GitHub on every poll, so anything remembered on a
+     * mirrored element lasts exactly one refresh.
+     *
+     * It arrives on the project-board answer, including its 404 — a board with no project is
+     * exactly the board whose first blocker is "sign `gh` in", and that one has to be drawable
+     * with nothing configured at all.
+     */
+    founder: { columnName: string; cards: FounderCard[] } | null
     signature: string
-  }>({ board: null, columns: [], errors: {}, implementing: {}, queue: null, signature: '' })
+  }>({ board: null, columns: [], errors: {}, implementing: {}, queue: null, founder: null, signature: '' })
 
   /** Whether a drag was in flight on the previous change, so its end can be noticed. */
   const mirrorDraggingRef = useRef<boolean>(false)
@@ -2525,7 +2542,7 @@ function App(): JSX.Element {
   const mirrorOriginsRef = useRef<Map<string, MirrorAnchor>>(new Map())
 
   const clearMirror = (): void => {
-    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, signature: '' }
+    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, founder: null, signature: '' }
     draftGeometryRef.current = ''
     // This board's, and only this board's: the region is gone from the canvas, so where it
     // was is no longer an answer to keep. Every other board's placement stands.
@@ -2712,12 +2729,6 @@ function App(): JSX.Element {
     const own = scene.filter((element) => !element.isDeleted && !isMirrorElement(element))
     const drafts = own.filter(isDraftBlock)
 
-    // The notes column is drawn too, and it is as wide as the rest, so the width the first
-    // measurement places the region by has to include it — `mirrorWidth`, not `boardWidth`,
-    // which counts only the options the project declares.
-    const width = mirrorWidth(board)
-    const origin = placeMirror(scene, own, width)
-
     // The blocks the `+` dropped hold the top of their column, newest first, and the
     // mirrored cards start below them. Both halves of that arithmetic come from
     // `layoutMirror`, so the room reserved and the slot a block is put in cannot disagree
@@ -2734,7 +2745,12 @@ function App(): JSX.Element {
       )
       : undefined
 
-    const layout = layoutMirror(board, origin, {
+    // Built once and used twice, and that is load-bearing rather than tidy: the width the
+    // region is placed by and the columns that are drawn have to be answers to the same
+    // question. Both columns the canvas owns are decided by these options, so a `mirrorWidth`
+    // asked without them reserves a region one column too narrow and the founder column is
+    // drawn over whatever sits to the region's left.
+    const options: LayoutOptions = {
       errors: projectBoardRef.current.errors,
       implementing: projectBoardRef.current.implementing,
       drafts: drafts.map(draftBlockOf),
@@ -2746,8 +2762,17 @@ function App(): JSX.Element {
             stalled: queue.stalled
           }
         }
-        : {})
-    })
+        : {}),
+      ...(projectBoardRef.current.founder ? { founder: projectBoardRef.current.founder } : {})
+    }
+
+    // The notes column is drawn too, and it is as wide as the rest, so the width the first
+    // measurement places the region by has to include it — `mirrorWidth`, not `boardWidth`,
+    // which counts only the options the project declares.
+    const width = mirrorWidth(board, options)
+    const origin = placeMirror(scene, own, width)
+
+    const layout = layoutMirror(board, origin, options)
     const placed = new Map(layout.drafts.map((placement) => [placement.id, placement]))
 
     // The block being typed into is left exactly where it is: rewriting a container and
@@ -3129,6 +3154,33 @@ function App(): JSX.Element {
     sayOnCanvas(api, `The project board could not be read. ${reported}${advice}`)
   }
 
+  /**
+   * The founder column out of a project-board answer, or null for a board with none waiting.
+   *
+   * Read defensively rather than cast: this is drawn as a column of cards, and a `cards` that
+   * turned out not to be an array would throw inside the layout on a twenty-second poll and
+   * take the whole mirror with it. A card missing either half of what a card *is* is dropped
+   * rather than drawn empty — there is nothing useful to show for it and the record it stands
+   * for is still on the server.
+   */
+  const founderColumnOf = (body: unknown): { columnName: string; cards: FounderCard[] } | null => {
+    const founder = (body as { founder?: unknown } | null)?.founder as
+      { columnName?: unknown; cards?: unknown } | undefined
+    if (!founder || !Array.isArray(founder.cards)) return null
+    const cards = (founder.cards as unknown[])
+      .map((card) => card as { key?: unknown; title?: unknown })
+      .filter((card) => typeof card?.key === 'string' && card.key
+        && typeof card?.title === 'string' && card.title)
+      .map((card) => ({ key: card.key as string, title: card.title as string }))
+    if (cards.length === 0) return null
+    return {
+      columnName: typeof founder.columnName === 'string' && founder.columnName.trim()
+        ? founder.columnName
+        : FOUNDER_NAME,
+      cards
+    }
+  }
+
   /** Re-read the project and redraw. A board with no project configured keeps its notes column. */
   const refreshProjectBoard = async (): Promise<void> => {
     const api = excalidrawAPIRef.current
@@ -3144,6 +3196,13 @@ function App(): JSX.Element {
       // A tab switched while the request was in flight would draw one project's board
       // over another project's canvas.
       if (activeWorkspaceRef.current !== workspace) return
+      const body = await response.json().catch(() => ({}))
+      // Read before the 404 below rather than after it, because the 404 is the answer that
+      // most needs this: a board with no project is the board whose first blocker is signing
+      // `gh` in, and that column has to be drawable with nothing configured at all.
+      projectBoardRef.current = {
+        ...projectBoardRef.current, founder: founderColumnOf(body)
+      }
       // The one status that means "this board has no project", and the only one that says
       // nothing. Since #317 it means only that: a `githubProject` that is not a project URL
       // answers 422 and falls through to the branch below, where it is said out loud. Most
@@ -3159,7 +3218,6 @@ function App(): JSX.Element {
         announcedBoardFailureRef.current[workspace] = ''
         return
       }
-      const body = await response.json().catch(() => ({}))
       if (!body?.success || !body.board) {
         // Not a 404 — that was answered above and means the board simply has no project.
         // This is `gh` unresolvable, an expired login, a token without the `project` scope,
@@ -5395,7 +5453,7 @@ function App(): JSX.Element {
     // at that moment, which on a board holding only a mirror and a terminal is nothing at
     // all — so the region went to a constant and landed on the block (#188). Keying it by
     // board is what the reset was really for, and a map does that without forgetting.
-    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, signature: '' }
+    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, founder: null, signature: '' }
 
     pendingSceneWorkspaceRef.current = workspaceId
     holdAutoSyncForSwitch()

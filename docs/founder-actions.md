@@ -453,6 +453,36 @@ board runs can confirm that a rate limit has lifted, that a bill has been paid o
 window has room. Only the next call that goes through shows any of them, and this module makes
 no calls at all.
 
+## The column the canvas owns
+
+The cards are drawn in a column of the project mirror's that mirrors nothing, under the reserved
+id `canvas:founder` — the arrangement **My Notes** already proved, and here for a stronger
+reason. The first founder action a fresh clone produces is *sign the GitHub CLI in*, and at that
+moment there is no project to file it into and no working `gh` to file it with, so a column that
+waited for GitHub to declare one would be missing exactly when it is needed. It is drawn on the
+board with no project at all, beside the notes column and nothing else.
+
+Nothing is drawn while nothing is waiting: no column, no extra width, no extra line on the strip.
+When something is, the column is **appended** after every column the project declares, so no
+column already there changes its index — and therefore its hue — and the strip gains a line
+saying how many are open.
+
+A card is an ordinary mirror card carrying `customData.founderKey` and no item id, which is what
+makes one dropped into another column snap back with nothing sent to GitHub: there is no project
+item to address a move to. It is not locked, because the panel that will answer these needs a
+card a reader can select. The `+` is not drawn on this column, and a block written by hand still
+rehomes to **My Notes** — a founder action is something the board noticed, never something
+somebody typed.
+
+What the column is called is the project's own answer, resolved by the same
+`founderColumn(workspace)` a published draft item is filed with — see [Naming the column per
+project](#naming-the-column-per-project). The canvas draws its own only while the project
+declares no column of that name, so the two can never show the same work twice.
+
+[project-board.md](project-board.md#the-founder-column) is where the geometry is argued: which
+edge the mirror is pinned by, the one-time shift the first drawing costs, and what
+`projectCardLimit` hides when a column that nothing drains is drawn newest-first.
+
 ## Naming the column per project
 
 The column has a name, and the name is per project. `projectFounderColumn` in a project's
@@ -494,38 +524,300 @@ nothing here knows which one was meant.
 config loader and the validator, and the refusal over a table of configurations differing only
 by case and by surrounding space.
 
-## What is not written here yet
+## Where an action lives after the run that noticed it has ended
 
-The register is the first half of the column and the rest of it lands separately. Each heading
-here is a stub of one sentence, and the change that fills it in is the one that ships the
-behaviour — so nothing in this section is a promise about a file that exists today.
+`src/core/founder-store.ts` keeps one JSON file per project under the board's own state
+directory, written into a temporary file and then renamed over the old one — the way board
+persistence writes a board, because a crash halfway through a plain write leaves half a document,
+and half a document read at the next start loses every record rather than the one being written.
 
-### A founder action outliving the process that noticed it
+**A run is not written down and this is**, and the asymmetry is the argument for the file.
+`src/core/implement-state.ts` holds its runs in a plain map, because what actually persists is
+the worktree and the map is an inference read back off git at startup. A founder block is the
+other shape entirely: the credit is still missing after a restart, the sign-in is still expired,
+and nothing on disk anywhere says a person was asked. A record held only in memory would re-file
+the same card on every boot and lose every Done somebody had already given it, which are the two
+failures that make a column of human work unusable rather than merely thin.
 
-Where a founder action is kept once the run that noticed it has ended, and what a second sighting
-of the same blocker does to the one already there.
+**The key is the dedupe, and it is the point.** One signed-out `gh` is discovered by the project
+poll, by the issue panel, by the queue's dependency reads and by every implement start.
+`founderActionKey` composes the project, the kind and — for the kinds where one board can
+honestly have two — a discriminator, so producers that noticed the same thing compose the same
+string without having heard of one another, and every sighting after the first moves `lastSeenAt`
+and nothing else. `dedupeBlockers` keeps the first sighting, with the evidence of whatever was
+being attempted when it was seen. The suppression that existed before this was per surface and
+transient, and none of it was a key a *different* producer could reuse.
 
-### The column the canvas owns
+`recordFounderAction` refuses anything `validateFounderAction` refuses and hands back the fault
+list rather than storing bad text: that one door is where the register is enforced.
+`appendChatTurn` is deliberately not validated — see [the chat](#the-chat-is-a-loop-of-headless-turns)
+below.
 
-How the column is drawn on a board that has never had one, so the first blocker on a fresh clone
-has somewhere to land.
+A record is `open`, `resolved` or `dismissed`, and **none of the three is ever deleted**: a column
+that forgets what it asked for asks for it again next week. `resolvedBy` says which of the two
+things settled it, this board's own re-probe or the person the card was written for. What happens
+to a settled record over months, and what a blocker that comes back does to one, are deliberately
+not decided in that module.
 
-### Publishing to the GitHub project
+### The store is the record, and GitHub is a projection of it
 
-How a founder action reaches the project board as a draft item rather than as an issue, and why
-an issue would be the wrong shape.
+Everything else on this page follows from that one sentence. An action exists because the store
+says so, not because a project item does — so a board with no `githubProject`, a project with no
+founder column, and a `gh` that cannot be started all cost the action nothing at all. Publication
+is the projection, and a projection that fails is a log line.
 
-### Choosing a founder card
+It has to be that way round. The first founder action this product will ever produce is
+*"the GitHub CLI is not installed"*, and at that moment there is no project to file into and no
+working `gh` to file with. [without-github.md](without-github.md) is the whole of that argument,
+level by level.
 
-What happens when a founder card is selected, and why the selection may never resolve to an
-issue anything is going to implement.
+## The four ways the queue is kept off a founder action
 
-### The panel, and the chat inside it
+A founder action is by definition work no agent can do. The hazard is one press away — a coding
+agent dispatched at *"put credit on the account"* burns a run and opens a pull request against a
+decision no repository holds — so it is closed four independent times, and not one of the four is
+a policy anybody has to remember.
 
-What the panel shows, what taking a founder action as done means, and what the chat beside it may
-and may not do on the reader's behalf.
+1. **A published action is a draft item, and a draft is unstartable.** `buildProjectQuery` asks a
+   `DraftIssue` for its title and creation date and nothing else, so `toBoard` builds the card
+   with no url, no number and `draggable: false`. `startableCards` filters on five things — the
+   content type is `Issue`, there is a url, the state is not closed, `draggable` is not false, and
+   the number is not in the blocked set — and a draft fails three of them. It is unstartable
+   **even after a person has dragged it into the column the queue drains**, which is the case that
+   matters, because `moveCard` has no per-column policy at all.
+2. **The canvas-owned column's option id cannot be written.** It is `canvas:founder`, and the `:`
+   fails the `NODE_ID` pattern that every write to the project is validated against, so
+   `buildMoveArgs` refuses it and `moveCard` — which builds its arguments there — refuses it as a
+   target. That is the same guarantee `canvas:notes` has carried since the notes column was
+   invented.
+3. **A config that points the founder column at either of the other two is refused**, in both
+   places a config is read. The queue drains exactly one column, resolved by name at dispatch
+   time, so a founder column with a name of its own is invisible to the start loop *by
+   construction* — and that construction holds only while the names differ. See
+   [Naming the column per project](#naming-the-column-per-project) above.
+4. **The panel resolves a founder card to a founder target, and never to an issue.**
+   `resolvePanelTarget` evaluates the founder branch first, so `issueShapeOf` is not called at
+   all on a card carrying a store key. That ordering is the fix rather than a filter, because
+   `offersImplement` is handed only a GitHub state and an implement state and knows nothing about
+   columns: it cannot be trusted to keep the Implement control off a founder card, so the target
+   must simply not look like one. See [Choosing a founder card](#choosing-a-founder-card).
 
-### Resolving, and asking again
+`scripts/check-founder-not-startable.mjs` holds the first two and the by-name drain, and it was
+landed **before** anything could file a founder action — a fence installed after the producer it
+protects has a window with nothing in it. It declares the reserved option id as a literal of its
+own so that it does not depend on the column having landed, and every section carries a positive
+control: a real open issue in the same fixture must come back startable, a deliberately mutated
+draft must come back startable, and an ordinary option id must be accepted. An assertion that
+cannot fail is not evidence. `scripts/check-founder-panel-target.mjs` holds the fourth.
 
-What a resolve does, why it re-probes rather than taking the word for it, and what a queue pass
-that refused every card has to report instead of a healthy idle board.
+## Publishing to the GitHub project
+
+`src/core/founder-publish.ts` puts an action on the project as a **draft item** — one
+`gh project item-create` carrying the title and a body that is byte-for-byte
+`renderFounderAction`'s own output — and never as an issue.
+
+The reason is guard 1 above, and the alternative is a trap worth writing down because it is the
+obvious first cut. `gh issue create` followed by a move cannot work: there is no
+`gh project item-add` anywhere in this tree, so the issue is not on the project and the move
+answers "is not on this project, so nothing was moved". Worse, if the project's *Item added to
+project* workflow is on, GitHub adds the issue with the project's default status — commonly the
+column the queue drains — and races the move. That decision is made outside this repository and
+cannot be read back.
+
+**Publication is on, and off is the switch.** `projectFounderPublishOff` in a project's
+`board.config.json` is a *suppression*, and it is unset on a fresh board. The queue's own toggle
+is the analogy that does not hold: that one starts coding agents against a repository and is
+rightly off until somebody says so, where this one writes a card to a column whose entire point is
+being seen. A feature whose whole point is visibility must not ship invisible.
+
+The board is read **uncapped** to resolve the column, because `projectCardLimit` exists so that a
+section does not draw hundreds of cards and a lookup must not inherit it.
+
+Nothing about a failure to publish is a refusal, and the degradation follows the automatic card
+moves' terms verbatim: no project spawns no `gh` at all and answers nothing; a project whose
+options hold no founder column creates nothing and warns naming the setting that would fix it;
+only `gh` itself failing throws, and a throw is non-fatal to the caller. A record that was not
+published stays re-publishable and the next sighting tries again — a signed-out CLI is exactly
+the blocker most likely to stop its own card going up — with one publication per key in flight at
+a time, because the store's guard is read before anything is spawned and cannot see an attempt
+that has not finished yet.
+
+The item id is written onto the record **before** the placement rather than after: a failed
+placement leaves one unplaced draft, where a failed record leaves an item created and
+unremembered and the next pass files a second one.
+
+`scripts/check-founder-publish.mjs` holds it, over a fixture whose columns are all renamed so that
+nothing may key on a string.
+
+## Choosing a founder card
+
+A founder card is an ordinary `role: 'card'` under the mirror's own kind, carrying a store key in
+`customData` — not a new kind and not a new role. That keeps every derived-element strip point
+and the drag settler working on it unchanged, and it is why the panel needs guard 4: to the
+resolver, before that guard, a founder card looked exactly like a card standing for an issue.
+
+`resolvePanelTarget` answers a **founder target** for any shape carrying the mirror's kind and a
+non-empty founder key, through the same walk-up a mirrored issue card gets — so a click landing on
+the card's bound label resolves to the card rather than to nothing, which was a real defect once
+and compiled perfectly. The target carries the key, the kind, the state and the title read off the
+bound label, and `recreatable: false` as a stated field rather than only as an absence.
+
+No Implement, Resume, Fix or Recreate control is reachable from it, because none of them is
+offered a URL to act on.
+
+## The panel, and the chat inside it
+
+A card face carries a title and nothing else — the mirror composes one line per card and centres
+it — so the what, the why, the steps and the confirm sentence can only be read where the founder
+target resolves, in the panel a selected card opens. Two rules about what that panel does are
+settled here rather than by whatever draws it:
+
+- **`## Evidence` is not shown by default.** It is the one part of a founder action written for
+  an engineer, and a reader who opens a card and is met with an HTTP status and a path into
+  `src/` has been handed the thing this whole register exists to keep out of their way.
+- **Nothing on it may start a run.** That is guard 4 above, and it is enforced by the target
+  rather than by the panel: no control on a founder target is ever offered a URL to act on.
+
+### Done, and what taken on trust means
+
+Marking an action done is not the last word, and that is deliberate. The honest way to close one
+is to look again, and `src/core/founder-verify.ts` is the half that looks.
+`verifyAgainst(kind, snapshot)` answers one of three things — `satisfied`, `still-blocked` or
+`cannot-say` — with one line a person can read, and the third is the whole module.
+
+**A probe that cannot say never closes an action and never blames anybody.** That rule is not
+invented here: `readPushAccess` is already built on it, where only a permission GitHub explicitly
+stated as non-pushing refuses a run and every failure to learn lets it through. Generalised, it is
+what keeps the column from filling with cards about a bad network minute and a reader who stops
+opening it.
+
+Three of the ten kinds can only ever answer `cannot-say`, and they say so rather than guessing:
+nothing this board runs can confirm that a rate limit has lifted, that a bill has been paid or
+that a usage window has room. Only the next call that goes through shows any of them, and that
+module makes no calls at all.
+
+**Taken on trust** is the answer for exactly those. A record carries `resolvedBy`, and it is
+`'person'` when somebody said they had done it and `'probe'` when this board's own look no longer
+sees the blocker. Keeping the two apart is the whole reason that field exists: a board that
+recorded them the same way could never say afterwards whether it had checked anything, and a
+column that claims to have verified a bill was paid is worse than one that admits it took a word
+for it.
+
+The one line each verdict carries is written for the same reader as the card. It has a length
+limit of its own and may not begin like a command, because what the machine said belongs in the
+evidence and a line starting `gh` or `Error:` is the machine talking.
+
+The board also looks on its own, without being asked. A pass every
+`EXCALIDRAW_FOUNDER_PASS_MS` — minutes rather than seconds, because it spends two probes per
+project — reads what `gh` says about itself and settles every open record the verifier calls
+`satisfied`. It is fast enough that somebody who has just signed in sees the card close while
+they are still looking at the board. Set to `0` it is off, and what a *refused* run notices is
+unaffected either way, because those producers run on the request that was refused rather than on
+a timer. [running.md](running.md) has the setting.
+
+### The chat is a loop of headless turns
+
+The operator wants to ask *"which plan should I buy?"*, *"is the free tier enough?"*, *"I did it,
+what now?"* — and to have the answer be able to change the card. The card is a record of named
+fields and the register is its schema, so the agent cannot be the thing that writes it. It
+answers the person and, at most, **offers** a revision in one fenced block; the board applies it,
+and `parseFounderChatAnswer` is the gate in front of that.
+
+The gate refuses a block naming another item, two blocks (nothing here can tell which one was
+meant, and taking the first is a guess), a block touching the kind, the creation date, the
+evidence or the published item, and a revision the register would refuse. **The founder still
+gets the answer** in every one of those cases; what they lose is the edit, and they are told so.
+
+**A turn is one headless run, and that is measured rather than preferred.** A readable transcript
+needs a streaming output format, which the agent CLI accepts only beside the flag that reads the
+prompt from stdin and spends it — and a pseudoterminal has no end of file to spend a second one
+with, measured on this platform's console host. A readable run and a typeable session are
+mutually exclusive under both named backends, so the conversation is kept by the board and every
+turn is a new process. Nothing opens a terminal session for it either: one tab per founder action
+would exhaust a board's session allowance, and a tab never ends by itself and reports no token
+counts.
+
+It is not a fourth agent role. It is the issue role — a run that reads and answers — with its
+invocation narrowed in place.
+
+`appendChatTurn` is not measured against the register, and that is deliberate: the founder types
+what they like, and the reply is prose in a panel rather than card text. A stack trace and the
+last stretch of somebody's stderr belong in a turn and are stored as they arrived. Sending the
+chat through the validator is the obvious mistake — it would refuse the founder's own sentence
+for being twenty-six words long.
+
+### The chat may read and answer, and may not write
+
+Handed the issue role's grant as it stands, a chat inherits `gh issue create`, `gh issue edit`,
+`gh issue comment` and the whole of `gh project` — every one of them unscoped to any issue
+number, because nothing in that allow-list grammar can express "only issue #N". An agent that
+decides the right answer to *"which plan should I buy?"* is to open a tracking issue will open
+one, and this board's own habit is to move a created issue into the column the queue drains. That
+is a coding agent started by a question nobody reviewed.
+
+`withoutGhWrites` closes it by taking those commands off the invocation. It **only ever removes**:
+no rule that was not in the input appears in the output, which is what makes it safe to apply to
+an argv nobody has read. The worst it can do is refuse a read.
+
+**And here is the honest limit.** On two kinds of board there is nothing for it to narrow, and it
+reports that rather than hiding it:
+
+- a **`raw` backend**, which is the shipped default, spawns the operator's command line byte for
+  byte and carries no grant this board wrote. The backend is asked first, before the argv is even
+  looked at, precisely because a raw line that happened to contain this board's own list would be
+  narrowed by argv while the string a run inside a distro is handed went on saying what it said;
+- a board whose operator **pinned their own `--allowedTools`**. That list is a posture its author
+  decided, and narrowing it would be this board overruling a grant rather than filling one in.
+
+In both cases the chat is **refused**, in the wording the board already uses for an agent it
+cannot run, with the cause said after it — because a chat that silently holds repository write
+access is worse than no chat. The prompt does tell the agent it may not file anything, and prose
+is not a boundary.
+
+A run under a CLI that grants a read-only mode rather than a list needs nothing removed and is
+allowed: `gh` cannot reach github.com from one.
+
+`scripts/check-founder-chat-posture.mjs` asserts the **realised argv**, never the exported list —
+a check reading the constant would pass on a build where the adapter had stopped writing it — and
+its first case is the control that the grant really does reach those writes, so that it cannot go
+green against a helper that does nothing.
+
+## Resolving, and the queue that was quietly refusing
+
+A blocker that clears has to change what the board does, not just what it draws. The one that
+shows this best is `push-denied`: the account behind `gh` cannot push to the checkout's `origin`,
+so `POST /api/implement` answers 403, and that is a decision about a login and a remote which no
+interval alters — the same oldest card is refused for ever.
+
+Before this milestone the start loop read only two statuses and fell through on everything else,
+so a pass that had been refused every card reported *the column held nothing* and the board drew a
+healthy idle queue over a card it was refusing every thirty seconds. That is now the queue's
+`refused` reason: it stalls, it is announced, and its detail names the **founder action** rather
+than repeating what `gh` said — which names a permission, a repository and a remote-URL command,
+all true and none of it the thing to say to somebody looking at a queue that has stopped.
+[issue-block.md](issue-block.md#the-queue-which-defers-instead-of-refusing) has the reason table,
+and [project-board.md](project-board.md#the-queue-toggle) has what the toggle does about it.
+
+The refusals that file a record are the ones a person can act on. The 403 for a push permission
+and the 404 for an agent that is not there each record before they answer; the 400 for a board
+that is misconfigured does not, because that is a board problem and admitting those is how a
+column written for a person fills with advice. Every status, body and refusal sentence is
+byte-identical to what it was before founder actions existed, which is why the record travels
+beside the answer rather than inside its body.
+
+## What this deliberately does not do
+
+Three things were left out on purpose, and each has a reason rather than a backlog entry.
+
+- **Authoring one by hand.** The `+` on the mirror stays notes-only. A founder action is a
+  *finding* — something a probe or a refusal noticed — and the register is enforced at the write
+  precisely so that no prose route into the column exists. A hand-authored one would be the free
+  text this whole design removes, and it would have no evidence, no kind and no verifier.
+- **Image attachments in the chat.** An issue block takes reference images and this does not.
+  Nothing about the founder store, the prompt or the answer gate handles bytes, and a screenshot
+  of a billing page is the single most likely thing to carry an account number into a file this
+  board writes. [whats-next.md](whats-next.md) carries it as the open question it is.
+- **A hotkey of its own.** `Alt+B` already scrolls onto the mirror and the founder column is part
+  of the mirror, so a second accelerator would spend one of the few chords Excalidraw leaves free
+  on a shorter walk to the same place. [project-board.md](project-board.md#the-hotkey) is where
+  the one hotkey is described.

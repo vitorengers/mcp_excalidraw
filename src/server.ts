@@ -57,7 +57,7 @@ import { BoardScene, parseBoardScene } from './core/board-seed.js';
 import { listDirectories } from './core/directory-browse.js';
 import {
   AgentCommands, AgentHost, AgentRun, agentCommandFor, agentCommandsOf, agentGrantFor,
-  agentGrantsFromEnv, runIssueAgent, runReviseAgent
+  agentGrantsFromEnv, agentNotEnabledRefusal, runFounderChatAgent, runIssueAgent, runReviseAgent
 } from './core/issue-agent.js';
 import {
   DEFAULT_AGENT_BACKEND, type AgentAdapter, type AgentCommandSpec
@@ -79,15 +79,16 @@ import {
   moveCard,
   moveIssueToColumn,
   findColumn,
+  founderColumn,
   inProgressColumn,
   todoColumn,
-  founderColumn,
   DEFAULT_FOUNDER_COLUMN,
   DEFAULT_TODO_COLUMN,
   NoProjectConfigured,
   ProjectUrlUnparseable,
   NotOnThisBoard
 } from './core/project-board.js';
+import type { FounderCard } from './core/project-board-types.js';
 import {
   GithubHealth, GithubStatus, githubHealth, githubPreflightLine, initialGithub, readGithubStatus
 } from './core/github-status.js';
@@ -109,9 +110,7 @@ import {
   resolveFounderAction,
   reviseFounderAction
 } from './core/founder-store.js';
-import {
-  FounderChatAnswer, parseFounderChatAnswer, runFounderChatTurn
-} from './core/founder-chat-run.js';
+import { FounderChatAnswer, parseFounderChatAnswer } from './core/founder-chat.js';
 import { FounderSnapshot, FounderVerdict, verifyAgainst } from './core/founder-verify.js';
 import { publishFounderAction as publishFounderActionTo } from './core/founder-publish.js';
 import { setTerminalGhReporter } from './core/gh.js';
@@ -2681,6 +2680,10 @@ const ISSUE_AGENT_CONFIGURED = Boolean(ISSUE_AGENT_COMMANDS.native || ISSUE_AGEN
  * a board with only `_WSL` set can research a distro-backed project and not a native one,
  * and the reverse. Naming the variable that is missing is the whole value of refusing here
  * rather than letting a run start and exit 127 somewhere the reader cannot see.
+ *
+ * The sentence itself is `agentNotEnabledRefusal`'s now, in `core/issue-agent.ts`, because a
+ * second caller of it is not a route: the founder chat refuses in that module, before anything
+ * is spawned, and two copies of this wording is how the two come to name different variables.
  */
 function agentCommandRefusal(
   workspace: Workspace,
@@ -2689,15 +2692,7 @@ function agentCommandRefusal(
   variable: string
 ): string | null {
   if (agentCommandFor(workspace, commands)) return null;
-
-  const where = workspace.environment.kind === 'wsl'
-    ? { wanted: `${variable}_WSL or ${variable}`, names: `the WSL distro "${workspace.environment.distro}" names it` }
-    : { wanted: variable, names: 'this machine names it' };
-  // The backend variable first, because it is the answer for a board that has an agent
-  // installed and no command line anywhere — which is every first run.
-  return `${what} is not enabled for workspace "${workspace.id}". `
-    + `Set ${settingName('AGENT_BACKEND')} to one of ${KNOWN_BACKEND_NAMES}, `
-    + `or ${where.wanted} to the agent command as ${where.names}.`;
+  return agentNotEnabledRefusal(workspace, what, variable);
 }
 
 /**
@@ -5978,7 +5973,53 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
  * somebody's board being broken — but a payload whose only machine-readable part is English
  * prose is one the next reader has to parse to act on.
  */
-type ProjectWorkspaceRefusal = { error: string; reason: 'no-workspace' | 'no-project' };
+type ProjectWorkspaceRefusal = {
+  error: string;
+  reason: 'no-workspace' | 'no-project';
+  /**
+   * The board itself, when there is one — a project refused is not always a workspace refused.
+   *
+   * Only `no-project` carries it, and only one caller reads it: the founder column, which is
+   * drawn on this very answer and takes its name from the workspace. A board that renamed the
+   * column it publishes into and then dropped its `githubProject` would otherwise be drawn a
+   * second column under the default name, which is the duplicate this column is built to avoid.
+   */
+  workspace?: Workspace;
+};
+
+/**
+ * The founder column this board's canvas should draw, or nothing at all to draw.
+ *
+ * It rides on the project-board answer rather than on a route of its own because it is drawn
+ * by the region that answer draws, on the same twenty-second poll — the mirror is rebuilt
+ * from scratch every time and remembers nothing, so what it knows has to arrive with the
+ * draw. `GET /api/founder-actions` (#547) is a different question with a different consumer:
+ * the panel, which reads one record whole and answers it.
+ *
+ * **It is sent on the 404 as well**, which is the case this column exists for. The first
+ * founder action a fresh clone produces is "sign `gh` in", and a clone that has not signed in
+ * has no `githubProject` either — so the board with no project is precisely the board with
+ * something waiting, and a payload that only carried this on success would draw the column
+ * everywhere except where it is needed first.
+ *
+ * The name is the workspace's own answer, through `founderColumn` in `project-board.ts` —
+ * the resolver #540 publishes a draft item with. Where the project already declares a column
+ * of that name, the layout draws none of its own, so the two cannot show the same work twice.
+ */
+function founderMirrorColumn(
+  workspaceId: string,
+  workspace: Workspace | null
+): { columnName: string; cards: FounderCard[] } | null {
+  const open = openFounderActions(workspaceId);
+  if (open.length === 0) return null;
+  return {
+    // The same answer `publishFounderAction` publishes into, from the same resolver: one
+    // column named once. A board that has no workspace at all — an id nobody registered —
+    // gets the default, which is what a board with no opinion would have got anyway.
+    columnName: workspace ? founderColumn(workspace).name : DEFAULT_FOUNDER_COLUMN,
+    cards: open.map((record) => ({ key: record.key, title: record.fields.title })),
+  };
+}
 
 async function projectWorkspace(
   req: Request
@@ -5998,7 +6039,8 @@ async function projectWorkspace(
   if (!workspace.githubProject) {
     return {
       error: 'This board has no "githubProject" in its board.config.json.',
-      reason: 'no-project'
+      reason: 'no-project',
+      workspace
     };
   }
   return { workspace };
@@ -6015,16 +6057,22 @@ app.get('/api/project-board', async (req: Request, res: Response) => {
   }
 
   const resolved = await projectWorkspace(req);
+  const founder = founderMirrorColumn(
+    workspaceIdFrom(req),
+    ('workspace' in resolved ? resolved.workspace : null) ?? null
+  );
   if ('error' in resolved) {
     // 404 rather than 400: the feature is absent for this board, not misused.
+    // The founder column rides along all the same — see `founderColumn` for why this answer
+    // is the one that most needs it.
     return res.status(404).json({
-      success: false, reason: resolved.reason, error: resolved.error
+      success: false, reason: resolved.reason, error: resolved.error, ...(founder ? { founder } : {})
     });
   }
 
   try {
     const board = await readProjectBoard(resolved.workspace);
-    res.json({ success: true, board });
+    res.json({ success: true, board, ...(founder ? { founder } : {}) });
   } catch (error) {
     // 422 rather than 404, and that split is the point of #317. A 404 is the canvas's
     // instruction to draw nothing and say nothing, which is right for the boards that have no
@@ -6546,10 +6594,13 @@ app.post('/api/founder-actions/chat', async (req: Request, res: Response) => {
   };
 
   try {
-    const result = await runFounderChatTurn(workspace, withMessage, message, {
-      agent,
-      notFoundVariable: settingName('ISSUE_AGENT_WSL')
-    });
+    // The transcript is the turns *before* this one: the founder's message is passed separately,
+    // and a prompt carrying it twice would read as the person having said it twice.
+    const said = withMessage.chat.slice(0, -1);
+    const result = await runFounderChatAgent(
+      workspace, withMessage.fields, withMessage.evidence, said, message,
+      { agent, key, kind: withMessage.kind, notFoundVariable: settingName('ISSUE_AGENT_WSL') }
+    );
     if (!result.ok) {
       settle({ state: 'failed', reply: null, refusal: null, revised: false, error: result.error });
       logger.warn(`Founder chat on "${key}" failed: ${result.error}`);
@@ -6559,14 +6610,22 @@ app.post('/api/founder-actions/chat', async (req: Request, res: Response) => {
     // The record is read again rather than reused: the turn just appended is part of what the
     // answer is about, and a producer may have moved `lastSeenAt` underneath it.
     const current = readFounderAction(workspaceId, key) ?? withMessage;
-    const answer: FounderChatAnswer = parseFounderChatAnswer(result.output, key, current.fields);
+    const answer: FounderChatAnswer = parseFounderChatAnswer(
+      result.output, { key, kind: current.kind, fields: current.fields }
+    );
 
     // The reply reaches the store whatever became of the revision. A founder who asked a question
     // and got an answer the register happened to refuse must still be able to read the answer.
     appendChatTurn(workspaceId, key, { role: 'agent', text: answer.reply });
 
     let revised = false;
-    let refusal = answer.refusal;
+    // Flattened to the sentence plus its faults, because that is what a panel prints and what a
+    // poll carries. The structured refusal stays `core/founder-chat.ts`'s.
+    let refusal = answer.refusal
+      ? `${answer.refusal.said}${answer.refusal.faults.length > 0
+          ? ` (${answer.refusal.faults.map((fault) => `${fault.field} ${fault.rule}`).join('; ')})`
+          : ''}`
+      : null;
     if (answer.patch) {
       const written = reviseFounderAction(workspaceId, key, answer.patch);
       revised = written.ok;

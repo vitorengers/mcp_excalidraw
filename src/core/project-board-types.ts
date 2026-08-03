@@ -8,7 +8,12 @@
  */
 
 export interface BoardCard {
-  /** The `ProjectV2Item` node id — what a move is addressed to, not the issue number. */
+  /**
+   * The `ProjectV2Item` node id — what a move is addressed to, not the issue number.
+   *
+   * Empty on a founder card, which addresses nothing on GitHub. See `founderKey` below for
+   * why that emptiness is the guard rather than an oversight.
+   */
   itemId: string;
   contentType: string;
   number: number | null;
@@ -23,6 +28,36 @@ export interface BoardCard {
    * lifecycle, and an item from elsewhere is not this board's to rearrange.
    */
   draggable: boolean;
+  /**
+   * The founder action this card stands for, on the cards the canvas owns.
+   *
+   * Absent on everything read from GitHub, which is what makes it the mark. A card carrying
+   * one is drawn with `customData.founderKey` and deliberately **no** `customData.itemId`:
+   * `settleMirrorDrag` writes a move back only for a card whose `itemId` is a string, so a
+   * founder card dropped in another column snaps back with no request sent. That is the
+   * honest answer rather than a refusal, because there is no project item to address a move
+   * to in the first place.
+   *
+   * `draggable` stays true all the same. It is what decides whether the shape is locked, and
+   * a locked shape cannot even be selected — so the card is the reader's to pick up and to
+   * select, and is simply never written anywhere.
+   */
+  founderKey?: string;
+}
+
+/**
+ * A founder action as the canvas needs it: enough to draw a card, and nothing else.
+ *
+ * The record itself is `FounderActionRecord` in `founder-store.ts` — a kind, a state, the
+ * evidence, the chat — and none of that is the mirror's business. What a column needs is a
+ * key to name the card by and a line to draw in it, so that is what crosses the wire. The
+ * panel is where the rest of a record is read, and it reads it by the key.
+ */
+export interface FounderCard {
+  /** `founderActionKey`'s answer: what the panel and a `Done` are addressed to. */
+  key: string;
+  /** `FounderActionFields.title`, which the register already holds to one line. */
+  title: string;
 }
 
 export interface BoardSection {
@@ -99,6 +134,36 @@ export const NOTES_OPTION_ID = 'canvas:notes';
  * called it when it was an option, so nothing on screen changes.
  */
 export const NOTES_NAME = 'My Notes';
+
+/**
+ * The section the work only a person can do is drawn in, which is the canvas's own too.
+ *
+ * Reserved on exactly the terms `NOTES_OPTION_ID` is reserved on, and for a reason that is
+ * one step stronger. The first founder action this product will ever produce is "sign the
+ * GitHub CLI in", and at that moment there is no project to file it into and no working `gh`
+ * to file it with — so a column that depended on GitHub having a column would be a column
+ * that cannot exist precisely when it is needed. Milestone M6 settled that a fresh clone must
+ * be usable before anything is configured; this is the same rule applied to the one card a
+ * fresh clone is certain to want.
+ *
+ * The `:` is the guard, as it is there: GitHub writes option ids as hex, so the colon fails
+ * the `NODE_ID` pattern every write to the project is validated against, and `buildMoveArgs`
+ * refuses a move naming this column before a command line is built. A card dropped into it
+ * therefore cannot be written back even by a caller that tried, which is the honest answer
+ * because there is no option behind it to write.
+ */
+export const FOUNDER_OPTION_ID = 'canvas:founder';
+
+/**
+ * What that column is called by default.
+ *
+ * The second column name in this repository that is a constant, and for `NOTES_NAME`'s
+ * reason: the column is drawn here, so its name comes from here or from nowhere. It is a
+ * default rather than the last word — the layout takes the name from its caller, because a
+ * project may want to call this column something else and #536 is where that is named per
+ * project.
+ */
+export const FOUNDER_NAME = 'Founder Actions';
 
 export interface ProjectRef {
   ownerType: 'user' | 'organization';

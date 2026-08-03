@@ -284,7 +284,10 @@ process.stdin.on('end', async () => {
     process.exit(0);
   }
 
-  const key = (input.match(/founder action key: (\\S+)/) ?? [])[1] ?? 'unknown';
+  // The key as \`founderChatPrompt\` spells it — "Its key is \`<key>\`". Read out of the prompt
+  // rather than written in here, so that a stub answering with a key nobody gave it would be
+  // refused by the parser's identity check instead of quietly applied.
+  const key = (input.match(/key is \`([^\`]+)\`/) ?? [])[1] ?? 'unknown';
 
   if (mode === 'plain') {
     process.stdout.write('The free tier is enough for what you are doing today.\\n');
@@ -297,10 +300,8 @@ process.stdin.on('end', async () => {
     process.stdout.write('Here is the answer, and I have rewritten the steps.\\n');
     process.stdout.write(block({
       key,
-      fields: {
-        title: 'Eight steps is a document',
-        steps: ['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight'],
-      },
+      title: 'Eight steps is a document',
+      steps: ['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight'],
     }));
     process.exit(0);
   }
@@ -309,10 +310,8 @@ process.stdin.on('end', async () => {
     process.stdout.write('Done. I have shortened the steps for you.\\n');
     process.stdout.write(block({
       key,
-      fields: {
-        title: 'Top the account up',
-        steps: ['Open the billing page', 'Add a card', 'Try the same thing again'],
-      },
+      title: 'Top the account up',
+      steps: ['Open the billing page', 'Add a card', 'Try the same thing again'],
     }));
     process.exit(0);
   }
