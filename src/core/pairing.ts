@@ -72,6 +72,17 @@ export const PAIRING_MAX_PENDING = 8;
  */
 export const PAIRING_COLLECT_MS = 60 * 1000;
 
+/**
+ * How long a refusal waits to be collected.
+ *
+ * A refusal is a thing the waiting device has to be *told*, which is the whole difference
+ * between dismissing a dialog and deferring it (#504): a device that is never told sits on a
+ * spinner until an expiry it cannot see, and the operator who dismissed the prompt believes they
+ * answered it. So a refused record survives its refusal exactly long enough for the next poll to
+ * find it, on the same clock and for the same reason an approved one does.
+ */
+export const PAIRING_REFUSED_MS = 60 * 1000;
+
 /** Why a request was not recorded. Reported to the caller as a status and no more. */
 export type PairingRefusal = 'unnamed' | 'one-per-address' | 'too-many-pending';
 
@@ -111,6 +122,15 @@ export type ApproveOutcome =
 export type PairingStatus =
   | { state: 'pending'; expiresAt: number }
   /**
+   * The operator said no, and said it on purpose.
+   *
+   * Distinct from `unknown` because the two are different things to put on the device's screen:
+   * "nobody answered within three minutes, ask again" and "the person at the other machine
+   * refused this" are the two answers a person is owed, and a device shown the first when the
+   * second happened asks again into a refusal.
+   */
+  | { state: 'refused' }
+  /**
    * `credential` rather than `secret`, because it is what `verifyDevice` takes: the device's id
    * and its secret in one opaque string (`deviceCredential`). One value, because it has to
    * travel everywhere a bearer token travels — a header, a query parameter on a WebSocket
@@ -130,6 +150,11 @@ export type PairingStatus =
 interface Record_ {
   pending: PendingPairing;
   approved: { device: DeviceRecord; secret: string } | null;
+  /**
+   * Set when the operator said no. A record has at most one of these two lives, never both:
+   * `approve` will not touch a refused record and `refuse` will not touch an approved one.
+   */
+  refused: boolean;
 }
 
 /** A code a person reads off one screen and finds on another. Six digits, grouped. */
@@ -143,6 +168,16 @@ export interface PairingDesk {
   /** Every live request, for the operator to choose between. Never carries a secret. */
   pending(now?: number): PendingPairing[];
   approve(input: { requestId: string; code: string; now?: number }): ApproveOutcome;
+  /**
+   * The other answer, and no code is asked for.
+   *
+   * Approving needs the code because the operator is choosing *which* request to let in, and
+   * getting that wrong lets a stranger onto this machine. Refusing needs nothing, because the
+   * worst a refusal aimed at the wrong request can do is make somebody ask again — and requiring
+   * a code to say no would mean the dialog could not be dismissed, which is the way a person
+   * says no when they do not recognise anything on it.
+   */
+  refuse(input: { requestId: string; now?: number }): boolean;
   /** What the waiting device is told — and the one poll on which it is told the secret. */
   status(input: { requestId: string; now?: number }): PairingStatus;
 }
@@ -177,7 +212,12 @@ export function createPairingDesk({ mint }: { mint: DeviceMinter }): PairingDesk
       if (!proposed) return { ok: false, refusal: 'unnamed' };
       // Before the ceiling, so that a caller already holding the one slot it may have is told
       // which limit it met rather than being blamed for everybody else's.
+      //
+      // A refused record does not hold the slot. The screen it belongs to says it was refused
+      // and offers to ask again (#504), and an offer that is answered with `one-per-address`
+      // until a minute has passed is not an offer.
       for (const record of records.values()) {
+        if (record.refused) continue;
         if (record.pending.remoteAddress === remoteAddress) return { ok: false, refusal: 'one-per-address' };
       }
       if (records.size >= PAIRING_MAX_PENDING) return { ok: false, refusal: 'too-many-pending' };
@@ -201,14 +241,14 @@ export function createPairingDesk({ mint }: { mint: DeviceMinter }): PairingDesk
         createdAt: now,
         expiresAt: now + PAIRING_EXPIRY_MS,
       };
-      records.set(pending.requestId, { pending, approved: null });
+      records.set(pending.requestId, { pending, approved: null, refused: false });
       return { ok: true, pending };
     },
 
     pending(now = Date.now()): PendingPairing[] {
       sweep(now);
       return [...records.values()]
-        .filter(record => record.approved === null)
+        .filter(record => record.approved === null && !record.refused)
         .map(record => ({ ...record.pending }))
         .sort((left, right) => left.createdAt - right.createdAt);
     },
@@ -217,8 +257,10 @@ export function createPairingDesk({ mint }: { mint: DeviceMinter }): PairingDesk
       sweep(now);
       const record = records.get(requestId);
       // A record already approved is not approvable again: the gesture is over and the only
-      // thing left to happen to it is the device collecting its secret.
-      if (!record || record.approved !== null) return { ok: false, reason: 'unknown' };
+      // thing left to happen to it is the device collecting its secret. A refused one is not
+      // approvable at all — the operator answered, and an answer that a second press can undo
+      // is not one.
+      if (!record || record.approved !== null || record.refused) return { ok: false, reason: 'unknown' };
       if (record.pending.code !== code) return { ok: false, reason: 'code-mismatch' };
 
       // The registry mints and writes; this module only decided that it was time to. Before the
@@ -237,10 +279,30 @@ export function createPairingDesk({ mint }: { mint: DeviceMinter }): PairingDesk
       return { ok: true, device, secret };
     },
 
+    refuse({ requestId, now = Date.now() }): boolean {
+      sweep(now);
+      const record = records.get(requestId);
+      // Not an approved one: the secret is minted and the device may already hold it, so what
+      // takes that back is `revokeDevice` in the registry and not this.
+      if (!record || record.approved !== null || record.refused) return false;
+      record.refused = true;
+      // The clock restarts, for the reason `PAIRING_COLLECT_MS` gives: a refusal at two minutes
+      // fifty-nine would otherwise leave the waiting page one second to hear about it, and a
+      // refusal nobody heard is exactly the spinner this exists to end.
+      record.pending = { ...record.pending, expiresAt: now + PAIRING_REFUSED_MS };
+      return true;
+    },
+
     status({ requestId, now = Date.now() }): PairingStatus {
       sweep(now);
       const record = records.get(requestId);
       if (!record) return { state: 'unknown' };
+      if (record.refused) {
+        // Told once and forgotten, like the secret below: the device has its answer and there is
+        // nothing further to say to a `requestId` that will never be approved.
+        records.delete(requestId);
+        return { state: 'refused' };
+      }
       if (!record.approved) return { state: 'pending', expiresAt: record.pending.expiresAt };
       // Handed over and forgotten in the same breath. A second poll finds nothing, which is
       // also what a `requestId` nobody issued finds.

@@ -19,6 +19,11 @@
  * profile out there is still holding, and it is the only reason the rename below cost nobody
  * their theme. Keeping it also documents the names in one place instead of in a migration
  * that ran once and was then removed, which is the form this shim would otherwise decay into.
+ *
+ * One thing in this store is not a setting and is not in the map below: this device's own pairing
+ * credential (#504). It lives here because this module is the only one allowed to touch
+ * `localStorage` at all; see `DEVICE_CREDENTIAL_KEY` at the foot of the file for why it is
+ * outside the map rather than a ninth entry in it.
  */
 export interface StorageKey {
   /** The name written to, and read from first. */
@@ -99,4 +104,44 @@ export function readSetting(key: StorageKey, suffix = ''): string | null {
 /** Write a setting down, under the current name only. */
 export function writeSetting(key: StorageKey, value: string, suffix = ''): void {
   window.localStorage?.setItem(`${key.current}${suffix}`, value)
+}
+
+/**
+ * The one thing in `localStorage` that is not a setting: this device's own credential (#504).
+ *
+ * It is here because this module is the only one that may reach into `localStorage` —
+ * `scripts/check-storage-migration-browser.mjs` holds the repository to that, and the rule is
+ * worth more than the tidiness of a second module — and it is *outside* `STORAGE_KEYS` because
+ * it is not one of the eight things above in any respect that matters:
+ *
+ * - it is a **credential**, not something a reader chose. Nothing migrates it, nothing defaults
+ *   it, and losing it costs a pairing rather than a preference;
+ * - it has no legacy name and never will. The pair in every entry above exists so a rename does
+ *   not silently reset somebody's theme; a rename here would mean re-pairing, which is a gesture
+ *   a person performs and not a value to carry forward under two names.
+ *
+ * `localStorage` rather than the `sessionStorage` `auth.ts` keeps the board token in, and for the
+ * opposite reason: that token is good for one start of one server, so a tab is the right lifetime
+ * for it. This one is what the approval on the other machine *bought*, and it has to survive the
+ * browser being closed — a device that had to be paired again every morning would write a new
+ * record into the operator's registry every morning.
+ *
+ * Origin-scoped, like everything in this store, which is what makes it the device's own: the
+ * board on `mac.tailnet.ts.net:3737` and the board on `127.0.0.1:3737` do not read each other's.
+ */
+export const DEVICE_CREDENTIAL_KEY = 'vibemaxxing.device.credential'
+
+/** What this device holds, or null when it has never been paired. */
+export function readDeviceCredential(): string | null {
+  try { return window.localStorage?.getItem(DEVICE_CREDENTIAL_KEY) ?? null } catch { return null }
+}
+
+/** Keep what an approval just handed over. */
+export function writeDeviceCredential(value: string): void {
+  try { window.localStorage?.setItem(DEVICE_CREDENTIAL_KEY, value) } catch { /* private mode */ }
+}
+
+/** Forget it, so the next load asks to pair again rather than offering a credential nobody wants. */
+export function forgetDeviceCredential(): void {
+  try { window.localStorage?.removeItem(DEVICE_CREDENTIAL_KEY) } catch { /* private mode */ }
 }

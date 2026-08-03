@@ -111,11 +111,26 @@ bar no longer carries the secret.
 The token above is one secret on one machine, and there is no way to hand a second machine a
 copy of it that is not "hand over the file". So a device asks instead, and you approve it.
 
-Open the board on the other machine. It finds no device secret and asks — `POST
-/api/pair/request` — and the board on *this* machine shows the request: the name it proposed,
-the address it arrived from, the name it reached this board under, and a **code**. Read the code
-off the other screen, approve the request showing the same one, and the waiting page collects a
-secret of its own on its next poll.
+Open the board on the other machine. Instead of a board it shows a code and says it is waiting;
+behind that it has asked — `POST /api/pair/request` — and the board on *this* machine has raised
+a dialog over the canvas: the name the device proposed, marked as the device's own claim; the
+address it arrived from and the name it reached this board under, both verbatim; the **code**;
+and one sentence saying what approving it hands over. Read the code off the other screen, approve
+the request showing the same one, and the waiting page collects a secret of its own on its next
+poll and opens into a board.
+
+**Refuse is the other answer, and it is as prominent as approve.** Escape, a press outside the
+dialog and the Refuse button are all the same answer, and the device is *told* — its screen says
+it was refused and offers to ask again, rather than spinning until an expiry nobody can see. A
+prompt that can only be answered `yes` is a prompt people learn to answer `yes`, and this is the
+one where that costs a shell.
+
+**The sentence about what approval grants is held to the routes it names.** It lives in
+`src/core/pairing-grants.ts` with the route each of its clauses is a claim about, and
+`scripts/check-pairing-surfaces-browser.mjs` asks those routes whether they are still there and
+still behind the credential the rest of the board is behind. A dialog that goes on promising what
+the board stopped doing is the worst possible state for the one screen you read before letting
+another machine in.
 
 Five things make that a gesture rather than a hole, and all five are in `src/core/pairing.ts`:
 
@@ -139,19 +154,31 @@ Five things make that a gesture rather than a hole, and all five are in `src/cor
   It is also what *makes* the secret: `src/core/pairing.ts` decides when a device is approved,
   and `src/core/device-registry.ts` (#502) is the only thing here that mints or writes.
 
-Those two open routes are also outside the `Host` pin the origin gate applies everywhere else,
-and only those two: a device that has not been approved yet reaches this board under a name it
-does not answer for, which is what pairing *is*. The name is recorded and shown to you rather
+Those two open routes are outside the `Host` pin the origin gate applies to every route, and
+since #504 so is the page itself — `GET /` and the static mounts. A device that has not been
+approved yet reaches this board under a name it does not answer for, which is what pairing *is*,
+and while the pin covered the page too, that device was answered a 403 rather than a screen: it
+could not read a code off a page it was refused. The name is recorded and shown to you rather
 than pinned — you are the one who can tell `mac.tailnet.ts.net` from something that merely
-resolves here. `Origin`, when a browser sends one, still has to name the same authority as
-`Host`, so a page at some other origin cannot put rows on your screen.
+resolves here.
 
-**What a paired device can do today: nothing yet.** Pairing writes the device down; teaching the
-guard to accept it is #501, and until that lands the credential is minted, stored and idle. The
-bind section below is still true.
+What this widened is the software and nothing about the board. The page carries no credential of
+its own, every route that *acts* is still pinned, and `/health` stays pinned because it names a
+pid and a build. A page served to an authority that merely resolves here can do no more from
+there than the two open pairing routes already allowed it — and those put a row on your screen
+with `evil.example` written in it, which is the row this dialog exists for you to refuse.
+`Origin`, when a browser sends one, still has to name the same authority as `Host`, so a page at
+some other origin cannot put rows on your screen at all.
 
-`scripts/check-pairing-handshake.mjs` holds this, including an approval attempted from a
+**What a paired device can do today: nothing yet.** Pairing writes the device down and the
+device keeps its credential; teaching the guard to accept it is #501, and until that lands the
+credential is minted, stored and idle — a device that pairs and is then not let in says so on
+its own screen rather than showing an empty board. The bind section below is still true.
+
+`scripts/check-pairing-handshake.mjs` holds the exchange, including an approval attempted from a
 genuinely non-loopback socket and one attempted with a forwarded header claiming loopback.
+`scripts/check-pairing-surfaces-browser.mjs` holds the two screens: it drives them from two
+origins in two browsers and asserts the code shown on the two ends is the same string.
 
 ## Where it listens
 

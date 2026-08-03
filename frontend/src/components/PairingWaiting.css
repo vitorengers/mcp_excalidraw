@@ -1,0 +1,138 @@
+/*
+ * The waiting screen, on the device asking.
+ *
+ * Self-contained colours, which is the one way this differs from every other stylesheet here.
+ * The rest of them read the tokens `frontend/index.html` declares on `.app[data-theme=…]`, and
+ * this screen renders *instead of* `.app` — there is no board, so there is nothing declaring
+ * them and no remembered theme to declare them from. So it follows the operating system's own
+ * preference directly, which is also the only signal a device that has never been paired has.
+ *
+ * Nothing here is behind a media query for width. It is one column of text and a number, and the
+ * device it is read on is as likely to be a phone held sideways as a second laptop.
+ */
+
+.pairing-waiting {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #f7f7f8;
+  color: #1b1b1f;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.pairing-waiting__card {
+  width: 34rem;
+  max-width: 100%;
+  padding: 28px 30px;
+  border: 1px solid #e2e2e6;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.08);
+  text-align: left;
+}
+
+/* Which board this is, before anything else: the reader may have typed the address by hand. */
+.pairing-waiting__board {
+  margin: 0 0 18px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #6b6b73;
+}
+
+.pairing-waiting__headline {
+  margin: 0 0 14px;
+  font-size: 21px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.pairing-waiting__code-label {
+  margin: 0;
+  color: #6b6b73;
+}
+
+/*
+ * The number, at the size it has to be read at from the other side of a desk — this is the half
+ * of the gesture the person carries to the other screen, and monospaced so a 0 and an O are not
+ * something they have to decide about.
+ */
+.pairing-waiting__code {
+  margin: 2px 0 18px;
+  font-family: ui-monospace, "SFMono-Regular", "Cascadia Mono", "Consolas", monospace;
+  font-size: 56px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  line-height: 1.05;
+}
+
+.pairing-waiting__body {
+  margin: 0 0 12px;
+}
+
+.pairing-waiting__aside {
+  margin: 0;
+  font-size: 13px;
+  color: #6b6b73;
+}
+
+.pairing-waiting__body code,
+.pairing-waiting__aside code {
+  font-family: ui-monospace, "SFMono-Regular", "Cascadia Mono", "Consolas", monospace;
+  font-size: 0.92em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f0f0f2;
+}
+
+.pairing-waiting__button {
+  margin-top: 16px;
+  padding: 10px 20px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: #6965db;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pairing-waiting__button:focus-visible {
+  outline: 2px solid #6965db;
+  outline-offset: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .pairing-waiting {
+    background: #121212;
+    color: #e3e3e8;
+  }
+
+  .pairing-waiting__card {
+    border-color: #35353c;
+    background: #232329;
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.4);
+  }
+
+  .pairing-waiting__board,
+  .pairing-waiting__aside,
+  .pairing-waiting__code-label {
+    color: #a0a0aa;
+  }
+
+  .pairing-waiting__body code,
+  .pairing-waiting__aside code {
+    background: #2e2e35;
+  }
+
+  .pairing-waiting__button {
+    background: #6965db;
+    color: #fff;
+  }
+}
