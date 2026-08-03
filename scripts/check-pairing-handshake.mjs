@@ -288,11 +288,33 @@ try {
   check('and it cannot be approved a second time', approvedTwice.status === 404,
         `${approvedTwice.status} ${approvedTwice.text.slice(0, 200)}`);
 
+  /*
+   * What the credential is now good for, and what it still is not.
+   *
+   * This case read `401` when #503 landed, on the reasoning that nothing yet consumed the
+   * registry and #501 was the seam. #505 built the half of that seam it could not do without:
+   * the token gate verifies a device credential after the board token, because "the device list
+   * is refused to a caller that is not the host or a paired device" and "a revoked device's next
+   * request is refused" are not statements that can be made, or checked, until a request can
+   * arrive *as* a device.
+   *
+   * So it is the same assertion turned the right way up rather than deleted. The credential is
+   * **not** the board token — it opens nothing the board token does not, it is one of many, and
+   * it can be taken away — and it is now a credential this server accepts. What #501 still owns
+   * is the *other* guard: `offLoopback` asks where the server bound and not who is calling, so
+   * this device reaches nothing at all from another machine yet.
+   */
   const drivenWithCredential = await call(board, '/api/elements', {
     headers: { [TOKEN_HEADER]: credential },
   });
-  check('the credential is not the board token — the guard learns it in #501',
-        drivenWithCredential.status === 401, `${drivenWithCredential.status}`);
+  check('the credential a pairing handed over is accepted by the gate (#505)',
+        drivenWithCredential.status === 200, `${drivenWithCredential.status}`);
+
+  const drivenWithRubbish = await call(board, '/api/elements', {
+    headers: { [TOKEN_HEADER]: `${credential.split('.')[0]}.${'f'.repeat(64)}` },
+  });
+  check('and it is the secret that does it, not the id half anybody can read',
+        drivenWithRubbish.status === 401, `${drivenWithRubbish.status}`);
 
   // ─── 2. A second origin ─────────────────────────────────────
   console.log('\nA second origin');

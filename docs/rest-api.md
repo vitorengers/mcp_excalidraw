@@ -28,6 +28,14 @@ curl -H "X-VibeMaxxing-Token: $(cat "$XDG_STATE_HOME/excalidraw-canvas/server-37
 
 The CLI and the MCP server read that file themselves, so nothing below needs a flag.
 
+**Or an approved device's credential**, in the same header and the same query parameter. A
+device paired through the handshake above holds one of its own — see [devices.md](devices.md) —
+and the gate takes it after the board token and never instead of it. The difference between the
+two is not what they reach: it is that a device's is one of many, survives a restart, and can be
+revoked while the board is running, where the board token is a per-start file this account owns.
+Only the three device routes ask which one a caller holds; everywhere else in this table the two
+are the same thing.
+
 ## Elements
 
 The canvas store, one `Map` per workspace — see [element-store.md](element-store.md).

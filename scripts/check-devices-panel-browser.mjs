@@ -102,6 +102,13 @@ const record = (id, name, extra) => ({
 const seeded = [
   record('dev-laptop', 'MacBook-Pro-3', { approvedFrom: '192.168.1.44', host: 'board.lan:3737' }),
   record('dev-phone', 'Pixel-9', { approvedFrom: '192.168.1.91', host: 'desk.local:3737' }),
+  // `lastSeenAt: null` is a state the registry means rather than a missing field: *paired and
+  // never used* is a different answer from *last used in March*, and a surface that rendered the
+  // first as "unknown" — or as the epoch, which is what a careless relative formatter gives —
+  // would throw away the one that most deserves a second look.
+  record('dev-never', 'Tablet in a drawer', {
+    approvedFrom: '192.168.1.7', host: 'board.lan:3737', lastSeenAt: null,
+  }),
 ];
 
 const onDisk = () => {
@@ -268,11 +275,11 @@ try {
   check('the control presses', await press('.devices-button'));
   const opened = await waitFor(async () => {
     const state = await panel();
-    return state.open && state.rows.length === 2 ? state : null;
+    return state.open && state.rows.length === 3 ? state : null;
   }, 'the device list to be drawn');
   await shot('02-list');
 
-  check('both paired devices are listed', opened.rows.length === 2,
+  check('every paired device is listed', opened.rows.length === 3,
         JSON.stringify(opened.rows.map((row) => row.name)));
   const laptop = opened.rows.find((row) => row.id === 'dev-laptop') ?? {};
   check('under the name the registry holds', laptop.name === 'MacBook-Pro-3',
@@ -289,6 +296,9 @@ try {
   check('a second device shows its own Host rather than the first one\'s',
         opened.rows.find((row) => row.id === 'dev-phone')?.host === 'desk.local:3737',
         JSON.stringify(opened.rows.find((row) => row.id === 'dev-phone')?.host));
+  check('a device that has never been seen says so, rather than reading as an old date',
+        opened.rows.find((row) => row.id === 'dev-never')?.lastSeen === 'never',
+        JSON.stringify(opened.rows.find((row) => row.id === 'dev-never')?.lastSeen));
 
   // ─── 3. The rename, which has to reach the file ─────────────
 
@@ -308,7 +318,8 @@ try {
     const state = await panel();
     return state.rows.find((row) => row.id === 'dev-laptop')?.name === "Ana's laptop" ? state : null;
   }, 'the row to be redrawn under the new name');
-  check('the row is redrawn under the new name', renamed.rows.length === 2);
+  check('the row is redrawn under the new name, and no other row moved with it',
+        renamed.rows.length === 3, JSON.stringify(renamed.rows.map((row) => row.name)));
   check('and the registry on disk says so, so this was not only on screen',
         (onDisk() ?? []).find((entry) => entry.id === 'dev-laptop')?.name === "Ana's laptop",
         JSON.stringify((onDisk() ?? []).map((entry) => entry.name)));
@@ -326,7 +337,7 @@ try {
         asking.warn.includes('Pixel-9'), JSON.stringify(asking.warn));
   check('and says when the loss of access takes effect', /next request/i.test(asking.warn),
         JSON.stringify(asking.warn));
-  check('nothing is revoked by the asking', (onDisk() ?? []).length === 2,
+  check('nothing is revoked by the asking', (onDisk() ?? []).length === 3,
         JSON.stringify((onDisk() ?? []).map((entry) => entry.id)));
   await shot('05-confirming');
 
@@ -334,7 +345,7 @@ try {
         await press('[data-device="dev-phone"] .devices-dialog__revoke--go'));
   const revoked = await waitFor(async () => {
     const state = await panel();
-    return state.rows.length === 1 ? state : null;
+    return state.rows.length === 2 ? state : null;
   }, 'the row to leave the list');
   check('the row is gone from the list', revoked.rows.every((row) => row.id !== 'dev-phone'));
   check('and so is the record', (onDisk() ?? []).every((entry) => entry.id !== 'dev-phone'),
@@ -347,9 +358,12 @@ try {
   // ─── 5. An empty list is a sentence, not a blank panel ──────
 
   console.log('\n5. the last device leaving says so in words');
-  await press('[data-device="dev-laptop"] .devices-dialog__revoke');
-  await waitFor(() => panel().then((state) => state.warn), 'the second confirmation');
-  await press('[data-device="dev-laptop"] .devices-dialog__revoke--go');
+  for (const id of ['dev-laptop', 'dev-never']) {
+    await press(`[data-device="${id}"] .devices-dialog__revoke`);
+    await waitFor(() => panel().then((state) => state.warn), `the confirmation on ${id}`);
+    await press(`[data-device="${id}"] .devices-dialog__revoke--go`);
+    await waitFor(async () => (await panel()).rows.every((row) => row.id !== id), `${id} to go`);
+  }
   const empty = await waitFor(async () => {
     const state = await panel();
     return state.rows.length === 0 ? state : null;
