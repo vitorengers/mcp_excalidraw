@@ -168,6 +168,12 @@ check('and it is a different column from the notes one',
       `${types.FOUNDER_OPTION_ID} vs ${types.NOTES_OPTION_ID}`);
 check('the default name is a constant this repository owns',
       types.FOUNDER_NAME === FOUNDER_COLUMN, JSON.stringify(types.FOUNDER_NAME));
+// One column, named once. #540 publishes a draft item into the column `founderColumn(workspace)`
+// resolves, and the canvas draws its own under the same default — two spellings of that string
+// would be a second column on the mirror the day either of them moved.
+check('and the column a founder action is published into defaults to the same string',
+      reader.DEFAULT_FOUNDER_COLUMN === types.FOUNDER_NAME,
+      `${JSON.stringify(reader.DEFAULT_FOUNDER_COLUMN)} vs ${JSON.stringify(types.FOUNDER_NAME)}`);
 
 const refusalFor = (optionId) => {
   try {

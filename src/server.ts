@@ -78,14 +78,15 @@ import {
   moveCard,
   moveIssueToColumn,
   findColumn,
+  founderColumn,
   inProgressColumn,
   todoColumn,
+  DEFAULT_FOUNDER_COLUMN,
   DEFAULT_TODO_COLUMN,
   NoProjectConfigured,
   ProjectUrlUnparseable,
   NotOnThisBoard
 } from './core/project-board.js';
-import { FOUNDER_NAME } from './core/project-board-layout.js';
 import type { FounderCard } from './core/project-board-types.js';
 import { openFounderActions } from './core/founder-store.js';
 import {
@@ -5707,7 +5708,19 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
  * somebody's board being broken — but a payload whose only machine-readable part is English
  * prose is one the next reader has to parse to act on.
  */
-type ProjectWorkspaceRefusal = { error: string; reason: 'no-workspace' | 'no-project' };
+type ProjectWorkspaceRefusal = {
+  error: string;
+  reason: 'no-workspace' | 'no-project';
+  /**
+   * The board itself, when there is one — a project refused is not always a workspace refused.
+   *
+   * Only `no-project` carries it, and only one caller reads it: the founder column, which is
+   * drawn on this very answer and takes its name from the workspace. A board that renamed the
+   * column it publishes into and then dropped its `githubProject` would otherwise be drawn a
+   * second column under the default name, which is the duplicate this column is built to avoid.
+   */
+  workspace?: Workspace;
+};
 
 /**
  * The founder column this board's canvas should draw, or nothing at all to draw.
@@ -5724,13 +5737,21 @@ type ProjectWorkspaceRefusal = { error: string; reason: 'no-workspace' | 'no-pro
  * something waiting, and a payload that only carried this on success would draw the column
  * everywhere except where it is needed first.
  *
- * `FOUNDER_NAME` until #536 makes the name a workspace's own.
+ * The name is the workspace's own answer, through `founderColumn` in `project-board.ts` —
+ * the resolver #540 publishes a draft item with. Where the project already declares a column
+ * of that name, the layout draws none of its own, so the two cannot show the same work twice.
  */
-function founderColumn(workspaceId: string): { columnName: string; cards: FounderCard[] } | null {
+function founderMirrorColumn(
+  workspaceId: string,
+  workspace: Workspace | null
+): { columnName: string; cards: FounderCard[] } | null {
   const open = openFounderActions(workspaceId);
   if (open.length === 0) return null;
   return {
-    columnName: FOUNDER_NAME,
+    // The same answer `publishFounderAction` publishes into, from the same resolver: one
+    // column named once. A board that has no workspace at all — an id nobody registered —
+    // gets the default, which is what a board with no opinion would have got anyway.
+    columnName: workspace ? founderColumn(workspace).name : DEFAULT_FOUNDER_COLUMN,
     cards: open.map((record) => ({ key: record.key, title: record.fields.title })),
   };
 }
@@ -5753,7 +5774,8 @@ async function projectWorkspace(
   if (!workspace.githubProject) {
     return {
       error: 'This board has no "githubProject" in its board.config.json.',
-      reason: 'no-project'
+      reason: 'no-project',
+      workspace
     };
   }
   return { workspace };
@@ -5769,9 +5791,11 @@ app.get('/api/project-board', async (req: Request, res: Response) => {
     });
   }
 
-  const founder = founderColumn(workspaceIdFrom(req));
-
   const resolved = await projectWorkspace(req);
+  const founder = founderMirrorColumn(
+    workspaceIdFrom(req),
+    ('workspace' in resolved ? resolved.workspace : null) ?? null
+  );
   if ('error' in resolved) {
     // 404 rather than 400: the feature is absent for this board, not misused.
     // The founder column rides along all the same — see `founderColumn` for why this answer

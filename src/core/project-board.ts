@@ -26,6 +26,7 @@ import {
   ProjectBoard,
   NO_STATUS_OPTION_ID,
   NO_STATUS_NAME,
+  FOUNDER_NAME,
   githubProjectRefusal,
   parseProjectUrl,
 } from './project-board-types.js';
@@ -490,8 +491,13 @@ export const DEFAULT_TODO_COLUMN = 'Todo';
  * invent — a project it created has no such option, so a board that wants one either adds it
  * under this name or names its own. A board with neither publishes nothing and says so, which
  * is the same answer `moveIssueToColumn` gives a project missing the column it was sent to.
+ *
+ * **`FOUNDER_NAME` itself, rather than the same string typed twice.** The canvas draws a column
+ * of its own under this name when nothing has published one yet (#539), and it lives next door
+ * because the browser needs it and this module spawns `gh`. Two spellings of one column name is
+ * a duplicate column the day either moves.
  */
-export const DEFAULT_FOUNDER_COLUMN = 'Founder Actions';
+export const DEFAULT_FOUNDER_COLUMN = FOUNDER_NAME;
 
 /** A column to move to, and the setting that would name it if the default is wrong. */
 export interface ColumnTarget {
