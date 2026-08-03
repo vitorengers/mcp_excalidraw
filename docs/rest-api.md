@@ -228,8 +228,10 @@ splitting state across IPv4 and IPv6. `scripts/check-local-bind.mjs` pins both d
 
 `HOST` can still be set wider; nothing stops that. What does stop is every route marked
 *loopback only* above, each of which refuses with 403 rather than answering a caller that
-arrived over the network. Two kinds of route carry that mark, and the second was decided in
-#366:
+arrived over the network. Since #501 that is what the mark literally means: the guard asks for
+the **caller's** address rather than the one this server opened, so a board on every interface
+still answers the browser on the machine it runs on and refuses everybody else. Two kinds of
+route carry the mark, and the second was decided in #366:
 
 - the ones that spawn a process holding your `gh` credentials, write to GitHub, or reach your
   filesystem;
@@ -239,20 +241,22 @@ arrived over the network. Two kinds of route carry that mark, and the second was
   whole scene as `initial_elements` the moment it is accepted.
 
 The choice there was between guarding them and writing down that a board bound to an interface
-publishes its contents to whoever reaches the port. They are guarded. The consequence is stated
-rather than hidden: a non-loopback bind now answers nothing worth having — #278 had already
-taken the tab strip and the picker with the registry, and this takes the canvas itself. A reverse
-proxy is unaffected, because it reaches this server on loopback, which is the shape
-`EXCALIDRAW_ALLOWED_HOSTS` exists for.
+publishes its contents to whoever reaches the port. They are guarded. What a stranger gets from
+one of those routes is nothing worth having — #278 had already taken the tab strip and the
+picker with the registry, and #366 took the canvas itself. A reverse proxy is unaffected, because
+it reaches this server on loopback, which is the shape `EXCALIDRAW_ALLOWED_HOSTS` exists for.
 
-The guard tests the **bind address**, which is the one thing about a caller that cannot be
-forged. The origin gate beside it tests `Origin` and `Host`, which is a question only a browser
-has to answer honestly, and the token above tests what the caller carries. None of the three
-stands in for the others — a request holding a valid token is still refused off loopback, and
-the bind is the only one of the three still answering wherever `VIBEMAXXING_NO_AUTH` is set.
-[SECURITY.md](SECURITY.md) is all of it in one place, and
-`scripts/check-board-reads-guard.mjs` holds this part.
+The guard tests the **caller's address**, which is the one thing about a caller that cannot be
+forged. `X-Forwarded-For` is deliberately not read: a header anybody can set would turn that one
+unforgeable property into a claim, and a proxy needs nothing from it because a proxy already
+arrives on loopback. The origin gate beside it tests `Origin` and `Host`, which is a question
+only a browser has to answer honestly, and the token above tests what the caller carries. None of
+the three stands in for the others — a remote request holding a valid token is still refused, and
+the caller's address is the only one of the three still answering wherever `VIBEMAXXING_NO_AUTH`
+is set. [SECURITY.md](SECURITY.md) is all of it in one place;
+`scripts/check-caller-guard.mjs` holds the question and
+`scripts/check-board-reads-guard.mjs` holds what these routes publish.
 
-The writes are not behind the bind guard, and saying so is the point of writing it down: a board
-bound off loopback can still be *drawn on* by anyone holding the token, even though none of them
-can read it back. That is #456.
+The writes are not behind that guard, and saying so is the point of writing it down: a board
+bound to an interface can still be *drawn on* over the network by anyone holding the token, even
+though none of them can read it back. That is #456.

@@ -43,6 +43,7 @@ import { fileURLToPath } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
+import { remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 let failures = 0;
 
@@ -100,8 +101,13 @@ const readRegistry = () => JSON.parse(readFileSync(registryPath, 'utf8'));
 
 const running = [];
 
-function startCanvas(port, { host = '127.0.0.1', registry = registryPath, stateHome = null } = {}) {
+function startCanvas(port, { host = '127.0.0.1', registry = registryPath, stateHome = null,
+                             allowedHosts = null } = {}) {
   const env = { PORT: String(port), HOST: host, LOG_LEVEL: 'error' };
+  // A request to `http://<interface>:<port>` names that authority in `Host`, which a board bound
+  // to `0.0.0.0` does not answer for. The origin gate is a different control from the caller
+  // guard, and a case that wants the second refusal has to get past the first.
+  if (allowedHosts) env.EXCALIDRAW_ALLOWED_HOSTS = allowedHosts;
   // Nothing to delete in the other case: the child's environment starts with no
   // `EXCALIDRAW_*` in it at all, so "not granted" is "never named".
   if (registry) env.EXCALIDRAW_WORKSPACES = registry;
@@ -242,15 +248,29 @@ try {
           : (roots.body?.entries ?? []).length > 0,
         JSON.stringify((roots.body?.entries ?? []).slice(0, 5)));
 
-  console.log('\n9. a board that is not bound to loopback may not write anything');
-  const open = startCanvas(openPort, { host: '0.0.0.0' });
-  await waitForHealth(OPEN_BASE, open.child, open.read);
-  const refused = await add(OPEN_BASE, { path: slash(join(workDir, 'seeded')) });
-  check('403 for the POST', refused.status === 403, `got ${refused.status} ${JSON.stringify(refused.body)}`);
-  check('and the refusal names loopback', /loopback/i.test(refused.body?.error ?? ''), refused.body?.error);
-  const refusedBrowse = await call(OPEN_BASE, '/api/fs/directories');
-  check('403 for the directory listing too', refusedBrowse.status === 403,
-        `got ${refusedBrowse.status} ${JSON.stringify(refusedBrowse.body)}`);
+  // Since #501 the guard asks who is calling rather than where the server opened, so the case is
+  // a caller reaching a board from somewhere that is not this machine, rather than the board's
+  // own bind. The board still listens everywhere; it is the caller that decides.
+  console.log('\n9. a caller that is not on this machine may not write anything');
+  const remote = await remoteInterfaceAddress((line) => console.log(`  note  ${line}`));
+  if (!remote) {
+    console.log('  note  this machine has no non-loopback address to be called on, so this case '
+                + 'could not be run at all');
+  } else {
+    const open = startCanvas(openPort, { host: '0.0.0.0', allowedHosts: `${remote}:${openPort}` });
+    await waitForHealth(OPEN_BASE, open.child, open.read);
+    const remoteBase = `http://${remote}:${openPort}`;
+    const refused = await add(remoteBase, { path: slash(join(workDir, 'seeded')) });
+    check('403 for the POST', refused.status === 403,
+          `got ${refused.status} ${JSON.stringify(refused.body)}`);
+    check('and the refusal names the caller, not the origin gate',
+          /machine/i.test(refused.body?.error ?? '')
+          && !/DNS rebinding/i.test(refused.body?.error ?? ''),
+          refused.body?.error);
+    const refusedBrowse = await call(remoteBase, '/api/fs/directories');
+    check('403 for the directory listing too', refusedBrowse.status === 403,
+          `got ${refusedBrowse.status} ${JSON.stringify(refusedBrowse.body)}`);
+  }
 
   console.log('\n10. a board with no registry named writes one, rather than refusing');
   // This case used to assert the opposite: a 503 whose message named `EXCALIDRAW_WORKSPACES`.

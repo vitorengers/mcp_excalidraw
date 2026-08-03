@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `GET /api/workspaces` answers only while the server is bound to loopback.
+ * `GET /api/workspaces` answers only a caller on this machine.
  *
  * The route returns the registry: every project's `id`, its **absolute filesystem path** and,
  * for a WSL project, its `innerPath`. That is the map of everything the operator works on, and
@@ -12,20 +12,25 @@
  * that only reads a project; this one reads more than a project, it reads the map of all of
  * them.
  *
- * Two servers, one registry, and the same request to both:
+ * Two servers, one registry, and three callers:
  *
  *   1. bound to loopback — 200, and the project's path is in the answer, which is what the tab
  *      strip and the picker need and what must keep working;
- *   2. bound off loopback — 403, no `workspaces` array, and that path nowhere in the body.
+ *   2. bound to `0.0.0.0` and called from loopback — 200 as well, since #501. The guard asks who
+ *      is calling rather than where the server opened, so the browser on the host machine is
+ *      served on a board that also listens somewhere else. It answered 403 before;
+ *   3. that same board, called on an address that is not loopback — 403, no `workspaces` array,
+ *      and the project's path nowhere in the body.
  *
- * **The off-loopback server is bound to `127.0.0.2`, not to a real interface.** The guard's
- * question is `LOOPBACK_ADDRESSES.includes(HOST)`, and its list is `127.0.0.1` and `::1`
- * exactly — so `127.0.0.2` is off loopback as far as the code under test is concerned while
- * never leaving this machine. A check that had to publish a board on the LAN for a second to
- * assert that it refuses would be a strange way to prove a security property. Where the
- * platform will not bind a loopback alias, the first real interface address is the fallback,
- * printed when it happens; either way the port is one the kernel just handed out and never
- * 3737.
+ * **The remote caller is a real one, and it did not have to be.** While the guard tested the
+ * bind, this check could ask the whole question by binding `127.0.0.2` — off loopback to a list
+ * of `127.0.0.1` and `::1` exactly, and never leaving the machine. Now that the guard tests the
+ * caller, `127.0.0.2` is a loopback address like the rest of `127.0.0.0/8` and there is no
+ * substitute left. `scripts/lib/remote-caller.mjs` prefers a host-only adapter — a Hyper-V or
+ * WSL virtual switch, a Docker bridge — says on stdout when it had to take a real interface, and
+ * answers `null` on a machine that has nothing but loopback, where case 3 says it could not run
+ * rather than passing as though it had. Either way the port is one the kernel just handed out
+ * and never 3737.
  *
  * The third case is read off `src/server.ts` rather than off a server: every route in the
  * workspaces block calls `offLoopback`. Line numbers move, so the block is found by its section
@@ -39,14 +44,14 @@
  * Tier: fast
  */
 
-import { createServer } from 'node:net';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { networkInterfaces, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { freePorts } from './lib/free-port.mjs';
 import { startCanvas } from './lib/spawn-canvas.mjs';
+import { looksLikeLoopback, peerAddressSeenOn, remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const startupTimeoutMs = 15000;
@@ -58,34 +63,8 @@ function check(name, condition, detail = '') {
   else { failures++; console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`); }
 }
 
-/** Whether this machine will let a server sit on `host`. */
-function canBind(host) {
-  return new Promise((resolve) => {
-    const probe = createServer();
-    probe.once('error', () => resolve(false));
-    probe.listen(0, host, () => probe.close(() => resolve(true)));
-  });
-}
-
-/**
- * An address the guard calls "not loopback" and this machine will bind.
- *
- * `127.0.0.2` first, because it is off loopback only in the sense the code under test means and
- * is unreachable from anywhere else. A platform that assigns the loopback interface `127.0.0.1`
- * alone (macOS) refuses it, and then a real interface is the only honest way left to ask the
- * question.
- */
-async function offLoopbackHost() {
-  if (await canBind('127.0.0.2')) return '127.0.0.2';
-  for (const entries of Object.values(networkInterfaces())) {
-    for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal && (await canBind(entry.address))) {
-        console.log(`  note  127.0.0.2 is not bindable here; using the interface ${entry.address}`);
-        return entry.address;
-      }
-    }
-  }
-  throw new Error('No non-loopback address on this machine could be bound.');
+function note(line) {
+  console.log(`  note  ${line}`);
 }
 
 async function waitForHealth(base, child) {
@@ -103,8 +82,8 @@ async function waitForHealth(base, child) {
   throw new Error(`Timed out waiting for the canvas server on ${base}.`);
 }
 
-async function get(base, path) {
-  const response = await fetch(`${base}${path}`);
+async function get(base, path, headers = {}) {
+  const response = await fetch(`${base}${path}`, { headers });
   const text = await response.text();
   let json = null;
   try { json = JSON.parse(text); } catch { /* not JSON */ }
@@ -132,13 +111,12 @@ writeFileSync(registryPath, JSON.stringify({ workspaces: [{ id: 'guarded', path:
 
 const [loopbackPort, offPort] = await freePorts(2);
 const env = { EXCALIDRAW_WORKSPACES: registryPath, LOG_LEVEL: 'error' };
+const remote = await remoteInterfaceAddress(note);
 
 let loopback;
 let off;
 
 try {
-  const offHost = await offLoopbackHost();
-
   // 1. Bound to loopback, the route answers exactly as it does today.
   console.log('\n1. bound to loopback');
   loopback = startCanvas({ port: loopbackPort, cwd: workdir, env });
@@ -154,25 +132,63 @@ try {
 
   loopback.stop();
 
-  // 2. Bound anywhere else, it refuses before it reads anything.
-  console.log(`\n2. bound to ${offHost}`);
-  off = startCanvas({ port: offPort, cwd: workdir, env: { ...env, HOST: offHost } });
-  const offBase = `http://${offHost}:${offPort}`;
-  await waitForHealth(offBase, off.child);
+  // 2. On every interface, and still the caller's own address that decides.
+  console.log('\n2. bound to 0.0.0.0, the caller on this machine is served all the same');
+  off = startCanvas({
+    port: offPort,
+    cwd: workdir,
+    env: {
+      ...env,
+      HOST: '0.0.0.0',
+      // The origin gate is a different control and this check is not about it. A request to
+      // `http://<interface>:<port>` names that authority in `Host`, which a board bound to
+      // `0.0.0.0` does not answer for, so without this the remote case would be refused by the
+      // wrong gate and would pass for the wrong reason.
+      ...(remote ? { EXCALIDRAW_ALLOWED_HOSTS: `${remote}:${offPort}` } : {}),
+    },
+  });
+  const localBase = `http://127.0.0.1:${offPort}`;
+  await waitForHealth(localBase, off.child);
 
-  const refused = await get(offBase, '/api/workspaces');
-  check('GET /api/workspaces answers 403', refused.status === 403, `got ${refused.status}`);
-  check('the refusal is the loopback guard, not some other 403',
-        /loopback/i.test(refused.text), refused.text.slice(0, 200));
-  check('no workspaces array in the body', refused.json?.workspaces === undefined,
-        refused.text.slice(0, 200));
-  check('the project path is nowhere in the body',
-        !refused.text.includes(JSON.stringify(projectPath).slice(1, -1))
-        && !refused.text.includes(JSON.stringify(workdir).slice(1, -1)),
-        refused.text.slice(0, 200));
+  const served = await get(localBase, '/api/workspaces');
+  check('GET /api/workspaces answers 200 — it answered 403 before #501',
+        served.status === 200, `got ${served.status} — ${served.text.slice(0, 200)}`);
+  check('and the registry is in it', served.json?.workspaces?.[0]?.id === 'guarded',
+        served.text.slice(0, 200));
 
-  const sibling = await post(offBase, '/api/workspaces', { path: projectPath });
-  check('POST /api/workspaces is still refused too', sibling.status === 403, `got ${sibling.status}`);
+  if (!remote) {
+    note('this machine has no non-loopback address to be called on, so case 3 — the caller that '
+         + 'is not on this machine — could not be run at all');
+  } else {
+    console.log(`\n3. and called on ${remote}, it refuses before it reads anything`);
+
+    // The premise, established with a server of this check's own rather than with the code under
+    // test: a connection to one of this machine's interface addresses reports that interface as
+    // its source, not 127.0.0.1.
+    const peer = await peerAddressSeenOn(remote);
+    check(`a server on ${remote} sees a peer that is not loopback (${peer})`,
+          Boolean(peer) && !looksLikeLoopback(peer), peer);
+
+    const offBase = `http://${remote}:${offPort}`;
+    const refused = await get(offBase, '/api/workspaces');
+    check('GET /api/workspaces answers 403', refused.status === 403, `got ${refused.status}`);
+    check('the refusal is the caller guard, not some other 403',
+          /machine/i.test(refused.text) && !/DNS rebinding/i.test(refused.text),
+          refused.text.slice(0, 200));
+    check('no workspaces array in the body', refused.json?.workspaces === undefined,
+          refused.text.slice(0, 200));
+    check('the project path is nowhere in the body',
+          !refused.text.includes(JSON.stringify(projectPath).slice(1, -1))
+          && !refused.text.includes(JSON.stringify(workdir).slice(1, -1)),
+          refused.text.slice(0, 200));
+
+    const sibling = await post(offBase, '/api/workspaces', { path: projectPath });
+    check('POST /api/workspaces is still refused too', sibling.status === 403, `got ${sibling.status}`);
+
+    const claiming = await get(offBase, '/api/workspaces', { 'x-forwarded-for': '127.0.0.1' });
+    check('and a forwarded header does not make that caller local', claiming.status === 403,
+          `got ${claiming.status} — ${claiming.text.slice(0, 200)}`);
+  }
 
   off.stop();
 } catch (error) {
@@ -191,9 +207,9 @@ try {
   catch { /* a teardown is not a verdict (#472); run-checks.mjs reaps it */ }
 }
 
-// ─── 3. Nothing in that block is unguarded ────────────────────
+// ─── 4. Nothing in that block is unguarded ────────────────────
 
-console.log('\n3. every route in the workspaces block carries the guard');
+console.log('\n4. every route in the workspaces block carries the guard');
 
 const source = readFileSync(join(repoRoot, 'src', 'server.ts'), 'utf8');
 const blockStart = source.indexOf('─── Workspaces API');
@@ -227,4 +243,4 @@ if (failures) {
   console.error(`${failures} case(s) failed`);
   process.exit(1);
 }
-console.log('All cases passed: the registry is readable on loopback and refused off it.');
+console.log('All cases passed: the registry is readable from this machine and refused off it.');

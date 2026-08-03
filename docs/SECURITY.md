@@ -113,25 +113,26 @@ past to the next free port, not a pin ([running.md](running.md)).
 
 `HOST=0.0.0.0` puts the board on **every network interface**. The token goes with it, and it is
 one secret with no sessions and no accounts behind it: anyone who has it is the operator as far
-as this server is concerned, and anyone who has not is refused. Underneath that, the bind is its
-own guard and a second answer: off loopback the reply is **403** to every route worth reaching —
-not only the GitHub half, the agents and the terminal, but since #366 every read of what the
-board holds. There is nothing left to publish that way. Do not do it on a network you do not
-control, and put access control in front of it if you do it at all.
+as this server is concerned, and anyone who has not is refused. Underneath that, **who is
+calling** is its own guard and a second answer: a caller that did not reach this server from the
+machine it runs on gets **403** from every route worth reaching — not only the GitHub half, the
+agents and the terminal, but since #366 every read of what the board holds. There is nothing left
+to publish over the network that way. Do not do it on a network you do not control, and put
+access control in front of it if you do it at all.
 
 The two are not the same control and neither stands in for the other. The token is what a caller
-carries; the bind is what this server opened itself to, and it is still the answer with
+carries; the caller's address is what the kernel filled in, and it is still the answer with
 `VIBEMAXXING_NO_AUTH=1` set, which is the one configuration where the token is not there to help.
 
 What a non-loopback bind actually leaves, now that the reads are behind the same guard:
 
-- **Refused with 403 off loopback** — the issue block and the implement run, the terminal, the
-  workspace registry and project settings, the directory picker, the GitHub project mirror and
-  card moves, `/api/github-status`, `/api/agent-limits`, the restart route, and the board's own
-  contents: `GET /api/elements`, `/api/elements/search`, `/api/elements/:id`, `/api/files`,
-  `/api/files/:id`, `/api/docs/:key`, `/api/library` and both snapshot reads. The **WebSocket
-  upgrade** is refused there too, because it sends the whole scene on connect and an HTTP guard
-  cannot see it.
+- **Refused with 403 to a caller that is not on this machine** — the issue block and the
+  implement run, the terminal, the workspace registry and project settings, the directory picker,
+  the GitHub project mirror and card moves, `/api/github-status`, `/api/agent-limits`, the restart
+  route, and the board's own contents: `GET /api/elements`, `/api/elements/search`,
+  `/api/elements/:id`, `/api/files`, `/api/files/:id`, `/api/docs/:key`, `/api/library` and both
+  snapshot reads. The **WebSocket upgrade** is refused too, because it sends the whole scene on
+  connect and an HTTP guard cannot see it.
 - **Still answered** — the writes, and `/health`. A board bound that way can be drawn on by
   anyone holding the token even though none of them can read it back. Treat everything on one as
   anybody's to change. That asymmetry is deliberate only in the sense that it was noticed rather
@@ -139,15 +140,28 @@ What a non-loopback bind actually leaves, now that the reads are behind the same
 
 Before #366 the second list was the whole drawing canvas — elements, files, documents, the
 library and the snapshots. The two honest options were to guard them or to write down that a
-board bound to an interface publishes its contents; they are guarded, and what that costs is the
-last thing a non-loopback bind was good for. The token had landed by then and does not make the
-question go away: it is a switch away from being off, and a control that only holds while a
-second one is set is not one that was decided.
+board bound to an interface publishes its contents; they are guarded. The token had landed by
+then and does not make the question go away: it is a switch away from being off, and a control
+that only holds while a second one is set is not one that was decided.
 
-The guard is a test of the **bind address**, not of the caller's address: a server bound to an
-interface refuses those routes for the loopback client on the same machine too. A reverse proxy
-is the configuration that still works, because a proxy reaches this server on loopback and
-`EXCALIDRAW_ALLOWED_HOSTS` is what tells the origin gate about the name in front of it.
+**Since #501 the guard is a test of the caller's address, not of the bind.** It was the bind
+until then, and the cost of that was a board on any interface being inert for *everybody* —
+including the browser on the host machine, whose request comes from loopback and was refused all
+the same. `HOST=0.0.0.0` and an address on a private overlay were punished identically, so a
+non-loopback bind answered nothing worth having in any configuration, however narrow. Now the
+board on the interface works for you and refuses the network. What lets a second machine in is a
+device credential, which is the next issue in this milestone; until it exists, remote and refused
+are the same answer, so nothing a stranger could not reach before is reachable now.
+
+**`X-Forwarded-For` is not read, and it must not be.** A reverse proxy reaches this server *on
+loopback*, which is why a proxy configuration worked before that change and is untouched by it,
+and `EXCALIDRAW_ALLOWED_HOSTS` is what tells the origin gate about the name in front of it.
+Trusting a forwarded header would turn the one property of a caller nobody can forge into one
+anybody can set: a remote caller would simply claim to be loopback. If proxy-awareness is ever
+wanted it is a separate, opt-in decision with the proxy's own address pinned. IPv6-mapped IPv4
+(`::ffff:127.0.0.1`) is read as loopback, because that is what a dual-stack listener reports for
+an ordinary local client. `scripts/check-caller-guard.mjs` holds all of this, including a real
+caller on a non-loopback address being refused with a forwarded header in hand.
 
 ## The origin gate, and why a bind test is not enough
 
@@ -167,12 +181,12 @@ there is a gate in front of every route, refusing with 403 before the route runs
   a refusal names the authority it expected so a lockout says what to put there.
 - The **WebSocket upgrade** goes through the same gate. It streams the scene and every live
   shell's scrollback on connect, and it is a door CORS never covered at all. Since #366 it is
-  asked about the bind first, because a program on the network sends no `Origin` and names
+  asked who is calling first, because a program on the network sends no `Origin` and names
   whatever `Host` it likes — the case this gate deliberately allows, and therefore the one only
-  a bind test can turn away.
+  an address the kernel filled in can turn away.
 
 `scripts/check-cross-origin.mjs` holds both sides of this, and
-`scripts/check-board-reads-guard.mjs` holds the bind side of the same two doors.
+`scripts/check-board-reads-guard.mjs` holds the caller side of the same two doors.
 
 **What the gate does not defend against is a local program.** Any process that can open a socket
 to the port sends no `Origin` at all, so nothing here sees it — which is why the token above
