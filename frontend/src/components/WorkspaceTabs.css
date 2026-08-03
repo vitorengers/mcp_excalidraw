@@ -137,6 +137,60 @@
   font-weight: 700;
 }
 
+/*
+ * Text that is read but not drawn.
+ *
+ * The config error and the liveness reason are sentences, and a tab is a few centimetres of a
+ * navigation strip — there is no room to print either of them, and printing one would push the
+ * project's own name off the row. But "no room" was how the meaning of the `!` came to live in
+ * a `title` and nowhere else, and a `title` is a hover: a keyboard user cannot reach it and a
+ * screen reader was told to skip the glyph it belongs to.
+ *
+ * So the sentence is in the document, inside the mark it explains, and taken out of the flow
+ * rather than out of the tree. `display: none` and `visibility: hidden` would remove it from
+ * both; a 1px clipped box removes it from one. The mark's accessible name is then the sentence,
+ * computed the ordinary way, with no `aria-label` to drift away from what is on the screen.
+ */
+.workspace-tab__aside {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/*
+ * Whether the machine holding this project is answering.
+ *
+ * A badge and not a dot: each state prints its own word, so a reader who cannot separate green
+ * from amber — or who is listening rather than looking — is told the same four answers as
+ * everybody else. The colour is the second reading, not the only one.
+ *
+ * Every state is declared twice, because dark is not a filter over this strip: the tab row is a
+ * DOM sibling of the canvas, so it is painted exactly as declared, and a fill chosen to sit
+ * under black text on a white bar is a fill that vanishes on a dark one. The pairs are chosen
+ * for two things at once — each clears 3:1 against its own label, and no two of them land near
+ * each other, in either theme.
+ */
+.workspace-tab__status {
+  background: var(--color-gray-30, #ced4da);
+  color: var(--color-gray-80, #343a40);
+}
+
+.workspace-tab__status--checking { background: #adb5bd; color: #212529; }
+.workspace-tab__status--online { background: #2f9e44; color: #ffffff; }
+.workspace-tab__status--unreachable { background: #e8a33d; color: #1e1e1e; }
+.workspace-tab__status--refused { background: #e03131; color: #ffffff; }
+
+.app[data-theme="dark"] .workspace-tab__status--checking { background: #495057; color: #e9ecef; }
+.app[data-theme="dark"] .workspace-tab__status--online { background: #8ce99a; color: #0b3d17; }
+.app[data-theme="dark"] .workspace-tab__status--unreachable { background: #ffd8a8; color: #4d3200; }
+.app[data-theme="dark"] .workspace-tab__status--refused { background: #ff8787; color: #4d0f0f; }
+
 .workspace-tab__config,
 .workspace-tabs__add {
   border: none;

@@ -87,15 +87,18 @@ is put where the other can reach it.
 Two guards stand between the machines, and they refuse for different reasons. **Who is calling**
 is `src/core/caller-gate.ts`: a request that did not arrive from the machine the server runs on
 is answered **403** by nearly every route worth reaching. That guard is what a paired device has
-to get past, and today it does not — the credential is minted, the token gate accepts it, and
-the caller guard still refuses a remote socket whether or not one is held. Until that lands
-(#522), the two machines can complete the whole approval and reach nothing with it. **What the
-caller asked for** is the origin gate's `Host` pin, and it is the trap in this design that looks
-like a credential failure and is not: a board reached under its name on a private overlay is
-being asked for an authority it does not answer for, and refuses with a 403 that has nothing to
-do with any secret. `EXCALIDRAW_ALLOWED_HOSTS` is what tells it about that name. A link that is
-refused for that reason and reported as a credential problem sends its operator to fix something
-that was never broken, which is why the states in the next section separate the two.
+to get past, and since #522 an approved device is the one caller that does — the credential is
+minted, the token gate accepts it, and this guard reads the same record. A caller holding
+anything else, the other board's own token included, is refused there exactly as before.
+**What the caller asked for** is the origin gate's `Host` pin, and it is the trap in this design
+that looks like a credential failure and is not: a board reached under its name on a private
+overlay is being asked for an authority it does not answer for, and refuses with a 403 that has
+nothing to do with any secret. Approving a device is now what tells it about that name — the
+record carries the authority the device arrived under, and the set is rebuilt when the registry
+changes — so `EXCALIDRAW_ALLOWED_HOSTS` is for the names no approval put there, an alias or a
+proxy in front of this board. A link that is refused for that reason and reported as a credential
+problem sends its operator to fix something that was never broken, which is why the states in the
+next section separate the two.
 
 ## What stops when the laptop sleeps
 
@@ -173,18 +176,57 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-The first of them has landed; the rest are named here so the reader of a pull request can see
-where each decision lands.
+The first four of them have landed; the rest are named here so the reader of a pull request can
+see where each decision lands.
 
 ```
-src/core/peer-liveness.ts    the four answers above, and which refusal an operator is looking at
-src/core/peer-registry.ts    what this board keeps about a board that approved it
-src/core/peer-client.ts      one board's HTTP call to another, and what each failure means
-src/core/peer-proxy.ts       the seam that sends a request to the machine that owns the board
+src/core/peer-liveness.ts          the four answers above, and which refusal you are looking at
+src/core/remote-workspace-id.ts    what this board calls a peer's project, and the inverse
+src/core/remote-workspace-view.ts  which fields of a project cross, and what replaces the path
+src/core/peer-registry.ts          what this board keeps about a board that approved it
+src/core/peer-client.ts            one board's HTTP call to another, and what each failure means
+src/core/peer-proxy.ts             the seam that sends a request to the machine that owns the board
 ```
+
+The id module is where a peer's project gets the name it wears here, and it is a pure pair of
+functions with no caller either. What it settles is that the name survives the *other* board's
+normaliser: that function does not reject a spelling it dislikes, it rewrites it to the shared
+`default` board, so a scheme punctuated with anything outside `.`, `-` and `_` would put a socket
+on the wrong scene and log nothing. It answers both directions, because the second one is what
+the wire needs — given a local id, the spelling the peer itself expects back — and a project that
+cannot be named inside the length a workspace id has is refused by a sentence rather than
+shortened into a valid id for a different board.
+
+The view module is the paragraph above — *what does not cross* — as code, and it has no caller
+either. Three fields of a project cross, named one at a time; the other fourteen are on a
+withheld list in that file with the reason beside each, so a field added to a project next year
+is absent from the wire until somebody edits this. It also decides what replaces the path in the
+tab's tooltip, since a peer's project has none here: the project's own name and the name this
+board calls the machine by, which is enough to tell two projects of the same name apart and is
+this board's own word rather than anything the owner sent.
+
+The registry is a module with no caller: it owns `peers.json` beside the state directory's other
+files, and nothing yet adds a row to it or presents what a row holds. What it settles is the
+asymmetry above — the record here keeps the secret rather than a hash, so the file is owner-only
+and every update swaps it whole rather than rewriting it in place, and a reader looking at it
+while a peer is renamed or forgotten never finds it missing or half-written.
 
 The milestone that files them is *One tab strip, two machines*, and the design decisions above
 are each a done-when bullet on one of its issues rather than a preference stated here.
+
+The far end of the chain has landed too: the tab strip has the slot to draw a state in.
+`WorkspaceSummary.status` in `frontend/src/components/WorkspaceTabs.tsx` is what a tab reads,
+and nothing supplies it yet — a project without it draws the row it always drew. See
+[canvas-frontend.md](canvas-frontend.md) for how a liveness state and a config error sit on one
+tab without displacing each other.
+
+**The union is written twice, and that is a constraint rather than a choice.**
+`WorkspaceStatusState` there and `PeerLivenessState` in `src/core/peer-liveness.ts` are the same
+four words. The frontend cannot import the second: that module opens sockets, so it imports
+`net`, and the frontend's own `tsconfig` compiles everything it can reach. Two copies of four
+words is two chances for one of them to learn a fifth, so
+`scripts/check-workspace-tab-status-browser.mjs` reads both files and fails if they stop
+agreeing.
 
 ## Related
 
