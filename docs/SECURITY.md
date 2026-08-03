@@ -106,6 +106,51 @@ a person uses, and a board started with it writes a line saying so into its log 
 refused upgrade, and, in a real browser, the launcher URL loading a working board whose address
 bar no longer carries the secret.
 
+## Pairing a second machine
+
+The token above is one secret on one machine, and there is no way to hand a second machine a
+copy of it that is not "hand over the file". So a device asks instead, and you approve it.
+
+Open the board on the other machine. It finds no device secret and asks — `POST
+/api/pair/request` — and the board on *this* machine shows the request: the name it proposed,
+the address it arrived from, the name it reached this board under, and a **code**. Read the code
+off the other screen, approve the request showing the same one, and the waiting page collects a
+secret of its own on its next poll.
+
+Five things make that a gesture rather than a hole, and all five are in `src/core/pairing.ts`:
+
+- **Only this machine may approve.** The approve route reads the caller's own socket address —
+  not `X-Forwarded-For`, which any caller can set and which would let a remote caller approve
+  itself by asking politely. A reverse proxy reaches this server on loopback, so a proxied board
+  is unaffected.
+- **The code is compared, not merely shown.** Without it you would be confirming that a request
+  exists, and a stranger's request racing your laptop's would be approved by somebody who
+  assumed the dialog was about their laptop. With it you are choosing between requests. An
+  approval naming the wrong code is refused, and two live requests never carry the same one.
+- **The secret is handed over exactly once**, and the record dies with it. A `requestId` polled
+  after that answers `unknown` — which is also what a `requestId` nobody issued answers.
+- **What a stranger can reach is bounded.** `POST /api/pair/request` and `GET /api/pair/status`
+  are the only routes under `/api` that answer without a credential, because asking for one is
+  what they are. They read nothing and change nothing you cannot see: the whole of their effect
+  is a row on your screen, so there is one live request per remote address, a ceiling of eight
+  overall, and a three-minute expiry. A refusal is a 429 and a line in the log, never a dialog.
+- **The registry holds the hash, never the secret.** `devices.json`, beside the token file and
+  owner-only in the same way. The device holds the secret; this server only ever verifies one.
+
+Those two open routes are also outside the `Host` pin the origin gate applies everywhere else,
+and only those two: a device that has not been approved yet reaches this board under a name it
+does not answer for, which is what pairing *is*. The name is recorded and shown to you rather
+than pinned — you are the one who can tell `mac.tailnet.ts.net` from something that merely
+resolves here. `Origin`, when a browser sends one, still has to name the same authority as
+`Host`, so a page at some other origin cannot put rows on your screen.
+
+**What a paired device can do today: nothing yet.** Pairing writes the device down; teaching the
+guard to accept it is #501, and until that lands the credential is minted, stored and idle. The
+bind section below is still true.
+
+`scripts/check-pairing-handshake.mjs` holds this, including an approval attempted from a
+genuinely non-loopback socket and one attempted with a forwarded header claiming loopback.
+
 ## Where it listens
 
 `HOST` defaults to **`127.0.0.1`**, and `PORT` to 3737 — a preference the launch path walks
