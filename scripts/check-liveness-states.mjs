@@ -176,7 +176,9 @@ const source = readFileSync(sourcePath, 'utf8');
 // The three things `scripts/check-settings-documented.mjs` would have something to say about,
 // and the reason neither budget is a `VIBEMAXXING_*`: a setting would drag in the generated
 // tables, the generator, and two rules that red any prose stating a count of the variable set.
-check('it reads no process.env', !/process\.env/.test(source));
+// A *read*, rather than the words: the module's own banner says it reads none, and a rule that
+// matched the promise as well as the breach would make writing it down the thing that fails.
+check('it reads no process.env', !/process\.env\s*[.[]/.test(source));
 check('it reads no file',
       !/from '(node:)?fs/.test(source) && !/readFileSync|writeFileSync|fs\.promises/.test(source));
 check('and no setting name appears in it', !/VIBEMAXXING_|settingName|settings\.js/.test(source),
