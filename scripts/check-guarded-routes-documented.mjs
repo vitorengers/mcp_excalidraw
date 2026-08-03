@@ -16,19 +16,25 @@
  *
  *  1. **every route is classified**, and the classification is checked against a real server
  *     rather than believed. A regex agreeing with a regex is not evidence about a guard.
- *  2. **`rest-api.md` marks a route *loopback only* exactly when the code guards it** — in its
- *     own row, or in the preamble of the section it sits under, which is how that document
+ *  2. **`rest-api.md` marks each route the way the code guards it** — *loopback only* for the
+ *     bind, *loopback **caller** only* for the caller, nothing for a route that is neither. In
+ *     its own row, or in the preamble of the section it sits under, which is how that document
  *     already says it for the terminal and the browser round-trips.
- *  3. **`SECURITY.md`'s list of what such a board still answers is exactly that set.** The list
- *     is short by design, so it is the one written out route by route; the refused set is the
- *     complement and `rest-api.md` is where it is catalogued.
+ *  3. **`SECURITY.md`'s list of what a caller on the network still reaches is exactly the third
+ *     of those.** The list is short by design, so it is the one written out route by route; the
+ *     refused set is the complement and `rest-api.md` is where it is catalogued.
  *
- * The four guard shapes are the four `src/server.ts` has: the `offLoopback` funnel, the two
- * feature helpers that answer 404-if-disabled before 403-if-remote (`terminalRefused`,
- * `implementingRefused`), and the inline test the GitHub routes were written with. A fifth shape
- * added tomorrow makes its routes read as *open* here, and section 2 is what turns that into a
- * failure rather than a quiet reclassification: every route this file calls open is asked, on a
- * server bound where the guard means it.
+ * There are two guards and they answer different questions. **The bind** — `offLoopback`, the
+ * two feature helpers that answer 404-if-disabled before 403-if-remote (`terminalRefused`,
+ * `implementingRefused`), and the inline test the GitHub routes were written with — refuses
+ * everybody on an interface-bound board, the operator's own browser included. **The caller** —
+ * `notTheHost`, which #503 added for the pairing routes — refuses a socket that did not come
+ * from this machine, wherever the server is bound. Marking one as the other would tell a reader
+ * the wrong thing about precisely the configuration this milestone exists to make usable.
+ *
+ * A third shape added tomorrow makes its routes read as *open* here, and section 2 is what turns
+ * that into a failure rather than a quiet reclassification: every route this file calls open or
+ * caller-guarded is asked, on a server bound where the guard means it.
  *
  * Self-contained: it builds a throwaway registry and one project in a temp directory, starts one
  * server on a port the kernel just handed out and kills it. No browser. Run
@@ -72,12 +78,23 @@ function check(name, condition, detail = '') {
  * Matched as *calls* rather than as bare names, for the reason `check-workspaces-guard.mjs`
  * gives: matching `offLoopback` alone counts the declaration of the funnel as a use of it.
  */
-const GUARD_SHAPES = [
+const BIND_SHAPES = [
   /offLoopback\(res,\s*['"]/,
   /terminalRefused\(res\)/,
   /implementingRefused\(res\)/,
   /!LOOPBACK_ADDRESSES\.includes\(HOST\)/,
 ];
+
+/**
+ * The other question, added by #503: not where the server opened, but who is calling.
+ *
+ * `notTheHost` refuses a caller whose socket did not come from this machine, and it is a
+ * different answer from the bind guard rather than a synonym for it — a board bound to an
+ * interface refuses a bind-guarded route to *everybody*, its own operator included, and answers a
+ * caller-guarded one to the operator while still refusing the network. The two pairing routes it
+ * sits on are the first of these; #501 is where the rest of the funnel becomes one.
+ */
+const CALLER_SHAPES = [/notTheHost\(req, res,\s*['"]/];
 
 /**
  * Every `app.<method>('<path>', …)` in a source file, with the body each one runs to.
@@ -91,10 +108,10 @@ function routesOf(source) {
     const from = declaration.index;
     const to = index + 1 < declarations.length ? declarations[index + 1].index : source.length;
     const body = source.slice(from, to);
-    return {
-      name: `${declaration[1].toUpperCase()} ${declaration[3]}`,
-      guarded: GUARD_SHAPES.some((shape) => shape.test(body)),
-    };
+    const guard = BIND_SHAPES.some((shape) => shape.test(body)) ? 'bind'
+      : CALLER_SHAPES.some((shape) => shape.test(body)) ? 'caller'
+      : 'open';
+    return { name: `${declaration[1].toUpperCase()} ${declaration[3]}`, guard };
   });
 }
 
@@ -123,37 +140,48 @@ app.get('/api/soft', (req: Request, res: Response) => {
   const offered = CONFIGURED && (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost');
   res.json({ offered });
 });
+app.get('/api/pair/pending', (req: Request, res: Response) => {
+  if (notTheHost(req, res, 'Pending pairing requests are read')) return;
+  res.json({});
+});
 `;
 
-const synthetic = new Map(routesOf(SYNTHETIC).map((route) => [route.name, route.guarded]));
-check('the offLoopback funnel is a guard', synthetic.get('GET /api/funnelled') === true);
-check('terminalRefused is a guard', synthetic.get('POST /api/terminal') === true);
-check('implementingRefused is a guard', synthetic.get('POST /api/implement') === true);
-check('the inline test the GitHub routes use is a guard', synthetic.get('GET /api/inline') === true);
-check('a route with none of them is open', synthetic.get('GET /api/open') === false);
+const synthetic = new Map(routesOf(SYNTHETIC).map((route) => [route.name, route.guard]));
+check('the offLoopback funnel is a bind guard', synthetic.get('GET /api/funnelled') === 'bind');
+check('terminalRefused is a bind guard', synthetic.get('POST /api/terminal') === 'bind');
+check('implementingRefused is a bind guard', synthetic.get('POST /api/implement') === 'bind');
+check('the inline test the GitHub routes use is a bind guard',
+      synthetic.get('GET /api/inline') === 'bind');
+check('notTheHost is a caller guard, which is a different answer',
+      synthetic.get('GET /api/pair/pending') === 'caller');
+check('a route with none of them is open', synthetic.get('GET /api/open') === 'open');
 check('and answering *less* off loopback is not the same as refusing there',
-      synthetic.get('GET /api/soft') === false,
+      synthetic.get('GET /api/soft') === 'open',
       'GET /api/implement drops the queue off loopback and still answers — that is open');
 
 // ─── 1. Every route in the server, classified ─────────────────
 
-console.log('\n1. every route in src/server.ts is classified, and the open ones are few');
+console.log('\n1. every route in src/server.ts is classified, and the reachable ones are few');
 
 const serverSource = readFileSync(join(repoRoot, 'src', 'server.ts'), 'utf8');
 const routes = routesOf(serverSource);
 check(`src/server.ts declares routes (${routes.length} found)`, routes.length > 0);
 
-const guardedRoutes = routes.filter((route) => route.guarded).map((route) => route.name);
-const openRoutes = routes.filter((route) => !route.guarded).map((route) => route.name);
-console.log(`  note  ${guardedRoutes.length} guarded, ${openRoutes.length} answered off loopback`);
-console.log(`        ${openRoutes.join(', ')}`);
+const named = (kind) => routes.filter((route) => route.guard === kind).map((route) => route.name);
+const bindGuarded = named('bind');
+const callerGuarded = named('caller');
+const openRoutes = named('open');
+console.log(`  note  guarded on the bind: ${bindGuarded.length}`);
+console.log(`  note  guarded on the caller: ${callerGuarded.join(', ') || 'none'}`);
+console.log(`  note  reachable from the network: ${openRoutes.join(', ')}`);
 
 /**
- * How each open route is asked, off loopback, in section 2.
+ * How each route section 2 asks about is asked, off loopback.
  *
- * Every route this file calls open has to be here: a classification nothing asks is a guess, and
- * the whole of `rest-api.md`'s markings and `SECURITY.md`'s short list rest on it. A route added
- * with a guard shape this file does not know fails here rather than silently becoming "open".
+ * Every route this file calls open or caller-guarded has to be here: a classification nothing
+ * asks is a guess, and the whole of `rest-api.md`'s markings and `SECURITY.md`'s short list rest
+ * on it. A route added with a guard shape this file does not know fails here rather than
+ * silently becoming "open".
  */
 const ISSUE_URL = 'https://github.com/vitorengers/vibemaxxing/issues/1';
 const PROBES = new Map([
@@ -166,9 +194,15 @@ const PROBES = new Map([
   ['DELETE /api/implement', { path: '/api/implement', method: 'DELETE', body: { url: ISSUE_URL } }],
   ['DELETE /api/issue-block/:id/implement',
     { path: '/api/issue-block/guarded-routes-block/implement', method: 'DELETE' }],
+  ['POST /api/pair/request',
+    { path: '/api/pair/request', method: 'POST', body: { name: 'the-check' } }],
+  ['GET /api/pair/status', { path: '/api/pair/status?requestId=nobody-issued-this' }],
+  ['GET /api/pair/pending', { path: '/api/pair/pending' }],
+  ['POST /api/pair/approve',
+    { path: '/api/pair/approve', method: 'POST', body: { requestId: 'none', code: '000000' } }],
 ]);
 
-/** One route per guard shape, so section 2 is evidence about the guarded half as well. */
+/** One route per bind-guard shape, so section 2 is evidence about the guarded half as well. */
 const GUARDED_PROBES = new Map([
   ['GET /api/elements', { path: '/api/elements' }],
   ['GET /api/github-status', { path: '/api/github-status' }],
@@ -176,8 +210,10 @@ const GUARDED_PROBES = new Map([
   ['POST /api/implement', { path: '/api/implement', method: 'POST', body: { url: ISSUE_URL } }],
 ]);
 
-const unprobed = openRoutes.filter((name) => !PROBES.has(name));
-check('every route this check calls open is one section 2 asks', unprobed.length === 0,
+const answering = [...openRoutes, ...callerGuarded];
+const unprobed = answering.filter((name) => !PROBES.has(name));
+check('every route this check calls open or caller-guarded is one section 2 asks',
+      unprobed.length === 0,
       `${unprobed.join(', ')} — add it to PROBES, or it is a guard shape this file cannot see`);
 
 // ─── 2. And a real server answers the way it says ─────────────
@@ -288,7 +324,7 @@ try {
           `got ${answer.status} — ${answer.text}`);
   }
 
-  for (const name of openRoutes) {
+  for (const name of answering) {
     // Skipped rather than crashed on: section 1 has already failed for anything missing here,
     // and a destructuring error would replace that message with a worse one.
     const probe = PROBES.get(name);
@@ -297,6 +333,13 @@ try {
     check(`${name} answers there, as this file classified it`, answer.status !== 403,
           `got ${answer.status} — ${answer.text}`);
   }
+
+  // The caller-guarded pair answering above is the whole of what distinguishes them from the
+  // bind-guarded ones here: this caller is on the machine, and the bind is not. That they refuse
+  // a caller who is *not* needs a socket from somewhere else, which
+  // `scripts/check-pairing-handshake.mjs` opens rather than this one opening a second.
+  console.log(`  note  the caller guard's other half — a genuinely remote socket refused — is`);
+  console.log('        scripts/check-pairing-handshake.mjs, not this file');
 } catch (error) {
   failures++;
   console.error(`  FAIL  ${error instanceof Error ? error.message : String(error)}`);
@@ -310,11 +353,22 @@ try {
 
 // ─── 3. What rest-api.md says beside each route ───────────────
 
-console.log('\n3. docs/rest-api.md marks a route loopback only exactly when the code guards it');
+console.log('\n3. docs/rest-api.md marks each route the way the code guards it');
 
 const restApi = readFileSync(join(repoRoot, 'docs', 'rest-api.md'), 'utf8');
 
-const SAYS_GUARDED = /loopback only/i;
+/**
+ * The two marks, and why they are two.
+ *
+ * *loopback only* is about the **bind** and is the older of them. *loopback **caller** only* is
+ * what #503 wrote for the pairing routes and is about the **caller** — a board bound to an
+ * interface refuses the first to its own operator and serves the second to them. A document that
+ * spelled both the same way would be telling a reader the wrong thing about exactly the
+ * configuration this milestone exists to make usable, so the marks are distinguished here and
+ * neither is allowed to stand in for the other.
+ */
+const SAYS_BIND = /loopback only/i;
+const SAYS_CALLER = /\bcaller\b[^|]*\bonly\b/i;
 
 /**
  * Every `## heading` of a document, with the lines under it.
@@ -338,19 +392,33 @@ function sections(text) {
   return out;
 }
 
-/** The `| `METHOD /path` | …` rows of a document, each with its section's prose. */
+/**
+ * What each `| `METHOD /path` | …` row of a document is marked as.
+ *
+ * A row inherits its section's preamble, which is how that document already says it for the
+ * terminal and the browser round-trips — a whole table sharing one answer says it once. The
+ * caller mark is read off the row only: it is the narrower claim, and a preamble has never made
+ * it.
+ */
 function documentedRoutes(text) {
   const found = new Map();
   for (const section of sections(text)) {
     const prose = section.lines.filter((line) => !line.startsWith('|')).join('\n');
-    const sectionSaysGuarded = SAYS_GUARDED.test(prose);
+    const proseSaysBind = SAYS_BIND.test(prose);
     for (const line of section.lines) {
       const row = /^\|\s*`(GET|POST|PUT|DELETE|PATCH)\s+([^`]+)`\s*\|/.exec(line);
       if (!row) continue;
-      const name = `${row[1]} ${row[2]}`;
-      found.set(name, {
-        marked: sectionSaysGuarded || SAYS_GUARDED.test(line),
-        where: sectionSaysGuarded && !SAYS_GUARDED.test(line) ? `the "${section.heading}" preamble` : 'its row',
+      const rowSaysCaller = SAYS_CALLER.test(line);
+      // The caller mark wins over the bind mark on the same row: "loopback **caller** only"
+      // contains neither of the other's words contiguously, but a row could be written to carry
+      // both, and the narrower claim is the one it is making.
+      const mark = rowSaysCaller ? 'caller'
+        : (SAYS_BIND.test(line) || proseSaysBind) ? 'bind'
+        : 'open';
+      found.set(`${row[1]} ${row[2]}`, {
+        mark,
+        where: mark === 'bind' && !SAYS_BIND.test(line)
+          ? `the "${section.heading}" preamble` : 'its row',
       });
     }
   }
@@ -363,20 +431,17 @@ check(`docs/rest-api.md tabulates routes (${documented.size} found)`, documented
 const missing = routes.filter((route) => !documented.has(route.name)).map((route) => route.name);
 check('every route in src/server.ts has a row there', missing.length === 0, missing.join(', '));
 
-const unmarked = guardedRoutes
-  .filter((name) => documented.has(name) && !documented.get(name).marked);
-check('every guarded route is marked loopback only', unmarked.length === 0,
-      `${unmarked.join(', ')} — the code refuses these off loopback and the table does not say so`);
-
-const overmarked = openRoutes
-  .filter((name) => documented.has(name) && documented.get(name).marked)
-  .map((name) => `${name} (via ${documented.get(name).where})`);
-check('and no route is marked that the code answers there', overmarked.length === 0,
-      `${overmarked.join(', ')} — these answer 200 off loopback; the table claims they do not`);
+const mismatched = routes
+  .filter((route) => documented.has(route.name))
+  .filter((route) => documented.get(route.name).mark !== route.guard)
+  .map((route) => `${route.name} — the code says ${route.guard}, `
+    + `${documented.get(route.name).where} says ${documented.get(route.name).mark}`);
+check('every route is marked the way the code guards it, or left unmarked because it is not',
+      mismatched.length === 0, `\n        ${mismatched.join('\n        ')}`);
 
 // ─── 4. And SECURITY.md's short list is that same set ─────────
 
-console.log('\n4. docs/SECURITY.md names exactly the routes such a board still answers');
+console.log('\n4. docs/SECURITY.md names exactly the routes a caller on the network still reaches');
 
 const security = readFileSync(join(repoRoot, 'docs', 'SECURITY.md'), 'utf8');
 
@@ -384,6 +449,10 @@ const security = readFileSync(join(repoRoot, 'docs', 'SECURITY.md'), 'utf8');
  * The passage `SECURITY.md` writes that list in, fenced by a comment rather than found by its
  * wording. The wording is prose and will be rewritten; the set it names is derived and must not
  * drift while it is.
+ *
+ * The set is the **open** routes and not the caller-guarded ones, because the question a reader
+ * of that section is asking is what somebody else can reach — and a caller-guarded route answers
+ * the operator on an interface-bound board and refuses everybody else.
  */
 const MARKER = /<!--\s*routes: answered-off-loopback\s*-->([\s\S]*?)<!--\s*\/routes: answered-off-loopback\s*-->/;
 const passage = MARKER.exec(security);
@@ -397,9 +466,10 @@ if (passage) {
   );
   const absent = openRoutes.filter((name) => !named.has(name));
   const extra = [...named].filter((name) => !openRoutes.includes(name));
-  check('it names every route the code answers off loopback', absent.length === 0,
-        `${absent.join(', ')} — a board bound there answers these and the document does not say so`);
-  check('and names no route the code refuses there', extra.length === 0, extra.join(', '));
+  check('it names every route a caller on the network reaches', absent.length === 0,
+        `${absent.join(', ')} — such a caller reaches these and the document does not say so`);
+  check('and names none it does not', extra.length === 0,
+        `${extra.join(', ')} — refused on the bind, or on the caller, so not in this list`);
 }
 
 /**

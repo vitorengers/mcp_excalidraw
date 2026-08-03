@@ -188,25 +188,33 @@ guard:
   four browser round-trips. The **WebSocket upgrade** is refused there too, because it sends the
   whole scene on connect and an HTTP guard cannot see it.
 <!-- routes: answered-off-loopback -->
-- **Still answered off loopback** — `GET /`, the page itself, which cannot read a token out of an
-  address bar it has not loaded yet; `GET /health`, which is how anything finds out whether a
-  canvas is on a port at all; `GET /api/sync/status`; and the records of what the agents have been
+- **Still reached by a caller on the network** — `GET /`, the page itself, which cannot read a
+  token out of an address bar it has not loaded yet; `GET /health`, which is how anything finds
+  out whether a canvas is on a port at all; `GET /api/sync/status`; the pairing front door,
+  `POST /api/pair/request` and `GET /api/pair/status`, which are open on purpose and bounded for
+  it (see [above](#pairing-a-second-machine)); and the records of what the agents have been
   doing, which live in this process's memory rather than behind that guard —
   `GET /api/issue-block/:id/run`, `GET /api/issue/recreate` and `GET /api/implement`, the last of
   which carries every run's pull request, its error text and the **absolute path of the worktree**
   it left on this machine — together with the two routes that reset such a record,
   `DELETE /api/implement` and `DELETE /api/issue-block/:id/implement`.
 <!-- /routes: answered-off-loopback -->
+- **Answered to you, refused to them** — `GET /api/pair/pending` and `POST /api/pair/approve`.
+  These are the exception to everything above: they ask **who is calling** rather than where the
+  server opened, so an interface-bound board still lets you approve a device from your own
+  keyboard while refusing the network the same route. That is #503's `notTheHost`, and it is the
+  shape #501 gives the rest of the funnel.
 
-So the sentence this used to end on — that a board bound that way is inert — was not true, and
-it is the kind of claim worth being exact about. What is inert is the **board**: nothing bound
-off loopback publishes a drawing or takes one. What is not is the record of what the agents have
-done with your repository, which such a caller can read, and can reset. That is a gap in the
-guard rather than a decision anybody wrote down, and it is filed as
+So the sentence this used to end on — that a board bound that way is inert — was not true, and it
+is the kind of claim worth being exact about. What is inert is the **board**: nothing bound off
+loopback publishes a drawing or takes one. What is not is the record of what the agents have done
+with your repository, which such a caller can read, and can reset. The pairing pair is deliberate
+and bounded; that one is not deliberate at all — it is a gap in the guard rather than a decision
+anybody wrote down, and it is filed as
 [#508](https://github.com/vitorengers/vibemaxxing/issues/508).
-`scripts/check-guarded-routes-documented.mjs` derives both lists from `src/server.ts`, so this
-one and the tables in [rest-api.md](rest-api.md) cannot drift from the code again without a
-check going red — including on the day #508 closes and this list gets shorter.
+`scripts/check-guarded-routes-documented.mjs` derives these lists from `src/server.ts`, so they
+and the tables in [rest-api.md](rest-api.md) cannot drift from the code again without a check
+going red — including on the day #508 closes and the first list gets shorter.
 
 Before #366 the second list was the whole drawing canvas — elements, files, documents, the
 library and the snapshots. The two honest options were to guard them or to write down that a
@@ -267,18 +275,22 @@ as closed as the weakest one that is actually switched on.
 |---|---|---|---|
 | **The token** (#350) | What the caller *carries* | Anything that cannot read a file in your state directory — another account on a machine you share, a sandboxed process, a page nobody handed the secret to | A process running as you, which reads that file exactly as it reads your SSH keys. And it is one `VIBEMAXXING_NO_AUTH=1` away from not being there, which is the state every check in `scripts/` runs in |
 | **The origin gate** (#270) | What a *browser* has to admit — its `Origin`, and the `Host` it asked for | A page at any other origin reaching `127.0.0.1` through your browser, and the DNS-rebinding version of the same trick | A local program. It sends no `Origin` at all, and anything that can set headers can set any of them |
-| **The bind** | What this server *opened itself to* | Every caller that is not on this machine, because the guarded routes refuse before they run. It is the one still answering with the token switched off | Nothing on this machine — and nothing off it, either, on the routes listed above as still answered. It tests the bind address rather than the caller, so an interface-bound board refuses your own browser too |
+| **The bind** | What this server *opened itself to* | Every caller that is not on this machine, because the guarded routes refuse before they run. It is the one still answering with the token switched off | Nothing on this machine — and nothing off it, either, on the routes listed above as still reached. It tests the bind address rather than the caller, so an interface-bound board refuses your own browser too |
+| **The caller** (#503) | Which address the request's own *socket* came from | A caller that is not on this machine, wherever the server is bound. `X-Forwarded-For` is deliberately not consulted, so this is not a header anybody can claim | Anything on this machine — the same limit as the token. So far it stands in front of the two pairing routes only, `GET /api/pair/pending` and `POST /api/pair/approve` |
 
-The bind is the crude one on purpose: it is the only property in that table nobody can forge, and
-the only one left standing when `VIBEMAXXING_NO_AUTH` is set. What it costs is that it cannot
-tell a laptop of yours from anybody else's, which is why there is no configuration today in which
-this board is reachable from a second machine, however narrowly you bind it.
+The last two are the same question asked from opposite ends, and the difference between them is
+the whole of this milestone. The bind is the crude one: it is the only property here nobody can
+forge, and the only one left standing when `VIBEMAXXING_NO_AUTH` is set, but it cannot tell a
+laptop of yours from anybody else's — so there is no configuration today in which this board is
+reachable from a second machine, however narrowly you bind it. Asking the *caller* instead makes
+that difference expressible, and #503 is the first two routes written that way.
 
-Changing that needs a control this table does not have — a credential a *device* holds, asked of
-the caller rather than of the bind. That is the pairing milestone: #501 is the seam in the guard,
-and #502 through #505 are the registry, the handshake, the approval and the management of it.
-`src/core/device-registry.ts` is here already; nothing reads it yet. Until something does, this
-table is the whole of the model, and the paragraphs above are what is actually running.
+What is still missing is the answer a remote caller could give. A credential a **device** holds
+is that answer, and pairing already mints one: #502 wrote the registry, #503 the handshake, and
+`devices.json` on a board that has paired something is a real record of a real approval. Nothing
+verifies it yet — teaching the funnel to accept it is #501, and until that lands, a paired device
+is written down and no more. So this table is the whole of the model that is running, and the
+sections above it are what each row means route by route.
 
 ## What a run does to your repository
 
@@ -299,13 +311,11 @@ The registry, the per-board scene state, the pidfile, the running server's token
 `config.json` sit in a per-user state directory ([configuration.md](configuration.md)); the log
 file goes where `LOG_FILE_PATH` says.
 
-`devices.json` sits there too, owner-only, since #502. It is the registry a paired device will
-be checked against, and it holds a **SHA-256 of each device's secret and never the secret** — the
-device is what holds that, and this side only ever verifies. Today nothing verifies against it:
-the file exists, `src/core/device-registry.ts` owns it, and no route reads it yet, so a board
-that has never paired anything has no such file and a board that has one is not thereby reachable
-from anywhere new. The control it is half of is #501 through #505 of the pairing milestone, and
-this document describes what is running rather than what is coming.
+`devices.json` sits there too, owner-only, once you have approved a device — the hash and never
+the secret, as [Pairing a second machine](#pairing-a-second-machine) says. A board that has
+paired nothing has no such file, and a board that has one is not thereby reachable from anywhere
+new: nothing verifies against it yet.
+
 The board holds whatever you drew on it. None of it is encrypted, and none of it is sent
 anywhere by this tool — the network calls it makes are `gh` to GitHub, and whatever the agent
 command line you configured does on its own account.

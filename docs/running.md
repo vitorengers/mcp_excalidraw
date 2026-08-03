@@ -282,8 +282,9 @@ there, and none of them is a board.
 
 The difference between the two is written down here anyway, because it is about to be the whole
 question. The pairing milestone replaces the bind test with a question about the **caller** —
-#501 is that seam, and #502 through #505 are the device credential a remote caller answers it
-with. On the day that lands, `HOST=0.0.0.0` and a single interface address stop being equally
+#502 and #503 have already built the credential a remote caller answers it with, and #501 is the
+seam that will ask for it. On the day that lands, `HOST=0.0.0.0` and a single interface address
+stop being equally
 useless, and the second one is the one to choose: it is the difference between offering the port
 to one network you control and offering it to every network the machine happens to be on. Until
 then both are the same 403 — anything but a loopback bind refuses the guarded routes to
@@ -593,7 +594,7 @@ node scripts/run-checks.mjs --list                # what would run, and nothing 
 
 | Tier | Needs, beyond Node and a built `dist/` | Runs on | Checks | On the contributor gate |
 |---|---|---|---|---|
-| `fast` | nothing | Linux, macOS, Windows | 160 | yes |
+| `fast` | nothing | Linux, macOS, Windows | 161 | yes |
 | `browser` | a Chrome or an Edge to drive | Linux, macOS, Windows | 81 | yes |
 | `windows` | win32 — the check gives up on anything else | Windows | 1 | no |
 | `wsl` | a real distro behind `wsl.exe` | Windows with WSL | 5 | no — the maintainer runs these |
