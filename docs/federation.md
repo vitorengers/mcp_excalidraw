@@ -87,15 +87,18 @@ is put where the other can reach it.
 Two guards stand between the machines, and they refuse for different reasons. **Who is calling**
 is `src/core/caller-gate.ts`: a request that did not arrive from the machine the server runs on
 is answered **403** by nearly every route worth reaching. That guard is what a paired device has
-to get past, and today it does not — the credential is minted, the token gate accepts it, and
-the caller guard still refuses a remote socket whether or not one is held. Until that lands
-(#522), the two machines can complete the whole approval and reach nothing with it. **What the
-caller asked for** is the origin gate's `Host` pin, and it is the trap in this design that looks
-like a credential failure and is not: a board reached under its name on a private overlay is
-being asked for an authority it does not answer for, and refuses with a 403 that has nothing to
-do with any secret. `EXCALIDRAW_ALLOWED_HOSTS` is what tells it about that name. A link that is
-refused for that reason and reported as a credential problem sends its operator to fix something
-that was never broken, which is why the states in the next section separate the two.
+to get past, and since #522 an approved device is the one caller that does — the credential is
+minted, the token gate accepts it, and this guard reads the same record. A caller holding
+anything else, the other board's own token included, is refused there exactly as before.
+**What the caller asked for** is the origin gate's `Host` pin, and it is the trap in this design
+that looks like a credential failure and is not: a board reached under its name on a private
+overlay is being asked for an authority it does not answer for, and refuses with a 403 that has
+nothing to do with any secret. Approving a device is now what tells it about that name — the
+record carries the authority the device arrived under, and the set is rebuilt when the registry
+changes — so `EXCALIDRAW_ALLOWED_HOSTS` is for the names no approval put there, an alias or a
+proxy in front of this board. A link that is refused for that reason and reported as a credential
+problem sends its operator to fix something that was never broken, which is why the states in the
+next section separate the two.
 
 ## What stops when the laptop sleeps
 
@@ -173,7 +176,7 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-The first five of them have landed; the rest are named here so the reader of a pull request can
+The first six of them have landed; the rest are named here so the reader of a pull request can
 see where each decision lands.
 
 ```
@@ -222,8 +225,34 @@ thing the reply carries and everything else is a key two live requests can share
 later than the request it describes, on that request's own budget, so a peer that sleeps mid-render
 leaves nothing behind. It has no caller either.
 
+The client is the thing that performs the call, and it too has no route and no caller yet. Two
+decisions give it its shape. **The header discipline is the whole of its security**: the outgoing
+request is built by naming the headers that cross, so this board's own token stops here in both
+of the spellings a caller can offer it in, exactly one credential reaches the peer, and
+`x-client-id` arrives byte-identical — a substituted one would get the reader its own writes
+echoed back. **And a failure comes back as a value rather than as an exception**, carrying one of
+the four states above and a sentence for the operator: a connect timeout, a read timeout, a 401
+and the two 403s are five different repairs, and the budget a connection is given to open is
+stated separately from the budget the answer is given to arrive, because a machine that is asleep
+and a board that is answering slowly are not the same thing. A redirect is not followed and is
+reported as its own outcome, since a peer answering 3xx is not the board this device paired with.
+
 The milestone that files them is *One tab strip, two machines*, and the design decisions above
 are each a done-when bullet on one of its issues rather than a preference stated here.
+
+The far end of the chain has landed too: the tab strip has the slot to draw a state in.
+`WorkspaceSummary.status` in `frontend/src/components/WorkspaceTabs.tsx` is what a tab reads,
+and nothing supplies it yet — a project without it draws the row it always drew. See
+[canvas-frontend.md](canvas-frontend.md) for how a liveness state and a config error sit on one
+tab without displacing each other.
+
+**The union is written twice, and that is a constraint rather than a choice.**
+`WorkspaceStatusState` there and `PeerLivenessState` in `src/core/peer-liveness.ts` are the same
+four words. The frontend cannot import the second: that module opens sockets, so it imports
+`net`, and the frontend's own `tsconfig` compiles everything it can reach. Two copies of four
+words is two chances for one of them to learn a fifth, so
+`scripts/check-workspace-tab-status-browser.mjs` reads both files and fails if they stop
+agreeing.
 
 ## Related
 

@@ -51,24 +51,35 @@ publishing the board and every shell to it. The dialog says how many connections
 ### Revoking the device you are reading this on
 
 Allowed, and warned about rather than refused. On the host it cannot happen at all — the host is
-not on this list — and on a paired device it is the ordinary "sign this machine out". The board
-stops loading there, and that machine cannot reach this board again until it is approved afresh.
+not on this list — and for a credential arriving from this machine it is the ordinary "sign this
+machine out". The board stops loading there, and that machine cannot reach this board again until
+it is approved afresh.
 
 There is no way to lock yourself out of your own board from here. The host's credential is a
 file in your state directory, and this page cannot touch it.
 
 ## Who may see the list
 
-The host, and a paired device. A paired device that could not see the list could not see that it
-is on one, and would have nowhere to press *sign this machine out*.
+**You, on the machine the board runs on.** Every route behind this page reads the caller's own
+socket address and refuses anybody else — a device you approved included, from wherever that
+device is.
 
-What a paired device may **not** do is rename or revoke anything but itself. The name is your
-word for a machine, and a device editing its neighbours' rows has no standing to.
+That is a decision rather than an omission, and it was made when the credential started working
+from another machine (#522). Widening the funnel in front of the board was the point of that
+change; widening the list, the rename and the revoke along with it would have put the management
+surface on the network as a side effect of a change about the scene, so a second machine could
+enumerate every other machine you have approved and take one off. The list is short and you are
+the one who reads it. Sign a machine out from here, where you can see all of them.
 
-Anybody else gets 401 from the same gate that guards the rest of `/api`. Like every other route
-that answers with something this machine owns, these three are also refused outright while the
-server is bound to an interface rather than to loopback — see
-[rest-api.md](rest-api.md) and [SECURITY.md](SECURITY.md).
+What that costs is *sign this machine out*, pressed on the machine being signed out. Revoke is on
+this page instead, one row along from the device you want gone, and it takes effect on that
+device's next request wherever that device is.
+
+Which credential a caller holds still decides the answer for the two that can arrive from this
+machine: a device credential presented here may rename nothing, and may revoke exactly itself.
+Anybody else gets 401 from the same gate that guards the rest of `/api`, and a caller that is not
+on this machine gets 403 before that gate is asked — see [rest-api.md](rest-api.md) and
+[SECURITY.md](SECURITY.md).
 
 ## If you have edited the file by hand
 

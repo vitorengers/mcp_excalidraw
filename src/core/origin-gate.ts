@@ -39,26 +39,46 @@ const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
  *
  * A board reached as `localhost:3737` and the same board reached as `127.0.0.1:3737` are the
  * same board and both are in here, because which one the operator typed is not something this
- * server gets to decide. `extra` is the escape hatch for an alias or a reverse proxy, and it
- * is the only reason this function takes a third argument.
+ * server gets to decide. `extra` is the escape hatch for an alias or a reverse proxy.
+ *
+ * `approved` is the fourth argument and it is a different kind of thing from the third. An
+ * `ALLOWED_HOSTS` entry is configuration: somebody wrote a name into a file, in advance, for
+ * every caller there will ever be. Each of these is one **approved device's** own recorded
+ * `host` (`core/device-registry.ts`) — the authority that device reached this board under when
+ * the operator looked at the pairing card and approved it. Without them, approving a device and
+ * this board answering for the name that device uses were on separate lifetimes: the approval
+ * landed and the `Host` pin refused it anyway, so a laptop could complete the whole gesture and
+ * be turned away at the first middleware by a name its own record was carrying.
+ *
+ * One name per approved device and never a wildcard. Revoking a device takes its name out with
+ * it, because the set is derived from the registry rather than accumulated beside it.
  */
-export function allowedAuthorities(host: string, port: number, extra?: string): Set<string> {
+export function allowedAuthorities(
+  host: string,
+  port: number,
+  extra?: string,
+  approved?: Iterable<string>,
+): Set<string> {
   const authorities = new Set<string>();
   const add = (hostname: string) => {
     if (!hostname) return;
     authorities.add(`${hostname}:${port}`.toLowerCase());
+  };
+  /** A name that may carry its own port, or inherit this server's. */
+  const addAuthority = (value: string) => {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return;
+    authorities.add(trimmed.includes(':') ? trimmed : `${trimmed}:${port}`);
   };
 
   for (const hostname of LOOPBACK_HOSTNAMES) add(hostname);
   // A server deliberately bound somewhere else still answers for that name.
   add(host);
 
-  for (const entry of (extra ?? '').split(',')) {
-    const trimmed = entry.trim().toLowerCase();
-    if (!trimmed) continue;
-    // An entry may carry its own port, or inherit this server's.
-    authorities.add(trimmed.includes(':') ? trimmed : `${trimmed}:${port}`);
-  }
+  for (const entry of (extra ?? '').split(',')) addAuthority(entry);
+  // Read the same way, because a `Host` header and an `ALLOWED_HOSTS` entry are the same kind of
+  // string: `board.lan:3737` on a board that is not on port 80, and `board.lan` on one that is.
+  for (const entry of approved ?? []) addAuthority(entry);
 
   return authorities;
 }

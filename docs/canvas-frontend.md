@@ -43,6 +43,23 @@ row that was mostly empty on both.
   no registry was configured, which hid the `+` on the one board that had nothing else to press
   (#310). With an empty list the control carries its own label — `+ Add a project` — because a
   lone `+` in an otherwise empty header has no tabs to be read against.
+- **A tab carries two marks, and they are two different facts.** At the end of the row, a red
+  `!` when `Workspace.error` is set — the config could not be resolved, and the project name is
+  underlined dotted to match. Beside the `WSL` badge, an optional liveness badge saying whether
+  the machine holding the project is answering: `Checking`, `Online`, `Unreachable` or
+  `Refused`, from `WorkspaceSummary.status`. **Nothing sets that field yet** and a project
+  without it renders the row it always did. The two are separate on purpose (#515): `error`
+  gates behaviour — an implement run refuses outright on a workspace carrying one — so a
+  machine that is merely asleep must not be written there, and a tab that is both broken and
+  unreachable shows both marks.
+- **Every mark on a tab is also text.** The `!` was `aria-hidden="true"` with its meaning in
+  the `title`, so the one sign that a project was broken was reachable only by hovering a
+  pointer over it. The glyph is still hidden — read aloud, `!` is noise — and the reason sits
+  beside it in a clipped 1px box (`.workspace-tab__aside`), which puts it in the accessible
+  name the tab is read by without printing a sentence on a strip a few centimetres wide. Each
+  liveness state prints its own word for the same reason: colour alone is not a message.
+  `scripts/check-workspace-tab-status-browser.mjs` reads those names out of Chrome's own
+  accessibility tree, and the badge colours out of a screenshot in both themes.
 - **There is no page title on it.** `<h1>Excalidraw Canvas</h1>` said the same four words on
   every board of every project; the tabs beside it say which board this is. The name is in
   `<title>`, where a browser tab reads it — though until #296 the sentence was aspirational:
