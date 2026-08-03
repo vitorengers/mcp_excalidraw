@@ -667,10 +667,16 @@ offered a URL to act on.
 
 ## The panel, and the chat inside it
 
-The card face carries a title and nothing else, so the what, the why, the steps and the confirm
-sentence are read in the panel — the same anchored reading column a GitHub issue body uses.
-`## Evidence` is the one part of a founder action written for an engineer, so it is present,
-collapsed and closed until somebody asks for it: showing it by default undoes the feature.
+A card face carries a title and nothing else — the mirror composes one line per card and centres
+it — so the what, the why, the steps and the confirm sentence can only be read where the founder
+target resolves, in the panel a selected card opens. Two rules about what that panel does are
+settled here rather than by whatever draws it:
+
+- **`## Evidence` is not shown by default.** It is the one part of a founder action written for
+  an engineer, and a reader who opens a card and is met with an HTTP status and a path into
+  `src/` has been handed the thing this whole register exists to keep out of their way.
+- **Nothing on it may start a run.** That is guard 4 above, and it is enforced by the target
+  rather than by the panel: no control on a founder target is ever offered a URL to act on.
 
 ### Done, and what taken on trust means
 
@@ -690,13 +696,16 @@ nothing this board runs can confirm that a rate limit has lifted, that a bill ha
 that a usage window has room. Only the next call that goes through shows any of them, and that
 module makes no calls at all.
 
-**Taken on trust** is the answer for exactly those: the person says they have done it, the record
-settles with `resolvedBy: 'person'`, and the board says the word was taken rather than claiming
-to have checked something it could not. `resolvedBy: 'probe'` is the other one — the board's own
-re-probe no longer sees the blocker — and keeping the two distinguishable is why the field exists
-at all. The reason line has a length limit of its own and may not begin like a command: this is
-shown beside a card in a column written for somebody with a payment card and ten minutes, and
-what the machine said belongs in the evidence.
+**Taken on trust** is the answer for exactly those. A record carries `resolvedBy`, and it is
+`'person'` when somebody said they had done it and `'probe'` when this board's own look no longer
+sees the blocker. Keeping the two apart is the whole reason that field exists: a board that
+recorded them the same way could never say afterwards whether it had checked anything, and a
+column that claims to have verified a bill was paid is worse than one that admits it took a word
+for it.
+
+The one line each verdict carries is written for the same reader as the card. It has a length
+limit of its own and may not begin like a command, because what the machine said belongs in the
+evidence and a line starting `gh` or `Error:` is the machine talking.
 
 The board also looks on its own, without being asked. A pass every
 `EXCALIDRAW_FOUNDER_PASS_MS` — minutes rather than seconds, because it spends two probes per
