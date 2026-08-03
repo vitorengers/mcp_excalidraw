@@ -308,7 +308,13 @@ writeFileSync(join(projectPath, 'board.config.json'), JSON.stringify({
   board: 'board.excalidraw',
   repo: 'vitorengers/vibemaxxing',
   // A project to mirror, so the GitHub routes are refused by the guard rather than by 404.
-  githubProject: 'https://github.com/users/vitorengers/projects/5',
+  //
+  // Owned by nobody in particular, and that is the point rather than taste:
+  // `check-shipped-config-neutral.mjs` reads every *tracked* file for a project board owned by
+  // whoever owns this repository, and this fixture named them — so `main` went red on a rule
+  // about shipping somebody's board, over a URL nothing ever fetches (#511's own note that a
+  // new check's fixtures are tracked files). Any well-formed project URL does the job here.
+  githubProject: 'https://github.com/users/someone/projects/5',
 }), 'utf8');
 writeFileSync(join(projectPath, 'board.excalidraw'), JSON.stringify({
   type: 'excalidraw',
