@@ -379,7 +379,11 @@ try {
   child.kill();
   await sleep(300);
   if (child.exitCode === null) child.kill('SIGKILL');
-  rmSync(workDir, { recursive: true, force: true });
+  // Forgiven: on Windows a killed server's handles on its state directory are
+  // released asynchronously, and a run that reported failure because it could not
+  // delete a temporary directory would be wrong about the thing it measured (#472).
+  try { rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
+  catch { /* a teardown is not a verdict (#472); run-checks.mjs reaps it */ }
 }
 
 if (failures) {

@@ -153,7 +153,8 @@ import {
   normalizeWorkspaceId,
   activeWorkspaceIds,
   onElementStoreChanged,
-  DEFAULT_WORKSPACE_ID
+  DEFAULT_WORKSPACE_ID,
+  WORKSPACE_QUERY_KEYS
 } from './core/element-store.js';
 import { allowedAuthorities, verifyOrigin } from './core/origin-gate.js';
 import {
@@ -1052,6 +1053,22 @@ app.delete('/api/elements/:id', (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Query parameters this route must not read as element fields.
+ *
+ * It is the only route in the file that treats what it does not recognise as data, which makes
+ * it the only one where a name the *transport* already spent is spent a second time. Both of
+ * these are such names: `?workspace=` chooses the board (`WORKSPACE_QUERY_KEYS`, and #457 is
+ * what happens without this), and `?token=` is the spelling of the board token a caller uses
+ * when it cannot set a header — the WebSocket constructor's case, allowed on ordinary requests
+ * so that `curl` has one spelling that works everywhere.
+ *
+ * Nothing is lost by excluding them. A stored element has no `workspace` or `token` property to
+ * match against: which board an element is on is which `Map` it is in, not a field written on
+ * it, so the filter these names produced could only ever match nothing.
+ */
+const SEARCH_RESERVED_PARAMS = new Set<string>([...WORKSPACE_QUERY_KEYS, TOKEN_QUERY]);
+
 // Query elements with filters
 app.get('/api/elements/search', async (req: Request, res: Response) => {
   // With no query at all this is `GET /api/elements` by another name, so it carries the same
@@ -1062,7 +1079,12 @@ app.get('/api/elements/search', async (req: Request, res: Response) => {
 
   try {
     await whenBoardsRestored();
-    const { type, x_min, x_max, y_min, y_max, ...filters } = req.query;
+    const { type, x_min, x_max, y_min, y_max, ...rest } = req.query;
+    // What is left over is the arbitrary-field filter, minus the names above that are addressing
+    // rather than data. Dropped here rather than in the loop below, so that `filters` means the
+    // same thing at every line that reads it.
+    const filters = Object.fromEntries(
+      Object.entries(rest).filter(([key]) => !SEARCH_RESERVED_PARAMS.has(key)));
     let results = Array.from(elementsFor(workspaceIdFrom(req)).values());
 
     // Filter by type if specified

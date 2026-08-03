@@ -399,7 +399,12 @@ const readDocumentationShift = (workspace: string): number => {
     const stored = raw ? (JSON.parse(raw) ?? {})[workspace] : null;
     // Validated rather than trusted, like the rect beside it: a key anybody can edit, and a
     // `NaN` here would move every authored shape on the board to nowhere.
-    return typeof stored === 'number' && Number.isFinite(stored) && stored >= 0 ? stored : 0;
+    //
+    // Finite is the whole test since #494. It used to also require `>= 0`, which was true of
+    // every shift a clamped `documentationClearance` could produce; now that the gap is a
+    // distance rather than a floor, a region standing left of the content is a negative one,
+    // and rejecting it would read a pushed board back as a board at rest and push it again.
+    return typeof stored === 'number' && Number.isFinite(stored) ? stored : 0;
   } catch (error) {
     console.warn('Failed to read the documentation shift from localStorage:', error);
     return 0;
@@ -2207,16 +2212,28 @@ function App(): JSX.Element {
    *
    * The scene now stays on screen until the new board's elements land, which means there
    * is a window where the canvas shows one board while `activeWorkspaceRef` already names
-   * another. An autosync in that window would write the board you left into the store of
-   * the board you went to. The timer is a floor, not the mechanism: the hold is released
-   * when the new scene arrives, and only expires if it never does.
+   * another. The hold is released when the new scene arrives, and only expires if it never
+   * does.
+   *
+   * **It is not what keeps one board out of another's store**, and treating it as though it
+   * were is #493. It never reached far enough to be: the counter it raises is read by
+   * `scheduleAutoSync` and by nothing else, and `flushAutoSync` goes straight to
+   * `syncToBackend` past it. That flush fires on *every* switch — closing the socket and
+   * opening a new one puts `socket.onopen` through it whenever a write is owed (#225) — so
+   * the board being left was posted under the name of the board being entered in the first
+   * second, with the hold up and doing nothing about it. Two boards on this machine each
+   * ended up holding the whole of the other.
+   *
+   * What keeps them apart is in `syncToBackend`: it names `sceneWorkspaceRef` and refuses
+   * outright while a scene is pending. The worst this timer can now do is let a board be
+   * saved to itself a little early.
    */
   const autoSyncHoldRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const holdAutoSyncForSwitch = (): void => {
     if (autoSyncHoldRef.current) return
     suppressAutoSyncCountRef.current += 1
-    autoSyncHoldRef.current = setTimeout(() => { finishBoardSwitch() }, BOARD_SWITCH_HOLD_MS)
+    autoSyncHoldRef.current = setTimeout(() => { expireBoardSwitchHold() }, BOARD_SWITCH_HOLD_MS)
   }
 
   /**
@@ -2398,7 +2415,7 @@ function App(): JSX.Element {
     fitLegibly(api, landingTarget(elements as unknown as ExcalidrawElement[]), false)
   }
 
-  /** The new board is on screen (or never will be): let autosync go again. */
+  /** The new board is on screen: let autosync go again. */
   const finishBoardSwitch = (): void => {
     // Read before it is cleared, and only a real switch has one: `loadExistingElements`
     // calls this on an ordinary first load too, where there is no board being landed on and
@@ -2409,12 +2426,34 @@ function App(): JSX.Element {
       sceneWorkspaceRef.current = landed
       restoreViewport(landed)
     }
+    releaseBoardSwitchHold()
+  }
+
+  /**
+   * The new board's scene never came, and the hold has run out.
+   *
+   * Everything `finishBoardSwitch` does *except* moving `sceneWorkspaceRef`, and the
+   * exception is the whole of it. This used to be the same function, so an expiry asserted
+   * the new board's scene was on the canvas in exactly the case where it is not — the second
+   * way into #493, and the one a slow board reaches: eight seconds is not generous across a
+   * `\\wsl.localhost` share. A foreign element is permanent once the version merge has taken
+   * it, because the store never reads absence as a deletion (#1).
+   *
+   * Letting the autosync go again is safe now and was not before: it names the board whose
+   * shapes are drawn, and those are still the board being left. A scene that arrives late
+   * lands through `finishBoardSwitch` as it always did.
+   */
+  const expireBoardSwitchHold = (): void => {
+    pendingSceneWorkspaceRef.current = null
+    releaseBoardSwitchHold()
+  }
+
+  const releaseBoardSwitchHold = (): void => {
     if (!autoSyncHoldRef.current) return
     clearTimeout(autoSyncHoldRef.current)
     autoSyncHoldRef.current = null
-    // The new board's scene is already on screen by the time this runs, so a sync refused
-    // during the switch is now a sync of that board into its own store — which is what the
-    // hold was protecting, not something it was meant to lose.
+    // A sync refused during the switch is now a sync of a board into its own store — which
+    // is what the hold was protecting, not something it was meant to lose.
     releaseAutoSyncSuppression()
   }
 
@@ -3730,13 +3769,22 @@ function App(): JSX.Element {
     const documentation = documentationElements(next as unknown as ExcalidrawElement[])
     const standing = settle ? boxOf(documentation) : null
     const exact = standing ? documentationClearance(region, standing.minX - applied) : applied
-    // Downwards only on the reconcile path, and only where this pass dropped a block. Both
-    // halves are load-bearing: `Math.min` is what keeps a dragged block from pushing the
-    // board, and `dropped` is what keeps a board switched to — where the scene arrives with
-    // no blocks at all and they are added back — from reading an empty region as "no room
-    // needed" and pulling that board's content left. See the note on `settle`.
+    // Downwards only on the reconcile path, and only where there is a region to measure.
+    //
+    // `Math.min` is the half that keeps a dragged block from pushing the board: this path
+    // runs on a poll, on a socket message and on a scene replaced, none of which are a
+    // decision about the geometry, so it may give room back and never ask for more.
+    //
+    // What it is guarded on changed with #494. It used to be `dropped.size > 0` — only a
+    // pass that took a block away could give room back — and that made `TERMINAL_GAP` a
+    // floor rather than a distance: a gap that was already too wide stayed too wide until
+    // something was closed. The hazard that guard was really about is an *empty* region,
+    // which is what a board switched to looks like for the instant before its blocks are
+    // added back; read as "no room needed", it would pull that board's content left. So the
+    // guard is now that hazard by name. `region` is measured over `[...next, ...added]`, so
+    // the blocks put back in this same pass are already in it.
     const wanted = settle === 'shrink'
-      ? (dropped.size > 0 ? Math.min(applied, exact) : applied)
+      ? (region ? Math.min(applied, exact) : applied)
       : exact
     const shift = wanted - applied
     const moving = new Set(shift === 0 ? [] : documentation.map((element) => element.id))
@@ -6361,6 +6409,21 @@ function App(): JSX.Element {
       return false
     }
 
+    // Nothing at all while a board is still arriving. The shapes on screen belong to the
+    // board being left, so a sync here writes one board's scene into another board's store
+    // — and the store reconciles by version and never reads absence as a deletion (#1), so
+    // what lands is permanent. This is the same guard `reportTerminalGrid` makes for the
+    // same window, and it is the mechanism: the hold is a convenience, not the rule.
+    //
+    // Owed rather than dropped, like every other refusal here: the caller may have cleared
+    // the pending flag on its way in, and a change refused with nothing left to come back
+    // to it is #92 again. Both ends of the switch come back to it — `finishBoardSwitch` and
+    // `expireBoardSwitchHold` release the suppression, which is what re-arms the timer.
+    if (pendingSceneWorkspaceRef.current !== null) {
+      autoSyncPendingRef.current = true
+      return false
+    }
+
     if (autoSyncTimerRef.current) {
       clearTimeout(autoSyncTimerRef.current)
       autoSyncTimerRef.current = null
@@ -6401,8 +6464,14 @@ function App(): JSX.Element {
       // 3. Convert to backend format
       const backendElements = currentElements.map(convertToBackendFormat)
 
-      // 4. Send to backend
-      const response = await fetch(apiUrl('/api/elements/sync'), {
+      // 4. Send to backend — to the board these shapes belong to.
+      //
+      // `sceneWorkspaceRef`, not `activeWorkspaceRef`, for the reason the terminal's keys and
+      // its resize report already read it: what is derived from the *drawing* has to follow
+      // the drawing. This is the payload for which that matters most — it is the whole scene,
+      // and a board named wrong here does not put one stale label somewhere, it merges an
+      // entire board into another one for good.
+      const response = await fetch(apiUrlOn('/api/elements/sync', sceneWorkspaceRef.current), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

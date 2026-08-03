@@ -116,6 +116,22 @@ export function workspaceIdFrom(source: {
   return DEFAULT_WORKSPACE_ID;
 }
 
+/**
+ * The names `workspaceIdFrom` consumes off a request, in the spellings a query string carries.
+ *
+ * A route that reads its *unrecognised* query parameters as data has to skip these, or the name
+ * that chose the board is read a second time as something else. `GET /api/elements/search` did
+ * exactly that: it resolved the right board from `?workspace=X` and then required every element
+ * on it to carry a `workspace` property equal to `X`, which no element has, so a board of two
+ * hundred shapes answered empty while the same request spelled `x-workspace-id: X` answered all
+ * of it (#457).
+ *
+ * Exported from beside the reader rather than spelled again at the call site, so that a fourth
+ * spelling arrives at both ends at once. Header names are deliberately not in here: a header
+ * cannot collide with a query parameter, and listing one would suggest it could.
+ */
+export const WORKSPACE_QUERY_KEYS: readonly string[] = ['workspace'];
+
 /** Ids reach us from URLs and headers; keep them to a shape safe to log and compare. */
 export function normalizeWorkspaceId(id: string | undefined | null): string {
   if (typeof id !== 'string') return DEFAULT_WORKSPACE_ID;
