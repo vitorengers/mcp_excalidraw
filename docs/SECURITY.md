@@ -111,11 +111,26 @@ bar no longer carries the secret.
 The token above is one secret on one machine, and there is no way to hand a second machine a
 copy of it that is not "hand over the file". So a device asks instead, and you approve it.
 
-Open the board on the other machine. It finds no device secret and asks — `POST
-/api/pair/request` — and the board on *this* machine shows the request: the name it proposed,
-the address it arrived from, the name it reached this board under, and a **code**. Read the code
-off the other screen, approve the request showing the same one, and the waiting page collects a
-secret of its own on its next poll.
+Open the board on the other machine. Instead of a board it shows a code and says it is waiting;
+behind that it has asked — `POST /api/pair/request` — and the board on *this* machine has raised
+a dialog over the canvas: the name the device proposed, marked as the device's own claim; the
+address it arrived from and the name it reached this board under, both verbatim; the **code**;
+and one sentence saying what approving it hands over. Read the code off the other screen, approve
+the request showing the same one, and the waiting page collects a secret of its own on its next
+poll and opens into a board.
+
+**Refuse is the other answer, and it is as prominent as approve.** Escape, a press outside the
+dialog and the Refuse button are all the same answer, and the device is *told* — its screen says
+it was refused and offers to ask again, rather than spinning until an expiry nobody can see. A
+prompt that can only be answered `yes` is a prompt people learn to answer `yes`, and this is the
+one where that costs a shell.
+
+**The sentence about what approval grants is held to the routes it names.** It lives in
+`src/core/pairing-grants.ts` with the route each of its clauses is a claim about, and
+`scripts/check-pairing-surfaces-browser.mjs` asks those routes whether they are still there and
+still behind the credential the rest of the board is behind. A dialog that goes on promising what
+the board stopped doing is the worst possible state for the one screen you read before letting
+another machine in.
 
 Five things make that a gesture rather than a hole, and all five are in `src/core/pairing.ts`:
 
@@ -139,20 +154,38 @@ Five things make that a gesture rather than a hole, and all five are in `src/cor
   It is also what *makes* the secret: `src/core/pairing.ts` decides when a device is approved,
   and `src/core/device-registry.ts` (#502) is the only thing here that mints or writes.
 
-Those two open routes are also outside the `Host` pin the origin gate applies everywhere else,
-and only those two: a device that has not been approved yet reaches this board under a name it
-does not answer for, which is what pairing *is*. The name is recorded and shown to you rather
+Those two open routes are outside the `Host` pin the origin gate applies to every route, and
+since #504 so is the page itself — `GET /` and the static mounts. A device that has not been
+approved yet reaches this board under a name it does not answer for, which is what pairing *is*,
+and while the pin covered the page too, that device was answered a 403 rather than a screen: it
+could not read a code off a page it was refused. The name is recorded and shown to you rather
 than pinned — you are the one who can tell `mac.tailnet.ts.net` from something that merely
-resolves here. `Origin`, when a browser sends one, still has to name the same authority as
-`Host`, so a page at some other origin cannot put rows on your screen.
+resolves here.
+
+What this widened is the software and nothing about the board. The page carries no credential of
+its own, every route that *acts* is still pinned, and `/health` stays pinned because it names a
+pid and a build. A page served to an authority that merely resolves here can do no more from
+there than the two open pairing routes already allowed it — and those put a row on your screen
+with `evil.example` written in it, which is the row this dialog exists for you to refuse.
+`Origin`, when a browser sends one, still has to name the same authority as `Host`, so a page at
+some other origin cannot put rows on your screen at all.
 
 **What a paired device can do today.** The token gate accepts its credential, after the board
 token and never instead of it, on `/api` and on the WebSocket upgrade — so an approved device is
 a caller that got past the gate, exactly as the operator's own page is. What it still cannot do
-is reach this board **from another machine**: the bind section below is unchanged, and
-`offLoopback` asks where the server bound rather than who is calling. Teaching that guard the
-difference is #501, and until it lands a device paired from a second machine is a credential
-that works only from this one.
+is reach this board **from another machine**. Two things stand there, and #501 moved only the
+first of them: the caller guard now asks who is calling rather than where the server bound, but
+its answer to a remote socket is still *refused*, credential or no credential — reading the
+registry there is the next issue in this milestone. And the `Host` pin is the second half, because
+the authority a second machine reaches this board under is not one `allowedAuthorities` builds,
+though the device's record has carried it since #502. Until both move, a device paired from a
+second machine is a credential that works only from this one.
+
+That is a state the device can now *say*, rather than one it shows as an empty board.
+`GET /api/pair/admission` answers with the gates' own verdict, and a device that holds a
+credential and is refused shows a screen saying so and offering to pair again — which is also
+what stops it asking on its own and writing a second record into your registry for a machine
+that is already in it.
 
 **Taking one away** is [devices.md](devices.md): the list, the name and the revoke. A revocation
 refuses the device on its **next request** — every verification reads the registry, so there is
@@ -163,6 +196,8 @@ locked out from there.
 
 `scripts/check-pairing-handshake.mjs` holds the approval, including one attempted from a
 genuinely non-loopback socket and one attempted with a forwarded header claiming loopback;
+`scripts/check-pairing-surfaces-browser.mjs` holds the two screens, driving them from two origins
+in two browsers and asserting that the code shown on the two ends is the same string; and
 `scripts/check-device-management.mjs` and `scripts/check-device-revoke-socket.mjs` hold what
 becomes of a device afterwards.
 
@@ -208,20 +243,23 @@ and the writes are behind the same guard:
   token out of an address bar it has not loaded yet; `GET /health`, which is how anything finds
   out whether a canvas is on a port at all; `GET /api/sync/status`; the pairing front door,
   `POST /api/pair/request` and `GET /api/pair/status`, which are open on purpose and bounded for
-  it (see [above](#pairing-a-second-machine)); and the records of what the agents have been
+  it (see [above](#pairing-a-second-machine)); `GET /api/pair/admission`, which is the page's own
+  question and answers nothing but the verdict of the two gates in front of it — a caller that
+  reaches it has already got past them, so it learns only what it already knew; and the records
+  of what the agents have been
   doing, which live in this process's memory rather than behind that guard —
   `GET /api/issue-block/:id/run`, `GET /api/issue/recreate` and `GET /api/implement`, the last of
   which carries every run's pull request, its error text and the **absolute path of the worktree**
   it left on this machine — together with the two routes that reset such a record,
   `DELETE /api/implement` and `DELETE /api/issue-block/:id/implement`.
 <!-- /routes: answered-off-loopback -->
-- **Answered to you, refused to them** — `GET /api/pair/pending` and `POST /api/pair/approve`,
-  written that way by #503, and since #501 the whole of the `offLoopback` funnel beside them:
-  the board's own contents, the registry, the picker, the restart route and the rest of the first
-  list. They ask **who is calling** rather than where the server opened, so an interface-bound
-  board serves them from your own keyboard while refusing the network the same route. What is
-  left on the bind is the terminal, the two agent helpers and the GitHub routes, which such a
-  board refuses to everybody including you.
+- **Answered to you, refused to them** — `GET /api/pair/pending`, `POST /api/pair/approve` and
+  `POST /api/pair/refuse`, written that way by #503 and #504, and since #501 the whole of the
+  `offLoopback` funnel beside them: the board's own contents, the registry, the picker, the
+  restart route and the rest of the first list. They ask **who is calling** rather than where the
+  server opened, so an interface-bound board serves them from your own keyboard while refusing
+  the network the same route. What is left on the bind is the terminal, the two agent helpers and
+  the GitHub routes, which such a board refuses to everybody including you.
 
 So the sentence this used to end on — that a board bound that way is inert — was not true, and it
 is the kind of claim worth being exact about. What is inert **to a stranger** is the board:

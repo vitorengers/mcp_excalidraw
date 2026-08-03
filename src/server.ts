@@ -434,6 +434,39 @@ function gatePath(req: Request): string {
 
 const isPairingBootstrap = (req: Request): boolean => PAIRING_OPEN_PATHS.has(gatePath(req));
 
+/** Whether a path is one of this server's own routes rather than a file it serves. */
+const isApiPath = (path: string): boolean => path === '/api' || path.startsWith('/api/');
+
+/**
+ * The page itself, which an unapproved device has to be able to load (#504).
+ *
+ * Until now the `Host` pin applied to `GET /` and to the bundle as well, so a device reaching
+ * this board under a name it does not answer for — which is what a second machine is, and what
+ * `POST /api/pair/request` exists to let it be — got a 403 with the origin gate's sentence in it
+ * instead of a screen. A device cannot read a code off a page it is refused, so the gesture #503
+ * describes had no way to start on the machine it is for.
+ *
+ * What this widens is exactly the software and nothing about the board. The page carries no
+ * credential — the token comes out of the address bar on the machine that launched it, and a
+ * device's own credential is minted by an approval — and every route that *acts* is still pinned,
+ * so a page served to a rebound authority can do no more from there than the two open pairing
+ * routes already allow it. `/health` stays pinned: it names a pid and a build, which is a thing
+ * to answer this machine's own tools with rather than anybody who resolves a name here.
+ *
+ * `GET` and `HEAD` only, because a file is read and not written, and a `POST` to a path this
+ * server does not route is a request that should meet the pin on its way to a 404.
+ *
+ * `gatePath` rather than `req.path`, like every other literal comparison in this file and for
+ * the reason #513 gives: a rule that widened `/HEALTH` while pinning `/health` would be exactly
+ * the disagreement between a gate and a router that this one was written to end.
+ */
+const isPageLoad = (req: Request): boolean => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  const path = gatePath(req);
+  if (path === '/health') return false;
+  return !isApiPath(path);
+};
+
 // Middleware
 //
 // This replaces `app.use(cors())`, whose defaults were `origin: '*'`. Note it refuses rather
@@ -441,7 +474,7 @@ const isPairingBootstrap = (req: Request): boolean => PAIRING_OPEN_PATHS.has(gat
 // runs on this side, and for `POST /api/terminal` the damage is starting the shell, not
 // reading the answer. See src/core/origin-gate.ts.
 app.use((req: Request, res: Response, next: NextFunction) => {
-  const verdict = isPairingBootstrap(req)
+  const verdict = (isPairingBootstrap(req) || isPageLoad(req))
     // Not the pin, because a device that has not been approved yet reaches this board under a
     // name it does not answer for — that is what pairing is. `verifySameAuthority` keeps the
     // half that still applies: a cross-origin page may not ask. See src/core/origin-gate.ts.
@@ -486,9 +519,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (!AUTH_REQUIRED) return next();
   // `gatePath`, never `req.path`: the two spellings of this comparison are what let `/API/…`
-  // past this gate and into a handler. See the note on that function.
-  const path = gatePath(req);
-  if (path !== '/api' && !path.startsWith('/api/')) return next();
+  // past this gate and into a handler (#513). See the note on that function.
+  if (!isApiPath(gatePath(req))) return next();
   if (isPairingBootstrap(req)) return next();
   const offered = offeredToken(req.headers, req.url);
   if (sameToken(offered, AUTH_TOKEN)) return next();
@@ -6640,6 +6672,54 @@ app.post('/api/pair/approve', (req: Request, res: Response) => {
   // The secret is not in this answer. It goes to the device that asked, on its next poll, and
   // the operator never sees it — there is nothing here for them to copy anywhere.
   res.json({ success: true, deviceId: outcome.device.id, name: outcome.device.name });
+});
+
+/**
+ * The other answer, and the one dismissing the dialog gives (#504).
+ *
+ * A dialog that can only be answered `yes` is a dialog people learn to answer `yes`. So the
+ * screen offers refuse as prominently as approve, Escape is a refusal rather than a deferral,
+ * and both of them arrive here — which is what lets the waiting device be *told*, instead of
+ * spinning until an expiry it cannot see and then being told nothing in particular.
+ *
+ * No code is required, unlike the approval. The operator refusing does not have to have decided
+ * which of two requests they are refusing; the worst a refusal aimed at the wrong one can do is
+ * make somebody ask again, and a refusal that had to be typed could not be a dismissal.
+ */
+app.post('/api/pair/refuse', (req: Request, res: Response) => {
+  if (notTheHost(req, res, 'A device is refused')) return;
+
+  const requestId = typeof req.body?.requestId === 'string' ? req.body.requestId : '';
+  if (!pairingDesk.refuse({ requestId })) {
+    return res.status(404).json({
+      success: false,
+      error: 'There is no pairing request waiting under that identifier. It may have expired, or '
+        + 'it may already have been answered.'
+    });
+  }
+
+  logger.info(`Refused a pairing request (${requestId}).`);
+  res.json({ success: true });
+});
+
+/**
+ * Whether the caller may drive this board at all — the page's own question, before it renders.
+ *
+ * Behind every gate the board's other routes are behind and behind nothing extra, because the
+ * answer *is* those gates: 200 means this caller is one the board answers, 401 that it holds no
+ * credential, 403 that it is reaching this board under a name the board does not answer for. The
+ * page needs the difference before it decides what to be (#504) — a board, or the screen that
+ * says how to become one — and asking any other route the same question would mean reading a
+ * refusal about the scene and guessing that it was about admission.
+ *
+ * Deliberately not one of `PAIRING_OPEN_PATHS`, and deliberately carrying no guard of its own:
+ * a caller this server admits has to get 200 here, so the answer stays the guards' rather than
+ * becoming a second copy of them that can disagree with them. That is also what makes it
+ * forward-compatible with the rest of this milestone — the day the caller guard learns to read a
+ * device's record, this route says so without being edited.
+ */
+app.get('/api/pair/admission', (_req: Request, res: Response) => {
+  res.json({ success: true, admitted: true });
 });
 
 /**

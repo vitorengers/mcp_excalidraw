@@ -28,6 +28,7 @@
  */
 
 import { LAUNCH_QUERY, TOKEN_HEADER, TOKEN_QUERY, TOKEN_STORAGE_KEY } from '../../src/core/board-token'
+import { readDeviceCredential } from './storage'
 
 /**
  * Take the token out of the URL, or off the tab if this is a reload.
@@ -64,27 +65,51 @@ export function boardToken(): string | null {
 }
 
 /**
- * The socket URL with the token on it, because a `WebSocket` handshake carries no headers.
+ * What this page presents when it asks the board for something: the token, or this device's own.
+ *
+ * Two credentials, one header, and never both at once. The board token is what the launcher put
+ * in the address bar on the machine running the server; the device credential is what an
+ * approval on that machine handed to a second one (#504), and a page holds exactly one of them
+ * because a page is on exactly one of those machines. The token wins where both somehow exist —
+ * it is the narrower of the two, good for this start of this server and no longer.
+ *
+ * Read on every call rather than captured once, because the device's arrives *during* a page's
+ * life: the waiting screen stores it the moment the operator approves, and the reload that
+ * follows should not be the thing that makes it take effect.
+ */
+function presentedCredential(): string | null {
+  return token ?? readDeviceCredential()
+}
+
+/**
+ * The socket URL with the credential on it, because a `WebSocket` handshake carries no headers.
  *
  * A board with no token gets the URL back unchanged, which is what keeps a page from an older
  * server, and a board started with the opt-out, working exactly as they did.
  */
 export function withBoardToken(url: string): string {
-  if (!token) return url
-  return `${url}${url.includes('?') ? '&' : '?'}${TOKEN_QUERY}=${encodeURIComponent(token)}`
+  const credential = presentedCredential()
+  if (!credential) return url
+  return `${url}${url.includes('?') ? '&' : '?'}${TOKEN_QUERY}=${encodeURIComponent(credential)}`
 }
 
 /**
- * Send the token on every same-origin request this page makes.
+ * Send the credential on every same-origin request this page makes.
  *
  * Cross-origin is left alone on purpose: this page fetches Excalidraw's fonts from a CDN when
  * the board is not serving them itself, and a secret for `127.0.0.1` has no business travelling
  * to `esm.sh`.
+ *
+ * Installed unconditionally since #504, where it used to stand down when there was no token. A
+ * page that holds nothing *yet* is exactly the page pairing is for, and a wrapper that decided at
+ * module scope would leave the newly paired device fetching bare-headed until its next load. The
+ * wrapper adds nothing when there is nothing to add, so a board with the token off is untouched.
  */
 function install(): void {
-  if (!token) return
   const native = window.fetch.bind(window)
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    const credential = presentedCredential()
+    if (!credential) return native(input, init)
     let sameOrigin = false
     try {
       const target = typeof input === 'string'
@@ -99,7 +124,7 @@ function install(): void {
     const headers = new Headers(
       init?.headers ?? (typeof input === 'object' && 'headers' in input ? input.headers : undefined)
     )
-    headers.set(TOKEN_HEADER, token)
+    headers.set(TOKEN_HEADER, credential)
     return native(input, { ...init, headers })
   }
 }

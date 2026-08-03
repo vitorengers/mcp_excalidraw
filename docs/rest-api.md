@@ -1,6 +1,6 @@
 # REST API
 
-`src/server.ts`. 65 routes, and the only surface that is workspace-aware — everything the
+`src/server.ts`. 67 routes, and the only surface that is workspace-aware — everything the
 browser does, and everything this board was built with, goes through here.
 
 The table below is the whole set, one row per route. It used to be a summary of thirty, under a
@@ -18,7 +18,8 @@ constructor has nowhere to put a header. `GET /` and `GET /health` are outside t
 a page can load before it has read anything and so that a tool can find out what is on a port.
 `POST /api/pair/request` and `GET /api/pair/status` are outside it for the same shape of reason
 — asking for a credential is what they are, so requiring one would be a circle — and they are
-the only two routes under `/api` that are. See [Pairing a second machine](#pairing-a-second-machine).
+the only two routes under `/api` that are. `GET /api/pair/admission` is deliberately *inside*
+it: its answer is the gate's. See [Pairing a second machine](#pairing-a-second-machine).
 [SECURITY.md](SECURITY.md) is what the secret is for and what it does not do.
 
 ```bash
@@ -182,6 +183,8 @@ id.
 | `GET /api/pair/status` | What became of a `requestId`: `pending`, or `approved` **once**, carrying the device's `credential` — the `id.secret` string `verifyDevice` takes. Every poll after that answers `unknown`, which is also what a `requestId` nobody issued answers |
 | `GET /api/pair/pending` | Every live request, with the code, the name it proposed, the `Host` it reached this board under and the address it arrived from (loopback **caller** only) |
 | `POST /api/pair/approve` | Approve one of them by `requestId` **and** `code`; `addDevice` mints the secret and writes the record, and the answer carries neither (loopback **caller** only) |
+| `POST /api/pair/refuse` | The other answer, by `requestId` alone — no code, because refusing is declining to choose and a refusal that had to be typed could not be a dismissal. The next poll of that `requestId` answers `refused` (loopback **caller** only) |
+| `GET /api/pair/admission` | Whether this caller may drive this board at all. Answers `{ admitted: true }` or nothing, because the answer *is* the gates in front of it: 401 with no credential, 403 under a name this board does not answer for. The page asks it before it decides whether to be a board or the screen that says how to become one |
 
 The gesture is: open the board on the second machine, read the code off it, approve it on the
 machine running the board. The rules that make that a gesture rather than a hole are in
@@ -203,14 +206,19 @@ can set would turn the one property of a request nobody can forge into one every
 remote caller would approve itself by asking politely. A reverse proxy reaches this server *on*
 loopback, so a proxied board is unaffected.
 
-The two open routes are also outside the `Host` pin, and only those two: a device that has not
-been approved yet reaches this board under a name it does not answer for, which is what pairing
-*is*. The pending record carries that name for the operator to recognise rather than pinning it.
-`Origin`, when a browser sends one, still has to name the same authority as `Host`, so a page at
-some other origin cannot put rows on the operator's screen.
+The two open routes are also outside the `Host` pin, and so is the page itself since #504 — `GET
+/` and the static mounts, which are what a device has to be able to load before it can read a
+code off anything. A device that has not been approved yet reaches this board under a name it
+does not answer for, which is what pairing *is*, and refusing it the page meant the gesture had
+no way to start on the machine it is for. Every route that *acts* is still pinned; what is
+outside the pin is the software, and `/health` stays inside it because it names a pid and a
+build. `Origin`, when a browser sends one, still has to name the same authority as `Host`, so a
+page at some other origin cannot put rows on the operator's screen.
 
 `scripts/check-pairing-handshake.mjs` drives the whole exchange, including an approval attempted
-from a genuinely non-loopback socket.
+from a genuinely non-loopback socket. `scripts/check-pairing-surfaces-browser.mjs` drives the two
+screens (#504) from two origins in two browsers, and holds the dialog's granted-capability
+sentence to the routes it names.
 
 ## Snapshots and health
 

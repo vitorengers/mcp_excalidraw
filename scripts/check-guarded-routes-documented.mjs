@@ -220,6 +220,13 @@ const PROBES = new Map([
   ['GET /api/pair/pending', { path: '/api/pair/pending' }],
   ['POST /api/pair/approve',
     { path: '/api/pair/approve', method: 'POST', body: { requestId: 'none', code: '000000' } }],
+  ['POST /api/pair/refuse',
+    { path: '/api/pair/refuse', method: 'POST', body: { requestId: 'none' } }],
+  // Open in the sense this file means, and deliberately: it is behind the token gate and the
+  // origin gate and behind no bind guard, so what it answers *is* those two gates' verdict.
+  // That is what lets the page on a device decide whether to be a board or the screen that says
+  // how to become one (#504).
+  ['GET /api/pair/admission', { path: '/api/pair/admission' }],
 ]);
 
 /**

@@ -70,6 +70,7 @@ import { DevicesDialog } from './components/DevicesDialog'
 import { AgentLimitsHud } from './components/AgentLimitsHud'
 import { RestartButton } from './components/RestartButton'
 import { ClearCanvasButton } from './components/ClearCanvasButton'
+import { PairingApproval } from './components/PairingApproval'
 import type { AgentLimitsReading } from './components/AgentLimitsHud'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
 
@@ -6676,6 +6677,15 @@ function App(): JSX.Element {
     // stylesheet in `index.html` reads, and both have to be readable from *above* the
     // Excalidraw subtree — the rules that hide its menus select down into it from here.
     <div className="app" data-theme={theme} data-chrome={chromeHidden ? 'hidden' : 'visible'}>
+      {/*
+        First in `.app`, and not in `.controls` with the other two things that ask before they
+        act. Nobody pressed anything for this one: a machine somewhere else did, and what it is
+        asking for is a shell on this one. It is a modal over the whole board for that reason,
+        and it is inside `.app` so it reads the theme tokens declared here.
+        See components/PairingApproval.tsx.
+      */}
+      <PairingApproval />
+
       {workspaceDialog === 'add' && (
         <AddWorkspaceDialog
           onClose={() => setWorkspaceDialog(null)}
