@@ -841,6 +841,7 @@ Each pass now records how it ended, and `GET /api/implement` carries it as `queu
 | `reclaimed` | It gave slots back from runs that were over and never said so. `detail` names them and what closed each. | no | no |
 | `blocked` | Every card it could have started declares a dependency that is still open, and nothing has run against it yet. `detail` names who waits on what. | no | no |
 | `deadlocked` | The same, except the dependency already holds a settled run. Nothing will start it a second time, so the wait cannot end. | **yes** | **yes** |
+| `refused` | Every card it could have started was refused by `POST /api/implement` for a reason the next pass will get again — a `403` from the push guard. `detail` names how many, and the first refusal's status and sentence. | **yes** | **yes** |
 | `no-column` | The project has no column by the configured name. | **yes** | **yes** |
 | `no-project` | The workspace is gone, unusable, or has no `githubProject`. | **yes** | **yes** |
 | `unreadable` | The board read failed — `gh` unresolvable, an expired login, an outage. | **yes** | **yes** |
@@ -873,6 +874,24 @@ implement registry answers for, so nothing will start it again and everything bu
 for ever. That is `deadlocked`, it stalls, and the detail names the dependent, the dependency and
 the state of the record standing in the way. Observed on 2026-08-01 (#476): seven cards frozen
 behind #326 for over two hours while the board drew a queue nobody needed to look at.
+
+**A refusal the queue will get again is not an idle column.** `beginImplement` answers `403` when
+the account behind `gh` cannot push to the checkout's `origin`, and that is a decision about a
+login and a remote which no interval alters — so the same oldest card is refused for ever. The
+start loop read only `202` and `409` and every other answer was a `logger.warn` and a
+fall-through, which left `outcome` at its default: the pass reported `nothing-startable`, the one
+reason that means *the column held nothing*, and the board drew a healthy idle queue over a card
+it was refusing every thirty seconds. That is `refused`, it stalls and it is announced. A `409`
+stays out of it deliberately — the slot is held by a run somebody asked for, which is the cap.
+A pass that started something *and* was refused something reports `started`: a queue that is
+draining is not stalled, however many of the rest it was told no about.
+
+**The reasons are a value as well as a type.** `QUEUE_PASS_REASONS` in `implement-queue.ts` is a
+frozen array of every member, built from a record keyed by the union so a member added with no
+entry does not compile. Without it the table above is unassertable — `reasonStalls` and
+`reasonAnnounces` are **deny-lists**, so a reason nobody classified is silently a stall that
+interrupts a reader, correctly or not, and nothing goes red either way.
+`scripts/check-queue-refusal-visible.mjs` iterates it against both predicates.
 
 **The stall that hides inside `cap-full` is a slot nobody is working in.** Implementing has no
 timeout by design, so an agent that wedged — or an interactive run nobody ended (see "Interactive
