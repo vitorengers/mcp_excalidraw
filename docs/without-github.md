@@ -16,8 +16,8 @@ Each row is one thing being absent.
 
 | Level | What is absent | What stops | What keeps working |
 |---|---|---|---|
-| 1 | `gh` is not installed, or not logged in | Every GitHub read and write: the mirror, the issue block's "Create issue", implementing | The canvas, documents, terminals, projects, sync, export |
-| 2 | `gh` works, but no `githubProject` | The mirrored columns and the card moves that follow a run | Everything at level 1, plus the notes column, its `+`, issue blocks and implement runs |
+| 1 | `gh` is not installed, or not logged in | Every GitHub read and write: the mirror, the issue block's "Create issue", implementing | The canvas, documents, terminals, projects, sync, export — and founder actions, which are what a board at this level is *for* |
+| 2 | `gh` works, but no `githubProject` | The mirrored columns and the card moves that follow a run | Everything at level 1, plus the notes column, its `+`, issue blocks, implement runs and the founder column |
 | 3 | `origin` is not on `github.com`, and no `repo` | Creating issues from a block, and interrupted-run recovery | Everything else, including the mirror if a `githubProject` is configured |
 | 4 | The project is not a git repository | Worktree isolation, and interrupted-run recovery | Everything else; the run happens in the project directory itself |
 
@@ -94,6 +94,42 @@ way and returns an empty list, so there is nothing to recover.
 The distinction that matters here is between *git said no* and *git could not be started*. The
 second is a refusal, not a `null`: running an implement agent unisolated in a real checkout
 because the `PATH` was missing a Homebrew prefix is worse than not running it.
+
+## Founder actions are the one feature built the other way round
+
+Everything above degrades: a level takes something away and the rest carries on. Founder actions
+are the exception, because they are the feature that has the *most* to do at level 1 and the least
+to do at level 4. The first founder action this product will ever produce is *"the GitHub CLI is
+not installed"* — and at that moment there is no project to file it into and no working `gh` to
+file it with. A design that needed either would be a design that goes quiet exactly when it is
+needed.
+
+So the whole of it works with no `gh` and no project at all:
+
+- **produced.** The periodic pass reads what `gh` says about itself through the same probe
+  `GET /api/github-status` uses rather than through the retrying command runner, which makes it
+  the only detector that sees a missing or signed-out CLI on a board with no project and no
+  repository. Every other producer needs somebody to have asked for something first.
+- **stored.** [founder-actions.md](founder-actions.md#where-an-action-lives-after-the-run-that-noticed-it-has-ended)
+  is a JSON file per project beside the board's own state. Nothing about it reaches GitHub, and a
+  restart neither re-files a card nor forgets a Done.
+- **drawn.** The founder column is one of the two the canvas owns, and it appears on a board of no
+  sections exactly as the notes column does — the same argument #316 settled for the `+`, applied
+  to the column a blocker about `gh` has to land in.
+- **chatted about.** A chat turn runs a coding agent, which is a different program from `gh`.
+  Whether it can run at all is a question about the agent and its permissions
+  ([founder-actions.md](founder-actions.md#the-chat-may-read-and-answer-and-may-not-write)), and
+  the GitHub writes are taken off it in any case.
+
+Publication is the only half that needs GitHub, and it is the projection rather than the record: a
+board with no `githubProject` spawns no `gh` at all and publishes nothing, a project with no
+founder column creates nothing and warns naming the setting that would fix it, and a `gh` that
+fails leaves the record re-publishable. None of the three costs the action anything, because the
+store is what says it exists.
+
+`scripts/check-founder-producers.mjs` drives the producers and the pass against a stubbed `gh`,
+and `scripts/check-founder-publish.mjs` holds the three degradations, one of its boards naming no
+project at all.
 
 ## What never asks GitHub anything
 
