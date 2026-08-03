@@ -160,6 +160,7 @@ import { allowedAuthorities, verifyOrigin, verifySameAuthority } from './core/or
 import { callerIsLocal } from './core/caller-gate.js';
 import { createPairingDesk, isLoopbackCaller } from './core/pairing.js';
 import { addDevice, deviceRegistryPath } from './core/device-registry.js';
+import { peerProxy } from './core/peer-proxy.js';
 import {
   authRequired,
   consumeTokenHandover,
@@ -602,6 +603,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 app.use(express.json({ limit: '10mb' }));
+
+app.use(peerProxy);
 
 // Serve static files from the build directory
 const staticDir = path.join(__dirname, '../dist');
