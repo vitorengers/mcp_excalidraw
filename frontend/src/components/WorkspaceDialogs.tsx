@@ -195,6 +195,7 @@ interface ConfigDraft {
   projectCardLimit: string
   projectTodoColumn: string
   projectInProgressColumn: string
+  projectFounderColumn: string
   issue: AgentDraft
   implement: AgentDraft
 }
@@ -295,6 +296,7 @@ export const WorkspaceConfigDialog: React.FC<{
           projectCardLimit: number(config.projectCardLimit),
           projectTodoColumn: text(config.projectTodoColumn),
           projectInProgressColumn: text(config.projectInProgressColumn),
+          projectFounderColumn: text(config.projectFounderColumn),
           issue: agentDraft(agents.issue),
           implement: agentDraft(agents.implement)
         })
@@ -329,6 +331,7 @@ export const WorkspaceConfigDialog: React.FC<{
           projectCardLimit: draft.projectCardLimit.trim() && Number.isInteger(cards) && cards > 0 ? cards : null,
           projectTodoColumn: orNull(draft.projectTodoColumn),
           projectInProgressColumn: orNull(draft.projectInProgressColumn),
+          projectFounderColumn: orNull(draft.projectFounderColumn),
           agents: { issue: agentPatch(draft.issue), implement: agentPatch(draft.implement) }
         }
       })
@@ -510,6 +513,11 @@ export const WorkspaceConfigDialog: React.FC<{
                     where an implementation does. Blank means the option GitHub names itself. */}
                 {field('Todo column', 'projectTodoColumn', 'Todo')}
                 {field('In-progress column', 'projectInProgressColumn', 'In Progress')}
+                {/* And the one it does not start work from. Blank is this tool's own
+                    suggestion rather than GitHub's, since no project it creates has one; a
+                    save naming the same column as either row above is refused by the server,
+                    which is what keeps a founder action out of the queue's reach. */}
+                {field('Founder column', 'projectFounderColumn', 'Founder Actions')}
 
                 {/*
                   A project retunes the agents the board already allows; blank means the

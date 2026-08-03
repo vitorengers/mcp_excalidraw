@@ -225,6 +225,27 @@ There is no equivalent for `githubProject` and there will not be. A project boar
 account, nothing on disk implies which one, and `readProjectBoard` runs `gh` against whatever it
 is given.
 
+Three keys name columns on that project, and each is the name of a column rather than a
+description of one. `projectTodoColumn` is where a finished research run puts the issue it
+opened, and it is the column the implement queue drains; `projectInProgressColumn` is where a
+run that started moves the card to. Both are unset by default and fall back to `Todo` and
+`In Progress`, which is what GitHub calls those columns on a project it created.
+
+`projectFounderColumn` is the third, and it is the one nothing is started from: the column the
+work only a person can do is collected in ([founder-actions.md](founder-actions.md)). Unset it
+is `Founder Actions` — this tool's own suggestion rather than GitHub's, because no project
+GitHub creates has such a column. All three are matched trimmed and without regard to case, and
+a column a project does not have gets no move rather than a guess.
+
+**A config that points the founder column at either of the other two is refused**, as
+configured or as defaulted, and the refusal names both keys. This is not tidiness. The queue
+drains exactly one column, resolved by name at dispatch time, so a founder column with a name
+of its own is invisible to the start loop *by construction* — and that construction holds only
+while the two names differ. A project that named them the same would hand work no agent can do
+to the loop that starts agents, which is the one route by which that could happen; it is closed
+by name, before the board reads the project. The settings dialog refuses the save, and a config
+edited by hand loads as a project marked broken saying which two keys disagree.
+
 A config field pointing outside its own project is **ignored, not honoured** — the workspace is
 still returned, with `error` explaining what was dropped. A project whose config is missing or
 malformed is also still listed, carrying its error, because one broken project should not hide
@@ -357,7 +378,7 @@ doing nothing.
 
 The dialog opens on **Name, Issue language, Docs folder, GitHub repo and GitHub project**, each
 marked *optional*. Everything else — Board file, Library file, Project field, Cards per column,
-the two column names, and both agent fieldsets — is behind an `Advanced` control.
+the three column names, and both agent fieldsets — is behind an `Advanced` control.
 
 It used to open on all of them: eleven free-text rows and two fieldsets of four, presented the
 moment a folder is picked, with nothing saying any of it could be left alone. That is a
