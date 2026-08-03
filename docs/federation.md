@@ -211,6 +211,20 @@ while a peer is renamed or forgotten never finds it missing or half-written.
 The milestone that files them is *One tab strip, two machines*, and the design decisions above
 are each a done-when bullet on one of its issues rather than a preference stated here.
 
+The far end of the chain has landed too: the tab strip has the slot to draw a state in.
+`WorkspaceSummary.status` in `frontend/src/components/WorkspaceTabs.tsx` is what a tab reads,
+and nothing supplies it yet — a project without it draws the row it always drew. See
+[canvas-frontend.md](canvas-frontend.md) for how a liveness state and a config error sit on one
+tab without displacing each other.
+
+**The union is written twice, and that is a constraint rather than a choice.**
+`WorkspaceStatusState` there and `PeerLivenessState` in `src/core/peer-liveness.ts` are the same
+four words. The frontend cannot import the second: that module opens sockets, so it imports
+`net`, and the frontend's own `tsconfig` compiles everything it can reach. Two copies of four
+words is two chances for one of them to learn a fifth, so
+`scripts/check-workspace-tab-status-browser.mjs` reads both files and fails if they stop
+agreeing.
+
 ## Related
 
 - [SECURITY.md](SECURITY.md) — the trust model, the token, the gates, and the pairing gesture
