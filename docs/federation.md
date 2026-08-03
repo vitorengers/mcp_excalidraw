@@ -176,15 +176,18 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-The first five of them have landed; the rest are named here so the reader of a pull request can
-see where each decision lands.
+All but the last of them have landed; it is named here so the reader of a pull request can see
+where each decision lands.
 
 ```
 src/core/peer-liveness.ts          the four answers above, and which refusal you are looking at
 src/core/remote-workspace-id.ts    what this board calls a peer's project, and the inverse
 src/core/remote-workspace-view.ts  which fields of a project cross, and what replaces the path
 src/core/peer-registry.ts          what this board keeps about a board that approved it
+src/core/peer-workspaces.ts        one peer's projects as tabs, and what is left when it sleeps
+src/core/reply-ledger.ts           which machine a reply belongs to, when it names only a request
 src/core/peer-client.ts            one board's HTTP call to another, and what each failure means
+src/core/peer-request-rewrite.ts   what a request says by the time it belongs to the peer
 src/core/peer-proxy.ts             the seam that sends a request to the machine that owns the board
 ```
 
@@ -205,15 +208,43 @@ tab's tooltip, since a peer's project has none here: the project's own name and 
 board calls the machine by, which is enough to tell two projects of the same name apart and is
 this board's own word rather than anything the owner sent.
 
+The tabs module is the three above composed into one answer, and it is where *a machine that
+stops answering is not a broken project* stops being a paragraph. It asks one peer for its
+projects, names each one through the id module, reduces each record through the view module — on
+the reading end too, because this board does not get to assume the peer runs the same version of
+itself — and attaches one liveness state. A peer that is not `online` contributes **zero projects
+and one state**: there is no `error` field on its answer for a fact about a network to land in,
+and the whole answer is held to a budget composed from the liveness ones, so a laptop in a bag
+does not hold the strip. It touches no per-id store, which is a decision rather than an accident:
+an unknown id yields an *empty* store by design, so a stray local read would not fail — it would
+manufacture a plausible blank board for a project another machine owns. It has no caller yet
+either, and how a peer is asked is a defaulted argument nothing passes — defaulted to the client
+below, so that the header discipline is decided in one file rather than in each of the modules
+that eventually calls a peer.
+
 The registry is a module with no caller: it owns `peers.json` beside the state directory's other
 files, and nothing yet adds a row to it or presents what a row holds. What it settles is the
 asymmetry above — the record here keeps the secret rather than a hash, so the file is owner-only
 and every update swaps it whole rather than rewriting it in place, and a reader looking at it
 while a peer is renamed or forgotten never finds it missing or half-written.
 
-The client is the thing that performs the call, and it too has no route and no caller yet. Two
-decisions give it its shape. **The header discipline is the whole of its security**: the outgoing
-request is built by naming the headers that cross, so this board's own token stops here in both
+The reply ledger is the answer to a question the section above does not raise and the wire does:
+a reply that names only the request it answers. Five `POST /api/export/image/result` sites and two
+`POST /api/viewport/result` sites in `frontend/src/App.tsx` carry a `requestId` and no workspace,
+which is exactly right on one machine — the server that asked is the server that is answered — and
+unroutable once the request came down a link. The ledger is what a forwarder consults instead of
+the parameter that is not there, and it is a separate module from both transports so that the HTTP
+forwarder and the socket forwarder cannot each keep their own and disagree. Three properties make
+it something a forwarder can rely on: it is keyed by the request id, because that is the only
+thing the reply carries and everything else is a key two live requests can share; resolving
+**consumes** the id, so a duplicate post is not delivered a second time; and an entry expires no
+later than the request it describes, on that request's own budget, so a peer that sleeps mid-render
+leaves nothing behind. It has no caller either.
+
+The client is the thing that performs the call. It has no route of its own, and the tabs module
+above is the first thing to reach it. Two decisions give it its shape. **The header discipline is
+the whole of its security**: the outgoing request is built by naming the headers that cross, so
+this board's own token stops here in both
 of the spellings a caller can offer it in, exactly one credential reaches the peer, and
 `x-client-id` arrives byte-identical — a substituted one would get the reader its own writes
 echoed back. **And a failure comes back as a value rather than as an exception**, carrying one of
@@ -222,6 +253,20 @@ and the two 403s are five different repairs, and the budget a connection is give
 stated separately from the budget the answer is given to arrive, because a machine that is asleep
 and a board that is answering slowly are not the same thing. A redirect is not followed and is
 reported as its own outcome, since a peer answering 3xx is not the board this device paired with.
+
+The rewriter is the decision about what that call *says*, and it is a pure function with no
+`fetch` in it and no caller yet either. Three things give it its shape. **The board is named in
+exactly one place on the way out**, for the same reason the credential is: this server reads a
+board off a query parameter, off a body field and off a header, so all three spellings come off
+the request and the peer's own id goes back on once — which makes one request expressed three
+ways one outbound request byte for byte, rather than three that agree about the board and differ
+everywhere else. **What it built is read back by the reader that will read it**, `workspaceIdFrom`
+itself rather than a restatement of it, because a spelling the peer dislikes is not refused there,
+it is answered from the shared `default` board. **And a request that belongs to the machine it was
+asked of is refused rather than rewritten**, each with the reason quoted: a restart ends that
+process and every agent it hosts whichever board asked, the directory picker can only read the
+disk its own process reaches, and the reply half of a render carries an id and no board at all. A
+rewriter that will rewrite anything handed to it is one bug away from forwarding each of those.
 
 The milestone that files them is *One tab strip, two machines*, and the design decisions above
 are each a done-when bullet on one of its issues rather than a preference stated here.
