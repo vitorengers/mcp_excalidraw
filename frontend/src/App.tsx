@@ -1772,9 +1772,11 @@ function App(): JSX.Element {
         created: Date.now()
       })))
 
-      // The file store is not per-board, so this request carries no workspace — the same
-      // id means the same image everywhere, which is why the ids are generated here.
-      const stored = await fetch('/api/files', {
+      // The *store* is not per-board — the same id means the same image everywhere, which is
+      // why the ids are generated here — but the board still has to be named, because since
+      // #526 it is what decides who is told over the socket. Unnamed, these bytes are
+      // announced to whatever board is called `default` and to no other (#526).
+      const stored = await fetch(apiUrl('/api/files'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ files: uploads })
@@ -6378,10 +6380,14 @@ function App(): JSX.Element {
 
     for (const batch of batches) {
       try {
-        // No workspace on the path: the file store is content-addressed and process-wide, so
-        // the same id is the same image on every board — which is the same reasoning
-        // `attachIssueImages` posts under.
-        const response = await fetch('/api/files', {
+        // The file store is content-addressed and process-wide, so the same id is the same
+        // image on every board and this path decides nothing about where the bytes are kept.
+        // It decides who is *told*: `files_added` is broadcast to the board this request
+        // names (#526), and the window next door showing this same board is exactly who has
+        // to hear it. `sceneWorkspaceRef`, and the board the elements below are synced to,
+        // because bytes announced to one board and named by elements stored on another are
+        // the hole in the board this upload exists to close (#343).
+        const response = await fetch(apiUrlOn('/api/files', sceneWorkspaceRef.current), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ files: batch })
