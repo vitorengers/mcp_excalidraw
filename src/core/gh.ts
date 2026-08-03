@@ -73,8 +73,13 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * Literal commands rather than descriptions. The reader is looking at a canvas that has just
  * said the mirror could not be read; a sentence they can copy is the difference between that
  * and a search.
+ *
+ * **Exported because a producer composes founder-facing steps out of these strings**, and the
+ * alternative to naming them is restating them. Two copies of one sentence is how two authors
+ * of one remedy start to drift, and the drift is invisible until a reader is following the
+ * older half (#534).
  */
-const REMEDY = {
+export const REMEDY = {
   install: 'Install the GitHub CLI, or set EXCALIDRAW_GH_COMMAND (EXCALIDRAW_GH_COMMAND_WSL for '
     + 'a project inside a distro) to where it lives.',
   login: 'Run "gh auth login".',
@@ -84,9 +89,44 @@ const REMEDY = {
     + 'holds.',
   target: 'Check the owner, repository or project number in the URL, and that the account this '
     + 'gh is logged in as can see it.',
+  /**
+   * Nothing is misconfigured and there is no command to run — the only move is to stop asking
+   * for a while. Said out loud because the failure this answers arrives as an HTTP 403, which
+   * for years read as "you cannot see that": a founder who has hit a rate limit was being sent
+   * to re-check a URL that was perfectly correct.
+   */
+  wait: 'Wait for GitHub to let this account through again — a minute or two for a secondary '
+    + 'limit, up to an hour for the hourly one — and then try the same thing again. Nothing '
+    + 'here is misconfigured.',
+  /**
+   * Payment, not permission, which is why it names a page rather than the URL: no wait clears
+   * an unpaid account and no re-check of the owner or the number is going to find anything
+   * wrong with them.
+   */
+  billing: 'Check this account\'s billing at https://github.com/settings/billing and top up or '
+    + 're-enable it: GitHub refused this over payment rather than over permission, so the URL '
+    + 'and the login are both fine.',
   /** Nothing for a person to do: the caller handles it and there is no second attempt to make. */
   none: '',
 } as const;
+
+/**
+ * How many seconds GitHub asked to be left alone for, when it said.
+ *
+ * "If the `retry-after` response header is present, you should not retry your request until
+ * after that many seconds has elapsed" — the REST rate-limit documentation. It is a header
+ * rather than part of the message, so it is there for some rate limits and absent for others,
+ * and a remedy that invented a number for the second kind would be worse than one that stays
+ * quiet. Nothing is appended when there is nothing to append.
+ *
+ * @see https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+ */
+function retryAfter(said: string): string {
+  const match = /retry[-\s]?after:?\s*(\d+)/i.exec(said);
+  if (!match) return '';
+  const seconds = Number(match[1]);
+  return ` GitHub asked for ${seconds} second${seconds === 1 ? '' : 's'}.`;
+}
 
 /**
  * What a failing `gh` said, and whether asking again could change the answer.
@@ -97,34 +137,66 @@ const REMEDY = {
  *
  * **Order matters, most specific first.** A missing scope is also an authentication failure
  * and may also arrive as an HTTP 403, and only the first of those three names the command
- * that fixes it.
+ * that fixes it. A rate limit and a billing refusal wear that same 403, which is why they sit
+ * above the row that reads one as a URL nobody can resolve (#534).
+ *
+ * **A class is not the same question as a retry.** Most of these can never succeed, but the
+ * rate limit is a founder-blocking condition that a wait really does clear, so it is named
+ * *and* retried: `terminal` is per row rather than a property of being in this table at all.
  *
  * The last rule is the one that keeps this honest: text nothing here recognises is *not*
  * terminal. Matching another tool's prose is matching something that changes between
  * releases and between locales, so the fallback has to be the old behaviour — retry — rather
  * than a refusal invented from a pattern that stopped matching.
  */
-const TERMINAL: ReadonlyArray<{ pattern: RegExp; remedy: string }> = [
+const CLASSES: ReadonlyArray<{
+  pattern: RegExp;
+  remedy: string;
+  /** Whether asking again could ever change the answer. */
+  terminal: boolean;
+  /** Anything the failure itself can add to the remedy, appended with its own leading space. */
+  detail?: (said: string) => string;
+}> = [
   // The spawn never happened: no such binary, or one that cannot be executed. `command not
   // found` is the same fact through a WSL workspace, where the spawn that succeeds is
   // `wsl.exe` and the CLI is missing one layer further in — the shape #252 was, and the one
   // shape of "gh is absent" that can never arrive as an errno.
-  { pattern: /\b(ENOENT|EACCES|ENOTDIR)\b|command not found/i, remedy: REMEDY.install },
+  { pattern: /\b(ENOENT|EACCES|ENOTDIR)\b|command not found/i, remedy: REMEDY.install, terminal: true },
   // gh's own pre-flight ("missing required scopes"), and GitHub's answer to a query the token
   // may not make. Both are one `gh auth refresh` away.
   {
     pattern: /missing required scope|not been granted the required scope|requires one of the following scopes|auth refresh -s/i,
     remedy: REMEDY.scope,
+    terminal: true,
   },
-  { pattern: /bad credentials|\bHTTP 401\b/i, remedy: REMEDY.credential },
-  { pattern: /gh auth login|not logged in|no default host configured/i, remedy: REMEDY.login },
-  { pattern: /could not resolve to an?\b|\bHTTP 40[34]\b/i, remedy: REMEDY.target },
+  { pattern: /bad credentials|\bHTTP 401\b/i, remedy: REMEDY.credential, terminal: true },
+  { pattern: /gh auth login|not logged in|no default host configured/i, remedy: REMEDY.login, terminal: true },
+  // Money, above the row that would read the same 403 as a wrong URL. `quota[ _]exceeded`
+  // rather than a space alone because the API answers with the error code, underscore and all,
+  // where the prose says "quota exceeded".
+  { pattern: /\bHTTP 402\b|payment required|billing|quota[ _]exceeded/i, remedy: REMEDY.billing, terminal: true },
+  // Rate limiting, above that row for the same reason and *not* terminal. GitHub sends both
+  // primary and secondary limits as a 403 or a 429, so the status alone cannot tell this from
+  // the row below; the prose can. `\bHTTP 429\b` is in the pattern because the status is the
+  // only thing some of them say — "Too Many Requests" and nothing else.
+  {
+    pattern: /rate limit|secondary rate|abuse detection|retry-after|\bHTTP 429\b/i,
+    remedy: REMEDY.wait,
+    terminal: false,
+    detail: retryAfter,
+  },
+  { pattern: /could not resolve to an?\b|\bHTTP 40[34]\b/i, remedy: REMEDY.target, terminal: true },
   // A field this `gh` does not know. Deterministic, and `fetchIssue` answers it by asking for
   // less rather than by asking again.
-  { pattern: /unknown json field/i, remedy: REMEDY.none },
+  { pattern: /unknown json field/i, remedy: REMEDY.none, terminal: true },
 ];
 
-/** Whether a failure can ever succeed on another attempt, and what to do when it cannot. */
+/**
+ * Whether a failure can ever succeed on another attempt, and what to go and do about it.
+ *
+ * The two are independent. A rate limit names something to do — wait — and is still worth
+ * asking again; only a failure nothing here recognises has neither.
+ */
 export interface GhFailure {
   terminal: boolean;
   remedy: string;
@@ -138,8 +210,8 @@ export interface GhFailure {
  * with one caller is how that stays impossible.
  */
 export function classifyGhFailure(said: string): GhFailure {
-  for (const { pattern, remedy } of TERMINAL) {
-    if (pattern.test(said)) return { terminal: true, remedy };
+  for (const { pattern, remedy, terminal, detail } of CLASSES) {
+    if (pattern.test(said)) return { terminal, remedy: `${remedy}${detail?.(said) ?? ''}` };
   }
   return { terminal: false, remedy: '' };
 }
