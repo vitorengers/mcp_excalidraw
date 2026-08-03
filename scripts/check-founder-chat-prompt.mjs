@@ -30,7 +30,8 @@
  * Tier: fast
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -406,6 +407,40 @@ check('and nothing here spawns anything',
 
 for (const name of ['founderChatPrompt', 'parseFounderChatAnswer']) {
   check(`it exports ${name}`, new RegExp(`export function ${name}\\b`).test(source));
+}
+
+/**
+ * And the graph is compiled rather than read.
+ *
+ * A grep over the import lines says what the file spells; it cannot say what the frontend's own
+ * configuration makes of the modules behind them, and the panel that carries this chat runs in
+ * the browser. The probe `extends` `frontend/tsconfig.json` rather than restating its flags —
+ * `check-founder-blockers.mjs`'s pattern, for its reason: a probe with hand-written options
+ * would keep passing after somebody loosened the file that actually runs.
+ */
+const scratch = mkdtempSync(join(repoRoot, 'node_modules', '.founder-chat-'));
+try {
+  writeFileSync(join(scratch, 'probe.ts'),
+                "import { parseFounderChatAnswer } from '../../src/core/founder-chat.js'\n"
+                + "export const read = parseFounderChatAnswer('', "
+                + "{ key: 'w:gh-login', kind: 'gh-login', "
+                + "fields: { title: '', what: '', why: '', steps: [], confirm: '' } }).reply\n", 'utf8');
+  writeFileSync(join(scratch, 'tsconfig.json'), JSON.stringify({
+    extends: join(repoRoot, 'frontend', 'tsconfig.json').replace(/\\/g, '/'),
+    include: [],
+    files: ['./probe.ts'],
+  }, null, 2), 'utf8');
+
+  const run = spawnSync(process.execPath,
+                        [join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
+                         '--noEmit', '-p', scratch],
+                        { cwd: repoRoot, encoding: 'utf8' });
+  const said = `${run.stdout ?? ''}${run.stderr ?? ''}`.trim();
+  check('the frontend\'s own configuration can compile a file that names it',
+        run.status === 0 && said === '',
+        said.split('\n').slice(0, 10).join('\n        ') || `exit ${run.status}`);
+} finally {
+  try { rmSync(scratch, { recursive: true, force: true }); } catch { /* a Windows lock */ }
 }
 
 if (failures) { console.error(`\n${failures} case(s) failed`); process.exit(1); }
