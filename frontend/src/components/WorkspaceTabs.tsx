@@ -9,8 +9,13 @@ import './WorkspaceTabs.css'
  * never replied — a laptop with its lid shut does not refuse a connection, it hangs — and
  * `refused` is one that replied and would not have us.
  *
- * Declared here, closed, so that the module which produces these states and the route which
- * carries them are naming a type rather than each inventing one.
+ * The same four words as `PeerLivenessState` in `src/core/peer-liveness.ts`, which is what
+ * decides them, and written out again here because that module opens sockets — it imports
+ * `net`, and the frontend's `tsconfig` compiles everything it can reach, so importing it for
+ * the type alone would drag a Node built-in into the browser build. Two copies of four words
+ * is two chances for one of them to learn a fifth, and nothing about a fifth word would fail
+ * to compile on either side, so `scripts/check-workspace-tab-status-browser.mjs` reads both
+ * declarations and fails if they stop agreeing.
  */
 export type WorkspaceStatusState = 'checking' | 'online' | 'unreachable' | 'refused'
 

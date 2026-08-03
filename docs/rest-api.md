@@ -87,9 +87,10 @@ same thing: a caller that got past the gate.
 
 An observation on the canvas becomes a GitHub issue — see [issue-block.md](issue-block.md).
 Every route here that shells out to `gh` does so holding the user's credentials, and each of
-those is marked below. The two that are not marked read this process's own memory and answer
-wherever the server is bound; see [SECURITY.md](SECURITY.md#where-it-listens) for what that is
-worth to a caller on the network.
+those is marked as needing the server bound to loopback. The two that only read this process's
+own memory are marked the other way — they answer you on an interface-bound board and refuse a
+caller on the network — which is where #508/#518 put them; see
+[SECURITY.md](SECURITY.md#where-it-listens) for what the difference is worth.
 
 | Route | What it does |
 |---|---|
@@ -97,11 +98,11 @@ worth to a caller on the network.
 | `POST /api/issue-block/:id/adopt` | Attach an issue that already exists, without creating one (loopback caller only) |
 | `DELETE /api/issue-block/:id` | Forget the run, so the block can be tried again (loopback only) |
 | `GET /api/issue-block/:id/issue` | The issue behind a block, read live rather than copied onto it (loopback only) |
-| `GET /api/issue-block/:id/run` | What that block's research run has spent, polled while it is going. Reads memory, so it is the one route here with no `gh` behind it — and therefore one of the two here with no bind guard on it either |
+| `GET /api/issue-block/:id/run` | What that block's research run has spent, polled while it is going. Reads memory, so it is the one route here with no `gh` behind it — and therefore one of the two here guarded on the caller rather than on the bind (loopback caller only) |
 | `GET /api/issue` | The issue behind a *mirrored card*, which has no element id, plus what is known about implementing it (loopback only) |
 | `POST /api/issue/comment` | Add a comment — the one way to answer an issue agent's open questions without leaving the board (loopback only) |
 | `POST /api/issue/recreate` | Research the issue again and rewrite it in place, while its card is still in Todo (loopback caller only) |
-| `GET /api/issue/recreate` | What that run has done so far, with no `gh` behind it, and no bind guard either |
+| `GET /api/issue/recreate` | What that run has done so far, with no `gh` behind it, and guarded on the caller rather than on the bind (loopback caller only) |
 
 ## Implementations
 
@@ -112,9 +113,9 @@ The implement agent, its worktree and the queue that feeds it — see
 |---|---|
 | `POST /api/issue-block/:id/implement` | Implement the issue on a block (loopback only) |
 | `POST /api/implement` | Implement an issue by URL, for a mirrored card the server has never seen; `resume: true` continues an interrupted attempt (loopback only) |
-| `DELETE /api/issue-block/:id/implement` | Reset a block's record, refused while its run is alive. No bind guard |
-| `GET /api/implement` | One record by `?url=`, or every record for the workspace, with the concurrency cap and the queue state. No bind guard — the `queue` half is dropped off loopback, the records are not |
-| `DELETE /api/implement` | The same reset, by URL. No bind guard |
+| `DELETE /api/issue-block/:id/implement` | Reset a block's record, refused while its run is alive, and refused before the element is looked at so the answer says nothing about which ids this board holds (loopback caller only) |
+| `GET /api/implement` | One record by `?url=`, or every record for the workspace, with the concurrency cap and the queue state (loopback caller only). The `queue` half is additionally dropped while the server is bound off loopback, because the toggle it draws turns on a route that is guarded on the bind |
+| `DELETE /api/implement` | The same reset, by URL (loopback caller only) |
 | `POST /api/implement/queue` | Turn this workspace's queue on or off (loopback only, and off unless implementing is enabled) |
 
 ## Project board mirror

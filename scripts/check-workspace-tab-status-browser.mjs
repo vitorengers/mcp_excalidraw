@@ -60,7 +60,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -627,6 +627,36 @@ try {
   await send('Runtime.enable');
   await send('DOM.enable');
   await send('Accessibility.enable');
+
+  // ─── 0 ──────────────────────────────────────────────────────
+
+  console.log('\n0. the four states are four states, in both places that name them');
+
+  /**
+   * The union is written twice, and neither copy can import the other.
+   *
+   * `src/core/peer-liveness.ts` is what decides these states, and it opens sockets — it imports
+   * `net`. The frontend's `tsconfig` compiles everything it can reach, so a component that
+   * imported that module for its type alone would drag a Node built-in into the browser build.
+   * Two copies of four words is two chances for one of them to learn a fifth, and nothing about
+   * a fifth word would fail to compile on either side.
+   */
+  const unionIn = (path, name) => {
+    const source = readFileSync(join(repoRoot, path), 'utf8');
+    // One line, deliberately: a union that has grown past a line has grown past four words,
+    // and reading on would quietly collect whatever the next declaration in the file says.
+    const declared = new RegExp(`type ${name}\\s*=([^\\n;]*)`).exec(source);
+    return declared
+      ? [...declared[1].matchAll(/'([a-z]+)'/g)].map((found) => found[1]).sort()
+      : null;
+  };
+  const onScreenSide = unionIn('frontend/src/components/WorkspaceTabs.tsx', 'WorkspaceStatusState');
+  const serverSide = unionIn('src/core/peer-liveness.ts', 'PeerLivenessState');
+  check('the strip declares the four states', JSON.stringify(onScreenSide) === JSON.stringify(STATES.slice().sort()),
+    JSON.stringify(onScreenSide));
+  check('and the module that decides them declares the same four',
+    serverSide !== null && JSON.stringify(serverSide) === JSON.stringify(onScreenSide),
+    `${JSON.stringify(serverSide)} vs ${JSON.stringify(onScreenSide)}`);
 
   // ─── 1 ──────────────────────────────────────────────────────
 
