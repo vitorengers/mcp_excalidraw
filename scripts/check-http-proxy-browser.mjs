@@ -419,7 +419,17 @@ try {
   console.log('0. src/server.ts learns a name, and the reply halves are named through one list');
 
   const serverSource = readFileSync(join(repoRoot, 'src', 'server.ts'), 'utf8');
-  const mentions = serverSource.split('\n')
+  // Comments blanked first, and for the reason `check-peer-client.mjs` blanks them: what this is
+  // about is how much *code* the server learns — an import and one `app.use` — and a comment
+  // beside that `app.use` explaining what runs after it, and why, is the file doing the right
+  // thing. A rule that read the explanation as the breach would make writing it down the failure
+  // (#530). Blanked in place rather than deleted, so the line numbers below still point at the
+  // file; the route case underneath reads the raw source, because a comment cannot register one.
+  const blanked = (block) => block.replace(/[^\n]/g, ' ');
+  const serverCode = serverSource
+    .replace(/\/\*[\s\S]*?\*\//g, blanked)
+    .replace(/^[^\n]*\/\/[^\n]*$/gm, (line) => (/^\s*\/\//.test(line) ? blanked(line) : line));
+  const mentions = serverCode.split('\n')
     .map((line, at) => ({ line: line.trim(), at: at + 1 }))
     .filter(({ line }) => /peer-proxy|peerProxy/.test(line));
   check('src/server.ts names the forwarder on exactly two lines', mentions.length === 2,
