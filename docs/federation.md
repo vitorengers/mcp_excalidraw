@@ -176,14 +176,15 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-The first six of them have landed; the rest are named here so the reader of a pull request can
-see where each decision lands.
+All but the last of them have landed; it is named here so the reader of a pull request can see
+where each decision lands.
 
 ```
 src/core/peer-liveness.ts          the four answers above, and which refusal you are looking at
 src/core/remote-workspace-id.ts    what this board calls a peer's project, and the inverse
 src/core/remote-workspace-view.ts  which fields of a project cross, and what replaces the path
 src/core/peer-registry.ts          what this board keeps about a board that approved it
+src/core/peer-workspaces.ts        one peer's projects as tabs, and what is left when it sleeps
 src/core/reply-ledger.ts           which machine a reply belongs to, when it names only a request
 src/core/peer-client.ts            one board's HTTP call to another, and what each failure means
 src/core/peer-request-rewrite.ts   what a request says by the time it belongs to the peer
@@ -207,6 +208,20 @@ tab's tooltip, since a peer's project has none here: the project's own name and 
 board calls the machine by, which is enough to tell two projects of the same name apart and is
 this board's own word rather than anything the owner sent.
 
+The tabs module is the three above composed into one answer, and it is where *a machine that
+stops answering is not a broken project* stops being a paragraph. It asks one peer for its
+projects, names each one through the id module, reduces each record through the view module — on
+the reading end too, because this board does not get to assume the peer runs the same version of
+itself — and attaches one liveness state. A peer that is not `online` contributes **zero projects
+and one state**: there is no `error` field on its answer for a fact about a network to land in,
+and the whole answer is held to a budget composed from the liveness ones, so a laptop in a bag
+does not hold the strip. It touches no per-id store, which is a decision rather than an accident:
+an unknown id yields an *empty* store by design, so a stray local read would not fail — it would
+manufacture a plausible blank board for a project another machine owns. It has no caller yet
+either, and how a peer is asked is a defaulted argument nothing passes — defaulted to the client
+below, so that the header discipline is decided in one file rather than in each of the modules
+that eventually calls a peer.
+
 The registry is a module with no caller: it owns `peers.json` beside the state directory's other
 files, and nothing yet adds a row to it or presents what a row holds. What it settles is the
 asymmetry above — the record here keeps the secret rather than a hash, so the file is owner-only
@@ -226,9 +241,10 @@ thing the reply carries and everything else is a key two live requests can share
 later than the request it describes, on that request's own budget, so a peer that sleeps mid-render
 leaves nothing behind. It has no caller either.
 
-The client is the thing that performs the call, and it too has no route and no caller yet. Two
-decisions give it its shape. **The header discipline is the whole of its security**: the outgoing
-request is built by naming the headers that cross, so this board's own token stops here in both
+The client is the thing that performs the call. It has no route of its own, and the tabs module
+above is the first thing to reach it. Two decisions give it its shape. **The header discipline is
+the whole of its security**: the outgoing request is built by naming the headers that cross, so
+this board's own token stops here in both
 of the spellings a caller can offer it in, exactly one credential reaches the peer, and
 `x-client-id` arrives byte-identical — a substituted one would get the reader its own writes
 echoed back. **And a failure comes back as a value rather than as an exception**, carrying one of
