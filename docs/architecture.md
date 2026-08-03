@@ -80,6 +80,9 @@ Somebody presses it and then presses **Implement / Fix**. What happens, in order
    before any of them: the origin gate (`src/core/origin-gate.ts`), and the board's token,
    which the page took out of its own address bar on load and now sends as a header
    ([SECURITY.md](SECURITY.md)) — without it the answer is `401` and nothing below happens.
+   Two routes are outside both gates and only two: `POST /api/pair/request` and
+   `GET /api/pair/status`, where a device with no credential asks for one
+   (`src/core/pairing.ts`, approved into `src/core/device-registry.ts`).
    Then both entrances to a run pass `implementingRefused`: an agent command has to be
    configured, and the server has to be bound to loopback. Off loopback this answers `403` —
    an agent that writes to a repository is not something a machine on the network gets to

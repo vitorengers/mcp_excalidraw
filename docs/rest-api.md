@@ -1,6 +1,6 @@
 # REST API
 
-`src/server.ts`. 58 routes, and the only surface that is workspace-aware — everything the
+`src/server.ts`. 62 routes, and the only surface that is workspace-aware — everything the
 browser does, and everything this board was built with, goes through here.
 
 The table below is the whole set, one row per route. It used to be a summary of thirty, under a
@@ -16,6 +16,9 @@ only ([configuration.md](configuration.md)), and a caller sends it either as the
 `X-VibeMaxxing-Token` header or as `?token=` — the second because a browser's `WebSocket`
 constructor has nowhere to put a header. `GET /` and `GET /health` are outside the gate, so that
 a page can load before it has read anything and so that a tool can find out what is on a port.
+`POST /api/pair/request` and `GET /api/pair/status` are outside it for the same shape of reason
+— asking for a credential is what they are, so requiring one would be a circle — and they are
+the only two routes under `/api` that are. See [Pairing a second machine](#pairing-a-second-machine).
 [SECURITY.md](SECURITY.md) is what the secret is for and what it does not do.
 
 ```bash
@@ -31,16 +34,16 @@ The canvas store, one `Map` per workspace — see [element-store.md](element-sto
 
 | Route | What it does |
 |---|---|
-| `GET /api/elements` | Every element in this workspace (loopback only) |
-| `POST /api/elements` | Create one (loopback only) |
-| `GET /api/elements/:id` | Read one (loopback only) |
-| `PUT /api/elements/:id` | Update one (loopback only) |
-| `DELETE /api/elements/:id` | Delete one (loopback only) |
-| `DELETE /api/elements/clear` | Empty the store, having first copied it beside the board's saved state — the path is `backup` in the response, or null if there was nothing to copy. Declared before `:id`, so `clear` is never read as an element id (loopback only) |
-| `GET /api/elements/search` | Filter by type, bounding box and arbitrary fields (loopback only — with no query at all it is `GET /api/elements` by another name) |
-| `POST /api/elements/batch` | Create many, ids preserved (loopback only) |
-| `POST /api/elements/from-mermaid` | Hand a Mermaid diagram to the browser to render (loopback only) |
-| `POST /api/elements/sync` | The browser's merge back into the store — [sync-reconciliation.md](sync-reconciliation.md) (loopback only) |
+| `GET /api/elements` | Every element in this workspace (loopback caller only) |
+| `POST /api/elements` | Create one (loopback caller only) |
+| `GET /api/elements/:id` | Read one (loopback caller only) |
+| `PUT /api/elements/:id` | Update one (loopback caller only) |
+| `DELETE /api/elements/:id` | Delete one (loopback caller only) |
+| `DELETE /api/elements/clear` | Empty the store, having first copied it beside the board's saved state — the path is `backup` in the response, or null if there was nothing to copy. Declared before `:id`, so `clear` is never read as an element id (loopback caller only) |
+| `GET /api/elements/search` | Filter by type, bounding box and arbitrary fields (loopback caller only — with no query at all it is `GET /api/elements` by another name) |
+| `POST /api/elements/batch` | Create many, ids preserved (loopback caller only) |
+| `POST /api/elements/from-mermaid` | Hand a Mermaid diagram to the browser to render (loopback caller only) |
+| `POST /api/elements/sync` | The browser's merge back into the store — [sync-reconciliation.md](sync-reconciliation.md) (loopback caller only) |
 
 ## Workspaces
 
@@ -48,31 +51,33 @@ One project per board — see [workspaces.md](workspaces.md).
 
 | Route | What it does |
 |---|---|
-| `GET /api/workspaces` | The registry, reloaded per request (loopback only — it is every project's absolute path) |
-| `POST /api/workspaces` | Append a project to the registry (loopback only) |
-| `DELETE /api/workspaces/:id` | Drop that entry — the folder and its `board.config.json` are left alone, and so is the saved board unless `?board=delete` (loopback only) |
-| `PUT /api/workspaces/order` | Permute the registry, which is the order of the tabs (loopback only) |
-| `GET /api/workspaces/:id/config` | That project's `board.config.json`, as it is on disk (loopback only) |
-| `PUT /api/workspaces/:id/config` | Write it back, round-tripped (loopback only) |
-| `GET /api/fs/directories` | List folders, for the picker the browser cannot implement (loopback only) |
+| `GET /api/workspaces` | The registry, reloaded per request (loopback caller only — it is every project's absolute path) |
+| `POST /api/workspaces` | Append a project to the registry (loopback caller only) |
+| `DELETE /api/workspaces/:id` | Drop that entry — the folder and its `board.config.json` are left alone, and so is the saved board unless `?board=delete` (loopback caller only) |
+| `PUT /api/workspaces/order` | Permute the registry, which is the order of the tabs (loopback caller only) |
+| `GET /api/workspaces/:id/config` | That project's `board.config.json`, as it is on disk (loopback caller only) |
+| `PUT /api/workspaces/:id/config` | Write it back, round-tripped (loopback caller only) |
+| `GET /api/fs/directories` | List folders, for the picker the browser cannot implement (loopback caller only) |
 
 ## Issue blocks
 
 An observation on the canvas becomes a GitHub issue — see [issue-block.md](issue-block.md).
-Every route here shells out to `gh` holding the user's credentials, so every route here is
-loopback only.
+Every route here that shells out to `gh` does so holding the user's credentials, and each of
+those is marked below. The two that are not marked read this process's own memory and answer
+wherever the server is bound; see [SECURITY.md](SECURITY.md#where-it-listens) for what that is
+worth to a caller on the network.
 
 | Route | What it does |
 |---|---|
-| `POST /api/issue-block/:id` | Run the research agent and open the issue |
-| `POST /api/issue-block/:id/adopt` | Attach an issue that already exists, without creating one |
-| `DELETE /api/issue-block/:id` | Forget the run, so the block can be tried again |
-| `GET /api/issue-block/:id/issue` | The issue behind a block, read live rather than copied onto it |
-| `GET /api/issue-block/:id/run` | What that block's research run has spent, polled while it is going. Reads memory, so it is the one route here with no `gh` behind it |
-| `GET /api/issue` | The issue behind a *mirrored card*, which has no element id, plus what is known about implementing it |
-| `POST /api/issue/comment` | Add a comment — the one way to answer an issue agent's open questions without leaving the board |
-| `POST /api/issue/recreate` | Research the issue again and rewrite it in place, while its card is still in Todo |
-| `GET /api/issue/recreate` | What that run has done so far, with no `gh` behind it |
+| `POST /api/issue-block/:id` | Run the research agent and open the issue (loopback only) |
+| `POST /api/issue-block/:id/adopt` | Attach an issue that already exists, without creating one (loopback caller only) |
+| `DELETE /api/issue-block/:id` | Forget the run, so the block can be tried again (loopback only) |
+| `GET /api/issue-block/:id/issue` | The issue behind a block, read live rather than copied onto it (loopback only) |
+| `GET /api/issue-block/:id/run` | What that block's research run has spent, polled while it is going. Reads memory, so it is the one route here with no `gh` behind it — and therefore one of the two here with no bind guard on it either |
+| `GET /api/issue` | The issue behind a *mirrored card*, which has no element id, plus what is known about implementing it (loopback only) |
+| `POST /api/issue/comment` | Add a comment — the one way to answer an issue agent's open questions without leaving the board (loopback only) |
+| `POST /api/issue/recreate` | Research the issue again and rewrite it in place, while its card is still in Todo (loopback caller only) |
+| `GET /api/issue/recreate` | What that run has done so far, with no `gh` behind it, and no bind guard either |
 
 ## Implementations
 
@@ -81,11 +86,11 @@ The implement agent, its worktree and the queue that feeds it — see
 
 | Route | What it does |
 |---|---|
-| `POST /api/issue-block/:id/implement` | Implement the issue on a block |
-| `POST /api/implement` | Implement an issue by URL, for a mirrored card the server has never seen; `resume: true` continues an interrupted attempt |
-| `DELETE /api/issue-block/:id/implement` | Reset a block's record, refused while its run is alive |
-| `GET /api/implement` | One record by `?url=`, or every record for the workspace, with the concurrency cap and the queue state |
-| `DELETE /api/implement` | The same reset, by URL |
+| `POST /api/issue-block/:id/implement` | Implement the issue on a block (loopback only) |
+| `POST /api/implement` | Implement an issue by URL, for a mirrored card the server has never seen; `resume: true` continues an interrupted attempt (loopback only) |
+| `DELETE /api/issue-block/:id/implement` | Reset a block's record, refused while its run is alive. No bind guard |
+| `GET /api/implement` | One record by `?url=`, or every record for the workspace, with the concurrency cap and the queue state. No bind guard — the `queue` half is dropped off loopback, the records are not |
+| `DELETE /api/implement` | The same reset, by URL. No bind guard |
 | `POST /api/implement/queue` | Turn this workspace's queue on or off (loopback only, and off unless implementing is enabled) |
 
 ## Project board mirror
@@ -125,38 +130,77 @@ loopback only, and capped per board.
 
 | Route | What it does |
 |---|---|
-| `GET /api/docs/:key` | The markdown behind a `customData.docKey` — [docs-block.md](docs-block.md) (loopback only) |
+| `GET /api/docs/:key` | The markdown behind a `customData.docKey` — [docs-block.md](docs-block.md) (loopback caller only) |
 | `GET /api/library` | The environment-wide `.excalidrawlib` plus the project's own — [shared-library.md](shared-library.md) (loopback only) |
-| `GET /api/files` | The image payloads *this* board references (loopback only) |
-| `GET /api/files/:id` | One of them (loopback only) |
-| `POST /api/files` | Add one (loopback only) |
-| `DELETE /api/files/:id` | Remove one (loopback only) |
+| `GET /api/files` | The image payloads *this* board references (loopback caller only) |
+| `GET /api/files/:id` | One of them (loopback caller only) |
+| `POST /api/files` | Add one (loopback caller only) |
+| `DELETE /api/files/:id` | Remove one (loopback caller only) |
 
 ## Browser round-trips
 
-Every route here is loopback only, the `/result` pair included. The tab that would answer cannot
-open its socket off loopback at all, so nothing is lost by refusing them there; what is refused is
-a caller resolving somebody else's pending export by guessing a request id.
+Every route here answers a loopback caller only, the `/result` pair included. The tab that would
+answer cannot open its socket from anywhere else at all, so nothing is lost by refusing them
+there; what is refused is a caller resolving somebody else's pending export by guessing a request
+id.
 
 | Route | What it does |
 |---|---|
-| `POST /api/export/image` | Ask the open tab to render a PNG or SVG |
-| `POST /api/export/image/result` | The tab answering back |
-| `POST /api/viewport` | Ask the open tab to move the camera |
-| `POST /api/viewport/result` | The tab answering back |
+| `POST /api/export/image` | Ask the open tab to render a PNG or SVG (loopback caller only) |
+| `POST /api/export/image/result` | The tab answering back (loopback caller only) |
+| `POST /api/viewport` | Ask the open tab to move the camera (loopback caller only) |
+| `POST /api/viewport/result` | The tab answering back (loopback caller only) |
+
+## Pairing a second machine
+
+| Route | What it does |
+|---|---|
+| `POST /api/pair/request` | A device with no credential asks to pair, proposing a name for itself; answers a `requestId` and a **code**, and nothing secret. Bounded — 429 for a second live request from the same address or once the board is holding its ceiling of eight, 400 for a request that proposes no name |
+| `GET /api/pair/status` | What became of a `requestId`: `pending`, or `approved` **once**, carrying the device's `credential` — the `id.secret` string `verifyDevice` takes. Every poll after that answers `unknown`, which is also what a `requestId` nobody issued answers |
+| `GET /api/pair/pending` | Every live request, with the code, the name it proposed, the `Host` it reached this board under and the address it arrived from (loopback **caller** only) |
+| `POST /api/pair/approve` | Approve one of them by `requestId` **and** `code`; `addDevice` mints the secret and writes the record, and the answer carries neither (loopback **caller** only) |
+
+The gesture is: open the board on the second machine, read the code off it, approve it on the
+machine running the board. The rules that make that a gesture rather than a hole are in
+`src/core/pairing.ts` — the code is compared rather than merely displayed, so the operator is
+choosing between requests instead of confirming that one exists; the credential is handed over on
+exactly one poll and the record dies with it; and the open routes are bounded, because the whole
+of their effect is a row on the operator's screen.
+
+**Nothing here mints.** `src/core/pairing.ts` decides *when* a device is approved and
+`src/core/device-registry.ts` is what makes the secret and writes the record — it is handed to
+the desk as `mint` rather than imported, so a check can drive the expiry and the ceiling without
+pairing devices into the state directory of whoever ran it. The registry throws rather than
+warning if it cannot write, and it throws before the pending record is touched: a board whose
+state directory has gone read-only answers 500 and leaves the request still approvable.
+
+**Loopback here is the caller, not the bind.** `notTheHost()` reads `req.socket.remoteAddress`
+and nothing else — `X-Forwarded-For` is deliberately not consulted, because a header any caller
+can set would turn the one property of a request nobody can forge into one everybody can, and a
+remote caller would approve itself by asking politely. A reverse proxy reaches this server *on*
+loopback, so a proxied board is unaffected.
+
+The two open routes are also outside the `Host` pin, and only those two: a device that has not
+been approved yet reaches this board under a name it does not answer for, which is what pairing
+*is*. The pending record carries that name for the operator to recognise rather than pinning it.
+`Origin`, when a browser sends one, still has to name the same authority as `Host`, so a page at
+some other origin cannot put rows on the operator's screen.
+
+`scripts/check-pairing-handshake.mjs` drives the whole exchange, including an approval attempted
+from a genuinely non-loopback socket.
 
 ## Snapshots and health
 
 | Route | What it does |
 |---|---|
-| `POST /api/snapshots` | Save this workspace's scene under a name (loopback only) |
-| `GET /api/snapshots` | List the names this workspace has taken (loopback only) |
-| `GET /api/snapshots/:name` | Read one back, from the workspace that took it (loopback only) |
+| `POST /api/snapshots` | Save this workspace's scene under a name (loopback caller only) |
+| `GET /api/snapshots` | List the names this workspace has taken (loopback caller only) |
+| `GET /api/snapshots/:name` | Read one back, from the workspace that took it (loopback caller only) |
 | `GET /` | The built frontend |
 | `GET /health` | Liveness, plus the `pid` of whatever is actually answering, the `version` it was built from, the `platform` it is answering from, how many issues it is `implementing`, and what the startup preflights found: `agents` per role and environment, and `gh` (`resolved` plus a version number — never the login, the scopes or stderr, which this route is not authenticated enough for) |
-| `POST /api/restart` | Replace this server with a new one on the same port (loopback only) |
+| `POST /api/restart` | Replace this server with a new one on the same port (loopback caller only) |
 | `GET /api/sync/status` | What the store and the connected browsers currently hold |
-| `GET /api/agent-limits` | What each coding-agent environment on this machine has spent (loopback only) — [agent-limits.md](agent-limits.md) |
+| `GET /api/agent-limits` | What each coding-agent environment on this machine has spent (loopback caller only) — [agent-limits.md](agent-limits.md) |
 
 Snapshots are **in memory and per workspace**, and both halves of that matter. They die with the
 process, so they are not the thing that makes a board recoverable — the copy
@@ -250,10 +294,17 @@ route carry the mark, and the second was decided in #366 and the third in #456:
 
 The choice was the same one both times: guard them, or write down that a board bound to an
 interface publishes its contents to whoever reaches the port and takes whatever they draw on it.
-They are guarded. What a stranger gets from one of those routes is nothing worth having in either
-direction — #278 had already taken the tab strip and the picker with the registry, and #366 and
-#456 took the canvas itself. A reverse proxy is unaffected, because it reaches this server on
-loopback, which is the shape `EXCALIDRAW_ALLOWED_HOSTS` exists for.
+They are guarded. What a *stranger* gets from one of those routes is nothing worth having in
+either direction — #278 had already taken the tab strip and the picker with the registry, and
+#366 and #456 took the canvas itself. A reverse proxy is unaffected, because it reaches this
+server on loopback, which is the shape `EXCALIDRAW_ALLOWED_HOSTS` exists for.
+
+What such a caller still reaches is the handful of rows above marked **no bind guard**: the
+research and implement records, which are in this process's memory rather than behind the funnel,
+and the two routes that reset one. `scripts/check-guarded-routes-documented.mjs` is what keeps
+that list here the same as the one in the code, and
+[SECURITY.md](SECURITY.md#where-it-listens) is where it says what such a caller can read and
+change.
 
 The guard tests the **caller's address**, which is the one thing about a caller that cannot be
 forged. `X-Forwarded-For` is deliberately not read: a header anybody can set would turn that one
@@ -270,4 +321,7 @@ is set. [SECURITY.md](SECURITY.md) is all of it in one place;
 For a while the writes were not behind that guard, and this said so in a sentence rather than
 deciding anything: a board bound off loopback could not be read by anybody and could still be
 drawn on and emptied by anybody who reached the port. #456 put the same question to them and gave
-it the same answer. To a stranger, a board on an interface is inert in both directions.
+it the same answer. The *board* is now refused in both directions to a caller that is not on this
+machine — which is not the same claim as the one this paragraph used to end on, that such a board
+is inert. The rows marked no bind guard are why, and they are named one by one in
+[SECURITY.md](SECURITY.md#where-it-listens).

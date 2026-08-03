@@ -156,8 +156,10 @@ import {
   DEFAULT_WORKSPACE_ID,
   WORKSPACE_QUERY_KEYS
 } from './core/element-store.js';
-import { allowedAuthorities, verifyOrigin } from './core/origin-gate.js';
+import { allowedAuthorities, verifyOrigin, verifySameAuthority } from './core/origin-gate.js';
 import { callerIsLocal } from './core/caller-gate.js';
+import { createPairingDesk, isLoopbackCaller } from './core/pairing.js';
+import { addDevice, deviceRegistryPath } from './core/device-registry.js';
 import {
   authRequired,
   consumeTokenHandover,
@@ -302,6 +304,19 @@ const wss = new WebSocketServer({
   }
 });
 
+/**
+ * The two routes a device that has never been here may reach.
+ *
+ * They are the bootstrap of the pairing gesture (#503) and they are open for the same reason
+ * `GET /` is: a page cannot present a credential before it has one, and asking for one is what
+ * these are. Both gates below make an exception for exactly these two paths and for nothing
+ * else — the pending list and the approval are the operator's, and they are behind the token
+ * and behind loopback like every other route that acts on this machine.
+ */
+const PAIRING_OPEN_PATHS = new Set(['/api/pair/request', '/api/pair/status']);
+
+const isPairingBootstrap = (req: Request): boolean => PAIRING_OPEN_PATHS.has(req.path);
+
 // Middleware
 //
 // This replaces `app.use(cors())`, whose defaults were `origin: '*'`. Note it refuses rather
@@ -309,11 +324,16 @@ const wss = new WebSocketServer({
 // runs on this side, and for `POST /api/terminal` the damage is starting the shell, not
 // reading the answer. See src/core/origin-gate.ts.
 app.use((req: Request, res: Response, next: NextFunction) => {
-  const verdict = verifyOrigin(
-    { origin: req.headers.origin, host: req.headers.host },
-    boardAuthorities(),
-    PORT
-  );
+  const verdict = isPairingBootstrap(req)
+    // Not the pin, because a device that has not been approved yet reaches this board under a
+    // name it does not answer for — that is what pairing is. `verifySameAuthority` keeps the
+    // half that still applies: a cross-origin page may not ask. See src/core/origin-gate.ts.
+    ? verifySameAuthority({ origin: req.headers.origin, host: req.headers.host }, PORT)
+    : verifyOrigin(
+      { origin: req.headers.origin, host: req.headers.host },
+      boardAuthorities(),
+      PORT
+    );
   if (!verdict.ok) {
     logger.warn(`Refused ${req.method} ${req.path}: ${verdict.reason}`);
     res.status(403).json({ success: false, error: verdict.reason });
@@ -333,9 +353,15 @@ app.use((req: Request, res: Response, next: NextFunction) => {
  * it is how `core/port.ts`, `core/spawn.ts` and the restart supervisor find out whether anything
  * of ours is on a port at all, and it is answered before the token file exists.
  *
- * Everything under `/api` requires the token. That is the whole of the reachable surface — the
- * scene, the files, the terminal, the agents, the registry and the directory picker — and until
- * #350 every one of them was open to any process on the machine that could open a socket.
+ * Everything under `/api` requires the token, with the two exceptions `PAIRING_OPEN_PATHS`
+ * names. That is the whole of the reachable surface — the scene, the files, the terminal, the
+ * agents, the registry and the directory picker — and until #350 every one of them was open to
+ * any process on the machine that could open a socket.
+ *
+ * The two exceptions are the same kind of exception as `GET /`: asking to pair (#503) is how a
+ * device that holds no credential gets one, so requiring a credential to ask would be a circle.
+ * What they can do is bounded in `core/pairing.ts` and what they can read is nothing — a
+ * `requestId` the caller was just handed, and whether the operator has looked at it yet.
  *
  * In front of `express.json`, so an unauthenticated caller cannot make this process parse ten
  * megabytes of body before being turned away.
@@ -343,6 +369,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (!AUTH_REQUIRED) return next();
   if (req.path !== '/api' && !req.path.startsWith('/api/')) return next();
+  if (isPairingBootstrap(req)) return next();
   if (sameToken(offeredToken(req.headers, req.url), AUTH_TOKEN)) return next();
 
   // The path, never the token: a refusal that echoed what it was offered would put a near-miss
@@ -6144,6 +6171,187 @@ app.get('/health', (req: Request, res: Response) => {
     platform: process.platform,
     ...canvasIdentity()
   });
+});
+
+// ─── Pairing a second machine ─────────────────────────────────
+//
+// The gesture, in four routes: a device asks, the operator is shown what asked, the operator
+// approves the one whose code matches the screen in front of them, and the waiting device
+// collects its secret on its next poll and never again. The rules that make that a gesture
+// rather than a hole — the code, the once-only handover, the expiry, the per-address limit and
+// the ceiling — are in `core/pairing.ts`, which is where they can be driven by a check without a
+// check having to wait out an expiry.
+
+/**
+ * One desk for this board.
+ *
+ * Nothing on it survives a restart, deliberately: a pending request is a gesture in progress and
+ * ending it is correct. What survives is the approved device, which is why the desk is handed
+ * `addDevice` — the registry (#502) is what mints a secret and writes a record, and this is the
+ * only place in the server that calls it.
+ */
+const pairingDesk = createPairingDesk({ mint: addDevice });
+
+/**
+ * Who is calling, taken off the socket and from nowhere else.
+ *
+ * Not `X-Forwarded-For`. A header any caller can set would turn the one property of a request
+ * nobody can forge into one everybody can, and a remote caller would approve itself by asking
+ * politely. A reverse proxy reaches this server *on* loopback, which is why a proxied board
+ * keeps working without this knowing the proxy exists.
+ */
+function callerAddress(req: Request): string {
+  return req.socket.remoteAddress ?? '';
+}
+
+/**
+ * Refuse a caller that is not on this machine, and say which question was asked.
+ *
+ * The counterpart of `offLoopback`, asking the other half of the question: that one is about the
+ * **bind** and this one is about the **caller**. Approving a device is the operator's action on
+ * the operator's own computer, and a pairing route a pending device could approve is not a
+ * gesture, it is a formality.
+ */
+function notTheHost(req: Request, res: Response, what: string): boolean {
+  if (isLoopbackCaller(callerAddress(req))) return false;
+  logger.warn(`Refused ${req.method} ${req.path} from ${callerAddress(req)}: ${what}`);
+  res.status(403).json({
+    success: false,
+    error: `${what} only from the machine this board is running on.`
+  });
+  return true;
+}
+
+/**
+ * A device asks to be let in.
+ *
+ * Open, with no credential, because asking for a credential is what this is. Bounded, because
+ * what it does is put a row on the operator's screen: a refusal here is a 429 and a line in the
+ * log, never a dialog — a stranger who can make the operator's board shout is a stranger who has
+ * found a way to make them stop reading it.
+ */
+app.post('/api/pair/request', (req: Request, res: Response) => {
+  const name = typeof req.body?.name === 'string' ? req.body.name : '';
+  const outcome = pairingDesk.request({
+    name,
+    remoteAddress: callerAddress(req),
+    host: typeof req.headers.host === 'string' ? req.headers.host : ''
+  });
+
+  if (!outcome.ok) {
+    if (outcome.refusal === 'unnamed') {
+      return res.status(400).json({
+        success: false,
+        error: 'A device asking to pair has to propose a name for itself, so that the operator '
+          + 'has something to recognise it by.'
+      });
+    }
+    // info rather than warn: this is the bound working, and the console on this machine is warn
+    // and above. A refused request is not something to put in front of the operator.
+    logger.info(`Refused a pairing request from ${callerAddress(req)}: ${outcome.refusal}.`);
+    return res.status(429).json({
+      success: false,
+      error: 'This board is not taking another pairing request right now. Try again shortly.'
+    });
+  }
+
+  logger.info(`A device calling itself "${outcome.pending.name}" asked to pair from `
+    + `${outcome.pending.remoteAddress} as ${outcome.pending.host}.`);
+  // The code and the identifier, and nothing else. Whether the operator has looked at it yet is
+  // what the poll below is for, and there is nothing secret in this answer at all.
+  res.json({
+    success: true,
+    requestId: outcome.pending.requestId,
+    code: outcome.pending.code,
+    expiresAt: outcome.pending.expiresAt
+  });
+});
+
+/**
+ * What became of a request — and, on exactly one poll, the secret.
+ *
+ * Open for the same reason the route above is: the device holding this `requestId` is the device
+ * that has no credential yet. `unknown` is the answer to a consumed request and to one nobody
+ * issued, which is deliberate: a poll is not a way to find out whether a request exists.
+ */
+app.get('/api/pair/status', (req: Request, res: Response) => {
+  const requestId = typeof req.query.requestId === 'string' ? req.query.requestId : '';
+  const status = pairingDesk.status({ requestId });
+  if (status.state === 'approved') {
+    logger.info(`A paired device collected its credential (${status.deviceId}).`);
+  }
+  res.json({ success: true, ...status });
+});
+
+/**
+ * What is waiting for the operator: every live request, with what there is to recognise it by.
+ *
+ * The operator's route, so it is behind the token and behind the caller check like the approval
+ * it precedes. The `Host` and the remote address are here because they are the two things a
+ * person can judge and this server cannot — only the operator can tell `mac.tailnet.ts.net` from
+ * a name that merely resolves here.
+ */
+app.get('/api/pair/pending', (req: Request, res: Response) => {
+  if (notTheHost(req, res, 'Pending pairing requests are read')) return;
+  res.json({ success: true, requests: pairingDesk.pending() });
+});
+
+/**
+ * The operator approves one of them, by the code they can read off the other screen.
+ *
+ * The code is required rather than decorative. Without it the operator is confirming that a
+ * request exists, and a stranger's request racing theirs is approved by somebody who assumed the
+ * dialog was about their own laptop; with it, the operator is choosing between requests.
+ *
+ * The device is written down before the answer goes out. An approval the operator watched
+ * succeed which then did not survive the next restart is worse than a refusal they can see.
+ */
+app.post('/api/pair/approve', (req: Request, res: Response) => {
+  if (notTheHost(req, res, 'A device is approved')) return;
+
+  const requestId = typeof req.body?.requestId === 'string' ? req.body.requestId : '';
+  const code = typeof req.body?.code === 'string' ? req.body.code : '';
+
+  // The registry writes inside `approve`, and it throws rather than warning when it cannot. It
+  // throws before the pending record is touched, so a board whose state directory has gone
+  // read-only leaves the request approvable rather than consuming the gesture on a failure.
+  let outcome;
+  try {
+    outcome = pairingDesk.approve({ requestId, code });
+  } catch (error) {
+    logger.error('Could not write the paired device registry:', error);
+    return res.status(500).json({
+      success: false,
+      error: `Nothing was paired: the device could not be written to ${deviceRegistryPath()} `
+        + `(${(error as Error).message}). The request is still waiting, so this can be tried again.`
+    });
+  }
+
+  if (!outcome.ok) {
+    if (outcome.reason === 'code-mismatch') {
+      // 409 and not 403: the request is real and the operator may still approve it. What
+      // disagrees is the code, which is the one thing this route exists to make them compare.
+      return res.status(409).json({
+        success: false,
+        error: 'That code does not match the request. Read the code off the screen of the device '
+          + 'asking, and approve the request showing the same one.'
+      });
+    }
+    return res.status(404).json({
+      success: false,
+      error: 'There is no pairing request waiting under that identifier. It may have expired, or '
+        + 'the device may already have collected its secret.'
+    });
+  }
+
+  // warn rather than info, unlike the registry's own line: on this machine the console is warn
+  // and above, and letting a second machine onto this board is something the operator watching
+  // the server should see said.
+  logger.warn(`Paired "${outcome.device.name}" (${outcome.device.id}), approved from `
+    + `${outcome.device.approvedFrom} for ${outcome.device.host}.`);
+  // The secret is not in this answer. It goes to the device that asked, on its next poll, and
+  // the operator never sees it — there is nothing here for them to copy anywhere.
+  res.json({ success: true, deviceId: outcome.device.id, name: outcome.device.name });
 });
 
 /**

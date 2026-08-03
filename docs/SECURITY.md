@@ -106,41 +106,120 @@ a person uses, and a board started with it writes a line saying so into its log 
 refused upgrade, and, in a real browser, the launcher URL loading a working board whose address
 bar no longer carries the secret.
 
+## Pairing a second machine
+
+The token above is one secret on one machine, and there is no way to hand a second machine a
+copy of it that is not "hand over the file". So a device asks instead, and you approve it.
+
+Open the board on the other machine. It finds no device secret and asks — `POST
+/api/pair/request` — and the board on *this* machine shows the request: the name it proposed,
+the address it arrived from, the name it reached this board under, and a **code**. Read the code
+off the other screen, approve the request showing the same one, and the waiting page collects a
+secret of its own on its next poll.
+
+Five things make that a gesture rather than a hole, and all five are in `src/core/pairing.ts`:
+
+- **Only this machine may approve.** The approve route reads the caller's own socket address —
+  not `X-Forwarded-For`, which any caller can set and which would let a remote caller approve
+  itself by asking politely. A reverse proxy reaches this server on loopback, so a proxied board
+  is unaffected.
+- **The code is compared, not merely shown.** Without it you would be confirming that a request
+  exists, and a stranger's request racing your laptop's would be approved by somebody who
+  assumed the dialog was about their laptop. With it you are choosing between requests. An
+  approval naming the wrong code is refused, and two live requests never carry the same one.
+- **The credential is handed over exactly once**, and the record dies with it. A `requestId`
+  polled after that answers `unknown` — which is also what a `requestId` nobody issued answers.
+- **What a stranger can reach is bounded.** `POST /api/pair/request` and `GET /api/pair/status`
+  are the only routes under `/api` that answer without a credential, because asking for one is
+  what they are. They read nothing and change nothing you cannot see: the whole of their effect
+  is a row on your screen, so there is one live request per remote address, a ceiling of eight
+  overall, and a three-minute expiry. A refusal is a 429 and a line in the log, never a dialog.
+- **The registry holds the hash, never the secret.** `devices.json`, beside the token file and
+  owner-only in the same way. The device holds the secret; this server only ever verifies one.
+  It is also what *makes* the secret: `src/core/pairing.ts` decides when a device is approved,
+  and `src/core/device-registry.ts` (#502) is the only thing here that mints or writes.
+
+Those two open routes are also outside the `Host` pin the origin gate applies everywhere else,
+and only those two: a device that has not been approved yet reaches this board under a name it
+does not answer for, which is what pairing *is*. The name is recorded and shown to you rather
+than pinned — you are the one who can tell `mac.tailnet.ts.net` from something that merely
+resolves here. `Origin`, when a browser sends one, still has to name the same authority as
+`Host`, so a page at some other origin cannot put rows on your screen.
+
+**What a paired device can do today: nothing yet.** Pairing writes the device down; teaching the
+guard to accept it is #501, and until that lands the credential is minted, stored and idle. The
+bind section below is still true.
+
+`scripts/check-pairing-handshake.mjs` holds this, including an approval attempted from a
+genuinely non-loopback socket and one attempted with a forwarded header claiming loopback.
+
 ## Where it listens
 
 `HOST` defaults to **`127.0.0.1`**, and `PORT` to 3737 — a preference the launch path walks
 past to the next free port, not a pin ([running.md](running.md)).
 
-`HOST=0.0.0.0` puts the board on **every network interface**. The token goes with it, and it is
+`HOST=0.0.0.0` puts the board on **every network interface**; a single address — one physical
+interface, or a Tailscale `100.x.y.z` — puts it on one network instead. Today that difference
+buys nothing, and the reason is the rest of this section. The token goes with either, and it is
 one secret with no sessions and no accounts behind it: anyone who has it is the operator as far
 as this server is concerned, and anyone who has not is refused. Underneath that, **who is
 calling** is its own guard and a second answer: a caller whose own address is not loopback — one
-that did not reach this server from the machine it runs on — gets **403** from every route worth
-reaching, not only the GitHub half, the agents and the terminal, but since #366 every read of
-what the board holds and since #456 every write of it. There is nothing left for a stranger to
-publish that way and nothing left for one to change. Do not do it on a network you do not
+that did not reach this server from the machine it runs on — gets **403** from nearly every route
+worth reaching, not only the GitHub half, the agents and the terminal, but since #366 every read
+of what the board holds and since #456 every write of it. Do not do it on a network you do not
 control, and put access control in front of it if you do it at all.
+[running.md](running.md#which-addresses-it-answers-on) is the operator's half of the same
+question — which of the two shapes to write, and what each is worth.
 
 The two are not the same control and neither stands in for the other. The token is what a caller
 carries; the caller's address is what the kernel filled in, and it is still the answer with
 `VIBEMAXXING_NO_AUTH=1` set, which is the one configuration where the token is not there to help.
 
-What a non-loopback bind actually leaves, now that the reads and the writes are behind the same
-guard:
+What a non-loopback bind actually leaves a caller who is not on this machine, now that the reads
+and the writes are behind the same guard:
 
-- **Refused with 403 to a caller that is not on this machine** — the issue block and the
-  implement run, the terminal, the workspace registry and project settings, the directory picker,
-  the GitHub project mirror and card moves, `/api/github-status`, `/api/agent-limits`, the restart
-  route, and the board's own contents in both directions: the reads `GET /api/elements`,
-  `/api/elements/search`, `/api/elements/:id`, `/api/files`, `/api/files/:id`, `/api/docs/:key`,
-  `/api/library` and both snapshot reads, and the writes `POST /api/elements`,
-  `PUT`/`DELETE /api/elements/:id`, `DELETE /api/elements/clear`, `/api/elements/batch`,
-  `/api/elements/from-mermaid`, `/api/elements/sync`, `POST /api/files`, `DELETE /api/files/:id`,
-  `POST /api/snapshots` and the four browser round-trips. The **WebSocket upgrade** is refused
-  too, because it sends the whole scene on connect and an HTTP guard cannot see it.
-- **Still answered** — `/health`, which is how anything finds out whether a canvas is on a port
-  at all, and `GET /api/sync/status`. To a stranger a board bound that way is inert: it publishes
-  nothing and takes nothing. To you, on the machine it is running on, it is an ordinary board.
+- **Refused with 403** — the issue block and the implement run, the terminal, the
+  workspace registry and project settings, the directory picker, the GitHub project mirror and
+  card moves, `/api/github-status`, `/api/agent-limits`, the restart route, and the board's own
+  contents in both directions: the reads `GET /api/elements`, `/api/elements/search`,
+  `/api/elements/:id`, `/api/files`, `/api/files/:id`, `/api/docs/:key`, `/api/library` and both
+  snapshot reads, and the writes `POST /api/elements`, `PUT`/`DELETE /api/elements/:id`,
+  `DELETE /api/elements/clear`, `/api/elements/batch`, `/api/elements/from-mermaid`,
+  `/api/elements/sync`, `POST /api/files`, `DELETE /api/files/:id`, `POST /api/snapshots` and the
+  four browser round-trips. The **WebSocket upgrade** is refused too, because it sends the whole
+  scene on connect and an HTTP guard cannot see it. Since #501 most of that list is refused on
+  the caller rather than on the bind, so it is you it stops being refused to — the terminal, the
+  agents and the GitHub half still test the bind and are refused to everybody on such a board.
+<!-- routes: answered-off-loopback -->
+- **Still reached by a caller on the network** — `GET /`, the page itself, which cannot read a
+  token out of an address bar it has not loaded yet; `GET /health`, which is how anything finds
+  out whether a canvas is on a port at all; `GET /api/sync/status`; the pairing front door,
+  `POST /api/pair/request` and `GET /api/pair/status`, which are open on purpose and bounded for
+  it (see [above](#pairing-a-second-machine)); and the records of what the agents have been
+  doing, which live in this process's memory rather than behind that guard —
+  `GET /api/issue-block/:id/run`, `GET /api/issue/recreate` and `GET /api/implement`, the last of
+  which carries every run's pull request, its error text and the **absolute path of the worktree**
+  it left on this machine — together with the two routes that reset such a record,
+  `DELETE /api/implement` and `DELETE /api/issue-block/:id/implement`.
+<!-- /routes: answered-off-loopback -->
+- **Answered to you, refused to them** — `GET /api/pair/pending` and `POST /api/pair/approve`,
+  written that way by #503, and since #501 the whole of the `offLoopback` funnel beside them:
+  the board's own contents, the registry, the picker, the restart route and the rest of the first
+  list. They ask **who is calling** rather than where the server opened, so an interface-bound
+  board serves them from your own keyboard while refusing the network the same route. What is
+  left on the bind is the terminal, the two agent helpers and the GitHub routes, which such a
+  board refuses to everybody including you.
+
+So the sentence this used to end on — that a board bound that way is inert — was not true, and it
+is the kind of claim worth being exact about. What is inert **to a stranger** is the board:
+nothing on one publishes a drawing to them or takes one from them. What is not is the record of
+what the agents have done with your repository, which such a caller can read, and can reset. The
+pairing pair is deliberate and bounded; that one is not deliberate at all — it is a gap in the
+guard rather than a decision anybody wrote down, and it is filed as
+[#508](https://github.com/vitorengers/vibemaxxing/issues/508).
+`scripts/check-guarded-routes-documented.mjs` derives these lists from `src/server.ts`, so they
+and the tables in [rest-api.md](rest-api.md) cannot drift from the code again without a check
+going red — including on the day #508 closes and the first list gets shorter.
 
 Before #366 the second list was the whole drawing canvas — elements, files, documents, the
 library and the snapshots. The two honest options were to guard them or to write down that a
@@ -206,6 +285,32 @@ exists and why it is a file with owner-only permissions rather than a header the
 checked. Between the two, another account on a machine you share is refused; a process running as
 you is not, because it can read the file.
 
+## The controls in front of it, and what each one stops
+
+Separate answers to separate questions. None of them stands in for another, and a board is only
+as closed as the weakest one that is actually switched on.
+
+| Control | What it asks | What it stops | What it does not |
+|---|---|---|---|
+| **The token** (#350) | What the caller *carries* | Anything that cannot read a file in your state directory — another account on a machine you share, a sandboxed process, a page nobody handed the secret to | A process running as you, which reads that file exactly as it reads your SSH keys. And it is one `VIBEMAXXING_NO_AUTH=1` away from not being there, which is the state every check in `scripts/` runs in |
+| **The origin gate** (#270) | What a *browser* has to admit — its `Origin`, and the `Host` it asked for | A page at any other origin reaching `127.0.0.1` through your browser, and the DNS-rebinding version of the same trick | A local program. It sends no `Origin` at all, and anything that can set headers can set any of them |
+| **The bind** | What this server *opened itself to* | Every caller that is not on this machine, because the guarded routes refuse before they run. It is the one still answering with the token switched off | Nothing on this machine — and nothing off it, either, on the routes listed above as still reached. It tests the bind address rather than the caller, so an interface-bound board refuses your own browser too |
+| **The caller** (#503) | Which address the request's own *socket* came from | A caller that is not on this machine, wherever the server is bound. `X-Forwarded-For` is deliberately not consulted, so this is not a header anybody can claim | Anything on this machine — the same limit as the token. So far it stands in front of the two pairing routes only, `GET /api/pair/pending` and `POST /api/pair/approve` |
+
+The last two are the same question asked from opposite ends, and the difference between them is
+the whole of this milestone. The bind is the crude one: it is the only property here nobody can
+forge, and the only one left standing when `VIBEMAXXING_NO_AUTH` is set, but it cannot tell a
+laptop of yours from anybody else's — so there is no configuration today in which this board is
+reachable from a second machine, however narrowly you bind it. Asking the *caller* instead makes
+that difference expressible, and #503 is the first two routes written that way.
+
+What is still missing is the answer a remote caller could give. A credential a **device** holds
+is that answer, and pairing already mints one: #502 wrote the registry, #503 the handshake, and
+`devices.json` on a board that has paired something is a real record of a real approval. Nothing
+verifies it yet — teaching the funnel to accept it is #501, and until that lands, a paired device
+is written down and no more. So this table is the whole of the model that is running, and the
+sections above it are what each row means route by route.
+
 ## What a run does to your repository
 
 An implement run is the sharpest edge here, so plainly: it gets a **git worktree of its own**
@@ -224,6 +329,12 @@ afternoon, and that is the exposure.
 The registry, the per-board scene state, the pidfile, the running server's token and
 `config.json` sit in a per-user state directory ([configuration.md](configuration.md)); the log
 file goes where `LOG_FILE_PATH` says.
+
+`devices.json` sits there too, owner-only, once you have approved a device — the hash and never
+the secret, as [Pairing a second machine](#pairing-a-second-machine) says. A board that has
+paired nothing has no such file, and a board that has one is not thereby reachable from anywhere
+new: nothing verifies against it yet.
+
 The board holds whatever you drew on it. None of it is encrypted, and none of it is sent
 anywhere by this tool — the network calls it makes are `gh` to GitHub, and whatever the agent
 command line you configured does on its own account.
