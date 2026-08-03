@@ -39,7 +39,12 @@ interface Device {
   id: string
   name: string
   createdAt: string
-  lastSeenAt: string
+  /**
+   * Null until the device has been seen, and the registry means it: *paired and never used* and
+   * *last used in March* are different answers to the question somebody tidying this list is
+   * asking, and rendering the first as "unknown" would throw the difference away.
+   */
+  lastSeenAt: string | null
   approvedFrom: string
   host: string
 }
@@ -51,7 +56,8 @@ interface Device {
  * comparing two ISO strings is doing the arithmetic this column exists to have done. The exact
  * instant is kept in `title`, so nothing is lost for whoever needs it.
  */
-function when(iso: string): string {
+function when(iso: string | null): string {
+  if (iso === null) return 'never'
   const at = Date.parse(iso)
   if (!Number.isFinite(at)) return 'unknown'
   const seconds = Math.max(0, Math.round((Date.now() - at) / 1000))
@@ -66,7 +72,8 @@ function when(iso: string): string {
   return months < 24 ? `${months} months ago` : `${Math.round(months / 12)} years ago`
 }
 
-const exact = (iso: string): string => (Number.isFinite(Date.parse(iso)) ? iso : '')
+const exact = (iso: string | null): string =>
+  (iso !== null && Number.isFinite(Date.parse(iso)) ? iso : '')
 
 export const DevicesDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [devices, setDevices] = useState<Device[] | null>(null)

@@ -2,7 +2,7 @@
 /**
  * Checks the surface a person opens when they ask "who can reach my board".
  *
- * `check-paired-devices.mjs` holds the routes and `check-device-revoke-socket.mjs` holds the
+ * `check-device-management.mjs` holds the routes and `check-device-revoke-socket.mjs` holds the
  * socket. Neither says anything about the thing an operator actually uses, and that half
  * compiles exactly as well when it does nothing: a dialog that never opens, a Rename that
  * posts and never redraws, a Revoke whose confirmation names the wrong device. So this drives
@@ -88,7 +88,7 @@ function stateDir() {
   return join(home, leaf);
 }
 
-const registryFile = join(stateDir(), 'paired-devices.json');
+const registryFile = join(stateDir(), 'devices.json');
 
 const record = (id, name, extra) => ({
   id,
@@ -105,7 +105,7 @@ const seeded = [
 ];
 
 const onDisk = () => {
-  try { return JSON.parse(readFileSync(registryFile, 'utf8')); } catch { return null; }
+  try { return JSON.parse(readFileSync(registryFile, 'utf8')).devices ?? null; } catch { return null; }
 };
 
 const children = [];
@@ -211,7 +211,7 @@ const panel = () => evaluate(`(() => {
 
 try {
   mkdirSync(dirname(registryFile), { recursive: true });
-  writeFileSync(registryFile, JSON.stringify(seeded, null, 2), 'utf8');
+  writeFileSync(registryFile, JSON.stringify({ version: 1, devices: seeded }, null, 2), 'utf8');
 
   const server = startCanvas({
     port: await freePort(),

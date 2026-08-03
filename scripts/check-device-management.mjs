@@ -2,6 +2,10 @@
 /**
  * Checks the surface that answers "who can reach my board" — the list, the rename, the revoke.
  *
+ * `check-device-registry.mjs` holds `core/device-registry.ts`: the file, its permissions, the
+ * constant-time compare, what a record is. This holds the three routes built on it and the rules
+ * about *who is asking*, which the module has no opinion about and cannot have.
+ *
  * A board that can be paired with a second machine needs the other half or it is a one-time
  * unlock: once there is a second device there is a third, and a laptop that was sold, and a
  * phone paired at an airport that should not still be on the list. What that needs is a list
@@ -22,9 +26,9 @@
  *    not special-cased into a refusal: it is "sign this machine out", which is legitimate.
  *  - **the next request, not the next restart.** Every verification reads the file, so a
  *    revoked device is refused by the same gate that let it in a moment earlier.
- *  - **a hand-edited file is no devices, never a throw.** This file is exactly the shape of
- *    thing a person opens in an editor to see who is on the list, and a board that will not
- *    start because they did is a worse failure than one that asks to pair again.
+ *  - **a hand-edited file is no devices, never a throw** *here too*. The module already reads
+ *    one that way; what is asked here is that the route built on it does not turn that into a
+ *    500 on the board whose operator has just broken the file and is looking for the reason.
  *
  * The socket half is `check-device-revoke-socket.mjs`, and it is separate because it is the
  * half a person cannot see: an HTTP-only revocation leaves the scene and every live shell's
@@ -43,13 +47,13 @@
  * Self-contained: a canvas server on a port the kernel just handed out, killed at the end. Run
  * `./node_modules/.bin/tsc` first.
  *
- * Usage: node scripts/check-paired-devices.mjs
+ * Usage: node scripts/check-device-management.mjs
  *
  * Tier: fast
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -67,7 +71,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** The one header name the server, the page and this check all have to agree on. */
 const TOKEN_HEADER = 'x-vibemaxxing-token';
 
-const workDir = mkdtempSync(join(tmpdir(), 'check-paired-devices-'));
+const workDir = mkdtempSync(join(tmpdir(), 'check-device-management-'));
 const fakeHome = join(workDir, 'home');
 mkdirSync(fakeHome, { recursive: true });
 
@@ -85,17 +89,24 @@ function stateDir() {
   return join(home, leaf);
 }
 
-const registryFile = join(stateDir(), 'paired-devices.json');
+const registryFile = join(stateDir(), 'devices.json');
 
 const hashOf = (secret) => createHash('sha256').update(secret).digest('hex');
 
-/** A device record as the registry stores one, with the secret the check keeps to itself. */
+/**
+ * A device record as `core/device-registry.ts` stores one, with the credential the check keeps.
+ *
+ * The credential is `<id>.<secret>`, which is the registry's own spelling: one opaque string,
+ * because it has to travel everywhere a bearer token travels and every one of those places has
+ * room for exactly one value.
+ */
 function device(name, { approvedFrom, host, createdAt, lastSeenAt }) {
   const secret = randomBytes(32).toString('hex');
+  const id = `dev-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
   return {
-    secret,
+    secret: `${id}.${secret}`,
     record: {
-      id: `dev-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+      id,
       name,
       secretHash: hashOf(secret),
       createdAt,
@@ -121,11 +132,12 @@ const phone = device('Pixel-9', {
 
 function seedRegistry(records) {
   mkdirSync(dirname(registryFile), { recursive: true });
-  writeFileSync(registryFile, JSON.stringify(records, null, 2), 'utf8');
+  writeFileSync(registryFile, JSON.stringify({ version: 1, devices: records }, null, 2), 'utf8');
 }
 
+/** The records as the file holds them, or null when it cannot be read as the registry at all. */
 function onDisk() {
-  try { return JSON.parse(readFileSync(registryFile, 'utf8')); } catch { return null; }
+  try { return JSON.parse(readFileSync(registryFile, 'utf8')).devices ?? null; } catch { return null; }
 }
 
 const children = [];
@@ -353,31 +365,23 @@ try {
   check('the operator cannot be locked out this way — the host is not on the list',
         hostStillIn.status === 200, `got ${hostStillIn.status}`);
 
-  // ─── 6. The file itself ─────────────────────────────────────
+  // ─── 6. A registry a person has opened in an editor ─────────
 
-  console.log('\n6. the registry is this account\'s, and a hand-edited one is not a dead board');
-  check('the registry is where the pidfile and the token are', existsSync(registryFile), registryFile);
-  if (process.platform === 'win32') {
-    // Windows has no POSIX mode bits: `statSync().mode` reports a synthesised value whatever the
-    // ACL says, so an assertion here would be about Node's fiction. What protects it there is the
-    // ACL on `%LOCALAPPDATA%`, and the POSIX case below runs on every other platform this ships to.
-    console.log('  ..    the mode case is POSIX-only; this platform has no mode bits to read');
-  } else {
-    const mode = statSync(registryFile).mode & 0o777;
-    check('its permissions deny group and other', (mode & 0o077) === 0, `mode ${mode.toString(8)}`);
-    check('and grant the owner read and write', (mode & 0o600) === 0o600, `mode ${mode.toString(8)}`);
-  }
-
+  // The file's permissions and the shape of the record are `check-device-registry.mjs`, which
+  // owns the module. What is asked here is only what this surface does with a registry it
+  // cannot read: a list route that threw would take the page down on exactly the board whose
+  // operator has just broken the file and is looking for the reason.
+  console.log('\n6. a registry nobody can parse is an empty list, not a dead board');
   writeFileSync(registryFile, '{ this is what an editor leaves behind', 'utf8');
   const mangled = await call('/api/devices', { secret: hostToken });
-  check('a registry nobody can parse reads as no devices rather than throwing',
+  check('GET /api/devices still answers 200',
         mangled.status === 200 && Array.isArray(mangled.body?.devices) && mangled.body.devices.length === 0,
         `got ${mangled.status} ${mangled.text.slice(0, 200)}`);
   const boardStillUp = await call('/api/elements', { secret: hostToken });
   check('and the rest of the board is still answering', boardStillUp.status === 200,
         `got ${boardStillUp.status}`);
 
-  writeFileSync(registryFile, JSON.stringify({ devices: 'not a list' }), 'utf8');
+  writeFileSync(registryFile, JSON.stringify({ version: 1, devices: 'not a list' }), 'utf8');
   const wrongShape = await call('/api/devices', { secret: hostToken });
   check('a file of the wrong shape reads as no devices too',
         wrongShape.status === 200 && wrongShape.body?.devices?.length === 0,

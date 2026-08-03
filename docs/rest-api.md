@@ -1,6 +1,6 @@
 # REST API
 
-`src/server.ts`. 58 routes, and the only surface that is workspace-aware — everything the
+`src/server.ts`. 61 routes, and the only surface that is workspace-aware — everything the
 browser does, and everything this board was built with, goes through here.
 
 The table below is the whole set, one row per route. It used to be a summary of thirty, under a
@@ -55,6 +55,21 @@ One project per board — see [workspaces.md](workspaces.md).
 | `GET /api/workspaces/:id/config` | That project's `board.config.json`, as it is on disk (loopback only) |
 | `PUT /api/workspaces/:id/config` | Write it back, round-tripped (loopback only) |
 | `GET /api/fs/directories` | List folders, for the picker the browser cannot implement (loopback only) |
+
+## Paired devices
+
+Who else may drive this board — see [devices.md](devices.md). The registry behind these is
+`src/core/device-registry.ts`, and no route hands out a device's stored hash.
+
+These three are the only routes where *which credential* a caller holds changes the answer.
+Everywhere else in this table, the board's token and an approved device's credential are the
+same thing: a caller that got past the gate.
+
+| Route | What it does |
+|---|---|
+| `GET /api/devices` | Every approved device, with `self` naming the caller's own entry when the caller is one of them. Answered to the host and to a paired device; refused to anybody else by the gate above (loopback only) |
+| `PATCH /api/devices/:id` | Rename one. The host's only — a device renaming its neighbours has no standing to (loopback only) |
+| `DELETE /api/devices/:id` | Revoke one, refusing it from its next request and closing the sockets it holds. The host's, and a device's own: signing this machine out is legitimate and is not special-cased into a refusal (loopback only) |
 
 ## Issue blocks
 

@@ -175,10 +175,9 @@ import {
   renameDevice,
   revokeDevice,
   touchDevice,
-  verifyDeviceSecret,
-  viewOf,
-  type PairedDevice
-} from './core/paired-devices.js';
+  verifyDevice,
+  type DeviceRecord
+} from './core/device-registry.js';
 import {
   backupBoardBefore,
   boardStateExists,
@@ -272,19 +271,56 @@ function offeredToken(headers: IncomingHttpHeaders, url: string | undefined): st
 }
 
 /**
- * Which paired device offered this secret, if any.
+ * Which paired device offered this credential, if any.
  *
  * Wrapped rather than called directly because it reads a file on every request that missed the
  * board token, and a registry that cannot be read is not a reason to stop answering: the caller
  * is refused, which is what would have happened anyway, and the operator gets a line saying the
  * file is the reason rather than a stack trace on a request they made.
  */
-function deviceFor(offered: string | null): PairedDevice | null {
+function deviceFor(offered: string | null): DeviceRecord | null {
   try {
-    return verifyDeviceSecret(offered);
+    return verifyDevice(offered);
   } catch (error) {
-    logger.warn(`The paired-device registry could not be read: ${(error as Error).message}`);
+    logger.warn(`The device registry could not be read: ${(error as Error).message}`);
     return null;
+  }
+}
+
+/**
+ * A device as the management surface may see it: everything but the hash.
+ *
+ * The stored digest has no use in a browser and a page that carried every device's verifier
+ * would put the whole registry through the network to draw a list. Written here rather than in
+ * `core/device-registry.ts` because it is a fact about *this surface*, not about the registry.
+ */
+function deviceView(device: DeviceRecord): Omit<DeviceRecord, 'secretHash'> {
+  const { secretHash: _secretHash, ...rest } = device;
+  return rest;
+}
+
+/**
+ * When each device was last written down as seen, so that is not done on every request.
+ *
+ * `touchDevice` deliberately leaves the rate to its caller — it reads and rewrites the whole
+ * registry, with a `chmod`, and a poll every four seconds from every open panel would make that
+ * the busiest write on the board. `lastSeenAt` is read by a person deciding whether a laptop is
+ * still in use, and "within the last minute" is as fine as that question ever gets.
+ *
+ * In memory rather than on disk: a restart that forgets this costs one extra write per device.
+ */
+const deviceSeenAt = new Map<string, number>();
+const DEVICE_TOUCH_INTERVAL_MS = 60_000;
+
+function noteDeviceSeen(device: DeviceRecord): void {
+  const now = Date.now();
+  const written = deviceSeenAt.get(device.id);
+  if (written !== undefined && now - written < DEVICE_TOUCH_INTERVAL_MS) return;
+  deviceSeenAt.set(device.id, now);
+  try {
+    touchDevice(device.id);
+  } catch (error) {
+    logger.warn(`Could not record when ${device.name} was last seen: ${(error as Error).message}`);
   }
 }
 
@@ -377,10 +413,10 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   const offered = offeredToken(req.headers, req.url);
   if (sameToken(offered, AUTH_TOKEN)) return next();
 
-  // The second credential, and the whole reason the registry exists: a device approved on this
-  // board holds a secret of its own, so that the operator has something to revoke short of a
-  // restart. Verified after the board token and never instead of it — the operator on loopback
-  // is the host and is not on the list.
+  // The second credential, and the whole reason `core/device-registry.ts` exists: a device
+  // approved on this board holds a credential of its own, so that the operator has something to
+  // revoke short of a restart. Verified after the board token and never instead of it — the
+  // operator on loopback is the host and is not on the list.
   //
   // `res.locals.device` is what the routes below read to tell the two apart. Absent means the
   // host, which is also what a board with the opt-out gives every caller: no authentication at
@@ -388,12 +424,10 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   const device = deviceFor(offered);
   if (device) {
     res.locals.device = device;
-    // On the request rather than on a timer, and rate-limited inside `touchDevice`: "last seen"
-    // is what tells a laptop in use from one nobody has opened in months, and the only moment
-    // this server can observe is a request arriving.
-    try { touchDevice(device.id); } catch (error) {
-      logger.warn(`Could not record when ${device.name} was last seen: ${(error as Error).message}`);
-    }
+    // On the request rather than on a timer: "last seen" is what tells a laptop in use from one
+    // nobody has opened in months, and a request arriving is the only moment this server can
+    // observe. Rate-limited in `noteDeviceSeen`, which is where the registry says it belongs.
+    noteDeviceSeen(device);
     return next();
   }
 
@@ -1647,15 +1681,15 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
 
 // ─── Paired devices (who else can reach this board) ───────────
 //
-// The management half of the registry in `core/paired-devices.ts`. Once a second machine can be
+// The management half of the registry in `core/device-registry.ts`. Once a second machine can be
 // paired there is a third, and a laptop that was sold, and a phone paired at an airport that
 // should not still be on the list — so the list, the name and the revoke are the feature and the
 // pairing is only its first minute.
 //
 // Two credentials reach these routes and they are not the same caller. The **host** is the
 // operator: the board token, which is a file only this account can read, and it is not on the
-// list. A **paired device** carries its own secret and `res.locals.device` names which one. The
-// split below is that distinction and nothing else:
+// list. A **paired device** carries a credential of its own and `res.locals.device` names which
+// one. The split below is that distinction and nothing else:
 //
 //   - the **list** is answered to either, because a device that cannot see the list cannot see
 //     that it is on one, and "sign this machine out" needs somewhere to press;
@@ -1692,12 +1726,10 @@ function closeSocketsOfDevice(deviceId: string, reason: string): number {
 app.get('/api/devices', (_req: Request, res: Response) => {
   if (offLoopback(res, 'Paired devices are listed')) return;
   try {
-    const asked = res.locals.device as PairedDevice | undefined;
+    const asked = res.locals.device as DeviceRecord | undefined;
     res.json({
       success: true,
-      // Never the hashes. The surface has no use for them and a management page that carried
-      // every device's verifier would put the whole registry through the browser to draw a list.
-      devices: listDevices().map(viewOf),
+      devices: listDevices().map(deviceView),
       // Which of them is the caller, so the surface can say "this is the device you are reading
       // this on" before it offers to revoke it. Null for the host, which is not on the list.
       self: asked?.id ?? null
@@ -1713,7 +1745,7 @@ app.patch('/api/devices/:id', (req: Request, res: Response) => {
   if (res.locals.device) {
     res.status(403).json({
       success: false,
-      error: 'Only this board\'s own machine may rename a device.'
+      error: 'Only the machine this board runs on may rename a device.'
     });
     return;
   }
@@ -1722,14 +1754,16 @@ app.patch('/api/devices/:id', (req: Request, res: Response) => {
     res.status(400).json({ success: false, error: 'A device needs a name.' });
     return;
   }
+  const id = req.params.id ?? '';
   try {
-    const renamed = renameDevice(req.params.id ?? '', name);
-    if (!renamed) {
+    if (!renameDevice(id, name)) {
       res.status(404).json({ success: false, error: 'No device on this board has that id.' });
       return;
     }
-    logger.info(`Renamed a paired device to ${renamed.name}.`);
-    res.json({ success: true, device: viewOf(renamed), devices: listDevices().map(viewOf) });
+    // Read back rather than assembled from the request: the registry is the record, and a
+    // surface that redrew from what it sent would show a rename that had not landed.
+    const devices = listDevices().map(deviceView);
+    res.json({ success: true, device: devices.find(entry => entry.id === id) ?? null, devices });
   } catch (error) {
     logger.error('Could not rename a paired device:', error);
     res.status(500).json({ success: false, error: (error as Error).message });
@@ -1738,8 +1772,9 @@ app.patch('/api/devices/:id', (req: Request, res: Response) => {
 
 app.delete('/api/devices/:id', (req: Request, res: Response) => {
   if (offLoopback(res, 'A paired device is revoked')) return;
-  const asked = res.locals.device as PairedDevice | undefined;
-  if (asked && asked.id !== req.params.id) {
+  const asked = res.locals.device as DeviceRecord | undefined;
+  const id = req.params.id ?? '';
+  if (asked && asked.id !== id) {
     res.status(403).json({
       success: false,
       error: 'A paired device may sign itself out, and only itself.'
@@ -1747,22 +1782,24 @@ app.delete('/api/devices/:id', (req: Request, res: Response) => {
     return;
   }
   try {
-    const removed = revokeDevice(req.params.id ?? '');
-    if (!removed) {
+    // Named before it goes, because what a caller is told afterwards is the name and the record
+    // is gone by then.
+    const removed = listDevices().find(entry => entry.id === id) ?? null;
+    if (!revokeDevice(id)) {
       res.status(404).json({ success: false, error: 'No device on this board has that id.' });
       return;
     }
     // After the record is gone, so a socket that reconnects in the gap between the two is
     // refused by the gate rather than let back in and closed again.
-    const closed = closeSocketsOfDevice(removed.id, 'This device was revoked.');
-    logger.info(`Revoked ${removed.name}; ${closed} open socket(s) closed.`);
+    const closed = closeSocketsOfDevice(id, 'This device was revoked.');
+    if (closed) logger.info(`Closed ${closed} socket(s) held by the device that was revoked.`);
     res.json({
       success: true,
-      device: viewOf(removed),
+      device: removed ? deviceView(removed) : null,
       socketsClosed: closed,
       // So a device that signed itself out knows the page it is looking at is now a stranger.
-      self: asked?.id === removed.id,
-      devices: listDevices().map(viewOf)
+      self: asked?.id === id,
+      devices: listDevices().map(deviceView)
     });
   } catch (error) {
     logger.error('Could not revoke a paired device:', error);

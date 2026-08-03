@@ -20,7 +20,7 @@
  *     their own board every time they tidied the list;
  *   - and a **second device's socket survives**, which is the same trap one door along.
  *
- * The board runs with the token on and a throwaway `HOME`, like `check-paired-devices.mjs`,
+ * The board runs with the token on and a throwaway `HOME`, like `check-device-management.mjs`,
  * and the registry is seeded on disk because there is no pairing exchange yet (#503).
  *
  * Self-contained: a canvas server on a port the kernel just handed out, killed at the end. Run
@@ -63,12 +63,14 @@ function stateDir() {
   return join(home, leaf);
 }
 
-const registryFile = join(stateDir(), 'paired-devices.json');
+const registryFile = join(stateDir(), 'devices.json');
 
 function device(id, name) {
   const secret = randomBytes(32).toString('hex');
   return {
-    secret,
+    // `<id>.<secret>`, which is `core/device-registry.ts`'s own spelling of a credential: one
+    // opaque string, because a WebSocket handshake has room for exactly one query parameter.
+    secret: `${id}.${secret}`,
     record: {
       id,
       name,
@@ -122,7 +124,7 @@ function open(url, secret) {
 
 try {
   mkdirSync(dirname(registryFile), { recursive: true });
-  writeFileSync(registryFile, JSON.stringify([sold.record, kept.record], null, 2), 'utf8');
+  writeFileSync(registryFile, JSON.stringify({ version: 1, devices: [sold.record, kept.record] }, null, 2), 'utf8');
 
   const server = startCanvas({
     port: await freePort(),
