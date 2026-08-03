@@ -1,6 +1,6 @@
 # REST API
 
-`src/server.ts`. 62 routes, and the only surface that is workspace-aware — everything the
+`src/server.ts`. 65 routes, and the only surface that is workspace-aware — everything the
 browser does, and everything this board was built with, goes through here.
 
 The table below is the whole set, one row per route. It used to be a summary of thirty, under a
@@ -27,6 +27,14 @@ curl -H "X-VibeMaxxing-Token: $(cat "$XDG_STATE_HOME/excalidraw-canvas/server-37
 ```
 
 The CLI and the MCP server read that file themselves, so nothing below needs a flag.
+
+**Or an approved device's credential**, in the same header and the same query parameter. A
+device paired through the handshake above holds one of its own — see [devices.md](devices.md) —
+and the gate takes it after the board token and never instead of it. The difference between the
+two is not what they reach: it is that a device's is one of many, survives a restart, and can be
+revoked while the board is running, where the board token is a per-start file this account owns.
+Only the three device routes ask which one a caller holds; everywhere else in this table the two
+are the same thing.
 
 ## Elements
 
@@ -58,6 +66,21 @@ One project per board — see [workspaces.md](workspaces.md).
 | `GET /api/workspaces/:id/config` | That project's `board.config.json`, as it is on disk (loopback only) |
 | `PUT /api/workspaces/:id/config` | Write it back, round-tripped (loopback only) |
 | `GET /api/fs/directories` | List folders, for the picker the browser cannot implement (loopback only) |
+
+## Paired devices
+
+Who else may drive this board — see [devices.md](devices.md). The registry behind these is
+`src/core/device-registry.ts`, and no route hands out a device's stored hash.
+
+These three are the only routes where *which credential* a caller holds changes the answer.
+Everywhere else in this table, the board's token and an approved device's credential are the
+same thing: a caller that got past the gate.
+
+| Route | What it does |
+|---|---|
+| `GET /api/devices` | Every approved device, with `self` naming the entry a request came from when it came from one of them. Answered to the host and to a paired device, and refused to anybody else by the gate above (loopback only) |
+| `PATCH /api/devices/:id` | Rename one. The host's only — a device renaming its neighbours has no standing to (loopback only) |
+| `DELETE /api/devices/:id` | Revoke one, refusing it from its next request and closing the sockets it holds. The host's, and a device's own: signing this machine out is legitimate and is not special-cased into a refusal (loopback only) |
 
 ## Issue blocks
 

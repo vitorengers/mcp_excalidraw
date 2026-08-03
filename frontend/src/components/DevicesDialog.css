@@ -1,0 +1,172 @@
+/*
+ * The paired-device list, on the backdrop `WorkspaceDialogs.css` already declares.
+ *
+ * It borrows `.workspace-dialog-backdrop`, `.workspace-dialog__title`, `.workspace-dialog__error`
+ * and `.workspace-dialog__actions` rather than restating them: this sits beside the project
+ * settings and a second set of rules for the same frame is the way two dialogs on one bar start
+ * looking like two products.
+ */
+
+.devices-dialog {
+  background: var(--island-bg-color, #fff);
+  color: var(--text-primary-color, #1e1e1e);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  padding: 18px 20px;
+  width: min(620px, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.devices-dialog__lede,
+.devices-dialog__empty,
+.devices-dialog__loading {
+  margin: 0 0 12px;
+  color: var(--color-gray-70, #495057);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.devices-dialog__said {
+  margin: 0 0 12px;
+  padding: 7px 9px;
+  border-radius: 5px;
+  background: var(--color-gray-10, #f1f3f5);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.devices-dialog__list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.devices-dialog__row {
+  border: 1px solid var(--color-gray-30, #ced4da);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+/* The device the reader is on, marked rather than sorted first: the order is the registry's. */
+.devices-dialog__row--self {
+  border-color: var(--color-primary, #6965db);
+}
+
+.devices-dialog__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.devices-dialog__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.devices-dialog__badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-primary, #6965db);
+  color: #fff;
+}
+
+.devices-dialog__name-field {
+  flex: 1 1 200px;
+  font: inherit;
+  padding: 5px 8px;
+  border: 1px solid var(--color-gray-30, #ced4da);
+  border-radius: 5px;
+  background: var(--input-bg-color, #fff);
+  color: inherit;
+}
+
+.devices-dialog__rename,
+.devices-dialog__save,
+.devices-dialog__cancel,
+.devices-dialog__keep,
+.devices-dialog__revoke {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--color-gray-30, #ced4da);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.devices-dialog__rename {
+  margin-left: auto;
+}
+
+.devices-dialog__save {
+  border-color: var(--color-primary, #6965db);
+}
+
+/*
+ * Revoke reads as what it is. Not disabled-looking and not hidden behind a menu: the whole
+ * reason this surface exists is that somebody needs to take a machine off the list, and a
+ * destructive control that is hard to find is one people work around rather than use.
+ */
+.devices-dialog__revoke {
+  margin-top: 8px;
+  border-color: var(--color-danger, #e03131);
+  color: var(--color-danger, #e03131);
+}
+
+.devices-dialog__revoke--go {
+  margin-top: 0;
+  background: var(--color-danger, #e03131);
+  color: #fff;
+}
+
+.devices-dialog__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 8px 0 0;
+}
+
+.devices-dialog__facts div {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.devices-dialog__facts dt {
+  color: var(--color-gray-70, #495057);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.devices-dialog__facts dd {
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.devices-dialog__confirm {
+  margin-top: 8px;
+  border-top: 1px solid var(--color-gray-30, #ced4da);
+  padding-top: 8px;
+}
+
+.devices-dialog__warn {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.devices-dialog__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

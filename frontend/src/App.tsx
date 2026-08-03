@@ -66,6 +66,7 @@ import type { Bounds } from '../../src/core/terminal-block'
 import { terminalAdvance, terminalFontReady, terminalLineBox } from './terminal-metrics'
 import { WorkspaceTabs, WorkspaceSummary } from './components/WorkspaceTabs'
 import { AddWorkspaceDialog, WorkspaceConfigDialog } from './components/WorkspaceDialogs'
+import { DevicesDialog } from './components/DevicesDialog'
 import { AgentLimitsHud } from './components/AgentLimitsHud'
 import { RestartButton } from './components/RestartButton'
 import { ClearCanvasButton } from './components/ClearCanvasButton'
@@ -1367,8 +1368,16 @@ function App(): JSX.Element {
   // Boards, one per project
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [activeWorkspace, setActiveWorkspace] = useState<string>('default')
-  /** Which dialog is open, if any: the project picker or one project's settings. */
-  const [workspaceDialog, setWorkspaceDialog] = useState<'add' | 'config' | null>(null)
+  /**
+   * Which dialog is open, if any: the project picker, one project's settings, or the devices.
+   *
+   * `devices` is in this state rather than in its own because the three are one slot on screen —
+   * a board that opened the device list over the settings dialog would be two modal panels deep
+   * with one backdrop between them. It is not *about* a project, which is why its control is on
+   * the bar rather than on the gear: the list has to open on a board with no project registered
+   * at all, which is the state a fresh clone is in.
+   */
+  const [workspaceDialog, setWorkspaceDialog] = useState<'add' | 'config' | 'devices' | null>(null)
   // WebSocket handlers close over their creation-time scope, so the ref is what the
   // async paths read — the state alone would send stale ids after a tab switch.
   const activeWorkspaceRef = useRef<string>('default')
@@ -6686,6 +6695,10 @@ function App(): JSX.Element {
         />
       )}
 
+      {workspaceDialog === 'devices' && (
+        <DevicesDialog onClose={() => setWorkspaceDialog(null)} />
+      )}
+
       {/*
         One bar, since #261: the boards on the left, what you can do to this one on the right.
 
@@ -6767,6 +6780,27 @@ function App(): JSX.Element {
               : 'Hide Excalidraw’s toolbar, properties panel and menu. Tools keep their keyboard shortcuts.'}
           >
             {chromeHidden ? 'Show Menus' : 'Hide Menus'}
+          </button>
+
+          {/*
+            The board's own configuration, beside the project settings and not on the canvas:
+            who else can reach this board is a fact about the *server*, not about anything
+            drawn on it. On the bar rather than behind the gear, because the gear is drawn
+            only on the tab in front and this has to open on a board with no project
+            registered at all — which is the state a fresh clone is in, and the state of the
+            board a reader is most likely to be asking the question from.
+
+            Before the two destructive controls rather than among them: revoking a device is
+            behind its own confirmation inside the dialog, and nothing this press does is
+            irreversible.
+          */}
+          <button
+            className="btn-secondary devices-button"
+            onClick={() => setWorkspaceDialog('devices')}
+            aria-haspopup="dialog"
+            title="See which devices are paired with this board, rename one, or revoke it"
+          >
+            Devices
           </button>
 
           {/*
