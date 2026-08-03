@@ -85,6 +85,9 @@ import {
   ProjectUrlUnparseable,
   NotOnThisBoard
 } from './core/project-board.js';
+import { FOUNDER_NAME } from './core/project-board-layout.js';
+import type { FounderCard } from './core/project-board-types.js';
+import { openFounderActions } from './core/founder-store.js';
 import {
   GithubHealth, GithubStatus, githubHealth, githubPreflightLine, initialGithub, readGithubStatus
 } from './core/github-status.js';
@@ -5365,6 +5368,32 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
  */
 type ProjectWorkspaceRefusal = { error: string; reason: 'no-workspace' | 'no-project' };
 
+/**
+ * The founder column this board's canvas should draw, or nothing at all to draw.
+ *
+ * It rides on the project-board answer rather than on a route of its own because it is drawn
+ * by the region that answer draws, on the same twenty-second poll — the mirror is rebuilt
+ * from scratch every time and remembers nothing, so what it knows has to arrive with the
+ * draw. `GET /api/founder-actions` (#547) is a different question with a different consumer:
+ * the panel, which reads one record whole and answers it.
+ *
+ * **It is sent on the 404 as well**, which is the case this column exists for. The first
+ * founder action a fresh clone produces is "sign `gh` in", and a clone that has not signed in
+ * has no `githubProject` either — so the board with no project is precisely the board with
+ * something waiting, and a payload that only carried this on success would draw the column
+ * everywhere except where it is needed first.
+ *
+ * `FOUNDER_NAME` until #536 makes the name a workspace's own.
+ */
+function founderColumn(workspaceId: string): { columnName: string; cards: FounderCard[] } | null {
+  const open = openFounderActions(workspaceId);
+  if (open.length === 0) return null;
+  return {
+    columnName: FOUNDER_NAME,
+    cards: open.map((record) => ({ key: record.key, title: record.fields.title })),
+  };
+}
+
 async function projectWorkspace(
   req: Request
 ): Promise<{ workspace: Workspace } | ProjectWorkspaceRefusal> {
@@ -5399,17 +5428,21 @@ app.get('/api/project-board', async (req: Request, res: Response) => {
     });
   }
 
+  const founder = founderColumn(workspaceIdFrom(req));
+
   const resolved = await projectWorkspace(req);
   if ('error' in resolved) {
     // 404 rather than 400: the feature is absent for this board, not misused.
+    // The founder column rides along all the same — see `founderColumn` for why this answer
+    // is the one that most needs it.
     return res.status(404).json({
-      success: false, reason: resolved.reason, error: resolved.error
+      success: false, reason: resolved.reason, error: resolved.error, ...(founder ? { founder } : {})
     });
   }
 
   try {
     const board = await readProjectBoard(resolved.workspace);
-    res.json({ success: true, board });
+    res.json({ success: true, board, ...(founder ? { founder } : {}) });
   } catch (error) {
     // 422 rather than 404, and that split is the point of #317. A 404 is the canvas's
     // instruction to draw nothing and say nothing, which is right for the boards that have no
