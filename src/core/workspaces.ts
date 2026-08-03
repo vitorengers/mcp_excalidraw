@@ -22,6 +22,14 @@ import {
 // The shapes module rather than the reader: this is the write path, and `project-board.ts`
 // spawns `gh`. What is needed here is the pattern the reader will hold the value to.
 import { githubProjectRefusal, parseProjectUrl } from './project-board-types.js';
+// The reader after all, for three strings — and only for three strings. The column names a
+// project's config falls back to are declared beside the resolvers that apply them, so that a
+// config refused here for naming the same column twice is refused against the very value the
+// board would have used. Duplicating them here is how the refusal and the resolver drift
+// apart, and the whole point of the refusal is that they cannot.
+import {
+  DEFAULT_FOUNDER_COLUMN, DEFAULT_IN_PROGRESS_COLUMN, DEFAULT_TODO_COLUMN,
+} from './project-board.js';
 // One question only — what reasoning-effort levels does this backend take — and it is asked of
 // the backend rather than answered here, because a level is the backend's own vocabulary. It was
 // answered here, once, by a constant documented as "as `claude --help` states them", which is one
@@ -331,6 +339,19 @@ export interface WorkspaceConfig {
    * such column gets no move rather than a guess.
    */
   projectTodoColumn?: string;
+  /**
+   * Column the work only a person can do is collected in.
+   *
+   * Unset, the option named `Founder Actions` is used — this tool's own suggestion rather
+   * than one of GitHub's, because no project GitHub creates has such a column. A project
+   * that keeps one under another name says so here.
+   *
+   * It may not be either of the two above, as configured or as defaulted. The implement
+   * queue drains a column by name, so a founder action sitting in that column would be
+   * picked up as work an agent can start; the two settings above and this one are refused
+   * together rather than allowed to coincide.
+   */
+  projectFounderColumn?: string;
   /** Per-project model, effort, ceiling and workflow for each agent. See WorkspaceAgentConfig. */
   agents?: WorkspaceAgentsConfig;
 }
@@ -355,6 +376,8 @@ export interface Workspace {
   projectInProgressColumn: string | null;
   /** Null means "the column named Todo, if the project has one". */
   projectTodoColumn: string | null;
+  /** Null means "the column named Founder Actions, if the project has one". */
+  projectFounderColumn: string | null;
   /** Per-agent overrides; null fields fall through to the board's own environment. */
   agents: WorkspaceAgents;
   /** Populated when this workspace could not be fully loaded. */
@@ -574,6 +597,7 @@ async function loadWorkspace(
     projectCardLimit: null,
     projectInProgressColumn: null,
     projectTodoColumn: null,
+    projectFounderColumn: null,
     agents: { issue: NO_AGENT_SETTINGS, implement: NO_AGENT_SETTINGS },
     error: null,
   };
@@ -631,6 +655,18 @@ async function loadWorkspace(
 
   const config = mergeWorkspaceConfig(shared, local) as WorkspaceConfig;
 
+  // Unlike a field pointing outside the project, this one is not survivable: a project whose
+  // founder column *is* a column the queue works on has no safe reading. Honouring it hands
+  // work no agent can do to the loop that starts agents; ignoring it silently leaves the
+  // board resolving a name the operator can see is wrong right there in the file. So the
+  // project loads broken and says which two keys disagree — the same shape as a config that
+  // will not parse, and for the same reason.
+  const collision = founderColumnCollision(config as Record<string, unknown>);
+  if (collision) {
+    logger.warn(`Workspace "${id}" is unusable — ${collision}`);
+    return { ...base, error: collision };
+  }
+
   // A config pointing outside its own project is treated as a mistake, not honoured.
   const docsDir = config.docsDir ? resolveInWorkspace(resolved, config.docsDir) : null;
   const boardFile = config.board ? resolveInWorkspace(resolved, config.board) : null;
@@ -657,6 +693,7 @@ async function loadWorkspace(
       : null,
     projectInProgressColumn: config.projectInProgressColumn?.trim() || null,
     projectTodoColumn: config.projectTodoColumn?.trim() || null,
+    projectFounderColumn: config.projectFounderColumn?.trim() || null,
     agents: readAgents(id, config, board, enabled),
     error: escaped.length
       ? `Config field(s) outside the workspace, ignored: ${escaped.join(', ')}`
@@ -1243,6 +1280,7 @@ export async function reorderWorkspaces(
 const STRING_FIELDS = [
   'name', 'language', 'docsDir', 'board', 'library', 'repo',
   'githubProject', 'projectField', 'projectInProgressColumn', 'projectTodoColumn',
+  'projectFounderColumn',
 ] as const;
 
 const AGENT_FIELDS = ['backend', 'model', 'effort', 'timeoutSeconds', 'workflow'] as const;
@@ -1260,6 +1298,69 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  */
 function refuseGithubProject(value: string): string {
   return `${githubProjectRefusal(value)} Nothing was written.`;
+}
+
+/** The one column setting the implement queue does not work on. */
+const FOUNDER_COLUMN_SETTING = 'projectFounderColumn';
+
+/**
+ * The two it does, paired with what the board falls back to — read at call time, not here.
+ *
+ * `project-board.js` and this module are a cycle: it needs `Workspace`, which is a type and
+ * therefore elided, but the runtime edge exists anyway through `gh.js` → `issue-agent.js`,
+ * which imports `loadAgentWorkflow` from here as a value. Whichever of the two is entered
+ * first, the other's module body runs while its exports are still in the temporal dead zone,
+ * so a top-level `DEFAULT_TODO_COLUMN` here is a `ReferenceError` at import — measured, not
+ * guessed. Inside a function the read happens after both bodies have finished, which is why
+ * this is a function and must stay one. `scripts/check-founder-column-setting.mjs` imports
+ * `project-board.js` before this module and would fail to load at all if it were hoisted.
+ */
+const queueColumnSettings = (): readonly { setting: string; fallback: string }[] => [
+  { setting: 'projectInProgressColumn', fallback: DEFAULT_IN_PROGRESS_COLUMN },
+  { setting: 'projectTodoColumn', fallback: DEFAULT_TODO_COLUMN },
+];
+
+/** A config value read the way `loadWorkspace` reads one: trimmed, and blank is unset. */
+function configuredColumn(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Why a founder column pointed at a column the queue works on is refused, or `null`.
+ *
+ * The queue drains exactly one column, resolved by name at dispatch time, and `findColumn`
+ * matches `trim().toLowerCase()`. So a founder column with a name of its own is invisible to
+ * the start loop by construction — and that construction holds only while the two names
+ * differ. A config that makes them the same is the one route by which a founder action, which
+ * is by definition work no agent can do, reaches the column an agent starts from; it is closed
+ * here, by name, before the board ever reads the project.
+ *
+ * Compared **as resolved** rather than as written, on both sides. A project that never wrote
+ * `projectTodoColumn` and calls its founder column `Todo` collides with the default just as
+ * squarely as one that wrote both, and a project that renamed its queue column onto the
+ * founder default collides from the other side; the board would resolve those to one column
+ * either way, so both are refused. Case and surrounding whitespace are folded for the same
+ * reason `findColumn` folds them: they are what the board would fold when it looked the column
+ * up.
+ *
+ * The message names **both** keys, because either one of them is a legitimate thing to change
+ * and this code has no way to know which one the reader meant.
+ */
+function founderColumnCollision(config: Record<string, unknown>): string | null {
+  const founder = configuredColumn(config[FOUNDER_COLUMN_SETTING]) ?? DEFAULT_FOUNDER_COLUMN;
+  const wanted = founder.toLowerCase();
+
+  for (const { setting, fallback } of queueColumnSettings()) {
+    const configured = configuredColumn(config[setting]);
+    const queue = configured ?? fallback;
+    if (queue.toLowerCase() !== wanted) continue;
+    return `"${FOUNDER_COLUMN_SETTING}" is "${founder}"`
+      + `${configuredColumn(config[FOUNDER_COLUMN_SETTING]) ? '' : ' by default'}`
+      + `, and "${setting}" ${configured ? 'names' : 'defaults to'} the same column "${queue}". `
+      + `The implement queue works on that column, so a founder action there would be started `
+      + `as work. Give one of them a name of its own in ${WORKSPACE_CONFIG_FILENAME}.`;
+  }
+  return null;
 }
 
 /**
@@ -1394,6 +1495,17 @@ export function validateWorkspaceConfigPatch(
       }
     }
   }
+
+  // After the loop, so a `projectFounderColumn` that is a number is refused as the wrong type
+  // rather than as a collision with a column it could never have named. The three column
+  // settings are judged together for the same reason a `backend` and an `effort` are: the
+  // patch is what the dialog holds in full — every field on every save, changed or not — and
+  // a pair is only wrong as a pair. A hand-made `PUT` carrying one of the three and not the
+  // others is judged against the defaults rather than against what the file already says, and
+  // `loadWorkspace` is the backstop there: `writeWorkspaceConfig` reads the project back
+  // through it, so a collision assembled that way arrives as a project marked broken.
+  const collision = founderColumnCollision(patch);
+  if (collision) return { ok: false, error: `${collision} Nothing was written.` };
 
   return { ok: true, patch };
 }

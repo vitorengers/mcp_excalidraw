@@ -474,14 +474,20 @@ export class NotOnThisBoard extends Error {}
 /**
  * The columns a run lands in when a project does not name them.
  *
- * These are the only two constants in this file that name a column, and they are fallbacks
- * rather than rules: they are what GitHub calls the columns on a project it created, the same
- * default the `+` already leans on when it drops a draft into the first option. A board that
- * renamed one says so in `board.config.json`; a board that has no such column gets no move,
- * because a guess would move somebody's card into a column they never asked for.
+ * These are the only three constants in this file that name a column, and they are fallbacks
+ * rather than rules: the first two are what GitHub calls the columns on a project it created,
+ * the same default the `+` already leans on when it drops a draft into the first option. A
+ * board that renamed one says so in `board.config.json`; a board that has no such column gets
+ * no move, because a guess would move somebody's card into a column they never asked for.
+ *
+ * The third is not GitHub's — no project it creates has a founder column — so it is this
+ * tool's own suggestion for what to call one, and it is a default in exactly the same sense:
+ * a project that already has such a column under another name says so, and nothing here
+ * creates it.
  */
 export const DEFAULT_IN_PROGRESS_COLUMN = 'In Progress';
 export const DEFAULT_TODO_COLUMN = 'Todo';
+export const DEFAULT_FOUNDER_COLUMN = 'Founder Actions';
 
 /** A column to move to, and the setting that would name it if the default is wrong. */
 export interface ColumnTarget {
@@ -504,6 +510,27 @@ export function todoColumn(workspace: Workspace): ColumnTarget {
   return {
     name: workspace.projectTodoColumn ?? DEFAULT_TODO_COLUMN,
     setting: 'projectTodoColumn',
+  };
+}
+
+/**
+ * Where the work only a person can do is collected — and it is never the queue's own column.
+ *
+ * A `ColumnTarget` like the two above, for the same reason: a project that already keeps such
+ * a column under a name of its own says so, and a project that has none is told which key
+ * would name it rather than having one guessed for it.
+ *
+ * The distinct name is the whole guard. `dispatchQueue` drains exactly one column, resolved
+ * by name through `findColumn`, so a founder column that is not that column is invisible to
+ * the start loop by construction. That holds only while the two names differ, which is why
+ * `loadWorkspace` and `validateWorkspaceConfigPatch` refuse a config that makes them the
+ * same: a misconfiguration is the only route by which a founder card could reach the drained
+ * column.
+ */
+export function founderColumn(workspace: Workspace): ColumnTarget {
+  return {
+    name: workspace.projectFounderColumn ?? DEFAULT_FOUNDER_COLUMN,
+    setting: 'projectFounderColumn',
   };
 }
 

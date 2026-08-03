@@ -86,7 +86,7 @@ const DEFAULT_FIELDS = ['name', 'language', 'docsDir', 'repo', 'githubProject'];
 /** What `Advanced` reveals — the expert settings, and both agents in full. */
 const ADVANCED_FIELDS = [
   'board', 'library', 'projectField', 'projectCardLimit',
-  'projectTodoColumn', 'projectInProgressColumn',
+  'projectTodoColumn', 'projectInProgressColumn', 'projectFounderColumn',
   'agents.issue.model', 'agents.issue.effort', 'agents.issue.timeoutSeconds', 'agents.issue.workflow',
   'agents.implement.model', 'agents.implement.effort', 'agents.implement.timeoutSeconds',
   'agents.implement.workflow',
