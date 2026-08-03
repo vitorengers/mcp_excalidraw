@@ -272,8 +272,12 @@ writeFileSync(join(projectPath, 'board.config.json'), JSON.stringify({
   name: 'guarded',
   board: 'board.excalidraw',
   repo: 'vitorengers/vibemaxxing',
-  // A project to mirror, so the GitHub routes are refused by the guard rather than by 404.
-  githubProject: 'https://github.com/users/vitorengers/projects/5',
+  // A project to mirror, so the GitHub routes are refused by the guard rather than by 404. The
+  // owner is `someone` like every other fixture in this directory, and that is a rule rather
+  // than a style: `check-shipped-config-neutral.mjs` refuses any tracked file that names a
+  // project board owned by this repository's owner, so a realistic-looking URL here is a red
+  // run somewhere else.
+  githubProject: 'https://github.com/users/someone/projects/5',
 }), 'utf8');
 writeFileSync(join(projectPath, 'board.excalidraw'), JSON.stringify({
   type: 'excalidraw',
