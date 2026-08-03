@@ -383,6 +383,76 @@ Nothing here can add more, and every run is refused at once until the window com
 The usage figure has room again, and a run begins instead of refusing.
 ```
 
+## Which blockers the board notices, and which it may ask again about
+
+The register above is the text. This is the other half: which conditions this product already
+detects, what each one is called, and what the board may go and check for itself.
+
+`src/core/founder-blockers.ts` reads what somebody else's probe answered and produces a
+`FounderBlocker` — a kind, a stable key, and the evidence — or `null`. `founderActionFor` then
+composes the founder action out of the corpus entry for that kind. `src/core/founder-verify.ts`
+is the half that looks again. Both are pure: they spawn nothing, store nothing and file
+nothing.
+
+| Kind | Noticed by | One key per |
+|---|---|---|
+| `gh-missing` | the failure classifier, and the preflight independently | the board |
+| `gh-login` | the same two | the board |
+| `gh-scope` | the same two | the board |
+| `gh-credential` | the failure classifier | the board |
+| `gh-rate-limit` | the failure classifier, on a failure that is deliberately not terminal | the board |
+| `gh-billing` | the failure classifier | the board |
+| `push-denied` | `readPushAccess`, and only on a permission GitHub stated | repository |
+| `agent-missing` | the agent preflight | role and environment |
+| `agent-not-granted` | the agent preflight, where nothing was granted at all | role and environment |
+| `agent-usage-exhausted` | one environment's limits reading | environment |
+
+**One fact is one card.** A missing GitHub CLI is detected twice and independently — once off a
+failing call and once off the startup preflight — so both produce the same key, and
+`dedupeBlockers` keeps the first sighting with the evidence of whatever was being attempted.
+
+### What a run knows, and where it goes
+
+A corpus entry names no account, repository or machine on purpose. Five named holes are how the
+facts of one run get in: the **repository**, the **permission**, the **binary**, the
+**environment** and the **variable**. A repository name can be any length and a binary can be an
+absolute path, so **an edit that would break a rule of the register is not made** — each one is
+applied and then read by `validateFounderAction`, and kept only if the record still passes. A
+board with a very long repository name gets the general sentence rather than a card that cannot
+be drawn.
+
+What a tool said never crosses into a founder field. `TerminalGhFailure` keeps `said` and
+`remedy` in separate fields, and glues them into `message` only so that a `catch` reading
+`.message` still carries the remedy — so nothing in this boundary reads `.message` at all.
+`said` goes to `## Evidence`, where it is exempt from every rule; `remedy` picks the kind, whose
+steps are already written for a reader.
+
+### A probe that cannot say produces nothing
+
+`readPushAccess` is deliberately permissive: only a permission GitHub explicitly stated as
+non-pushing refuses a run, and every failure to learn is `unknown`. That rule generalises here,
+because the alternative is a column that fills with cards about a bad network minute and a
+reader who stops opening it.
+
+- `verdict: 'unknown'` produces no blocker, and settles `cannot-say` when a card is looked at
+  again — never satisfied, and never held against anybody.
+- An environment the agent preflight could not probe produces nothing: a machine with no distro
+  is not a machine with a missing agent.
+- A limits reading older than ten minutes produces nothing. It means nobody has been in a
+  session, not that a quota is still spent.
+
+The full-access posture warning is **not** a blocker. It is human-only and actionable, and it
+never blocks a run — a board works perfectly with it. Admit advice and the column fills with
+advice.
+
+### Looking again
+
+`verifyAgainst(kind, snapshot)` answers `satisfied`, `still-blocked` or `cannot-say`, with one
+line a person can read. Three kinds can only ever answer the third and say so: nothing this
+board runs can confirm that a rate limit has lifted, that a bill has been paid or that a usage
+window has room. Only the next call that goes through shows any of them, and this module makes
+no calls at all.
+
 ## Naming the column per project
 
 The column has a name, and the name is per project. `projectFounderColumn` in a project's
@@ -429,11 +499,6 @@ by case and by surrounding space.
 The register is the first half of the column and the rest of it lands separately. Each heading
 here is a stub of one sentence, and the change that fills it in is the one that ships the
 behaviour — so nothing in this section is a promise about a file that exists today.
-
-### Which blockers the board may notice, and which it may re-probe
-
-The set of human blockers this product already detects, and which of them the board may ask
-about again on its own rather than waiting to be told.
 
 ### A founder action outliving the process that noticed it
 
