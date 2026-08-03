@@ -127,8 +127,8 @@ Five things make that a gesture rather than a hole, and all five are in `src/cor
   exists, and a stranger's request racing your laptop's would be approved by somebody who
   assumed the dialog was about their laptop. With it you are choosing between requests. An
   approval naming the wrong code is refused, and two live requests never carry the same one.
-- **The secret is handed over exactly once**, and the record dies with it. A `requestId` polled
-  after that answers `unknown` — which is also what a `requestId` nobody issued answers.
+- **The credential is handed over exactly once**, and the record dies with it. A `requestId`
+  polled after that answers `unknown` — which is also what a `requestId` nobody issued answers.
 - **What a stranger can reach is bounded.** `POST /api/pair/request` and `GET /api/pair/status`
   are the only routes under `/api` that answer without a credential, because asking for one is
   what they are. They read nothing and change nothing you cannot see: the whole of their effect
@@ -136,6 +136,8 @@ Five things make that a gesture rather than a hole, and all five are in `src/cor
   overall, and a three-minute expiry. A refusal is a 429 and a line in the log, never a dialog.
 - **The registry holds the hash, never the secret.** `devices.json`, beside the token file and
   owner-only in the same way. The device holds the secret; this server only ever verifies one.
+  It is also what *makes* the secret: `src/core/pairing.ts` decides when a device is approved,
+  and `src/core/device-registry.ts` (#502) is the only thing here that mints or writes.
 
 Those two open routes are also outside the `Host` pin the origin gate applies everywhere else,
 and only those two: a device that has not been approved yet reaches this board under a name it
@@ -161,26 +163,30 @@ one secret with no sessions and no accounts behind it: anyone who has it is the 
 as this server is concerned, and anyone who has not is refused. Underneath that, the bind is its
 own guard and a second answer: off loopback the reply is **403** to every route worth reaching —
 not only the GitHub half, the agents and the terminal, but since #366 every read of what the
-board holds. There is nothing left to publish that way. Do not do it on a network you do not
-control, and put access control in front of it if you do it at all.
+board holds and since #456 every write of it. There is nothing left to publish that way and
+nothing left to change. Do not do it on a network you do not control, and put access control in
+front of it if you do it at all.
 
 The two are not the same control and neither stands in for the other. The token is what a caller
 carries; the bind is what this server opened itself to, and it is still the answer with
 `VIBEMAXXING_NO_AUTH=1` set, which is the one configuration where the token is not there to help.
 
-What a non-loopback bind actually leaves, now that the reads are behind the same guard:
+What a non-loopback bind actually leaves, now that the reads and the writes are behind the same
+guard:
 
 - **Refused with 403 off loopback** — the issue block and the implement run, the terminal, the
   workspace registry and project settings, the directory picker, the GitHub project mirror and
   card moves, `/api/github-status`, `/api/agent-limits`, the restart route, and the board's own
-  contents: `GET /api/elements`, `/api/elements/search`, `/api/elements/:id`, `/api/files`,
-  `/api/files/:id`, `/api/docs/:key`, `/api/library` and both snapshot reads. The **WebSocket
-  upgrade** is refused there too, because it sends the whole scene on connect and an HTTP guard
-  cannot see it.
-- **Still answered** — the writes, and `/health`. A board bound that way can be drawn on by
-  anyone holding the token even though none of them can read it back. Treat everything on one as
-  anybody's to change. That asymmetry is deliberate only in the sense that it was noticed rather
-  than folded in: #456 is where the same question gets asked of the writes.
+  contents in both directions: the reads `GET /api/elements`, `/api/elements/search`,
+  `/api/elements/:id`, `/api/files`, `/api/files/:id`, `/api/docs/:key`, `/api/library` and both
+  snapshot reads, and the writes `POST /api/elements`, `PUT`/`DELETE /api/elements/:id`,
+  `DELETE /api/elements/clear`, `/api/elements/batch`, `/api/elements/from-mermaid`,
+  `/api/elements/sync`, `POST /api/files`, `DELETE /api/files/:id`, `POST /api/snapshots` and the
+  four browser round-trips. The **WebSocket upgrade** is refused there too, because it sends the
+  whole scene on connect and an HTTP guard cannot see it.
+- **Still answered** — `/health`, which is how anything finds out whether a canvas is on a port
+  at all, and `GET /api/sync/status`. A board bound that way is inert: it publishes nothing and
+  takes nothing.
 
 Before #366 the second list was the whole drawing canvas — elements, files, documents, the
 library and the snapshots. The two honest options were to guard them or to write down that a
@@ -188,6 +194,12 @@ board bound to an interface publishes its contents; they are guarded, and what t
 last thing a non-loopback bind was good for. The token had landed by then and does not make the
 question go away: it is a switch away from being off, and a control that only holds while a
 second one is set is not one that was decided.
+
+#456 is the same paragraph about the other direction. Guarding the reads alone had left the
+writes as the shape the routes happened to have: nobody on the network could read such a board,
+and anybody reaching the port could still draw on it, empty it — `DELETE /api/elements/clear`
+copies the board first, and it still empties it — and fill its file store. The two options were
+the same two, and so is the answer.
 
 The guard is a test of the **bind address**, not of the caller's address: a server bound to an
 interface refuses those routes for the loopback client on the same machine too. A reverse proxy
@@ -216,8 +228,9 @@ there is a gate in front of every route, refusing with 403 before the route runs
   whatever `Host` it likes — the case this gate deliberately allows, and therefore the one only
   a bind test can turn away.
 
-`scripts/check-cross-origin.mjs` holds both sides of this, and
-`scripts/check-board-reads-guard.mjs` holds the bind side of the same two doors.
+`scripts/check-cross-origin.mjs` holds both sides of this;
+`scripts/check-board-reads-guard.mjs` holds the bind side of the same two doors, and
+`scripts/check-board-writes-guard.mjs` the bind side of everything that changes a board.
 
 **What the gate does not defend against is a local program.** Any process that can open a socket
 to the port sends no `Origin` at all, so nothing here sees it — which is why the token above

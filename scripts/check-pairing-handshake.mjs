@@ -21,10 +21,12 @@
  *     They are what stops a stranger on the network filling the operator's screen with prompts,
  *     and they are refusals nobody sees rather than dialogs.
  *
- * The bounds are driven against `dist/core/pairing.js` directly, with the clock passed in. An
- * expiry a check can wait out is an expiry too short to be one, and a ceiling proved over HTTP
- * would need as many distinct source addresses as the ceiling is high. The routes are proved
- * over HTTP; the arithmetic behind them is proved in the module that does it.
+ * The bounds are driven against `dist/core/pairing.js` directly, with the clock passed in and a
+ * minter that writes nowhere. An expiry a check can wait out is an expiry too short to be one, a
+ * ceiling proved over HTTP would need as many distinct source addresses as the ceiling is high,
+ * and a desk built here with the real `addDevice` would pair devices into the state directory of
+ * whoever ran this. The routes are proved over HTTP; the arithmetic behind them is proved in the
+ * module that does it.
  *
  * The board is given a throwaway `HOME`/`USERPROFILE`/`LOCALAPPDATA`/`XDG_STATE_HOME`, so the
  * token and the device registry land inside this check's own temporary directory and the
@@ -247,8 +249,11 @@ try {
         !/secret/i.test(approved.text), approved.text.slice(0, 200));
 
   const collected = await call(board, `/api/pair/status?requestId=${encodeURIComponent(requestId)}`);
-  const secret = collected.body?.secret ?? '';
-  check('the waiting device is handed the secret on its next poll',
+  // One opaque string, the id and the secret joined — what `verifyDevice` takes, and the only
+  // shape that fits in the one place a bearer credential has to travel in.
+  const credential = collected.body?.credential ?? '';
+  const secret = credential.split('.')[1] ?? '';
+  check('the waiting device is handed its credential on its next poll',
         collected.body?.state === 'approved' && secret.length >= 32,
         collected.text.slice(0, 200));
 
@@ -283,11 +288,11 @@ try {
   check('and it cannot be approved a second time', approvedTwice.status === 404,
         `${approvedTwice.status} ${approvedTwice.text.slice(0, 200)}`);
 
-  const drivenWithSecret = await call(board, '/api/elements', {
-    headers: { [TOKEN_HEADER]: secret },
+  const drivenWithCredential = await call(board, '/api/elements', {
+    headers: { [TOKEN_HEADER]: credential },
   });
-  check('the device secret is not the board token — it is a credential the guard learns in #501',
-        drivenWithSecret.status === 401, `${drivenWithSecret.status}`);
+  check('the credential is not the board token — the guard learns it in #501',
+        drivenWithCredential.status === 401, `${drivenWithCredential.status}`);
 
   // ─── 2. A second origin ─────────────────────────────────────
   console.log('\nA second origin');
@@ -384,10 +389,35 @@ try {
 
   if (pairing) {
     const { createPairingDesk, PAIRING_EXPIRY_MS, PAIRING_MAX_PENDING } = pairing;
+    /**
+     * A registry that writes nowhere, in the shape `addDevice` answers in.
+     *
+     * The real one writes into the state directory of whoever is running this, which is the
+     * operator's own — and the desk is being driven here in this process rather than in a
+     * throwaway server's. Section 1 above is what proves the real one is wired up.
+     */
+    let minted = 0;
+    const mint = (approval) => {
+      const secret = createHash('sha256').update(`secret-${minted}`).digest('hex')
+        + createHash('sha256').update(`salt-${minted}`).digest('hex');
+      minted++;
+      return {
+        secret,
+        device: {
+          id: `device-${minted}`,
+          name: approval.name,
+          secretHash: createHash('sha256').update(secret).digest('hex'),
+          createdAt: new Date(0).toISOString(),
+          lastSeenAt: null,
+          approvedFrom: approval.approvedFrom,
+          host: approval.host,
+        },
+      };
+    };
     const ask = (desk, at, remoteAddress, name = 'a device') =>
       desk.request({ name, remoteAddress, host: 'board.test:3737', now: at });
 
-    const desk = createPairingDesk();
+    const desk = createPairingDesk({ mint });
     const first = ask(desk, 1_000, '10.0.0.5');
     check('a device may ask', first.ok === true, JSON.stringify(first));
 
@@ -409,7 +439,7 @@ try {
     check('and that address may ask again once it has expired',
           ask(desk, afterExpiry, '10.0.0.5').ok === true);
 
-    const ceiling = createPairingDesk();
+    const ceiling = createPairingDesk({ mint });
     for (let index = 0; index < PAIRING_MAX_PENDING; index++) {
       ask(ceiling, 1_000, `10.0.1.${index}`);
     }
@@ -420,7 +450,7 @@ try {
     check('and one expiring makes room again',
           ask(ceiling, 1_000 + PAIRING_EXPIRY_MS + 1, '10.0.9.9').ok === true);
 
-    const codes = createPairingDesk();
+    const codes = createPairingDesk({ mint });
     const issued = new Set();
     for (let index = 0; index < PAIRING_MAX_PENDING; index++) {
       const asked = ask(codes, 1_000, `10.0.2.${index}`);
@@ -429,23 +459,33 @@ try {
     check('two live requests never carry the same code, because the operator compares them',
           issued.size === PAIRING_MAX_PENDING, `${issued.size} distinct of ${PAIRING_MAX_PENDING}`);
 
-    const minting = createPairingDesk();
+    const minting = createPairingDesk({ mint });
     const toApprove = ask(minting, 1_000, '10.0.3.1', 'a mac');
-    const minted = minting.approve({
+    const approval = minting.approve({
       requestId: toApprove.pending.requestId, code: toApprove.pending.code, now: 1_100,
     });
-    check('approving mints a secret and a device record',
-          minted.ok === true && typeof minted.secret === 'string' && minted.secret.length >= 32,
-          JSON.stringify({ ok: minted.ok }));
-    check('and the record holds the hash of it, the address it was approved from, and the name it used',
-          minted.device.secretHash === createHash('sha256').update(minted.secret).digest('hex')
-          && minted.device.approvedFrom === '10.0.3.1'
-          && minted.device.host === 'board.test:3737',
-          JSON.stringify({ ...minted.device, secretHash: '<hash>' }));
+    check('approving asks the registry for a secret and a device record',
+          approval.ok === true && typeof approval.secret === 'string' && approval.secret.length >= 32,
+          JSON.stringify({ ok: approval.ok }));
+    check('and hands it the name, the address it was approved from and the authority it used',
+          approval.device.approvedFrom === '10.0.3.1'
+          && approval.device.host === 'board.test:3737'
+          && approval.device.name === 'a mac',
+          JSON.stringify({ ...approval.device, secretHash: '<hash>' }));
     check('and the pending record is gone the moment it is approved',
           minting.pending(1_100).length === 0, JSON.stringify(minting.pending(1_100)));
-    check('the secret is handed over exactly once',
-          minting.status({ requestId: toApprove.pending.requestId, now: 1_200 }).secret === minted.secret
+    check('a refusal to write is not a consumed gesture — the request survives it',
+          (() => {
+            const failing = createPairingDesk({ mint: () => { throw new Error('read-only'); } });
+            const asked = ask(failing, 1_000, '10.0.4.1');
+            let threw = false;
+            try { failing.approve({ requestId: asked.pending.requestId, code: asked.pending.code, now: 1_100 }); }
+            catch { threw = true; }
+            return threw && failing.pending(1_100).length === 1;
+          })());
+    check('the credential is handed over exactly once',
+          minting.status({ requestId: toApprove.pending.requestId, now: 1_200 }).credential
+            === `${approval.device.id}.${approval.secret}`
           && minting.status({ requestId: toApprove.pending.requestId, now: 1_300 }).state === 'unknown');
   }
 

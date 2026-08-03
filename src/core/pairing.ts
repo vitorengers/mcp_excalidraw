@@ -1,4 +1,7 @@
-import { createHash, randomBytes, randomInt, randomUUID } from 'crypto';
+import { randomInt, randomUUID } from 'crypto';
+
+import { deviceCredential } from './device-registry.js';
+import type { DeviceApproval, DeviceRecord, PairedDevice } from './device-registry.js';
 
 /**
  * The pairing handshake: a device asks, the host approves, and only the host may approve.
@@ -30,10 +33,12 @@ import { createHash, randomBytes, randomInt, randomUUID } from 'crypto';
  *    request per remote address, a ceiling overall, a short expiry — because what it does is put
  *    something on the operator's screen. A network that can fill that screen with prompts has
  *    found a way to make the operator stop reading them.
- *  - **Nothing here is persisted.** A pending request is a gesture in progress, held by an
- *    operator who is looking at two screens; a restart ends it, and ending it is correct. What
- *    survives a restart is the approved device, and that is the registry's job
- *    (`core/device-registry.ts`).
+ *  - **Nothing here is persisted, and nothing here mints.** A pending request is a gesture in
+ *    progress, held by an operator who is looking at two screens; a restart ends it, and ending
+ *    it is correct. What survives a restart is the approved device, and both the record and the
+ *    secret are `core/device-registry.ts`'s to make (#502) — this module only decides *when*.
+ *    The minter is passed in rather than imported, so that a check can drive the arithmetic
+ *    below without a real registry file being written on the machine running it.
  *
  * The clock is a parameter rather than a call to `Date.now()`, so that the expiry and the
  * ceiling can be driven by a check without a check having to wait out an expiry — and an expiry
@@ -85,31 +90,33 @@ export interface PendingPairing {
   expiresAt: number;
 }
 
-/** A device the operator approved, in the shape the registry stores. */
-export interface ApprovedDevice {
-  id: string;
-  name: string;
-  /** The hash, never the secret: this server only ever verifies, and the device holds it. */
-  secretHash: string;
-  createdAt: number;
-  lastSeenAt: number | null;
-  /** The address the request arrived from, recorded so a stale entry can be recognised later. */
-  approvedFrom: string;
-  /** The authority this device was approved *for*, which is what the origin gate needs. */
-  host: string;
-}
+/**
+ * What writes an approved device down and mints its secret.
+ *
+ * `addDevice` from `core/device-registry.ts`, and in a check something that writes nowhere. A
+ * parameter rather than an import because this module is driven directly by
+ * `scripts/check-pairing-handshake.mjs`, in the check's own process, where a real `addDevice`
+ * would write into the operator's own state directory.
+ */
+export type DeviceMinter = (approval: DeviceApproval) => PairedDevice;
 
 export type RequestOutcome =
   | { ok: true; pending: PendingPairing }
   | { ok: false; refusal: PairingRefusal };
 
 export type ApproveOutcome =
-  | { ok: true; device: ApprovedDevice; secret: string }
+  | { ok: true; device: DeviceRecord; secret: string }
   | { ok: false; reason: 'unknown' | 'code-mismatch' };
 
 export type PairingStatus =
   | { state: 'pending'; expiresAt: number }
-  | { state: 'approved'; secret: string; deviceId: string }
+  /**
+   * `credential` rather than `secret`, because it is what `verifyDevice` takes: the device's id
+   * and its secret in one opaque string (`deviceCredential`). One value, because it has to
+   * travel everywhere a bearer token travels — a header, a query parameter on a WebSocket
+   * handshake — and every one of those places has room for exactly one.
+   */
+  | { state: 'approved'; credential: string; deviceId: string }
   | { state: 'unknown' };
 
 /**
@@ -122,22 +129,13 @@ export type PairingStatus =
  */
 interface Record_ {
   pending: PendingPairing;
-  approved: { device: ApprovedDevice; secret: string } | null;
+  approved: { device: DeviceRecord; secret: string } | null;
 }
 
 /** A code a person reads off one screen and finds on another. Six digits, grouped. */
 function newCode(): string {
   const digits = String(randomInt(0, 1_000_000)).padStart(6, '0');
   return `${digits.slice(0, 3)}-${digits.slice(3)}`;
-}
-
-/** As long as the board token, and generated the same way, because it is the same kind of thing. */
-function newSecret(): string {
-  return randomBytes(32).toString('hex');
-}
-
-export function hashSecret(secret: string): string {
-  return createHash('sha256').update(secret).digest('hex');
 }
 
 export interface PairingDesk {
@@ -155,7 +153,7 @@ export interface PairingDesk {
  * The server makes exactly one. A check makes as many as it has cases, which is the difference
  * between driving the ceiling and restarting a process eight times.
  */
-export function createPairingDesk(): PairingDesk {
+export function createPairingDesk({ mint }: { mint: DeviceMinter }): PairingDesk {
   const records = new Map<string, Record_>();
 
   /**
@@ -223,18 +221,15 @@ export function createPairingDesk(): PairingDesk {
       if (!record || record.approved !== null) return { ok: false, reason: 'unknown' };
       if (record.pending.code !== code) return { ok: false, reason: 'code-mismatch' };
 
-      const secret = newSecret();
-      const device: ApprovedDevice = {
-        id: randomUUID(),
+      // The registry mints and writes; this module only decided that it was time to. Before the
+      // record is touched, deliberately: a registry that could not be written throws out of here
+      // with the request still pending, which is what lets the operator try again rather than
+      // discovering that the gesture was consumed by a failure.
+      const { device, secret } = mint({
         name: record.pending.name,
-        secretHash: hashSecret(secret),
-        createdAt: now,
-        // Never, yet. The device has not come back with it, and until it does "approved" and
-        // "in use" are different things the management surface has to be able to tell apart.
-        lastSeenAt: null,
-        approvedFrom: record.pending.remoteAddress,
         host: record.pending.host,
-      };
+        approvedFrom: record.pending.remoteAddress,
+      });
       record.approved = { device, secret };
       // The clock restarts on the approval; see `PAIRING_COLLECT_MS`. A secret nobody comes back
       // for still expires, so it is not left in memory until the board is restarted.
@@ -250,7 +245,11 @@ export function createPairingDesk(): PairingDesk {
       // Handed over and forgotten in the same breath. A second poll finds nothing, which is
       // also what a `requestId` nobody issued finds.
       records.delete(requestId);
-      return { state: 'approved', secret: record.approved.secret, deviceId: record.approved.device.id };
+      return {
+        state: 'approved',
+        credential: deviceCredential(record.approved.device.id, record.approved.secret),
+        deviceId: record.approved.device.id
+      };
     },
   };
 }
