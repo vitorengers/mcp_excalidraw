@@ -173,10 +173,11 @@ handed back to a page, on either machine.
 
 ## The files it is being built in
 
-None of these exist yet; they are named here so the reader of a pull request can see where each
-decision lands.
+The first of them has landed; the rest are named here so the reader of a pull request can see
+where each decision lands.
 
 ```
+src/core/peer-liveness.ts    the four answers above, and which refusal an operator is looking at
 src/core/peer-registry.ts    what this board keeps about a board that approved it
 src/core/peer-client.ts      one board's HTTP call to another, and what each failure means
 src/core/peer-proxy.ts       the seam that sends a request to the machine that owns the board
