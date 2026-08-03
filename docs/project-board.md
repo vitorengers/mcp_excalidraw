@@ -4,8 +4,10 @@ A region to the left of the board's own content, showing the workspace's GitHub 
 section per column, newest issue on top — except **Todo**, which reads oldest first because it is
 the column the queue drains — and cards you can drag between columns with the move travelling back
 to GitHub. Dormant unless a project names a `githubProject` — a board that has none mirrors
-nothing, and since #316 still draws the one column that mirrors nothing anyway: **My Notes**, with
-its `+`. See [The region on a board with no project](#the-region-on-a-board-with-no-project).
+nothing, and since #316 still draws the columns that mirror nothing anyway: **My Notes**, with
+its `+`, and — when anything is waiting in it — **Founder Actions**, at the other end. See
+[The region on a board with no project](#the-region-on-a-board-with-no-project) and
+[The founder column](#the-founder-column).
 
 The **leftmost** region again since #200: the canvas reads `mirror | terminals | documentation`,
 and the terminal blocks sit between this one and the board's own content, anchored to the
@@ -304,6 +306,73 @@ the issue in](issue-block.md#a-run-needs-a-repository-to-create-the-issue-in).
 `scripts/check-notes-column-without-project-browser.mjs` holds all of it, in a browser and at two
 zooms: the column's position is computed relative to the mirrored ones, so drawing it alone is a
 layout change that compiles perfectly either way.
+
+## The founder column
+
+The second column the canvas owns, under the reserved id `canvas:founder`, holding the work only
+a person can do — install something, sign in, pay a bill. Its cards come from this board's own
+records ([founder-actions.md](founder-actions.md)) rather than from GitHub, and it is drawn on
+exactly the terms **My Notes** is: an id with a `:` in it, which is not an id GitHub could issue
+and which `buildMoveArgs` refuses before a command line is built.
+
+The reason it cannot wait for GitHub to declare a column is the first founder action this product
+will ever produce, which is *sign the GitHub CLI in*. At that moment there is no project to file
+it into and no working `gh` to file it with, so the board with no project is precisely the board
+with something waiting — which is why the column rides on the 404 as well as on the read.
+
+Four decisions worth having in one place:
+
+- **Appended, after every column the project declares.** A column's hue is its index into a list
+  of five, so inserting it anywhere else would re-colour every column after it the day the first
+  blocker arrived. At the end, nothing already drawn changes index, hue, role or geometry, and the
+  mirror simply gets 324 wider. Being pinned by its right edge, the region therefore slides 324
+  left on the poll that first draws it — the same accepted shift a column added on GitHub already
+  causes, and [Where the region sits](#where-the-region-sits) is where that is argued.
+- **Nothing is drawn when nothing is waiting.** No column, no extra width, no extra line on the
+  strip. A column for a case that has not happened is a column in everybody's way.
+- **A card is `role: 'card'` under the mirror's own kind**, carrying `customData.founderKey` and
+  no `customData.itemId`. Not a role of its own, so all five derived-element rules go on keying
+  on the kind and nothing is saved, exported, synced or mis-measured; and the missing item id is
+  what makes a card dropped in another column snap back with no request — there is no project
+  item to address a move to. It is deliberately *not* locked, because a locked shape cannot even
+  be selected.
+- **A project that declares a column of that name draws its own and no duplicate.** Once these
+  are published as draft items they arrive in a column read from GitHub, and the canvas has to
+  stand down rather than show the same work twice under one heading.
+
+The strip carries a second line saying how many are waiting, the way the `morePages` line is
+carried, and for the reason [a failed read draws a strip rather than a
+toast](#a-read-that-fails-says-so--on-a-strip-when-the-board-is-cold-in-words-either-way): what
+is being reported lasts as long as the blocker does.
+
+The `+` is not drawn on this column and a draft dropped anywhere still rehomes to **My Notes**. A
+founder action is never authored by hand — it is something the board noticed.
+`scripts/check-founder-column-canvas.mjs` holds the arithmetic and
+`scripts/check-founder-column-browser.mjs` drives the drag in a real browser, with the same drag
+on a real card as its control.
+
+### Newest-first, and what the cap therefore hides
+
+Every column keeps newest-on-top except the one the queue drains, which is
+[drawn oldest first](#todo-is-drawn-oldest-first) because that is the order the queue starts
+things in. Nothing drains this one, so it takes the ordinary rule — and the ordinary rule has a
+consequence here it has nowhere else.
+
+`projectCardLimit` decides what a section *draws* and never what it holds, and the sort runs
+before the cap. Newest-first, the cards a cap leaves out are the **oldest** — which in this column
+means the blocker that has been waiting longest, often the one that is the reason nothing else is
+moving. It is neither lost nor silent: it is in the header's total and the header qualifies the
+card side with `, N hidden`. But it is off the screen, and the cap is a small number — 8 on this
+board, 12 for a config that says nothing.
+
+That is a real cost and it is accepted rather than special-cased, for the reason
+[Todo is drawn oldest first](#todo-is-drawn-oldest-first) gives for not flipping every column: an
+order chosen per column is an order a reader cannot predict, and the column that most needs the
+newest-first rule is Done.
+
+Nothing that *acts* on a founder action reads the drawn column. The records are read uncapped,
+exactly as the queue reads its own column uncapped, so what is drawn and what is held can disagree
+about nothing but how much fits on the screen.
 
 ## Where the region sits
 
@@ -747,16 +816,14 @@ have somewhere honest to land:
 carries a reserved option id with a `:` in it — `canvas:notes` and `canvas:founder` — which fails
 the `NODE_ID` pattern every write to the project is validated against. So no drag and no automatic
 move can put a card into either of them, and nothing GitHub does to the options list can rename,
-reorder or delete them. That is what #97 bought for the notes column and what the founder column
-inherits: before it, `My Notes` had to be dragged to the top of a list GitHub appends to, and an
-option deleted or reordered by anyone with write access moved the `+`.
+reorder or delete them. That is what #97 bought for the notes column, and what the founder column
+inherits.
 
-The canvas draws `Founder Actions` **only while the project has no column of that name**. A
-project that keeps one gets its own mirrored column and no canvas-owned duplicate beside it,
-because an action published there is already a draft item in it — and a draft item is exactly what
-the implement queue can never start.
+The two differ in one thing: `My Notes` is always drawn, and `Founder Actions` is drawn only while
+something is waiting in it and the project declares no column of that name. That is
+[The founder column](#the-founder-column) above;
 [founder-actions.md](founder-actions.md#the-four-ways-the-queue-is-kept-off-a-founder-action) is
-why that shape was chosen, and what a founder action is for.
+what a founder action is and why nothing an agent runs can ever start one.
 
 **The three GitHub columns are a maintainer's job, done on GitHub.** Not automated, and
 deliberately: `updateProjectV2Field` takes the whole `singleSelectOptions` list and its input
@@ -769,49 +836,11 @@ the part that can be done safely from here.
 Order still matters for the GitHub half — a project that reorders its options reorders the
 columns, and their hues with them. Neither canvas-owned column is affected, for the reason above:
 neither is an option, so nothing GitHub does to that list can move `My Notes` off the front or
-`Founder Actions` off the end, or change what either is called. The founder column is **appended**
-rather than inserted for the same arithmetic, since every column takes its hue from its index and
-inserting one would recolour every column after it.
+`Founder Actions` off the end, or change what either is called.
 
 A board that names its columns differently says so in `board.config.json` rather than being
 renamed to suit this page; see `projectTodoColumn` and `projectInProgressColumn` below, and
 `projectFounderColumn` beside them.
-
-### The founder column is drawn newest-first, and the cap hides the longest wait
-
-Every column keeps newest-on-top except the one the queue drains, which is
-[drawn oldest first](#todo-is-drawn-oldest-first) because that is the order the queue starts
-things in. Nothing drains the founder column, so it takes the ordinary rule — and the ordinary
-rule has a consequence here it does not have anywhere else.
-
-`projectCardLimit` decides what a section *draws* and never what it holds, and the sort runs
-before the cap. Newest-first, the cards the cap leaves out are therefore the **oldest**, which in
-this column means the blocker that has been waiting longest — often the one that is the reason
-nothing else is moving. It is neither lost nor silent: it is in the header's total, and the header
-qualifies the card side with `, N hidden`. But it is off the screen, and the cap is a small number
-— 8 on the board this page was written against, 12 unset.
-
-Nothing that *acts* on a founder action reads the drawn column. The records are read uncapped,
-exactly as the queue reads its own column uncapped, so what is drawn and what is held can disagree
-about nothing except how much fits on the screen.
-
-### The one-time shift when the column first appears
-
-The region is pinned by its **right** edge and drawn leftward
-([Where the region sits](#where-the-region-sits)), so a column added does not extend the mirror
-towards the board — it moves every column already drawn one column-width further away from it,
-the first of them, the one carrying the `+`, included. A column is 300 wide and the gap beside it
-is 24, so the first poll that has a founder action to draw slides everything already there
-**324 to the left**, once.
-
-That is accepted behaviour rather than an oversight, and it is the price of the trade #200
-settled. Under the `mirror | terminals | documentation` order the blocks are anchored to this
-region's right edge, so growing rightward would put a new column on top of them; growing leftward
-goes into canvas nobody is using. A column appearing is also a cause a reader can point at, which
-is what the drift #99 recorded never was.
-
-It happens once, because the origin is measured once and then remembered, and because the column
-is drawn only while there is something open to put in it.
 
 ## A card is an issue block
 

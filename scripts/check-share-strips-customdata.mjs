@@ -6,9 +6,10 @@
  * a third-party store this fork does not control. The encryption is not the point: the key
  * travels in the URL fragment, and the whole purpose of the URL is to be given to somebody.
  * So whatever is in the scene is published, and `customData` is where this tool keeps what
- * a block *is* — `issueUrl`, `implementState`, `docKey`, `kind`, `inTodo`. A GitHub issue
- * URL for a private repository, uploaded because a shape happened to be on the canvas, is
- * not something an operator asking for a shareable picture agreed to.
+ * a block *is* — `issueUrl`, `implementState`, `docKey`, `kind`, `inTodo`, `founderKey`. A
+ * GitHub issue URL for a private repository, uploaded because a shape happened to be on the
+ * canvas, is not something an operator asking for a shareable picture agreed to, and a
+ * founder action key names which account on this machine is signed out.
  *
  * `cleanElementsForShare` already destructures out the server-only fields; `customData` was
  * simply not among them and rode along in the `...rest` spread. Removal rather than an
@@ -84,6 +85,9 @@ const { cleanElementsForShare, shareUploadNotice } = shareModule;
 const ISSUE_URL = 'https://github.com/vitorengers/vibemaxxing/issues/279';
 const DOC_KEY = 'running.md';
 const IMPLEMENT_BRANCH = 'issue-279';
+// A founder card names a blocker on somebody's machine — which account is signed out, which
+// repository refused a push. It is drawn on a mirror card like any other key under customData.
+const FOUNDER_KEY = 'someones-board:gh-login';
 
 const BOARD = [
   {
@@ -117,7 +121,7 @@ const BOARD = [
     startBinding: { elementId: 'issue-block', focus: 0, gap: 4 },
     endBinding: { elementId: 'a-note', focus: 0, gap: 4 },
     label: { text: 'points at' },
-    customData: { kind: 'board-section', issueUrl: ISSUE_URL },
+    customData: { kind: 'board-section', issueUrl: ISSUE_URL, founderKey: FOUNDER_KEY },
   },
   {
     id: 'plain-shape', type: 'ellipse',
@@ -156,6 +160,8 @@ const forbidden = [
   ['the branch an implementation runs on', IMPLEMENT_BRANCH],
   ['a local filesystem path', 'C:/secret/path'],
   ['the key inTodo', 'inTodo'],
+  ['the key founderKey', 'founderKey'],
+  ['the founder action key itself', FOUNDER_KEY],
 ];
 for (const [what, needle] of forbidden) {
   check(`${what} is absent`, !serialised.includes(needle),

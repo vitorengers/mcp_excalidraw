@@ -453,6 +453,36 @@ board runs can confirm that a rate limit has lifted, that a bill has been paid o
 window has room. Only the next call that goes through shows any of them, and this module makes
 no calls at all.
 
+## The column the canvas owns
+
+The cards are drawn in a column of the project mirror's that mirrors nothing, under the reserved
+id `canvas:founder` — the arrangement **My Notes** already proved, and here for a stronger
+reason. The first founder action a fresh clone produces is *sign the GitHub CLI in*, and at that
+moment there is no project to file it into and no working `gh` to file it with, so a column that
+waited for GitHub to declare one would be missing exactly when it is needed. It is drawn on the
+board with no project at all, beside the notes column and nothing else.
+
+Nothing is drawn while nothing is waiting: no column, no extra width, no extra line on the strip.
+When something is, the column is **appended** after every column the project declares, so no
+column already there changes its index — and therefore its hue — and the strip gains a line
+saying how many are open.
+
+A card is an ordinary mirror card carrying `customData.founderKey` and no item id, which is what
+makes one dropped into another column snap back with nothing sent to GitHub: there is no project
+item to address a move to. It is not locked, because the panel that will answer these needs a
+card a reader can select. The `+` is not drawn on this column, and a block written by hand still
+rehomes to **My Notes** — a founder action is something the board noticed, never something
+somebody typed.
+
+What the column is called is the project's own answer, resolved by the same
+`founderColumn(workspace)` a published draft item is filed with — see [Naming the column per
+project](#naming-the-column-per-project). The canvas draws its own only while the project
+declares no column of that name, so the two can never show the same work twice.
+
+[project-board.md](project-board.md#the-founder-column) is where the geometry is argued: which
+edge the mirror is pinned by, the one-time shift the first drawing costs, and what
+`projectCardLimit` hides when a column that nothing drains is drawn newest-first.
+
 ## Naming the column per project
 
 The column has a name, and the name is per project. `projectFounderColumn` in a project's
@@ -579,26 +609,6 @@ own so that it does not depend on the column having landed, and every section ca
 control: a real open issue in the same fixture must come back startable, a deliberately mutated
 draft must come back startable, and an ordinary option id must be accepted. An assertion that
 cannot fail is not evidence. `scripts/check-founder-panel-target.mjs` holds the fourth.
-
-## The column the canvas owns
-
-The founder column is the second column this canvas draws for itself. `My Notes` was the first,
-and the reason is the same one: a fresh clone has to be usable before anything is configured, and
-a blocker about `gh` has nowhere on GitHub to be.
-
-The reserved id and the guarantee it carries are guard 2 above. Everything else about how the
-column is placed, ordered, counted and shifted is
-[project-board.md](project-board.md#the-columns-a-board-is-expected-to-have)'s, because it is the
-same mirror, drawn by the same layout, with the same header arithmetic — and restating it here is
-how two documents come to disagree.
-
-Two rules about it are this page's, because they are about founder actions rather than about
-columns:
-
-- **The `+` stays notes-only.** A founder action is never authored by hand; see
-  [what this deliberately does not do](#what-this-deliberately-does-not-do).
-- **A draft is an observation, wherever somebody put it.** Draft rehoming keeps rewriting every
-  draft to the notes column, including one sitting in the founder column, and that is deliberate.
 
 ## Publishing to the GitHub project
 

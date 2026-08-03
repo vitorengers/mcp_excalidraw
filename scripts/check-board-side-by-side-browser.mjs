@@ -41,6 +41,14 @@
  * still 1 — stated here, and checked, so that a board that grows wider than the display goes
  * red here instead of arriving as "the writing is blurry" again.
  *
+ * **The bounds are the board's own elements**, with every derived region left out by its
+ * mark. The notes column is drawn on a board with no project since #316 and stands one gap to
+ * the left of everything authored, so a scene bound that counted it measured 2792 — the board
+ * plus 468 units of region — and whether it had landed yet was a race with the twenty-second
+ * poll rather than anything about the board. That was measured on #539, which changed when
+ * the notes column arrives on such a board and made a latent race here visible: 9 of 9 green
+ * before it, 4 of 9 red after, with the failing runs holding six mirror elements at x = -488.
+ *
  * The geometry runs with or without Chrome. Only the browser half is skipped when there is
  * none. Run `./node_modules/.bin/tsc` and `./node_modules/.bin/vite build` first: the
  * resolver is a compiled module and the page is the built frontend.
@@ -356,7 +364,14 @@ const PROBE = `(() => {
     if (element.isDeleted) continue;
     const custom = element.customData || {};
     const box = { x: element.x, y: element.y, w: element.width, h: element.height };
-    out.boxes.push(box);
+    // **The board, and not what is drawn beside it.** Every derived region is left out of the
+    // bounds: since #316 a board with no project still draws the notes column and its `+`,
+    // which stands one gap to the left of the board's own content and is therefore 468 scene
+    // units of width that is not board data. Whether it has landed yet when this probe runs
+    // is a race with the poll, and the claim being measured — that the two sections fit the
+    // display they were written for — is about neither. Marked rather than positioned,
+    // because that is how every other rule in this repository tells the two apart.
+    if (custom.kind !== 'project-board' && custom.kind !== 'terminal') out.boxes.push(box);
     if (custom.kind === 'board-section') out.sections[custom.title] = box;
   }
   const state = api.getAppState();

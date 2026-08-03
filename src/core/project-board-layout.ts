@@ -10,8 +10,9 @@
  * answer, measured once against the board's own content and then kept; `mirrorWidth` is what
  * the caller hands it, being the whole width the mirror is about to draw.
  *
- * Not every column here is GitHub's. The first one is the canvas's own — where the `+`
- * drops an observation, and the only column on the mirror no option is behind. It is added
+ * Not every column here is GitHub's. Two are the canvas's own, both under reserved ids no
+ * option could be behind: the first, where the `+` drops an observation, and — when there is
+ * anything waiting in it — a last one holding the work only a person can do. Both are added
  * by `layoutMirror`; `layoutBoard` below it draws whatever it is given.
  *
  * Every shape produced carries `customData.kind = "project-board"`. That mark is what
@@ -21,15 +22,22 @@
 import { layoutLabel, wrap } from './text-layout.js';
 import {
   BoardSection,
+  FounderCard,
   ProjectBoard,
   NO_STATUS_OPTION_ID,
   NOTES_OPTION_ID,
   NOTES_NAME,
+  FOUNDER_OPTION_ID,
+  FOUNDER_NAME,
 } from './project-board-types.js';
 import { TERMINAL_KIND } from './terminal-block.js';
 
-// Re-exported so the canvas can name the notes column without importing two modules.
-export { NOTES_OPTION_ID, NOTES_NAME } from './project-board-types.js';
+// Re-exported so the canvas can name the columns that are its own without importing two
+// modules. Both reserved ids travel together because they are the same arrangement twice.
+export {
+  NOTES_OPTION_ID, NOTES_NAME, FOUNDER_OPTION_ID, FOUNDER_NAME,
+} from './project-board-types.js';
+export type { FounderCard } from './project-board-types.js';
 
 /** The mark that says an element belongs to the mirror rather than to the board. */
 export const MIRROR_KIND = 'project-board';
@@ -215,6 +223,28 @@ export interface LayoutOptions {
    * once, as a toast, by whoever noticed the change.
    */
   queue?: { sectionOptionId: string; enabled: boolean; stalled?: boolean };
+  /**
+   * The founder actions still waiting, and what this board calls the column they wait in.
+   *
+   * An option rather than something carried on the board, and merged at draw time exactly as
+   * `implementing` is, for `implementing`'s reason: a mirrored element is rebuilt from GitHub
+   * on every poll and can remember nothing, so anything the mirror knows that GitHub does not
+   * has to arrive with the draw. The records themselves live on the server, in
+   * `founder-store.ts`, because a blocker outlives the process that noticed it.
+   *
+   * `columnName` is the caller's answer for `queue.sectionOptionId`'s reason: what this
+   * column is called is a workspace's decision (#536), and a layout that knew the name would
+   * be the constant this mirror is built to avoid. `FOUNDER_NAME` is what a caller with no
+   * opinion passes.
+   *
+   * **The mirror gets 324 wider the first time this carries a card**, being one `COLUMN_WIDTH`
+   * plus one `COLUMN_GAP`, and the region therefore slides 324 to the left on that poll: it is
+   * pinned by its *right* edge with the origin remembered (`MirrorAnchor`,
+   * `resolveMirrorOrigin`), so it grows leftward into empty canvas rather than onto the
+   * terminal blocks. That is #200's accepted cost, the same one a column added on GitHub
+   * already pays, and it is named here so the next reader does not read it as a defect.
+   */
+  founder?: { columnName: string; cards: FounderCard[] };
 }
 
 /**
@@ -551,9 +581,31 @@ export function layoutBoard(
   const heading = board.fieldName
     ? `${board.projectTitle} — ${board.fieldName}`
     : board.projectTitle;
-  const titleText = board.morePages
-    ? `${heading}\nfirst ${mirrored} items, the project has more`
-    : heading;
+
+  /**
+   * How many founder actions are waiting, said on the strip when there are any.
+   *
+   * Counted off the canvas-owned section rather than off the caller's list, so the line
+   * describes what was actually drawn: where the project declares a column of that name the
+   * mirror draws none of its own, the cards are that column's, and a second sentence about
+   * them here would be the strip counting a column it does not own.
+   *
+   * On the strip rather than in a toast, and `layoutUnreadable` is where that argument is
+   * written out: a condition that lasts as long as the blocker does needs a sign that lasts
+   * with it, and a toast on a twenty-second poll is either gone in ten seconds or said a
+   * hundred and eighty times an hour. A second line the way `morePages` takes one, because
+   * #206 measured that appending to the title clips both ends of it in a browser.
+   */
+  const waiting = board.sections.reduce(
+    (total, section) =>
+      (section.optionId === FOUNDER_OPTION_ID ? total + section.cards.length + section.hidden : total),
+    0
+  );
+  const titleText = [
+    heading,
+    ...(board.morePages ? [`first ${mirrored} items, the project has more`] : []),
+    ...(waiting > 0 ? [`${waiting} founder action${waiting === 1 ? '' : 's'} waiting`] : []),
+  ].join('\n');
   const titleHeight = Math.max(
     TITLE_HEIGHT,
     layoutLabel(titleText, width, HEADER_FONT_SIZE).containerHeight
@@ -715,7 +767,9 @@ export function layoutBoard(
     });
 
     for (const card of section.cards) {
-      const error = errors[card.itemId];
+      // A founder card can carry no move error: nothing ever sends a move for it. Asked by
+      // the mark rather than by the empty `itemId` it would otherwise look one up under.
+      const error = card.founderKey ? undefined : errors[card.itemId];
       const text = cardText(card.title, card.number, error);
       const laid = layoutLabel(text, COLUMN_WIDTH, CARD_FONT_SIZE);
       const height = Math.max(CARD_MIN_HEIGHT, laid.containerHeight + 8);
@@ -731,7 +785,10 @@ export function layoutBoard(
       const outlined = run === 'running' || run === 'done';
 
       const shape = rectangle({
-        id: `pb-c-${card.itemId}`,
+        // A founder card has no item id to be named by — that is the whole of what it is —
+        // so it is named by the key the store holds it under, which is unique per board for
+        // the same reason: it is the dedupe.
+        id: `pb-c-${card.founderKey ?? card.itemId}`,
         x,
         y,
         width: COLUMN_WIDTH,
@@ -763,7 +820,15 @@ export function layoutBoard(
           kind: MIRROR_KIND,
           role: 'card',
           sectionOptionId: section.optionId,
-          itemId: card.itemId,
+          // One or the other, never both. A founder card is `role: 'card'` under the same
+          // `kind` — not a role of its own, so that all five derived-element strip points go
+          // on keying on `kind === MIRROR_KIND` and it is saved, exported, synced and
+          // measured exactly as nothing — and it is the **absence** of a string `itemId` that
+          // makes `settleMirrorDrag` snap it back with no `POST /api/project-board/move`.
+          // There is no project item to move: the record is this board's own.
+          ...(card.founderKey
+            ? { founderKey: card.founderKey }
+            : { itemId: card.itemId }),
           issueUrl: card.url,
           draggable: card.draggable,
           // Whether the issue is still waiting rather than being worked on, which is what
@@ -801,6 +866,39 @@ export function layoutBoard(
  */
 export function notesSection(): BoardSection {
   return { optionId: NOTES_OPTION_ID, name: NOTES_NAME, cards: [], hidden: 0 };
+}
+
+/**
+ * The section the work only a person can do is drawn in — the canvas's own, like the notes
+ * column, and for a stronger reason: the first founder action a fresh clone produces is
+ * "sign `gh` in", and at that moment there is no project to file it into.
+ *
+ * Its cards are `BoardCard`s so that `layoutBoard` draws them exactly as it draws every other
+ * card — one code path, one geometry, one set of derived-element rules. What tells them apart
+ * is `founderKey`, and `BoardCard.founderKey` is where the two consequences of that are
+ * written out: no string `itemId` in the drawn `customData`, so a drag is never written back;
+ * `draggable` true, so the shape is not locked and can still be selected.
+ *
+ * `name` is the caller's, defaulting to `FOUNDER_NAME` — see `LayoutOptions.founder`.
+ */
+export function founderSection(cards: FounderCard[], name: string = FOUNDER_NAME): BoardSection {
+  return {
+    optionId: FOUNDER_OPTION_ID,
+    name,
+    cards: cards.map((card) => ({
+      itemId: '',
+      contentType: 'FounderAction',
+      number: null,
+      title: card.title,
+      url: null,
+      state: null,
+      createdAt: null,
+      repository: null,
+      draggable: true,
+      founderKey: card.key,
+    })),
+    hidden: 0,
+  };
 }
 
 /** What the strip says when there is no project to name on it. */
@@ -851,13 +949,41 @@ export function isNotesOnlyBoard(board: ProjectBoard | null | undefined): boolea
  * columns keep the positions they had when an option stood in for this one, so the hues
  * they are drawn in do not shift either.
  */
-export function mirrorSections(board: ProjectBoard): BoardSection[] {
-  return [notesSection(), ...board.sections];
+export function mirrorSections(board: ProjectBoard, options: LayoutOptions = {}): BoardSection[] {
+  const sections = [notesSection(), ...board.sections];
+
+  /**
+   * And the founder column, **appended** — after everything the project declares.
+   *
+   * Appended rather than inserted, because a column's hue is `COLUMN_STROKES[index % 5]` and
+   * its fill the same index: putting this one anywhere but the end would re-colour every
+   * column after it the day the first blocker arrived, on a board nobody had touched. At the
+   * end, every existing column keeps its index and therefore its hue, its role and its
+   * geometry, and the mirror simply gets 324 wider — see `LayoutOptions.founder`.
+   *
+   * And only when the project declares no column of that name. Once #540 publishes these as
+   * draft items they arrive in a real column read from GitHub, and drawing a canvas-owned one
+   * beside it would show the same work twice under one heading. Matched the way every other
+   * column lookup in this project is: trimmed, and without regard to case.
+   */
+  const founder = options.founder;
+  if (!founder || founder.cards.length === 0) return sections;
+  const named = founder.columnName.trim().toLowerCase();
+  if (board.sections.some((section) => section.name.trim().toLowerCase() === named)) return sections;
+  return [...sections, founderSection(founder.cards, founder.columnName)];
 }
 
-/** How wide the mirror is, the notes column included. The caller anchors by this. */
-export function mirrorWidth(board: ProjectBoard): number {
-  return boardWidth(board.sections.length + 1);
+/**
+ * How wide the mirror is, the columns the canvas owns included. The caller anchors by this.
+ *
+ * **The second parameter is optional and has to stay optional**: `mirrorWidth(board)` is what
+ * a caller measuring a mirror with nothing of its own asks, and a required parameter would
+ * break every one of them. A caller that passes options to `layoutMirror` must pass the same
+ * ones here, though, or it reserves a region one column too narrow and draws the founder
+ * column over whatever sits to its left.
+ */
+export function mirrorWidth(board: ProjectBoard, options: LayoutOptions = {}): number {
+  return boardWidth(mirrorSections(board, options).length);
 }
 
 /**
@@ -887,13 +1013,19 @@ export function mirrorWidth(board: ProjectBoard): number {
  * A draft is an observation; observations are in the notes column. That rule holds whatever
  * a stamp says, so `sectionOptionId` on a draft is now vestigial — written by the `+`, read
  * by nothing that matters, and kept only because `layoutBoard` below places by it.
+ *
+ * **The founder column is no exception, and that is deliberate.** A draft stamped with
+ * `FOUNDER_OPTION_ID` is rehomed to the notes column with all the rest: a draft is an
+ * observation somebody wrote down, and a founder action is a blocker this board noticed and
+ * holds a record of. Nothing hand-written is ever a founder action — which is also why the
+ * `+` stays on the notes column alone, and why there is no gesture anywhere that authors one.
  */
 export function layoutMirror(
   board: ProjectBoard,
   origin: { x: number; y: number },
   options: LayoutOptions = {}
 ): MirrorLayout {
-  const sections = mirrorSections(board);
+  const sections = mirrorSections(board, options);
   const drafts = (options.drafts ?? []).map((draft) => (
     draft.sectionOptionId === NOTES_OPTION_ID
       ? draft

@@ -58,9 +58,11 @@ export function cleanElementsForShare(urlExportElements: ServerElement[]): Recor
   for (const el of urlExportElements) {
     // Strip server-only fields
     // `customData` goes with them: it is where this tool keeps what a block *is* —
-    // issueUrl, implementState, docKey, kind, inTodo — and stock excalidraw.com reads
-    // none of it, so nothing rendered there can depend on a key inside. Removal rather
-    // than an allowlist for that reason.
+    // issueUrl, implementState, docKey, kind, inTodo, founderKey — and stock excalidraw.com
+    // reads none of it, so nothing rendered there can depend on a key inside. Removal rather
+    // than an allowlist for that reason, which is also why a key added over there needs no
+    // edit here: `founderKey` names a blocker on somebody's machine and is stripped by the
+    // same removal that strips the rest.
     const {
       createdAt, updatedAt, syncedAt, source: _src,
       syncTimestamp, label, start, end, text,
