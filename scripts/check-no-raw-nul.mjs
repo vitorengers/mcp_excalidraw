@@ -1,0 +1,133 @@
+#!/usr/bin/env node
+/**
+ * No tracked text file carries a raw NUL byte, because ripgrep stops reading a file that does.
+ *
+ * A NUL is a good separator and a terrible character to type. `${workspaceId}\0host` and
+ * `${workspaceId}\0${issueUrl}` are both memo keys joining two strings with a byte that cannot
+ * occur in either, which is the right idiom — the wrong part is writing it as a literal 0x00 in the
+ * source instead of as the escape `\0`.
+ *
+ * What that costs is every search of the file. ripgrep classifies a file containing a NUL as
+ * **binary** and stops at the match that contains it, reporting a warning that reads like a note
+ * about file format:
+ *
+ *     src/server.ts: WARNING: stopped searching binary file after match (found "\0" byte around
+ *     offset 287800)
+ *
+ * `src/server.ts` is the largest file in this repository and the one most often searched, by people
+ * and by agents. A search for `LOOPBACK_ADDRESSES` in it reported five matches and there were
+ * eleven; the six it did not mention were all past the NUL, and #586 was written against the five
+ * until `Select-String` disagreed. Nothing failed, nothing warned in a way anybody reads, and half
+ * of every question about that file's second half went unanswered.
+ *
+ * Any rule of the shape "no occurrence of X in `src/server.ts`" inherits that: it cannot fail on an
+ * occurrence past the byte. This check is what stops a NUL coming back by the route it arrived by,
+ * which is a paste.
+ *
+ * **The escape is allowed and the byte is not**, which is the whole rule. `'\0'`, `'\u0000'` and
+ * `String.fromCharCode(0)` all produce the same string and leave the file searchable, so nothing
+ * that wants a NUL separator is being asked to give it up — only to say so in characters a reader
+ * and a tool can both see.
+ *
+ * Binary files are exempt by extension rather than by sniffing for a NUL, because sniffing is the
+ * thing being tested: a rule that skipped files containing NULs would skip exactly the files it is
+ * looking for.
+ *
+ * Self-contained, reads the index with `git ls-files`, starts nothing.
+ *
+ * Usage: node scripts/check-no-raw-nul.mjs
+ *
+ * Tier: repo
+ */
+
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+let failures = 0;
+const check = (name, condition, detail = '') => {
+  if (condition) console.log(`  ok    ${name}`);
+  else { failures++; console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`); }
+};
+
+/**
+ * What is allowed to hold a NUL: things that are not text.
+ *
+ * Fonts, images and archives are full of them and are nobody's search results. Everything else is
+ * asked, including `.excalidraw` and `.excalidrawlib`, which are JSON.
+ */
+const BINARY = /\.(png|jpe?g|gif|webp|ico|icns|woff2?|ttf|otf|eot|zip|gz|tgz|pdf|mp4|webm|wasm|exe|dll|node)$/i;
+
+// ─── 0. The rule finds a NUL, and an escape of one is not a NUL ─
+
+console.log('0. a raw byte is caught and every way of writing one in characters is not');
+
+/** The offset of the first NUL in a buffer, or -1. */
+const rawNulAt = (buffer) => buffer.indexOf(0);
+
+/**
+ * The fixture is **built, never written**, and that is not fastidiousness.
+ *
+ * This file is tracked, so section 1 asks it the same question it asks everything else. A fixture
+ * holding a real 0x00 would make this check an offender against its own rule — and, worse, would
+ * stop ripgrep reading the file that forbids it, so the rule would become unsearchable in the act of
+ * being stated. Writing it that way happened on the first draft of this check, which is how the trap
+ * is known to be easy rather than theoretical: the byte is invisible in an editor, it survives a
+ * paste, and the only thing that noticed was this check failing an assertion about its own fixture.
+ */
+const NUL = String.fromCharCode(0);
+const SPACE = String.fromCharCode(32);
+const withNul = Buffer.from(`const key = \`a${NUL}b\`;\n`, 'utf8');
+const withSpace = Buffer.from(`const key = \`a${SPACE}b\`;\n`, 'utf8');
+
+check('a raw NUL in the middle of a line is found', rawNulAt(withNul) === 14,
+      String(rawNulAt(withNul)));
+check('a space in the same place is not', rawNulAt(withSpace) === -1, String(rawNulAt(withSpace)));
+// The three spellings that mean the same string and leave the file searchable. Each of these is
+// what the fix for #587 wrote in place of the byte.
+for (const [name, source] of [
+  ['the \\0 escape', 'const key = `${a}\\0${b}`;\n'],
+  ['the \\u0000 escape', 'const key = `${a}\\u0000${b}`;\n'],
+  ['String.fromCharCode(0)', 'const key = a + String.fromCharCode(0) + b;\n'],
+]) {
+  check(`${name} is not a raw NUL`, rawNulAt(Buffer.from(source, 'utf8')) === -1, source.trim());
+}
+check('a binary extension is exempt', BINARY.test('frontend/public/font.woff2'));
+check('and a source file is not',
+      !BINARY.test('src/server.ts') && !BINARY.test('docs/board.excalidraw')
+      && !BINARY.test('scripts/run-checks.mjs'));
+
+// ─── 1. And no tracked text file has one ──────────────────────
+
+console.log('\n1. no tracked text file in this repository carries a raw NUL byte');
+
+const tracked = execFileSync('git', ['ls-files'], { cwd: repoRoot, encoding: 'utf8' })
+  .split('\n').map((line) => line.trim()).filter(Boolean);
+check(`the index was read (${tracked.length} file(s))`, tracked.length > 0);
+
+const offenders = [];
+for (const path of tracked.filter((path) => !BINARY.test(path))) {
+  let buffer;
+  // A file in the index that is not on disk is somebody else's failure, not this one's.
+  try { buffer = readFileSync(join(repoRoot, path)); } catch { continue; }
+  const at = rawNulAt(buffer);
+  if (at === -1) continue;
+  const line = buffer.slice(0, at).toString('utf8').split('\n').length;
+  offenders.push(`${path}:${line} (byte offset ${at})`);
+}
+
+check('every one of them can be searched to the end', offenders.length === 0,
+      `\n        ${offenders.join('\n        ')}`
+      + '\n        ripgrep stops at the first match containing a NUL and calls the file binary,'
+      + '\n        so a search of anything after that line silently answers nothing.'
+      + '\n        Write the byte as the escape `\\0` — it is the same string.');
+
+console.log('');
+if (failures) {
+  console.error(`${failures} case(s) failed`);
+  process.exit(1);
+}
+console.log('All cases passed: every tracked text file is searchable to the end.');

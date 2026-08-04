@@ -6124,7 +6124,11 @@ app.get('/api/github-status', async (req: Request, res: Response) => {
 
   try {
     const status = await ghStatusMemo.read(
-      target ? target.id : `${workspaceId} host`,
+      // `\0` as an escape and never as the byte: a raw NUL makes ripgrep treat this file as
+      // binary and stop reading it part way through (#587). The separator itself is the point,
+      // because no workspace id can hold one — so this key cannot collide with a real
+      // `target.id` however a board is named.
+      target ? target.id : `${workspaceId}\0host`,
       GH_STATUS_KEY,
       () => readGithubStatus(target)
     );
