@@ -394,9 +394,16 @@ function settledAt(record: FounderActionRecord): number {
   return Date.parse(record.resolvedAt ?? record.lastSeenAt ?? record.createdAt);
 }
 
-/** When something was last said about a record, or `-Infinity` for a record nobody has. */
+/**
+ * When something was last said about a record, or `-Infinity` for a record nobody has.
+ *
+ * The list is tested rather than trusted: `usable` admits a record on its key alone, so a
+ * hand-edited file can carry one with no transcript at all, and this runs over every record on
+ * every write.
+ */
 function lastTurnAt(record: FounderActionRecord): number {
-  const last = record.chat[record.chat.length - 1];
+  const chat = Array.isArray(record.chat) ? record.chat : [];
+  const last = chat[chat.length - 1];
   const at = last ? Date.parse(last.at) : Number.NaN;
   return Number.isNaN(at) ? Number.NEGATIVE_INFINITY : at;
 }
