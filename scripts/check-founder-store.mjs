@@ -25,9 +25,11 @@
  *     implement start, and four producers must leave one card. Recording an existing key moves
  *     `lastSeenAt` and nothing else.
  *  5. **two workspaces holding the same key do not see each other's.**
- *  6. **settled, and left settled.** Resolve names who settled it; dismiss is a person's. A
- *     settled key that is recorded again stays settled — the re-open rule is #545's, on
- *     purpose, because it needs real callers before it can be written against what they do.
+ *  6. **settled, and who settled it.** Resolve names which of the two settled it; dismiss is
+ *     always a person's. A settled key noticed again inside the re-open cooldown comes back as
+ *     the record it already was, `reopenedAt` stamped and `createdAt` where it was (#545) — the
+ *     recurrence past that cooldown, and the retention that bounds the history it creates, are
+ *     `scripts/check-founder-store-retention.mjs`.
  *  7. **a chat turn is not register-validated.** A stack trace and 300 characters of stderr
  *     are stored intact, and the same text in a founder field is refused. Conflating the two
  *     is the obvious mistake, so both halves are asserted in one place.
@@ -310,7 +312,7 @@ check('and they are kept in different files',
 
 // ─── 6. Settled, and left settled ────────────────────────────
 
-console.log('\n6. a settled key is settled, and this issue leaves it that way');
+console.log('\n6. a settled key says who settled it, and comes back if the blocker does');
 
 const resolved = resolveFounderAction(ALPHA, `${ALPHA}:gh-login`, 'probe');
 check('resolving says so', resolved?.state === 'resolved', resolved?.state);
@@ -321,15 +323,41 @@ check('the open list drops it',
       openFounderActions(ALPHA).map((record) => record.key).join());
 check('and the full list keeps it', listFounderActions(ALPHA).length === 2);
 
+// The one thing this section left to #545, now that it has been written: a settled key noticed
+// again **inside the re-open cooldown** is the same blocker still there — most often a Done taken
+// on trust, because three kinds can only ever be settled on somebody's word — so the record that
+// is already here comes back rather than a second one being filed. The other side of that rule,
+// a re-detection after the cooldown, and the retention that bounds the history it creates, are
+// `scripts/check-founder-store-retention.mjs`.
 const settledSeenAt = String(resolved?.lastSeenAt);
+const settledCreatedAt = String(resolved?.createdAt);
 await sleep(12);
 const settledAgain = recordFounderAction({ workspaceId: ALPHA, kind: 'gh-login', fields: GOOD });
-check('recording a settled key leaves it settled', settledAgain.record?.state === 'resolved',
-      settledAgain.record?.state);
-check('but still records that it was seen again',
+check('recording a settled key inside the cooldown re-opens the record that is there',
+      settledAgain.record?.state === 'open', settledAgain.record?.state);
+check('and stamps when it was re-opened',
+      typeof settledAgain.record?.reopenedAt === 'string'
+      && !Number.isNaN(Date.parse(settledAgain.record.reopenedAt)),
+      String(settledAgain.record?.reopenedAt));
+check('it is the same event it always was — createdAt did not move',
+      settledAgain.record?.createdAt === settledCreatedAt,
+      `${settledCreatedAt} became ${settledAgain.record?.createdAt}`);
+check('and it records that it was seen again',
       String(settledAgain.record?.lastSeenAt) > settledSeenAt,
       `${settledSeenAt} became ${settledAgain.record?.lastSeenAt}`);
-check('and it did not come back on the open list', openFounderActions(ALPHA).length === 1);
+check('no second record was filed under the key', listFounderActions(ALPHA).length === 2,
+      `${listFounderActions(ALPHA).length} record(s)`);
+check('and the blocker is back on the open list rather than buried',
+      openFounderActions(ALPHA).length === 2, `${openFounderActions(ALPHA).length} open`);
+
+// Settled again, so what the rest of this file reads is a settled workspace. A record that has
+// been round the loop once carries both stamps, and section 8 reads them back off the disk.
+const resettled = resolveFounderAction(ALPHA, `${ALPHA}:gh-login`, 'probe');
+check('settling it a second time settles it', resettled?.state === 'resolved', resettled?.state);
+check('and it keeps the record of having been re-opened',
+      resettled?.reopenedAt === settledAgain.record?.reopenedAt
+      && String(resettled?.resolvedAt) > String(resettled?.reopenedAt),
+      JSON.stringify({ reopenedAt: resettled?.reopenedAt, resolvedAt: resettled?.resolvedAt }));
 
 const dismissed = dismissFounderAction(ALPHA, `${ALPHA}:gh-login:other-account`);
 check('dismissing says so', dismissed?.state === 'dismissed', dismissed?.state);
@@ -400,8 +428,11 @@ check('and with both chat turns intact, the long one byte for byte',
 const settled = restarted.readFounderAction(ALPHA, `${ALPHA}:gh-login`);
 check('a settled record comes back settled, with who settled it',
       settled?.state === 'resolved' && settled?.resolvedBy === 'probe'
-      && settled?.resolvedAt === resolved?.resolvedAt,
+      && settled?.resolvedAt === resettled?.resolvedAt,
       JSON.stringify({ state: settled?.state, by: settled?.resolvedBy }));
+check('and one that was re-opened along the way comes back saying so',
+      settled?.reopenedAt === settledAgain.record?.reopenedAt,
+      `${settledAgain.record?.reopenedAt} became ${settled?.reopenedAt}`);
 check('and the workspace comes back with everything it held',
       restarted.listFounderActions(ALPHA).length === 2
       && restarted.openFounderActions(ALPHA).length === 0,
