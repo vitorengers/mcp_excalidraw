@@ -377,19 +377,25 @@ try {
   check('an unknown option is refused before gh is run', rejected.status === 400,
         `got ${rejected.status}`);
 
-  console.log('\n16. the move route refuses to run off loopback');
+  console.log('\n16. a board bound off loopback still moves a card for the operator');
   const remotePort = await freePort();
   const remote = startCanvas(remotePort, '0.0.0.0');
   const REMOTE_BASE = `http://127.0.0.1:${remotePort}`;
   await waitForHealth(REMOTE_BASE, remote.child, remote.read);
-  const offLoopback = await fetch(`${REMOTE_BASE}/api/project-board/move?workspace=mirror-check`, {
+  const fromThisMachine = await fetch(`${REMOTE_BASE}/api/project-board/move?workspace=mirror-check`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ itemId: 'PVTI_new', optionId: DOING.id }),
   });
-  check('403 Forbidden', offLoopback.status === 403, `got ${offLoopback.status}`);
-  const offBody = await offLoopback.json().catch(() => ({}));
-  check('and it says loopback', /loopback/i.test(offBody.error ?? ''), offBody.error);
+  // 403 until #586, and the caller it was refusing is this one: `REMOTE_BASE` is `127.0.0.1`, so
+  // this request came from the machine the server runs on, on a board its operator opened so that a
+  // second machine could reach it. That a caller who is on neither this machine nor an approved
+  // device is still refused is asserted with a real remote socket in
+  // `scripts/check-acting-caller-guard.mjs`.
+  check('not refused', fromThisMachine.status !== 403, `got ${fromThisMachine.status}`);
+  const offBody = await fromThisMachine.json().catch(() => ({}));
+  check('and nothing it says is about the bind', !/loopback/i.test(offBody.error ?? ''),
+        offBody.error);
 } catch (error) {
   failures++;
   console.error(`\n  FAIL  ${error.message}`);
