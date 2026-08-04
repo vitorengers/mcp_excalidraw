@@ -42,10 +42,12 @@
  *    case is about a name a person approved rather than a string this file wrote.
  *  - The board is bound to `0.0.0.0` and reached **two ways at once**: at `127.0.0.1`, where the
  *    caller is the host and holds the board token, and at this machine's own interface address,
- *    where the socket the server sees is genuinely remote. That is what makes the capability
- *    cases mean something — the same board, at the same moment, offers the queue and the
- *    terminal to the device and withholds both from the operator on loopback, because the bind
- *    is what that question is about and the bind has not changed.
+ *    where the socket the server sees is genuinely remote. That is what makes the capability cases
+ *    mean something. Since #586 what they mean has changed: the queue and the terminal are offered
+ *    to the device *and* to the operator on loopback, because that question is the caller's now
+ *    rather than the bind's, and the caller who is refused is the one that is neither — a request
+ *    from off this machine carrying the board's own token, which satisfies the token gate and is
+ *    turned away all the same.
  *  - The management surface is asked from the device on purpose. Widening the funnel must not
  *    quietly widen `GET|PATCH|DELETE /api/devices` with it: those stay the host's.
  *
@@ -59,13 +61,14 @@
 
 import http from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { networkInterfaces, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas } from './lib/spawn-canvas.mjs';
+import { remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -103,16 +106,6 @@ function conventionalStateFile(name) {
 
 /** Not a failure: the one machine shape on which none of this can be asked. See below. */
 class Skip extends Error {}
-
-/** The address a second machine would reach this one on, or null when there is no such address. */
-function externalAddress() {
-  for (const entries of Object.values(networkInterfaces())) {
-    for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal) return entry.address;
-    }
-  }
-  return null;
-}
 
 let log = '';
 let server = null;
@@ -201,7 +194,17 @@ function upgrade(at, query) {
   });
 }
 
-const external = externalAddress();
+/**
+ * The address a second machine would reach this one on.
+ *
+ * `lib/remote-caller.mjs` rather than the first non-internal address this file used to take: that
+ * one picked whatever the machine listed first, which on a machine with a private overlay is the
+ * overlay — and a board put on a tailnet address here answered `connect EACCES`, so every case
+ * below was skipped by a transport error rather than run. The shared helper prefers a **host-only**
+ * adapter, probes that it can be bound before returning it, and says on stdout when it had to take
+ * a real interface instead.
+ */
+const external = await remoteInterfaceAddress((line) => console.log(`  note  ${line}`));
 
 // Loud rather than silent: every case below is about a socket that did not come from this
 // machine, and `127.0.0.2` is inside `127.0.0.0/8` and is therefore *on* it. There is no
@@ -375,18 +378,22 @@ try {
         record?.name === 'a laptop across the desk' && record?.host === deviceAuthority,
         JSON.stringify(record ?? null));
 
-  // ─── 5. What a paired caller can do that the bind alone refused ───
+  // ─── 5. What acting on this machine is, and whose it is ─────
 
-  console.log('\n5. a board on every interface offers the device what it withholds from the bind');
+  console.log('\n5. acting on this machine is the operator\'s and this device\'s, and nobody else\'s');
 
   const queueForDevice = await call(device, '/api/implement', { headers: asDevice });
   check('GET /api/implement carries the queue for a paired caller',
         queueForDevice.status === 200 && Boolean(queueForDevice.body?.queue),
         `${queueForDevice.status} ${queueForDevice.text.slice(0, 200)}`);
 
+  // This read `queue === undefined` until #586, and that was the defect written down as a rule:
+  // the board withheld its own queue toggle from the operator because it had been opened on an
+  // interface, and the caller it was refusing arrives from loopback like any other browser on this
+  // machine.
   const queueForHost = await call(host, '/api/implement', { headers: asHost });
-  check('and drops it for a caller that is not one, on this same board',
-        queueForHost.status === 200 && queueForHost.body?.queue === undefined,
+  check('and carries it for the operator on this machine as well, on this same board',
+        queueForHost.status === 200 && Boolean(queueForHost.body?.queue),
         `${queueForHost.status} ${queueForHost.text.slice(0, 200)}`);
 
   const terminalForDevice = await call(device, '/api/terminal', { headers: asDevice });
@@ -394,9 +401,17 @@ try {
         `${terminalForDevice.status} ${terminalForDevice.text.slice(0, 200)}`);
 
   const terminalForHost = await call(host, '/api/terminal', { headers: asHost });
-  check('and is refused to one that is not, because that question is about the bind',
-        terminalForHost.status === 403,
+  check('and the operator at the keyboard', terminalForHost.status === 200,
         `${terminalForHost.status} ${terminalForHost.text.slice(0, 200)}`);
+
+  // The discriminator this section used to take from the bind. The board's own token is the
+  // operator's secret and not a device, so a request carrying it from off this machine gets past
+  // the token gate and is refused here — which is what makes a copied token less than an approved
+  // laptop rather than equal to it.
+  const terminalForStranger = await call(device, '/api/terminal', { headers: asHost });
+  check('and neither, for a caller off this machine holding the board token instead of a credential',
+        terminalForStranger.status === 403,
+        `${terminalForStranger.status} ${terminalForStranger.text.slice(0, 200)}`);
 
   // ─── 6. Last seen moves on a served request, not a refused one ───
 

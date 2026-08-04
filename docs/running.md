@@ -263,35 +263,32 @@ has two shapes, and they are not equally wide:
 
 - **`HOST=0.0.0.0`** offers the port on *every* interface the machine has: the Wi-Fi it joined,
   the Ethernet it is plugged into, every VPN, and every virtual adapter a container runtime left
-  behind. It is the value most tutorials print. Off loopback the routes that read or write a
-  board answer 403, so what this actually publishes to all of those networks is a server that
-  refuses.
+  behind. It is the value most tutorials print. What reaches all of those networks is a server that
+  answers **403** to every caller that did not arrive from this machine over loopback and is not on
+  a device you have approved.
 - **`HOST=100.x.y.z`**, one address rather than all of them — a Tailscale address, or the address
   of a single physical interface — offers it on that one network and nowhere else. A laptop on
-  the same tailnet can reach the port; the café Wi-Fi the machine is also on cannot. It is much
-  the narrower of the two, and it is what somebody who wants their own board from their own
-  second machine actually means. The 403 is identical, because the guard asks which address the
-  server *bound* and not which address the caller came from, so loopback is still the only bind
-  that serves anything.
+  the same tailnet can reach the port; the café Wi-Fi the machine is also on cannot. The refusal an
+  unapproved caller meets is identical; what differs is how many networks are in a position to hear
+  it, and that is the whole reason to prefer this shape.
 
-**So the recipe today is: do not set `HOST`.** A board bound anywhere else refuses those routes
-for everybody, the browser on the host machine included — it is on loopback, and it is refused
-along with everyone, so the page loads and the board stays empty.
-[SECURITY.md](SECURITY.md#where-it-listens) names the handful of routes that do still answer
-there, and none of them is a board.
+**Setting `HOST` no longer costs you your own board, and it used to.** The guards asked where the
+server had *bound* rather than who was calling, so a board on any interface was inert for
+*everybody* — the browser on the host machine included, whose request comes from loopback and was
+refused along with everyone else's. That is what made the two shapes above equally useless and this
+section a warning rather than a recipe. The reads and the WebSocket moved to the caller's own address
+in #501; the credential that lets a second machine in arrived in #502, #503 and #522; and #586 moved
+the last of it — the routes that spawn `gh`, the terminal and the implement agent. A board on an
+interface now works for you exactly as a loopback one does.
+[SECURITY.md](SECURITY.md#where-it-listens) is the longer version of what it still does for nobody
+else.
 
-The difference between the two is written down here anyway, because it is about to be the whole
-question. The pairing milestone replaces the bind test with a question about the **caller** —
-#502 and #503 have already built the credential a remote caller answers it with, and #501 is the
-seam that will ask for it. On the day that lands, `HOST=0.0.0.0` and a single interface address
-stop being equally
-useless, and the second one is the one to choose: it is the difference between offering the port
-to one network you control and offering it to every network the machine happens to be on. Until
-then both are the same 403 — anything but a loopback bind refuses the guarded routes to
-everybody, so this section is a warning rather than a recipe, and
-[SECURITY.md](SECURITY.md#where-it-listens) is the longer version of it.
+**To use it from a second machine, open the board's address there.** The page offers to pair rather
+than showing you an empty canvas: it asks, you approve it on this machine, and from then on that
+device holds a credential of its own that you can rename or revoke.
+[devices.md](devices.md) is the gesture and the panel.
 
-**A reverse proxy is the configuration that works now**, and none of the above touches it: a
+**A reverse proxy needs none of this**, and none of the above touches it: a
 proxy reaches this server on loopback, which is where the guard wants every caller, and
 `EXCALIDRAW_ALLOWED_HOSTS` is what tells the origin gate about the name in front of it.
 

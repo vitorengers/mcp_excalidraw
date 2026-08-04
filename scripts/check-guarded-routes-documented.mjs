@@ -24,18 +24,18 @@
  *     of those.** The list is short by design, so it is the one written out route by route; the
  *     refused set is the complement and `rest-api.md` is where it is catalogued.
  *
- * There are two guards and they answer different questions. **The bind** — the two feature
- * helpers that answer 404-if-disabled before 403-if-remote (`terminalRefused`,
- * `implementingRefused`) and the inline test the GitHub routes were written with — refuses
- * everybody on an interface-bound board, the operator's own browser included. **The caller** —
- * `notTheHost`, which #503 added for the pairing routes, and since #501 `offLoopback`, which is
- * the funnel in front of everything else — refuses a socket that did not come from this machine,
- * wherever the server is bound. Marking one as the other would tell a reader the wrong thing
- * about precisely the configuration this milestone exists to make usable.
+ * There are two guards and they answer different questions. **The bind** refuses everybody on an
+ * interface-bound board, the operator's own browser included. **The caller** refuses a socket that
+ * did not come from this machine, wherever the server is bound. Marking one as the other would
+ * tell a reader the wrong thing about precisely the configuration this milestone exists to make
+ * usable.
  *
- * The set moved when #501 landed rather than the rule: `offLoopback` was written here as a bind
- * shape because that is what it asked, and it asks the other question now, so the two lists and
- * every mark in `rest-api.md` that rests on them moved with it.
+ * **No route on this server is bind-guarded any more, and that is the state this file now records
+ * rather than the state it was written in.** The shapes moved one at a time and the rule did not:
+ * `offLoopback` was written here as a bind shape because that is what it asked, and #501 changed
+ * the question; `terminalRefused` and `implementingRefused` were the last two, and #586 changed
+ * theirs. `BIND_SHAPES` is kept, matching nothing, because it is what would classify a bind test
+ * written tomorrow — and every mark in `rest-api.md` that rested on those lists moved with them.
  *
  * A third shape added tomorrow makes its routes read as *open* here, and section 2 is what turns
  * that into a failure rather than a quiet reclassification: every route this file calls open or
@@ -87,8 +87,6 @@ function check(name, condition, detail = '') {
  * gives: matching `offLoopback` alone counts the declaration of the funnel as a use of it.
  */
 const BIND_SHAPES = [
-  /terminalRefused\(res\)/,
-  /implementingRefused\(res\)/,
   /!LOOPBACK_ADDRESSES\.includes\(HOST\)/,
 ];
 
@@ -110,6 +108,13 @@ const CALLER_SHAPES = [
   // different sentence from the one those rows used to carry and is why `rest-api.md` marks
   // them the other way now.
   /offLoopback\(res,\s*['"]/,
+  // And #586 moved these two, which were the last of the bind. Both are `actingFor`, which asked
+  // where the server had opened before it asked anything about the caller — so an interface-bound
+  // board refused the shell and the coding agent to the operator sitting at it, whose request
+  // arrives from loopback. `actingFor` is `operatorsOwn` now, the same question the funnel above
+  // asks, with `null` reserved for the board asking about itself.
+  /terminalRefused\(res\)/,
+  /implementingRefused\(res\)/,
 ];
 
 /**
@@ -165,9 +170,13 @@ app.get('/api/pair/pending', (req: Request, res: Response) => {
 const synthetic = new Map(routesOf(SYNTHETIC).map((route) => [route.name, route.guard]));
 check('the offLoopback funnel is a caller guard since #501',
       synthetic.get('GET /api/funnelled') === 'caller');
-check('terminalRefused is a bind guard', synthetic.get('POST /api/terminal') === 'bind');
-check('implementingRefused is a bind guard', synthetic.get('POST /api/implement') === 'bind');
-check('the inline test the GitHub routes use is a bind guard',
+check('terminalRefused is a caller guard since #586',
+      synthetic.get('POST /api/terminal') === 'caller');
+check('implementingRefused is one too', synthetic.get('POST /api/implement') === 'caller');
+// Kept, and matching nothing in `src/server.ts` today: it is what classifies a bind test written
+// tomorrow, so that a new one has to be marked as one in `rest-api.md` rather than passing as a
+// caller guard. `check-acting-caller-guard.mjs` is what asserts there are none left.
+check('an inline bind test would still read as one, if anybody wrote another',
       synthetic.get('GET /api/inline') === 'bind');
 check('notTheHost is a caller guard, which is a different answer',
       synthetic.get('GET /api/pair/pending') === 'caller');
@@ -227,20 +236,31 @@ const PROBES = new Map([
   // That is what lets the page on a device decide whether to be a board or the screen that says
   // how to become one (#504).
   ['GET /api/pair/admission', { path: '/api/pair/admission' }],
-]);
-
-/**
- * One route per bind-guard shape, so section 2 is evidence about the refused half as well.
- *
- * `GET /api/elements` used to be here and is not any more: since #501 the funnel it sits behind
- * asks the caller, so on the interface-bound server below — reached from this machine — it
- * answers. It moved to `CALLER_SHAPE_PROBES`, where that is the assertion.
- */
-const GUARDED_PROBES = new Map([
+  // Caller-guarded since #586, and asked here for the reason `GET /api/elements` is: on an
+  // interface-bound board, reached from this machine, these are the routes whose 403 was the
+  // defect. The project mirror, the GitHub status, the shell and the coding agent are what an
+  // operator loses by opening the board so that a second machine can reach it, and what they
+  // stopped losing.
   ['GET /api/github-status', { path: '/api/github-status' }],
   ['GET /api/terminal', { path: '/api/terminal' }],
   ['POST /api/implement', { path: '/api/implement', method: 'POST', body: { url: ISSUE_URL } }],
 ]);
+
+/**
+ * One route per bind-guard shape — and there is no such shape left.
+ *
+ * This map emptied one entry at a time as the guards moved. `GET /api/elements` left when #501
+ * taught the funnel to ask the caller; the three that were here until #586 — the GitHub status, the
+ * terminal and the implement agent — left when `actingFor` did, and they are asked among the
+ * answering routes below instead, because on this interface-bound server a caller from this machine
+ * is exactly who they now serve.
+ *
+ * Kept as an empty map rather than deleted: `BIND_SHAPES` still classifies a bind test written
+ * tomorrow, and section 1 requires every classification to be asked, so the next one that appears
+ * has somewhere to be. The refused half of the caller guard needs a socket from off this machine,
+ * which this file does not open — see the note at the end of section 2.
+ */
+const GUARDED_PROBES = new Map([]);
 
 /**
  * One caller-guarded route per shape, asked beside the open ones.
@@ -252,7 +272,13 @@ const GUARDED_PROBES = new Map([
  * spellings of one fact, each needing a body and a fixture. What the trap needs is that a route
  * with a shape nobody here knows reads as *open* and is then asked, which is unchanged.
  */
-const CALLER_SHAPE_PROBES = ['GET /api/elements', 'GET /api/pair/pending'];
+const CALLER_SHAPE_PROBES = [
+  'GET /api/elements',        // offLoopback
+  'GET /api/pair/pending',    // notTheHost
+  'GET /api/github-status',   // offLoopback, and the one an operator sees fail first
+  'GET /api/terminal',        // terminalRefused
+  'POST /api/implement',      // implementingRefused
+];
 
 const answering = [...openRoutes, ...CALLER_SHAPE_PROBES];
 const unprobed = openRoutes.filter((name) => !PROBES.has(name));
@@ -389,12 +415,12 @@ try {
           `got ${answer.status} — ${answer.text}`);
   }
 
-  // The caller-guarded pair answering above is the whole of what distinguishes them from the
-  // bind-guarded ones here: this caller is on the machine, and the bind is not. That they refuse
-  // a caller who is *not* needs a socket from somewhere else, which
-  // `scripts/check-pairing-handshake.mjs` opens rather than this one opening a second.
+  // Every route above answering on an interface-bound board is the whole of what a caller guard
+  // is: this caller is on the machine, and the bind is not. That they refuse a caller who is
+  // *not* needs a socket from somewhere else, which this file does not open.
   console.log(`  note  the caller guard's other half — a genuinely remote socket refused — is`);
-  console.log('        scripts/check-pairing-handshake.mjs, not this file');
+  console.log('        scripts/check-acting-caller-guard.mjs and scripts/check-caller-guard.mjs,');
+  console.log('        with scripts/check-pairing-handshake.mjs for the credential that gets in');
 } catch (error) {
   failures++;
   console.error(`  FAIL  ${error instanceof Error ? error.message : String(error)}`);
@@ -451,28 +477,34 @@ function sections(text) {
  * What each `| `METHOD /path` | …` row of a document is marked as.
  *
  * A row inherits its section's preamble, which is how that document already says it for the
- * terminal and the browser round-trips — a whole table sharing one answer says it once. The
- * caller mark is read off the row only: it is the narrower claim, and a preamble has never made
- * it.
+ * terminal and the browser round-trips — a whole table sharing one answer says it once. **Either
+ * mark may be inherited**, which it could not be until #586: the caller mark used to be readable
+ * off the row alone, on the reasoning that it was the narrower of the two claims and no preamble
+ * had ever made it. The terminal's preamble makes it now, because after #586 there is one kind of
+ * guard and the terminal table is five rows sharing it.
+ *
+ * The row still wins over the preamble, and on a row that somehow carried both, the caller mark
+ * wins: it is the narrower claim, and it is the one such a row would be making.
  */
 function documentedRoutes(text) {
   const found = new Map();
   for (const section of sections(text)) {
     const prose = section.lines.filter((line) => !line.startsWith('|')).join('\n');
     const proseSaysBind = SAYS_BIND.test(prose);
+    const proseSaysCaller = SAYS_CALLER.test(prose);
     for (const line of section.lines) {
       const row = /^\|\s*`(GET|POST|PUT|DELETE|PATCH)\s+([^`]+)`\s*\|/.exec(line);
       if (!row) continue;
       const rowSaysCaller = SAYS_CALLER.test(line);
-      // The caller mark wins over the bind mark on the same row: "loopback **caller** only"
-      // contains neither of the other's words contiguously, but a row could be written to carry
-      // both, and the narrower claim is the one it is making.
+      const rowSaysBind = SAYS_BIND.test(line);
       const mark = rowSaysCaller ? 'caller'
-        : (SAYS_BIND.test(line) || proseSaysBind) ? 'bind'
+        : rowSaysBind ? 'bind'
+        : proseSaysCaller ? 'caller'
+        : proseSaysBind ? 'bind'
         : 'open';
       found.set(`${row[1]} ${row[2]}`, {
         mark,
-        where: mark === 'bind' && !SAYS_BIND.test(line)
+        where: mark !== 'open' && !rowSaysCaller && !rowSaysBind
           ? `the "${section.heading}" preamble` : 'its row',
       });
     }

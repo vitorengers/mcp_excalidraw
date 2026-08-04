@@ -438,10 +438,28 @@ console.log('\n5. both funnels ask the socket, and the decision reads no header 
 
 const server = readFileSync(join(repoRoot, 'src', 'server.ts'), 'utf8');
 
-const guardStart = server.indexOf('function offLoopback(');
-const guard = guardStart === -1 ? '' : server.slice(guardStart, server.indexOf('\n}', guardStart));
-check('offLoopback asks about the caller', /callerIsLocal\(/.test(guard), guard.slice(0, 240));
-check('and no longer about the bind', !/boundToLoopback\(/.test(guard), guard.slice(0, 240));
+/**
+ * Followed through the delegation, because since #586 there are two funnels and one question.
+ *
+ * `offLoopback` guards the board's contents and `actingFor` guards what acts on this machine, and
+ * they now ask the identical thing — so it is written once, in `operatorsOwn`, and "asks about the
+ * caller" is a property of that. Asserting `callerIsLocal` inside `offLoopback` instead would be a
+ * check that goes red the day the duplication is removed, which is not the thing worth holding
+ * still.
+ */
+const bodyOf = (name) => {
+  const at = server.indexOf(`function ${name}(`);
+  return at === -1 ? '' : server.slice(at, server.indexOf('\n}', at));
+};
+
+const shared = bodyOf('operatorsOwn');
+check('the question the funnels share asks about the caller', /callerIsLocal\(/.test(shared),
+      shared.slice(0, 240) || 'there is no operatorsOwn');
+const guard = bodyOf('offLoopback');
+check('offLoopback decides on it', /operatorsOwn\(/.test(guard),
+      guard.slice(0, 240) || 'there is no offLoopback');
+check('and no longer about the bind', !/boundToLoopback\(|LOOPBACK_ADDRESSES/.test(guard),
+      guard.slice(0, 240));
 
 const upgradeStart = server.indexOf('new WebSocketServer(');
 const upgrade = upgradeStart === -1

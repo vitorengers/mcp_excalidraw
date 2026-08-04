@@ -38,13 +38,16 @@ per-start file this account owns.
 It is also the one credential that works **from another machine** (#522). Every row below marked
 *loopback caller only* is answered to a caller on this machine and to an approved device, and to
 nobody else; a remote request holding the board's own token is refused there like any other,
-because that token is a file and not a device anybody approved. What an approved device reaches
-is therefore this table minus three things: the rows marked *loopback only*, which test the bind
-and are refused to everybody on a board bound to an interface; the pairing desk, which is yours
-from this machine; and the three device rows below. The terminal and the implement agent are
-marked *loopback only* and take an approved device as the second way that test passes — that is
-the one place the two marks are not the whole story, and
-[SECURITY.md](SECURITY.md#pairing-a-second-machine) enumerates it.
+because that token is a file and not a device anybody approved. What an approved device reaches is
+therefore this table minus two things: the pairing desk, which is yours from this machine, and the
+three device rows below. [SECURITY.md](SECURITY.md#pairing-a-second-machine) enumerates it.
+
+**There is one mark, and until #586 there were two.** The other was *loopback only*, which tested
+where the server had **bound** rather than who was calling, and it was refused to everybody on a
+board bound to an interface — the browser on the host machine included. That is why an operator who
+opened the board so a second machine could reach it lost the project mirror, the GitHub status, the
+issue reads, the founder column and the shell on their own desk. Nothing on this server tests the
+bind now.
 
 ## Elements
 
@@ -135,13 +138,13 @@ caller on the network — which is where #508/#518 put them; see
 
 | Route | What it does |
 |---|---|
-| `POST /api/issue-block/:id` | Run the research agent and open the issue (loopback only) |
+| `POST /api/issue-block/:id` | Run the research agent and open the issue (loopback caller only) |
 | `POST /api/issue-block/:id/adopt` | Attach an issue that already exists, without creating one (loopback caller only) |
 | `DELETE /api/issue-block/:id` | Forget the run, so the block can be tried again (loopback caller only) |
-| `GET /api/issue-block/:id/issue` | The issue behind a block, read live rather than copied onto it (loopback only) |
+| `GET /api/issue-block/:id/issue` | The issue behind a block, read live rather than copied onto it (loopback caller only) |
 | `GET /api/issue-block/:id/run` | What that block's research run has spent, polled while it is going. Reads memory, so it is the one route here with no `gh` behind it — and therefore one of the two here guarded on the caller rather than on the bind (loopback caller only) |
-| `GET /api/issue` | The issue behind a *mirrored card*, which has no element id, plus what is known about implementing it (loopback only) |
-| `POST /api/issue/comment` | Add a comment — the one way to answer an issue agent's open questions without leaving the board (loopback only) |
+| `GET /api/issue` | The issue behind a *mirrored card*, which has no element id, plus what is known about implementing it (loopback caller only) |
+| `POST /api/issue/comment` | Add a comment — the one way to answer an issue agent's open questions without leaving the board (loopback caller only) |
 | `POST /api/issue/recreate` | Research the issue again and rewrite it in place, while its card is still in Todo (loopback caller only) |
 | `GET /api/issue/recreate` | What that run has done so far, with no `gh` behind it, and guarded on the caller rather than on the bind (loopback caller only) |
 
@@ -152,20 +155,20 @@ The implement agent, its worktree and the queue that feeds it — see
 
 | Route | What it does |
 |---|---|
-| `POST /api/issue-block/:id/implement` | Implement the issue on a block (loopback only) |
-| `POST /api/implement` | Implement an issue by URL, for a mirrored card the server has never seen; `resume: true` continues an interrupted attempt (loopback only) |
+| `POST /api/issue-block/:id/implement` | Implement the issue on a block (loopback caller only) |
+| `POST /api/implement` | Implement an issue by URL, for a mirrored card the server has never seen; `resume: true` continues an interrupted attempt (loopback caller only) |
 | `DELETE /api/issue-block/:id/implement` | Reset a block's record, refused while its run is alive, and refused before the element is looked at so the answer says nothing about which ids this board holds (loopback caller only) |
-| `GET /api/implement` | One record by `?url=`, or every record for the workspace, with the concurrency cap and the queue state (loopback caller only). The `queue` half is additionally dropped while the server is bound off loopback, because the toggle it draws turns on a route that is guarded on the bind |
+| `GET /api/implement` | One record by `?url=`, or every record for the workspace, with the concurrency cap and the queue state (loopback caller only). The `queue` half is dropped for a caller that may not act on this machine at all, because a toggle whose route would then refuse is a button that lies to whoever presses it |
 | `DELETE /api/implement` | The same reset, by URL (loopback caller only) |
-| `POST /api/implement/queue` | Turn this workspace's queue on or off (loopback only, and off unless implementing is enabled) |
+| `POST /api/implement/queue` | Turn this workspace's queue on or off (loopback caller only, and off unless implementing is enabled) |
 
 ## Project board mirror
 
 | Route | What it does |
 |---|---|
-| `GET /api/project-board` | The GitHub project, read live through `gh` (loopback only) |
-| `POST /api/project-board/move` | Move a card to another column — this one writes to GitHub (loopback only) |
-| `GET /api/github-status` | Whether `gh` is installed and logged in, per board, behind a short memo (loopback only — it answers with the login and the token's scopes) |
+| `GET /api/project-board` | The GitHub project, read live through `gh` (loopback caller only) |
+| `POST /api/project-board/move` | Move a card to another column — this one writes to GitHub (loopback caller only) |
+| `GET /api/github-status` | Whether `gh` is installed and logged in, per board, behind a short memo (loopback caller only — it answers with the login and the token's scopes) |
 
 `GET /api/project-board` answers three refusals, and they are three because the canvas does
 different things with them:
@@ -182,15 +185,15 @@ the silence meant for a board that never had one.
 ## Founder actions
 
 The column for the work only a person can do — see
-[founder-actions.md](founder-actions.md). All four are loopback only: the bodies name accounts,
+[founder-actions.md](founder-actions.md). All four are loopback caller only: the bodies name accounts,
 repositories and remedies, and one of them starts a coding agent.
 
 | Route | What it does |
 |---|---|
-| `GET /api/founder-actions` | The open actions, the founder column's name and a `capabilities` object. Answers 200 on a board with no `githubProject` and runs no `gh` at all — it reads a local file, so it goes on answering while GitHub is the thing that is broken (loopback only) |
-| `POST /api/founder-actions/resolve` | Done. `how: "probe"` throws away what was remembered and looks again; `how: "person"` settles it on somebody's word (loopback only) |
-| `POST /api/founder-actions/chat` | Ask a question about one item. The message is stored before anything is spawned, and one turn runs at a time per item (loopback only) |
-| `GET /api/founder-actions/chat` | The conversation and the turn in flight (loopback only) |
+| `GET /api/founder-actions` | The open actions, the founder column's name and a `capabilities` object. Answers 200 on a board with no `githubProject` and runs no `gh` at all — it reads a local file, so it goes on answering while GitHub is the thing that is broken (loopback caller only) |
+| `POST /api/founder-actions/resolve` | Done. `how: "probe"` throws away what was remembered and looks again; `how: "person"` settles it on somebody's word (loopback caller only) |
+| `POST /api/founder-actions/chat` | Ask a question about one item. The message is stored before anything is spawned, and one turn runs at a time per item (loopback caller only) |
+| `GET /api/founder-actions/chat` | The conversation and the turn in flight (loopback caller only) |
 
 The two halves of that last answer come from two places, and the difference is worth knowing:
 
@@ -209,7 +212,7 @@ recorded as the person's rather than as the board's.
 ## Terminal
 
 Shells on the canvas — see [terminal.md](terminal.md). Opt in with `EXCALIDRAW_TERMINAL`;
-loopback only, and capped per board.
+loopback caller only, and capped per board.
 
 | Route | What it does |
 |---|---|
@@ -374,12 +377,13 @@ bind is a separate answer underneath it, so both are still worth reading here.
 loopback listener already holds the port, which is what would otherwise leave two canvas servers
 splitting state across IPv4 and IPv6. `scripts/check-local-bind.mjs` pins both down.
 
-`HOST` can still be set wider; nothing stops that. What does stop is every route marked
-*loopback only* above, each of which refuses with 403 rather than answering a caller that
-arrived over the network. Since #501 that is what the mark literally means: the guard asks for
-the **caller's** address rather than the one this server opened, so a board on every interface
-still answers the browser on the machine it runs on and refuses everybody else. Three kinds of
-route carry the mark, and the second was decided in #366 and the third in #456:
+`HOST` can still be set wider, and since #586 there is a reason to: it is how a second machine
+reaches this board at all. What does not widen with it is every route marked *loopback caller only*
+above, each of which refuses with 403 rather than answering a caller that arrived over the network —
+unless that caller is on a device you approved. The guard asks for the **caller's** address rather
+than the one this server opened, so a board on every interface answers the browser on the machine it
+runs on exactly as a loopback board does. Three kinds of route carry the mark, and the second was
+decided in #366 and the third in #456:
 
 - the ones that spawn a process holding your `gh` credentials, write to GitHub, or reach your
   filesystem;

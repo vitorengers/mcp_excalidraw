@@ -35,6 +35,7 @@ import WebSocket from 'ws';
 
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas as spawnCanvas } from './lib/spawn-canvas.mjs';
+import { remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const isWindows = process.platform === 'win32';
@@ -466,21 +467,57 @@ try {
   }
   check('no shell was started', !existsSync(stubMarker));
 
-  // ─── 4. Off loopback means they refuse ──────────────────────
-  console.log('\n4. bound off loopback they refuse, and still nothing is spawned');
-  const remote = startCanvas(REMOTE_PORT, { HOST: '0.0.0.0', EXCALIDRAW_TERMINAL: stubCommand });
+  // ─── 4. Who the shell is for, on a board opened on every interface ──
+  //
+  // This section used to read the bind — one board on `0.0.0.0`, called at `127.0.0.1`, asserted
+  // 403 — and that was the defect rather than the rule (#586). The caller it refused was the
+  // operator's own browser, which arrives from loopback; an operator who opens the board on an
+  // interface so that a second machine can reach it must not thereby lose the shell on the machine
+  // they are sitting at. So the same board is asked by both callers, at the same moment, and what
+  // is asserted is which of them is served.
+  console.log('\n4. bound off loopback, a caller that is not this machine\'s gets no shell and the '
+              + 'operator at the keyboard does');
+  const remoteAddress = await remoteInterfaceAddress((line) => console.log(`  note  ${line}`));
+  const remote = startCanvas(REMOTE_PORT, {
+    HOST: '0.0.0.0',
+    EXCALIDRAW_TERMINAL: stubCommand,
+    // The origin gate is a different control and this section is not about it. A request to
+    // `http://<interface>:<port>` names an authority a board bound to `0.0.0.0` does not answer
+    // for, so without this the remote case would be turned away by the wrong gate and would pass
+    // for the wrong reason.
+    ...(remoteAddress ? { EXCALIDRAW_ALLOWED_HOSTS: `${remoteAddress}:${REMOTE_PORT}` } : {}),
+  });
   const REMOTE_BASE = `http://127.0.0.1:${REMOTE_PORT}`;
   await waitForHealth(REMOTE_BASE, remote);
 
-  const offLoopback = await call(REMOTE_BASE, '/api/terminal', { method: 'POST' });
-  check('403 Forbidden', offLoopback.status === 403,
-        `got ${offLoopback.status} ${JSON.stringify(offLoopback.body)}`);
-  check('in the wording the other guards use',
-        /only run.*while the server is bound to loopback/i.test(offLoopback.body?.error ?? ''),
-        offLoopback.body?.error);
+  // The refused caller first, while the marker cannot have been written by anybody: a shell
+  // started and then reported as "not started" is the one mistake this section cannot make.
+  if (!remoteAddress) {
+    console.log('  note  this machine has no non-loopback address to be called on, so the caller '
+                + 'that has to be refused could not be made, and that case was not run');
+  } else {
+    const away = await call(`http://${remoteAddress}:${REMOTE_PORT}`, '/api/terminal', { method: 'POST' });
+    check('403 Forbidden for a caller on neither this machine nor an approved device',
+          away.status === 403, `got ${away.status} ${JSON.stringify(away.body)}`);
+    check('refused by the caller guard rather than by the origin gate',
+          !/DNS rebinding/i.test(away.body?.error ?? ''), away.body?.error);
+    check('in the wording the other guards use',
+          /only runs for a caller on this machine/i.test(away.body?.error ?? ''),
+          away.body?.error);
+    await sleep(500);
+    check('and no shell was started for it — starting it is the damage, not reading the answer',
+          !existsSync(stubMarker),
+          existsSync(stubMarker) ? `a stub shell reported pid ${readFileSync(stubMarker, 'utf8')}` : '');
+  }
+
+  const atTheKeyboard = await call(REMOTE_BASE, '/api/terminal', { method: 'POST' });
+  check('202 Accepted for the operator on this machine, on that same board',
+        atTheKeyboard.status === 202,
+        `got ${atTheKeyboard.status} ${JSON.stringify(atTheKeyboard.body)}`);
   await sleep(500);
-  check('no shell was started', !existsSync(stubMarker),
-        existsSync(stubMarker) ? `a stub shell reported pid ${readFileSync(stubMarker, 'utf8')}` : '');
+  check('and that one really did start a shell', existsSync(stubMarker),
+        'the marker the stub shell writes on start is absent');
+  rmSync(stubMarker, { force: true });
 
   // ─── 5. A session, in the workspace root ────────────────────
   console.log('\n5. a session runs in the project, and pwd says so');

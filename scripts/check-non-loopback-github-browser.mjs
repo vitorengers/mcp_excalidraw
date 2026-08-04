@@ -1,6 +1,19 @@
 #!/usr/bin/env node
 /**
- * Checks what a canvas bound off loopback is, and that it says so.
+ * Checks what a canvas bound off loopback is, and that it says so — and **since #586 what it is has
+ * changed**, so two of the three things below assert the opposite of what they used to.
+ *
+ * It is no longer a drawing-only board. The guards that made it one asked where the server had
+ * *bound* rather than who was calling, and the caller they were refusing was its own operator, whose
+ * browser reaches it over loopback like anybody else's on that machine. #501 moved the board's
+ * contents to the caller's own address, #522 taught that question about approved devices, and #586
+ * moved the last three — the routes that spawn `gh`, the terminal and the implement agent. A board
+ * on an interface now serves its operator exactly as a loopback one does, and refuses everyone else
+ * unless they are on a device that operator approved.
+ *
+ * So rule 1 stands unchanged, rule 2 is tightened rather than dropped, and sections 2 and 3 now
+ * assert that the operator is *served* and that nothing on their screen blames the bind. The
+ * reasoning from when the bind decided this is kept below, because rule 2 is about it.
  *
  * The container this repository used to ship set `ENV HOST=0.0.0.0`, and `HOST` is what every
  * GitHub-shaped route is guarded on: the project mirror, a card move, the GitHub status route,
@@ -144,12 +157,21 @@ const OFFERS_OFF_LOOPBACK = [
 ];
 
 /**
- * What such a passage has to say: that the refusal is about the *bind*, and that it is a
- * refusal. Both halves, because "loopback" alone is the word the default is described with and
- * "403" alone could be about anything.
+ * What such a passage has to say. Three halves now, and the third is #586's.
+ *
+ * "loopback" alone is the word the default is described with and "403" alone could be about
+ * anything, so both of those were always required. The third arrived when the answer changed: the
+ * refusal is about the **caller** and not the bind, so the passage that offers a wider `HOST` has to
+ * name the one caller off this machine who is *not* refused — a device the operator approved.
+ *
+ * Requiring it is what stops the old sentence coming back. "Off loopback the routes that read or
+ * write a board answer 403" satisfied the first two conjuncts perfectly and is now false: on such a
+ * board those routes answer the operator, and the reader who acted on that sentence went and
+ * rebound a server that was bound correctly.
  */
 const NAMES_THE_COST = (passage) => /\bloopback\b/i.test(passage)
-  && /\b(403|refus\w*|answers? nothing|drawing[- ]only|no GitHub)\b/i.test(passage);
+  && /\b(403|refus\w*|answers? nothing|drawing[- ]only|no GitHub)\b/i.test(passage)
+  && /\b(approv\w*|paired|pairing|device)\b/i.test(passage);
 
 /**
  * The paragraphs of a Markdown document: contiguous runs of non-blank lines.
@@ -207,14 +229,22 @@ check('source that compares against the string is not',
 const SILENT_NOTE = '> **Security note:** The canvas server binds `127.0.0.1` only by default. If '
   + 'you expose it on a network interface (`HOST=0.0.0.0`), put network-level access controls in '
   + 'front — the API has no built-in authentication.';
-const FULL_NOTE = '> **Security note:** The canvas server binds `127.0.0.1` only by default, and '
-  + 'off loopback every GitHub-backed route answers `403` — the board is drawing-only there. If '
+/** The sentence written while the bind decided this. It named a cost; #586 made it the wrong one. */
+const BIND_TEST_NOTE = '> **Security note:** The canvas server binds `127.0.0.1` only by default, '
+  + 'and off loopback every GitHub-backed route answers `403` — the board is drawing-only there. If '
   + 'you expose it on a network interface (`HOST=0.0.0.0`) anyway, put network-level access '
   + 'controls in front — the API has no built-in authentication.';
+const FULL_NOTE = '> **Security note:** The canvas server binds `127.0.0.1` only by default. Expose '
+  + 'it on a network interface (`HOST=0.0.0.0`) and every route answers `403` to a caller that did '
+  + 'not arrive over loopback and is not on a device you have approved; pairing one is how a second '
+  + 'machine gets in.';
 check('a note that offers the bind and names only the authentication is caught',
       silentOffers('README.md', SILENT_NOTE).length === 1,
       JSON.stringify(silentOffers('README.md', SILENT_NOTE)));
-check('the same note carrying what it costs is accepted',
+check('so is one naming the cost the bind test had, which is no longer what it costs',
+      silentOffers('README.md', BIND_TEST_NOTE).length === 1,
+      JSON.stringify(silentOffers('README.md', BIND_TEST_NOTE)));
+check('the same note carrying what it costs now is accepted',
       silentOffers('README.md', FULL_NOTE).length === 0,
       JSON.stringify(silentOffers('README.md', FULL_NOTE)));
 check('a document that never offers one is not asked',
@@ -400,7 +430,20 @@ const json = async (url, init) => {
   return { status: response.status, body: await response.json().catch(() => ({})) };
 };
 
-const SAID = 'The project board could not be read';
+/**
+ * The same wait, bounded and never thrown, answering null instead.
+ *
+ * A `waitFor` inside a case takes the rest of the file down with it when the thing never happens:
+ * one failure is printed and every assertion after it is unevidenced, which is the shape that makes
+ * a red run unreadable.
+ */
+async function settles(fn, tries = 80) {
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try { const value = await fn(); if (value) return value; } catch { /* not yet */ }
+    await sleep(250);
+  }
+  return null;
+}
 
 try {
   // `0.0.0.0` is a bind address; the requests below all go to `127.0.0.1`, which it includes.
@@ -415,30 +458,34 @@ try {
   });
   servers.push(board);
 
-  await stage('2. the GitHub routes refuse off loopback, and say why', async () => {
+  await stage('2. the GitHub routes answer the caller on this machine, on a board bound to every '
+              + 'interface', async () => {
     const health = await json(`${board.base}/health`);
-    check('the canvas itself is up — this is a bind, not a broken server',
-          health.status === 200, `${health.status} ${JSON.stringify(health.body).slice(0, 120)}`);
+    check('the canvas itself is up', health.status === 200,
+          `${health.status} ${JSON.stringify(health.body).slice(0, 120)}`);
 
+    // All three answered 403 here until #586, and the caller they were refusing is this one: a
+    // request to `127.0.0.1`, from the machine the server runs on, on a board its operator opened
+    // so that a second machine could reach it. `gh` is sealed in a check's environment, so what
+    // they answer with is a failure about GitHub — which is a different thing from a refusal about
+    // where the server opened, and telling those two apart is the whole of this section.
     const mirror = await json(`${board.base}/api/project-board?workspace=off-loopback`);
-    check('GET /api/project-board answers 403', mirror.status === 403,
+    check('GET /api/project-board is not refused', mirror.status !== 403,
           `${mirror.status} ${JSON.stringify(mirror.body)}`);
-    check('naming the bind rather than the board',
-          /loopback/i.test(String(mirror.body?.error ?? '')), JSON.stringify(mirror.body));
-    check('and not 404, which is the one status the canvas is entitled to draw nothing for',
-          mirror.status !== 404, String(mirror.status));
+    check('and nothing it says is about the bind',
+          !/loopback/i.test(String(mirror.body?.error ?? '')), JSON.stringify(mirror.body));
 
     const move = await json(`${board.base}/api/project-board/move?workspace=off-loopback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ itemId: 'PVTI_x', optionId: 'opt' }),
     });
-    check('POST /api/project-board/move answers 403 too', move.status === 403,
+    check('POST /api/project-board/move is not refused either', move.status !== 403,
           `${move.status} ${JSON.stringify(move.body)}`);
 
     const status = await json(`${board.base}/api/github-status?workspace=off-loopback`);
-    check('and GET /api/github-status, which is the route that would have diagnosed it',
-          status.status === 403, `${status.status} ${JSON.stringify(status.body)}`);
+    check('and GET /api/github-status answers, which is the route that diagnoses the rest',
+          status.status === 200, `${status.status} ${JSON.stringify(status.body)}`);
   });
 
   const cdpPort = await freePort();
@@ -459,30 +506,31 @@ try {
   await send('Runtime.enable');
   await send('Page.addScriptToEvaluateOnNewDocument', { source: RECORDER });
 
-  await stage('3. the refusal reaches the canvas as words, not as a blank region', async () => {
+  await stage('3. and what the reader sees is never a refusal about the bind again', async () => {
     await send('Page.navigate', { url: `${board.base}/?workspace=off-loopback` });
     await waitFor(() => evaluate(GRAB_API), 'the Excalidraw API handle');
-    // Not "the canvas half still works" any more — since #366 the reads and the socket are
-    // refused there too and since #456 so are the writes, so nothing fills this scene and
-    // nothing it draws locally is saved. What matters is that the page mounts at all: one that
-    // never finished loading could not say why the board is empty either.
     check('the page itself came up, which is what lets it say why it is empty', true);
 
-    const spoke = await waitFor(async () => {
+    // Something has to be said — `gh` is sealed for a check, so this mirror genuinely cannot be
+    // read, and a 403 that is correct, logged and invisible is the state #320 is about. What it
+    // must not say is that the server is bound in the wrong place: that sentence sent a reader who
+    // had opened the board on purpose off to rebind a server that was bound correctly, and it is
+    // the screen this whole issue was reported from.
+    const spoke = await settles(async () => {
       const toasts = await evaluate('window.__toasts || []');
-      return toasts.some((text) => text.includes(SAID)) ? toasts : null;
-    }, 'the board to say the project board could not be read', 240);
+      return toasts.length ? toasts : null;
+    });
     await shot('01-off-loopback');
-    check('the toast reached the DOM', spoke.some((text) => text.includes(SAID)),
-          JSON.stringify(spoke));
-    check('carrying the server\'s own sentence about the bind',
-          spoke.some((text) => /loopback/i.test(text)), JSON.stringify(spoke));
+    check('the board says something about why the mirror is empty', Boolean(spoke),
+          'nothing reached the DOM at all, which is the silence #320 is about');
+    check('and none of it blames the bind',
+          !(spoke ?? []).some((text) => /loopback|bound to/i.test(text)), JSON.stringify(spoke));
 
-    const strip = await waitFor(() => evaluate(STRIP), 'the unreadable strip on the scene', 120);
-    check('and a cold board draws the reason on itself, where the mirror would have been',
+    const strip = await settles(() => evaluate(STRIP));
+    check('a cold board still draws the reason on itself, where the mirror would have been',
           Boolean(strip) && strip.kind === 'project-board', JSON.stringify(strip));
-    check('in words, naming the bind', /loopback/i.test(String(strip?.text ?? '')),
-          JSON.stringify(strip?.text));
+    check('in words about GitHub rather than about where the server opened',
+          !/loopback|bound to/i.test(String(strip?.text ?? '')), JSON.stringify(strip?.text));
   });
 } catch (error) {
   failures++;
