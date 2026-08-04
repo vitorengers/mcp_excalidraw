@@ -407,6 +407,12 @@ told it is unattended and must decide those questions alone. Between the two run
 nowhere to say anything — an answer, or whatever the observation left out, had to be typed on
 github.com in another window.
 
+The **founder chat** is the third of that family and the one that writes nothing to GitHub at all.
+It sits on a founder card rather than on an issue block, the transcript is kept by this board
+rather than posted anywhere, and the only thing an answer may change is the card it is about — a
+run that could file or edit anything on GitHub is precisely what it has taken away from it.
+[founder-actions.md](founder-actions.md#the-chat-is-a-loop-of-headless-turns) is all of it.
+
 Four things are deliberate:
 
 - **A comment, not an edit to the body.** It is the one place both the implement agent and a
@@ -762,6 +768,15 @@ workspace behind `EXCALIDRAW_GH_STATUS_MEMO_MS`, so a queue pass starting four r
 `gh`. `scripts/check-implement-no-push.mjs` covers both directions and both shapes of "cannot
 say".
 
+**The refusal now also leaves a durable record**, and so does the 404 for an agent that is not
+installed: each files a founder action before it answers, so a refusal a person has to clear
+outlives the request that hit it instead of being a log line and a red toast. Nothing about the
+status, the body or the sentence changed — the record travels beside the answer rather than
+inside it, so a caller comparing bodies still sees what it saw. The 400 for a board that is
+misconfigured files nothing, deliberately: that is a board problem, and admitting those is how a
+column written for a person fills with advice.
+[founder-actions.md](founder-actions.md) is the register those records are written to.
+
 ### How many at once
 
 `EXCALIDRAW_IMPLEMENT_CONCURRENCY` caps the implementations one workspace may have in flight,
@@ -885,6 +900,13 @@ it was refusing every thirty seconds. That is `refused`, it stalls and it is ann
 stays out of it deliberately — the slot is held by a run somebody asked for, which is the cap.
 A pass that started something *and* was refused something reports `started`: a queue that is
 draining is not stalled, however many of the rest it was told no about.
+
+**What the detail says is the founder action, not what `gh` said.** The push refusal's own
+sentence names a permission, a repository and a `git remote set-url` — all true, and none of it
+the thing to say to somebody looking at a queue that has stopped. The record the refusal filed is
+written for that reader instead, and clearing it is what makes the next pass start the run rather
+than refuse it again. [founder-actions.md](founder-actions.md#resolving-and-the-queue-that-was-quietly-refusing)
+is where that loop is described.
 
 **The reasons are a value as well as a type.** `QUEUE_PASS_REASONS` in `implement-queue.ts` is a
 frozen array of every member, built from a record keyed by the union so a member added with no

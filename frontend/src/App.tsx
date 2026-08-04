@@ -48,11 +48,13 @@ import {
   isNotesOnlyBoard,
   UNREADABLE_WIDTH,
   MIRROR_KIND,
-  NOTES_OPTION_ID
+  NOTES_OPTION_ID,
+  FOUNDER_NAME
 } from '../../src/core/project-board-layout'
 import type {
-  CardImplementState, DraftBlock, FounderCard, LayoutOptions, MirrorAnchor, MirrorColumn
+  CardImplementState, DraftBlock, LayoutOptions, MirrorAnchor, MirrorColumn
 } from '../../src/core/project-board-layout'
+import type { FounderCard } from '../../src/core/project-board-types'
 import type { ProjectBoard } from '../../src/core/project-board-types'
 import { TerminalPanel } from './components/TerminalPanel'
 import {
@@ -1453,25 +1455,16 @@ function App(): JSX.Element {
   /**
    * What `GET /api/founder-actions` last answered for this board.
    *
-   * State as well as a ref: the panel reads the record and the capabilities on every render,
-   * and the mirror reads the cards inside `renderMirror`, which runs from a poll rather than
-   * from a render. Written together so the two cannot disagree about what is open.
+   * The *panel's* half, and only that: the record behind a card — its steps, its evidence, its
+   * conversation — and what this board is willing to offer for it. The **column** is drawn from
+   * `projectBoardRef.current.founder`, which #539 feeds off the project-board answer, and that
+   * is deliberately one answer rather than two. A card carries a key and a face and nothing
+   * else, because the mirror redraws it on every poll.
    */
   const [founderState, setFounderState] = useState<{
-    columnName: string
     actions: FounderAction[]
     capabilities: FounderControls
   } | null>(null)
-  const founderRef = useRef<{ columnName: string; cards: FounderCard[] } | null>(null)
-  /**
-   * The founder column as it was last actually **drawn**, which is not the same question.
-   *
-   * A read can land before the canvas has any board to draw a column onto — the two polls are
-   * independent, so either may be first — and a redraw skipped for that reason must be retried
-   * rather than forgotten. Comparing against what was drawn, rather than against what was last
-   * read, is what makes the retry happen at all.
-   */
-  const founderDrawnRef = useRef<string>('')
 
   /**
    * The shape the card is pinned to, and where that shape currently is on screen.
@@ -2539,8 +2532,21 @@ function App(): JSX.Element {
      * would last exactly one refresh.
      */
     queue: ImplementQueueState | null
+    /**
+     * The founder actions still waiting, and what this board calls the column they wait in.
+     *
+     * Null until the server has said, and null again the moment it says there are none — the
+     * column is drawn from this and never read back off the shapes, for the reason the queue
+     * toggle is: the mirror is rebuilt from GitHub on every poll, so anything remembered on a
+     * mirrored element lasts exactly one refresh.
+     *
+     * It arrives on the project-board answer, including its 404 — a board with no project is
+     * exactly the board whose first blocker is "sign `gh` in", and that one has to be drawable
+     * with nothing configured at all.
+     */
+    founder: { columnName: string; cards: FounderCard[] } | null
     signature: string
-  }>({ board: null, columns: [], errors: {}, implementing: {}, queue: null, signature: '' })
+  }>({ board: null, columns: [], errors: {}, implementing: {}, queue: null, founder: null, signature: '' })
 
   /** Whether a drag was in flight on the previous change, so its end can be noticed. */
   const mirrorDraggingRef = useRef<boolean>(false)
@@ -2566,7 +2572,7 @@ function App(): JSX.Element {
   const mirrorOriginsRef = useRef<Map<string, MirrorAnchor>>(new Map())
 
   const clearMirror = (): void => {
-    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, signature: '' }
+    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, founder: null, signature: '' }
     draftGeometryRef.current = ''
     // This board's, and only this board's: the region is gone from the canvas, so where it
     // was is no longer an answer to keep. Every other board's placement stands.
@@ -2753,28 +2759,6 @@ function App(): JSX.Element {
     const own = scene.filter((element) => !element.isDeleted && !isMirrorElement(element))
     const drafts = own.filter(isDraftBlock)
 
-    /**
-     * The founder actions, if this board is holding any.
-     *
-     * Read off a ref rather than off the state above, because this runs from a poll and not
-     * from a render: a closure over state would draw whatever was current when the poll was
-     * scheduled. It is the same object the width is measured from and the layout is drawn
-     * from, which is the one thing that must not have two answers — a region measured a
-     * column too narrow overlaps whatever sits to its left.
-     */
-    const founderCards = founderRef.current
-    const founderOption: LayoutOptions = founderCards && founderCards.cards.length > 0
-      ? { founder: { columnName: founderCards.columnName, cards: founderCards.cards } }
-      : {}
-
-    // The notes column is drawn too, and it is as wide as the rest, so the width the first
-    // measurement places the region by has to include it — `mirrorWidth`, not `boardWidth`,
-    // which counts only the options the project declares. The founder column counts the same
-    // way when there is one, and the region slides one column left on the poll that first
-    // draws it: the origin is pinned by the right edge, which is #200's accepted trade.
-    const width = mirrorWidth(board, founderOption)
-    const origin = placeMirror(scene, own, width)
-
     // The blocks the `+` dropped hold the top of their column, newest first, and the
     // mirrored cards start below them. Both halves of that arithmetic come from
     // `layoutMirror`, so the room reserved and the slot a block is put in cannot disagree
@@ -2791,11 +2775,15 @@ function App(): JSX.Element {
       )
       : undefined
 
-    const layout = layoutMirror(board, origin, {
+    // Built once and used twice, and that is load-bearing rather than tidy: the width the
+    // region is placed by and the columns that are drawn have to be answers to the same
+    // question. Both columns the canvas owns are decided by these options, so a `mirrorWidth`
+    // asked without them reserves a region one column too narrow and the founder column is
+    // drawn over whatever sits to the region's left.
+    const options: LayoutOptions = {
       errors: projectBoardRef.current.errors,
       implementing: projectBoardRef.current.implementing,
       drafts: drafts.map(draftBlockOf),
-      ...founderOption,
       ...(queue && queueColumn
         ? {
           queue: {
@@ -2804,8 +2792,17 @@ function App(): JSX.Element {
             stalled: queue.stalled
           }
         }
-        : {})
-    })
+        : {}),
+      ...(projectBoardRef.current.founder ? { founder: projectBoardRef.current.founder } : {})
+    }
+
+    // The notes column is drawn too, and it is as wide as the rest, so the width the first
+    // measurement places the region by has to include it — `mirrorWidth`, not `boardWidth`,
+    // which counts only the options the project declares.
+    const width = mirrorWidth(board, options)
+    const origin = placeMirror(scene, own, width)
+
+    const layout = layoutMirror(board, origin, options)
     const placed = new Map(layout.drafts.map((placement) => [placement.id, placement]))
 
     // The block being typed into is left exactly where it is: rewriting a container and
@@ -3187,6 +3184,33 @@ function App(): JSX.Element {
     sayOnCanvas(api, `The project board could not be read. ${reported}${advice}`)
   }
 
+  /**
+   * The founder column out of a project-board answer, or null for a board with none waiting.
+   *
+   * Read defensively rather than cast: this is drawn as a column of cards, and a `cards` that
+   * turned out not to be an array would throw inside the layout on a twenty-second poll and
+   * take the whole mirror with it. A card missing either half of what a card *is* is dropped
+   * rather than drawn empty — there is nothing useful to show for it and the record it stands
+   * for is still on the server.
+   */
+  const founderColumnOf = (body: unknown): { columnName: string; cards: FounderCard[] } | null => {
+    const founder = (body as { founder?: unknown } | null)?.founder as
+      { columnName?: unknown; cards?: unknown } | undefined
+    if (!founder || !Array.isArray(founder.cards)) return null
+    const cards = (founder.cards as unknown[])
+      .map((card) => card as { key?: unknown; title?: unknown })
+      .filter((card) => typeof card?.key === 'string' && card.key
+        && typeof card?.title === 'string' && card.title)
+      .map((card) => ({ key: card.key as string, title: card.title as string }))
+    if (cards.length === 0) return null
+    return {
+      columnName: typeof founder.columnName === 'string' && founder.columnName.trim()
+        ? founder.columnName
+        : FOUNDER_NAME,
+      cards
+    }
+  }
+
   /** Re-read the project and redraw. A board with no project configured keeps its notes column. */
   const refreshProjectBoard = async (): Promise<void> => {
     const api = excalidrawAPIRef.current
@@ -3202,6 +3226,13 @@ function App(): JSX.Element {
       // A tab switched while the request was in flight would draw one project's board
       // over another project's canvas.
       if (activeWorkspaceRef.current !== workspace) return
+      const body = await response.json().catch(() => ({}))
+      // Read before the 404 below rather than after it, because the 404 is the answer that
+      // most needs this: a board with no project is the board whose first blocker is signing
+      // `gh` in, and that column has to be drawable with nothing configured at all.
+      projectBoardRef.current = {
+        ...projectBoardRef.current, founder: founderColumnOf(body)
+      }
       // The one status that means "this board has no project", and the only one that says
       // nothing. Since #317 it means only that: a `githubProject` that is not a project URL
       // answers 422 and falls through to the branch below, where it is said out loud. Most
@@ -3217,7 +3248,6 @@ function App(): JSX.Element {
         announcedBoardFailureRef.current[workspace] = ''
         return
       }
-      const body = await response.json().catch(() => ({}))
       if (!body?.success || !body.board) {
         // Not a 404 — that was answered above and means the board simply has no project.
         // This is `gh` unresolvable, an expired login, a token without the `project` scope,
@@ -3259,14 +3289,18 @@ function App(): JSX.Element {
   }
 
   /**
-   * Re-read the work only a person can do, and redraw the column it goes in.
+   * Re-read what the panel needs to draw a founder action, on a request of its own.
    *
    * **Its own request, on its own timer, and deliberately not inside `refreshProjectBoard`.**
    * That function's 404 branch — a board with no `githubProject` — calls `renderNotesOnly` and
-   * returns, so a founder read nested there would never run on exactly the board this column
-   * exists for: the fresh clone whose first blocker is that `gh` is signed out. It also has to
-   * keep answering when the project read is the thing that is broken, which a call inside that
-   * function's success path could not.
+   * returns, so a read nested there would never run on exactly the board this column exists
+   * for: the fresh clone whose first blocker is that `gh` is signed out. It also has to keep
+   * answering when the project read is the thing that is broken.
+   *
+   * It draws nothing. The column is #539's, fed off the project-board answer and read there
+   * *before* its 404 branch for the same reason; a second thing deciding what is in that column
+   * would be two answers to one question. What this fetches is the half a card cannot carry —
+   * the steps, the evidence, the conversation, and what may be offered for them.
    *
    * **A failure changes nothing at all.** No board is written, so an already-warm mirror is
    * left alone and a notes-only board is not marked warm — `renderUnreadable` reads warm as
@@ -3290,36 +3324,10 @@ function App(): JSX.Element {
     if (activeWorkspaceRef.current !== workspace) return
     if (!body?.success) return
 
-    const actions = (Array.isArray(body.actions) ? body.actions : []) as FounderAction[]
-    const columnName = typeof body.columnName === 'string' && body.columnName
-      ? body.columnName
-      : 'Founder Actions'
     setFounderState({
-      columnName,
-      actions,
+      actions: (Array.isArray(body.actions) ? body.actions : []) as FounderAction[],
       capabilities: (body.capabilities as FounderControls) ?? { resolve: true, chat: false }
     })
-
-    const cards: FounderCard[] = actions.map((action) => ({
-      key: action.key,
-      kind: action.kind ?? null,
-      state: action.state,
-      title: action.fields?.title ?? action.key
-    }))
-    founderRef.current = { columnName, cards }
-    const signature = JSON.stringify(founderRef.current)
-    if (signature === founderDrawnRef.current) return
-
-    // Drawn against the board this canvas already has, whichever it is — the mirrored one or
-    // the notes-only one a board with no project gets. A board that has not been read at all
-    // yet is left alone rather than invented: a notes-only board made up here would draw a
-    // column for a project that may be one request away from arriving. The signature is left
-    // un-marked, so the tick after it comes round and draws it.
-    const board = projectBoardRef.current.board
-    const api = excalidrawAPIRef.current
-    if (!board || !api || busyOnCanvas(api)) return
-    founderDrawnRef.current = signature
-    renderMirror(board)
   }
 
   /**
@@ -3349,7 +3357,10 @@ function App(): JSX.Element {
       return {
         ok: true,
         why: typeof body.why === 'string' ? body.why : null,
-        verified: body.verified === true,
+        // `onTrust` is the route's own word for "nothing could confirm it and the board took
+        // yours", which is a different fact from `settledBy`: a `how: 'person'` press is the
+        // person's too, and is not a claim about a probe that declined to say.
+        verified: body.settledBy === 'probe' && body.onTrust !== true,
         action: (body.action as FounderAction) ?? null
       }
     } catch (error) {
@@ -4942,13 +4953,11 @@ function App(): JSX.Element {
    * for. Nothing here spawns a `gh` — it is a local file — so the cost of the extra request is
    * a read of memory on a page that is on screen.
    *
-   * The ref is emptied when the board changes, before the first read for the new one lands, or
-   * one project's blockers would be drawn on the next project's canvas for a poll.
+   * It is emptied when the board changes, before the first read for the new one lands, or one
+   * project's blockers would be read against the next project's cards for a poll.
    */
   useEffect(() => {
     if (!excalidrawAPI) return
-    founderRef.current = null
-    founderDrawnRef.current = ''
     setFounderState(null)
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -4956,14 +4965,7 @@ function App(): JSX.Element {
     const tick = async (): Promise<void> => {
       if (cancelled) return
       if (document.visibilityState === 'visible') await refreshFounderActions()
-      // A read whose column has not reached the canvas yet comes round again at once. That is
-      // the ordinary case on a cold page — the two polls start together, and this one can
-      // easily answer before there is any board to draw a column onto — and waiting out a
-      // whole interval for it would leave the column missing for ten seconds on exactly the
-      // board it exists for.
-      const undrawn = founderRef.current !== null
-        && founderDrawnRef.current !== JSON.stringify(founderRef.current)
-      if (!cancelled) timer = setTimeout(() => { void tick() }, undrawn ? 500 : FOUNDER_POLL_MS)
+      if (!cancelled) timer = setTimeout(() => { void tick() }, FOUNDER_POLL_MS)
     }
     void tick()
 
@@ -5630,7 +5632,7 @@ function App(): JSX.Element {
     // at that moment, which on a board holding only a mirror and a terminal is nothing at
     // all — so the region went to a constant and landed on the block (#188). Keying it by
     // board is what the reset was really for, and a map does that without forgetting.
-    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, signature: '' }
+    projectBoardRef.current = { board: null, columns: [], errors: {}, implementing: {}, queue: null, founder: null, signature: '' }
 
     pendingSceneWorkspaceRef.current = workspaceId
     holdAutoSyncForSwitch()

@@ -26,18 +26,21 @@ import os from 'os';
 import path from 'path';
 import logger from '../utils/logger.js';
 import {
-  deliverStdin, invocationArgs, singleQuoted, tokenizeCommand, withoutAnyFullAccess,
+  deliverStdin, invocationArgs, quotedLine, singleQuoted, tokenizeCommand, withoutAnyFullAccess,
+  withoutGhWrites,
   type AgentAdapter, type AgentCommandSpec, type AgentInvocation, type AgentRole,
 } from './agent-adapter.js';
 import {
-  agentGrants, agentSpecFor, parseAgentBackends, type AgentGrants,
+  KNOWN_BACKEND_NAMES, agentGrants, agentSpecFor, parseAgentBackends, type AgentGrants,
 } from './agent-backend.js';
+import { founderChatPrompt, type FounderChatMessage } from './founder-chat.js';
+import type { FounderActionEvidence, FounderActionFields } from './founder-action-text.js';
 import { adapterFor } from './agents/index.js';
 import { commandLineInvocation } from './agents/raw.js';
 import { AgentUsage, UsageMeter } from './agent-usage.js';
 import { GITHUB_HOST } from './github-host.js';
 import { AgentSettings, loadAgentWorkflow, Workspace } from './workspaces.js';
-import { env as settingValue } from './settings.js';
+import { env as settingValue, settingName } from './settings.js';
 
 /**
  * The two command-line helpers that are still anybody's, still reachable from here.
@@ -682,6 +685,34 @@ export function agentRunFor(
       fullAccess: role === 'implement' && implementFullAccess(),
     }),
   };
+}
+
+/**
+ * The refusal a board answers when the run being asked for is not one it can make.
+ *
+ * The wording is the server's — it was `agentCommandRefusal`'s whole body, and that function
+ * still produces it by calling this. It moved down here because a second caller appeared that
+ * is not a route: `runFounderChatAgent` refuses in this module, before anything is spawned, and
+ * a second copy of the sentence is how the two come to name different variables.
+ *
+ * Naming the variable that is missing is the whole value of refusing rather than letting a run
+ * start and exit 127 somewhere the reader cannot see. The backend variable comes first, because
+ * it is the answer for a board that has an agent installed and no command line anywhere.
+ */
+export function agentNotEnabledRefusal(
+  workspace: Workspace,
+  what: string,
+  variable: string
+): string {
+  const where = workspace.environment.kind === 'wsl'
+    ? {
+        wanted: `${variable}_WSL or ${variable}`,
+        names: `the WSL distro "${workspace.environment.distro}" names it`,
+      }
+    : { wanted: variable, names: 'this machine names it' };
+  return `${what} is not enabled for workspace "${workspace.id}". `
+    + `Set ${settingName('AGENT_BACKEND')} to one of ${KNOWN_BACKEND_NAMES}, `
+    + `or ${where.wanted} to the agent command as ${where.names}.`;
 }
 
 /**
@@ -1567,4 +1598,152 @@ export async function runReviseAgent(
     ...(options.onUsage ? { onUsage: options.onUsage } : {}),
   });
   return { ok: run.ok, issueUrl: run.url, output: run.output, error: run.error };
+}
+
+// ─── One founder chat turn ────────────────────────────────────
+
+/**
+ * Why a `raw` board is refused before `withoutGhWrites` is even asked.
+ *
+ * That helper would refuse such a board anyway in every ordinary case — a raw command line
+ * carries no posture this board wrote — but "anyway" is not the guarantee that is wanted here.
+ * `raw` is `DEFAULT_AGENT_BACKEND`, its whole contract is that the operator's string is spawned
+ * byte for byte, and a line that happened to contain this board's own list would be narrowed by
+ * argv while the string a WSL run is handed went on saying what it said. So the backend is the
+ * question, asked first.
+ */
+const FOUNDER_CHAT_RAW = 'a "raw" board spawns the command line it was given, exactly as it was '
+  + 'given, so there is no grant of this board\'s here to narrow';
+
+/** Said after the refusal below, because "not enabled" alone sends a reader to the wrong knob. */
+const FOUNDER_CHAT_UNNARROWED = 'The founder chat runs only where this board can narrow the '
+  + 'agent\'s permissions, and here it could not';
+
+/** What one turn needs beyond the conversation itself. */
+export interface FounderChatAgentOptions {
+  /** Which agent, and the command that reaches it. The issue agent's. See `agentGrantFor`. */
+  agent: AgentCommandSpec;
+  /**
+   * The item's key, which is not one of its fields.
+   *
+   * It is `founderActionKey`'s composition rather than anything a person wrote, and the prompt
+   * has to name it so that an answer about this card can be told from an answer about another.
+   */
+  key: string;
+  /** The item's kind, which the prompt names so the agent knows which blocker it is about. */
+  kind: string;
+  timeoutMs?: number;
+  /** Named when the command turns out not to exist where it was run. See RunAgentOptions. */
+  notFoundVariable?: string | null;
+  /** The run's token totals so far. The same opt-in as `runIssueAgent`, one seam not two. */
+  onUsage?: (usage: AgentUsage) => void;
+}
+
+/**
+ * One turn of the founder chat, as a headless run with the GitHub writes taken away.
+ *
+ * **A loop of one-shot runs, one per message, and that is measured rather than preferred.**
+ * A readable transcript needs `--output-format stream-json`, which Claude Code accepts only
+ * beside `--print`, which reads the prompt from stdin and spends it; and a pseudoterminal has no
+ * end of file to spend a second one with — measured on ConPTY, a child sees neither `^Z` nor
+ * `^D` (`terminal-session.ts`, `docs/terminal.md`). A readable run and a typeable session are
+ * mutually exclusive under both named backends, so the conversation is kept by the caller and
+ * every turn is a new process.
+ *
+ * **No `host`**, exactly as `runIssueAgent` and `runReviseAgent` pass none. Nothing here opens a
+ * terminal session, which means none of the eight `TERMINAL_SESSION_LIMIT` allows is spent: one
+ * tab per founder action would exhaust a board, and a tab never ends by itself, reports no token
+ * counts, and holds its slot until a person closes it.
+ *
+ * **No new `AgentRole`.** This is the issue role — a run that reads and answers — with its
+ * invocation narrowed in place, which is what `withoutFullAccess` already does one door along. A
+ * role would cost a union member, an arm in `postureFor`, per-backend flags, its own grant and a
+ * key in `AgentsHealth` that nothing fills.
+ *
+ * **A board whose posture cannot be narrowed is refused**, in the wording the board already uses
+ * for an agent it cannot run, with the cause said after it. A chat that silently holds
+ * repository write access is worse than no chat: the prompt tells the agent it may not file
+ * anything, and prose is not a boundary.
+ *
+ * Never throws. It answers in `IssueAgentResult`'s shape, with `issueUrl` always null — a
+ * conversation is not asked for a URL, so unlike the two runs above, `ok` is the exit code and
+ * nothing else.
+ */
+export async function runFounderChatAgent(
+  workspace: Workspace,
+  fields: FounderActionFields,
+  evidence: FounderActionEvidence | null | undefined,
+  transcript: readonly FounderChatMessage[],
+  message: string,
+  options: FounderChatAgentOptions
+): Promise<IssueAgentResult> {
+  try {
+    // The issue agent's settings: a founder chat is the research agent answering a person, and a
+    // project that said how its issue agent runs said it about this run too.
+    const settings = workspace.agents?.issue ?? null;
+    const { adapter, invocation } = agentRunFor(options.agent, 'issue', settings);
+
+    // The backend first, then the argv. See `FOUNDER_CHAT_RAW` for why the order matters.
+    const narrowing = options.agent.backend === 'raw'
+      ? { args: [...invocation.args], narrowed: false, reason: FOUNDER_CHAT_RAW }
+      : withoutGhWrites(invocation.args);
+    if (!narrowing.narrowed) {
+      return {
+        ok: false,
+        issueUrl: null,
+        output: '',
+        error: `${agentNotEnabledRefusal(workspace, 'Founder chat', settingName('ISSUE_AGENT'))} `
+          + `${FOUNDER_CHAT_UNNARROWED}: ${narrowing.reason}.`,
+      };
+    }
+    // Only where something actually came off. The line is derived from argv for a named
+    // backend — see the note at the top of `agent-adapter.ts` — so re-deriving it when nothing
+    // changed would be a rewrite for its own sake.
+    const narrowed: AgentInvocation = narrowing.args.every(
+      (one, index) => one === invocation.args[index]
+    )
+      ? invocation
+      : {
+          ...invocation,
+          args: narrowing.args,
+          line: quotedLine(invocation.command, narrowing.args),
+        };
+
+    const prompt = founderChatPrompt(
+      { key: options.key, kind: options.kind, fields }, evidence, transcript, message
+    );
+    const timeoutMs = options.timeoutMs !== undefined
+      ? options.timeoutMs
+      : settings?.timeoutMs ?? undefined;
+    const run = await runAgent(workspace, prompt, {
+      adapter,
+      invocation: narrowed,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      // The kind of URL a salvaged timeout would look for, and it is all this decides here:
+      // nothing below reads `run.url`, because a conversation answers with prose.
+      expects: 'issues',
+      what: 'founder chat agent',
+      notFoundVariable: options.notFoundVariable ?? null,
+      ...(options.onUsage ? { onUsage: options.onUsage } : {}),
+    });
+
+    // The exit code alone. `AgentRun.ok` folds "exited zero *and* printed a URL" into one
+    // answer, and the second half is a question nobody asked this run.
+    const ok = run.code === 0;
+    return {
+      ok,
+      issueUrl: null,
+      output: run.output,
+      error: ok ? null : (run.error ?? 'The founder chat agent ended without saying why.'),
+    };
+  } catch (error) {
+    // Never throws, and this is the whole of that promise: a caller drawing a panel has an
+    // answer to show either way, and a chat turn that blew up is a message rather than a 500.
+    return {
+      ok: false,
+      issueUrl: null,
+      output: '',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }

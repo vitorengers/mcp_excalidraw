@@ -4,8 +4,10 @@ A region to the left of the board's own content, showing the workspace's GitHub 
 section per column, newest issue on top — except **Todo**, which reads oldest first because it is
 the column the queue drains — and cards you can drag between columns with the move travelling back
 to GitHub. Dormant unless a project names a `githubProject` — a board that has none mirrors
-nothing, and since #316 still draws the one column that mirrors nothing anyway: **My Notes**, with
-its `+`. See [The region on a board with no project](#the-region-on-a-board-with-no-project).
+nothing, and since #316 still draws the columns that mirror nothing anyway: **My Notes**, with
+its `+`, and — when anything is waiting in it — **Founder Actions**, at the other end. See
+[The region on a board with no project](#the-region-on-a-board-with-no-project) and
+[The founder column](#the-founder-column).
 
 The **leftmost** region again since #200: the canvas reads `mirror | terminals | documentation`,
 and the terminal blocks sit between this one and the board's own content, anchored to the
@@ -304,6 +306,73 @@ the issue in](issue-block.md#a-run-needs-a-repository-to-create-the-issue-in).
 `scripts/check-notes-column-without-project-browser.mjs` holds all of it, in a browser and at two
 zooms: the column's position is computed relative to the mirrored ones, so drawing it alone is a
 layout change that compiles perfectly either way.
+
+## The founder column
+
+The second column the canvas owns, under the reserved id `canvas:founder`, holding the work only
+a person can do — install something, sign in, pay a bill. Its cards come from this board's own
+records ([founder-actions.md](founder-actions.md)) rather than from GitHub, and it is drawn on
+exactly the terms **My Notes** is: an id with a `:` in it, which is not an id GitHub could issue
+and which `buildMoveArgs` refuses before a command line is built.
+
+The reason it cannot wait for GitHub to declare a column is the first founder action this product
+will ever produce, which is *sign the GitHub CLI in*. At that moment there is no project to file
+it into and no working `gh` to file it with, so the board with no project is precisely the board
+with something waiting — which is why the column rides on the 404 as well as on the read.
+
+Four decisions worth having in one place:
+
+- **Appended, after every column the project declares.** A column's hue is its index into a list
+  of five, so inserting it anywhere else would re-colour every column after it the day the first
+  blocker arrived. At the end, nothing already drawn changes index, hue, role or geometry, and the
+  mirror simply gets 324 wider. Being pinned by its right edge, the region therefore slides 324
+  left on the poll that first draws it — the same accepted shift a column added on GitHub already
+  causes, and [Where the region sits](#where-the-region-sits) is where that is argued.
+- **Nothing is drawn when nothing is waiting.** No column, no extra width, no extra line on the
+  strip. A column for a case that has not happened is a column in everybody's way.
+- **A card is `role: 'card'` under the mirror's own kind**, carrying `customData.founderKey` and
+  no `customData.itemId`. Not a role of its own, so all five derived-element rules go on keying
+  on the kind and nothing is saved, exported, synced or mis-measured; and the missing item id is
+  what makes a card dropped in another column snap back with no request — there is no project
+  item to address a move to. It is deliberately *not* locked, because a locked shape cannot even
+  be selected.
+- **A project that declares a column of that name draws its own and no duplicate.** Once these
+  are published as draft items they arrive in a column read from GitHub, and the canvas has to
+  stand down rather than show the same work twice under one heading.
+
+The strip carries a second line saying how many are waiting, the way the `morePages` line is
+carried, and for the reason [a failed read draws a strip rather than a
+toast](#a-read-that-fails-says-so--on-a-strip-when-the-board-is-cold-in-words-either-way): what
+is being reported lasts as long as the blocker does.
+
+The `+` is not drawn on this column and a draft dropped anywhere still rehomes to **My Notes**. A
+founder action is never authored by hand — it is something the board noticed.
+`scripts/check-founder-column-canvas.mjs` holds the arithmetic and
+`scripts/check-founder-column-browser.mjs` drives the drag in a real browser, with the same drag
+on a real card as its control.
+
+### Newest-first, and what the cap therefore hides
+
+Every column keeps newest-on-top except the one the queue drains, which is
+[drawn oldest first](#todo-is-drawn-oldest-first) because that is the order the queue starts
+things in. Nothing drains this one, so it takes the ordinary rule — and the ordinary rule has a
+consequence here it has nowhere else.
+
+`projectCardLimit` decides what a section *draws* and never what it holds, and the sort runs
+before the cap. Newest-first, the cards a cap leaves out are the **oldest** — which in this column
+means the blocker that has been waiting longest, often the one that is the reason nothing else is
+moving. It is neither lost nor silent: it is in the header's total and the header qualifies the
+card side with `, N hidden`. But it is off the screen, and the cap is a small number — 8 on this
+board, 12 for a config that says nothing.
+
+That is a real cost and it is accepted rather than special-cased, for the reason
+[Todo is drawn oldest first](#todo-is-drawn-oldest-first) gives for not flipping every column: an
+order chosen per column is an order a reader cannot predict, and the column that most needs the
+newest-first rule is Done.
+
+Nothing that *acts* on a founder action reads the drawn column. The records are read uncapped,
+exactly as the queue reads its own column uncapped, so what is drawn and what is held can disagree
+about nothing but how much fits on the screen.
 
 ## Where the region sits
 
@@ -727,11 +796,12 @@ because a drop that moved the cards and left the header stale compiles just as w
 
 ## The columns a board is expected to have
 
-Four columns are drawn, and only **three of them are on GitHub**: `Todo`, `In Progress`, `Done`,
-in that order. The fourth, `My Notes`, is drawn in front of them by the canvas and exists nowhere
-else. That is a convention, not a rule this code enforces — nothing here creates, renames or
-reorders a `Status` option, and a project with two options or seven still mirrors correctly. What
-the convention buys is that each column answers one question, and the two moves this server writes
+Five columns are drawn, and **three of them are on GitHub**: `Todo`, `In Progress`, `Done`, in
+that order. The other two belong to the canvas and exist nowhere else — `My Notes`, drawn in
+front of them, and `Founder Actions`, appended after them. That the GitHub three are named that
+way is a convention, not a rule this code enforces — nothing here creates, renames or reorders a
+`Status` option, and a project with two options or seven still mirrors correctly. What the
+convention buys is that each column answers one question, and the two moves this server writes
 have somewhere honest to land:
 
 | Column | Where it lives | What is in it | What puts it there |
@@ -740,6 +810,20 @@ have somewhere honest to land:
 | Todo | GitHub | issues that exist and are waiting | the server, when a research run finishes |
 | In Progress | GitHub | issues an agent is working on | the server, when an implementation starts |
 | Done | GitHub | closed issues | GitHub's own project workflows |
+| Founder Actions | the canvas, and the project too when it has a column of that name | the work only a person can do — install, sign in, approve, pay | the board, when a probe or a refused run notices a blocker |
+
+**Neither canvas-owned column is a `Status` option, and that is what makes them safe.** Each
+carries a reserved option id with a `:` in it — `canvas:notes` and `canvas:founder` — which fails
+the `NODE_ID` pattern every write to the project is validated against. So no drag and no automatic
+move can put a card into either of them, and nothing GitHub does to the options list can rename,
+reorder or delete them. That is what #97 bought for the notes column, and what the founder column
+inherits.
+
+The two differ in one thing: `My Notes` is always drawn, and `Founder Actions` is drawn only while
+something is waiting in it and the project declares no column of that name. That is
+[The founder column](#the-founder-column) above;
+[founder-actions.md](founder-actions.md#the-four-ways-the-queue-is-kept-off-a-founder-action) is
+what a founder action is and why nothing an agent runs can ever start one.
 
 **The three GitHub columns are a maintainer's job, done on GitHub.** Not automated, and
 deliberately: `updateProjectV2Field` takes the whole `singleSelectOptions` list and its input
@@ -750,13 +834,13 @@ delete `My Notes` from project 5 as part of landing: the code stopped depending 
 the part that can be done safely from here.
 
 Order still matters for the GitHub half — a project that reorders its options reorders the
-columns, and their hues with them. The notes column is not affected: it is not an option, so
-nothing GitHub does to that list can move it off the front or change what it is called. This is
-what #97 bought. Before it, `My Notes` had to be dragged to the top of a list GitHub appends to,
-and an option deleted or reordered by anyone with write access moved the `+`.
+columns, and their hues with them. Neither canvas-owned column is affected, for the reason above:
+neither is an option, so nothing GitHub does to that list can move `My Notes` off the front or
+`Founder Actions` off the end, or change what either is called.
 
-A board that names its GitHub columns differently says so in `board.config.json` rather than being
-renamed to suit this page; see `projectTodoColumn` and `projectInProgressColumn` below.
+A board that names its columns differently says so in `board.config.json` rather than being
+renamed to suit this page; see `projectTodoColumn` and `projectInProgressColumn` below, and
+`projectFounderColumn` beside them.
 
 ## A card is an issue block
 
@@ -842,6 +926,27 @@ reliance on GitHub's defaults the `+` makes on the first column. **If neither re
 moved** and the reason is logged, naming the setting that would fix it. A board that renamed a
 column gets no move until it says so, which is the deliberate half of that trade: retargeting to
 some other column would put somebody's card somewhere they never asked for.
+
+`projectFounderColumn` is the third key of that family and resolves the same way, to the same
+shape — a name matched trimmed and case-insensitively, plus the `board.config.json` key that would
+fix a project that has no such column. Unset it is `Founder Actions`, which is this tool's own
+suggestion rather than one of GitHub's, since no project GitHub creates has such a column; it is a
+default in exactly the sense the other two are, and a project that has no column by that name is
+told which key would name it instead of having one guessed for it.
+
+It differs from the other two in one way that matters. **A config pointing it at either of the
+others is refused**, as configured or as defaulted, and the refusal names both keys because either
+one of them is a legitimate thing to change and nothing here knows which was meant. That is a
+correctness requirement rather than tidiness: the queue drains exactly one column, resolved by
+name at dispatch time, so a founder column with a name of its own is invisible to the start loop
+*by construction*, and that construction holds only while the names differ. Both doors are closed
+— the settings dialog refuses the save with nothing written, and a config edited by hand loads as
+a project marked broken. [workspaces.md](workspaces.md) has the keys and
+[founder-actions.md](founder-actions.md#naming-the-column-per-project) has the argument.
+
+Nothing is ever moved *into* the founder column by either of the two moves below, or by a drag:
+the canvas-owned column's reserved id is unwritable, and an action that reaches a project column
+gets there as a draft item created straight into it.
 
 Nothing about either move may cost the run. The write is not awaited — the project and the agent
 are independent, and a `gh` working through its retries must not hold a run up — and every outcome

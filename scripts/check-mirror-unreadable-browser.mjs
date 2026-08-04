@@ -302,7 +302,7 @@ const PROBE = `(() => {
     if (custom.role === 'title' && custom.unreadable === true) out.strip = { ...box, text: text(element.id), label: labelOf(element.id), stroke: element.strokeColor, locked: element.locked };
     else if (custom.role === 'title') out.title = { ...box, text: text(element.id) };
     else if (custom.role === 'section') out.columns.push({ ...box, col: custom.sectionOptionId });
-    else if (custom.role === 'card') out.cards.push({ ...box, itemId: custom.itemId });
+    else if (custom.role === 'card') out.cards.push({ ...box, itemId: custom.itemId, founderKey: custom.founderKey || null });
   }
   out.columns.sort((a, b) => a.x - b.x);
   out.cards.sort((a, b) => a.x - b.x || a.y - b.y);
@@ -451,23 +451,21 @@ try {
   }, 'the mirror to be drawn');
   await shot('02-recovered');
 
+  // A fourth column is drawn beside them, and it is the failure above that put it there: the
+  // read that failed was a terminal `gh` failure, which #541 records as a founder action and
+  // #539 draws in a column of the canvas's own. A record outlives the failure that made it —
+  // that is the whole point of writing it down — so it is still there once `gh` mends, and it
+  // goes when a re-probe settles it rather than when the next read happens to succeed.
+  const mirrored = warm.cards.filter((card) => !card.founderKey);
   check('the columns are drawn: the canvas\'s own and the two the project declares',
-        warm.columns.filter((column) => column.col !== 'canvas:founder').length === 3,
+        warm.columns.filter((column) => !String(column.col).startsWith('canvas:')).length === 2
+        && warm.columns.some((column) => column.col === 'canvas:notes'),
         JSON.stringify(warm.columns.map((column) => column.col)));
-  check('the mirrored cards are drawn',
-        warm.cards.filter((card) => card.itemId).length === 2, String(warm.cards.length));
-
-  // The founder column is the other half of the same recovery, and it is drawn on purpose. The
-  // `gh` this section has just mended was failing terminally for two polls, and a terminal `gh`
-  // failure is a founder action (#541): a card asking a person to sign in. It stays open until a
-  // re-probe closes it — one `VIBEMAXXING_FOUNDER_PASS_MS` away, which is longer than this run —
-  // so a mirror that came back with no such column would mean the failure was noticed by nobody.
-  // Named here rather than counted into the two cases above, because it is not the project's
-  // column and the project's count is what those are about.
-  check('and the failure that has just been mended left a founder card behind',
-        warm.columns.some((column) => column.col === 'canvas:founder')
-        && warm.cards.some((card) => !card.itemId),
-        JSON.stringify(warm.columns.map((column) => column.col)));
+  check('the cards read from GitHub are drawn', mirrored.length === 2, String(warm.cards.length));
+  check('and what the failure was noticed as is drawn beside them, in the founder column',
+        warm.cards.length - mirrored.length === 1
+        && warm.columns.some((column) => column.col === 'canvas:founder'),
+        JSON.stringify(warm.cards.map((card) => card.founderKey)));
   check('the strip is gone rather than left behind under them', warm.strip === null,
         JSON.stringify(warm.strip));
   check('and the mirror kept the edge the strip was pinned by',

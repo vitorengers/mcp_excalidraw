@@ -181,24 +181,30 @@ the silence meant for a board that never had one.
 
 ## Founder actions
 
-The work only a person can do — see [founder-actions.md](founder-actions.md). The records
-behind these are `src/core/founder-store.ts`, one file per board, and nothing here needs a
-GitHub project: the first action this product will ever produce is "sign `gh` in", and a route
-that needed `gh` to list one would be empty on exactly the board it exists for.
+The column for the work only a person can do — see
+[founder-actions.md](founder-actions.md). All four are loopback only: the bodies name accounts,
+repositories and remedies, and one of them starts a coding agent.
 
 | Route | What it does |
 |---|---|
-| `GET /api/founder-actions` | The open actions, the name of the column they go in, and a `capabilities` object saying what may be offered (loopback only — the bodies name accounts, repositories and remedies) |
-| `POST /api/founder-actions/resolve` | Settle one. `how: 'probe'` drops the memo and looks again, answering **409** with the probe's own sentence while it is still blocked; `how: 'person'` records it as taken on the founder's word (loopback only) |
-| `POST /api/founder-actions/chat` | Ask about one. The question reaches the store before an agent is spawned, and a second question while one is in flight answers **409** (loopback only) |
-| `GET /api/founder-actions/chat` | What that turn has done, and the item as the store now holds it (loopback only) |
+| `GET /api/founder-actions` | The open actions, the founder column's name and a `capabilities` object. Answers 200 on a board with no `githubProject` and runs no `gh` at all — it reads a local file, so it goes on answering while GitHub is the thing that is broken (loopback only) |
+| `POST /api/founder-actions/resolve` | Done. `how: "probe"` throws away what was remembered and looks again; `how: "person"` settles it on somebody's word (loopback only) |
+| `POST /api/founder-actions/chat` | Ask a question about one item. The message is stored before anything is spawned, and one turn runs at a time per item (loopback only) |
+| `GET /api/founder-actions/chat` | The conversation and the turn in flight (loopback only) |
 
-The split between the two halves of that last row is deliberate: the **run** is in memory and
-does not survive a restart, and the **transcript** is in the store and does. So reloading the
-page shows the whole conversation while a run nobody is waiting for is simply gone.
+The two halves of that last answer come from two places, and the difference is worth knowing:
 
-Controls in the panel are driven by `capabilities` and never by probing a POST — a probe
-against a route that exists would perform the write it was probing for.
+| Field | Where it lives | What a restart does to it |
+|---|---|---|
+| `chat` | the store, beside the record | survives — it is what was said |
+| `run` | this process's memory | gone, and reads as `null` |
+
+`POST /api/founder-actions/resolve` answers 409 in two ways. A record that was already settled
+says so; and a `how: "probe"` whose fresh look still reports the blocker answers with the probe's
+own sentence and leaves the item open, which is why pressing Done is not the last word on
+anything the board can check for itself. What it cannot check — a bill being paid, a rate limit
+lifting, a usage window refilling — is settled on trust, `onTrust: true` in the answer, and
+recorded as the person's rather than as the board's.
 
 ## Terminal
 

@@ -57,7 +57,7 @@ import { BoardScene, parseBoardScene } from './core/board-seed.js';
 import { listDirectories } from './core/directory-browse.js';
 import {
   AgentCommands, AgentHost, AgentRun, agentCommandFor, agentCommandsOf, agentGrantFor,
-  agentGrantsFromEnv, runIssueAgent, runReviseAgent
+  agentGrantsFromEnv, agentNotEnabledRefusal, runFounderChatAgent, runIssueAgent, runReviseAgent
 } from './core/issue-agent.js';
 import {
   DEFAULT_AGENT_BACKEND, type AgentAdapter, type AgentCommandSpec
@@ -82,11 +82,13 @@ import {
   founderColumn,
   inProgressColumn,
   todoColumn,
+  DEFAULT_FOUNDER_COLUMN,
   DEFAULT_TODO_COLUMN,
   NoProjectConfigured,
   ProjectUrlUnparseable,
   NotOnThisBoard
 } from './core/project-board.js';
+import type { FounderCard } from './core/project-board-types.js';
 import {
   GithubHealth, GithubStatus, githubHealth, githubPreflightLine, initialGithub, readGithubStatus
 } from './core/github-status.js';
@@ -100,17 +102,16 @@ import {
 } from './core/founder-blockers.js';
 import {
   FounderActionRecord,
-  FounderActionResolver,
   appendChatTurn,
   founderActionKey,
   openFounderActions,
   readFounderAction,
   recordFounderAction,
-  reviseFounderAction,
-  resolveFounderAction
+  resolveFounderAction,
+  reviseFounderAction
 } from './core/founder-store.js';
-import { FounderSnapshot, verifyAgainst } from './core/founder-verify.js';
-import { founderChatInvocation, runFounderChatTurn } from './core/founder-chat-agent.js';
+import { FounderChatAnswer, parseFounderChatAnswer } from './core/founder-chat.js';
+import { FounderSnapshot, FounderVerdict, verifyAgainst } from './core/founder-verify.js';
 import { publishFounderAction as publishFounderActionTo } from './core/founder-publish.js';
 import { setTerminalGhReporter } from './core/gh.js';
 import {
@@ -2679,6 +2680,10 @@ const ISSUE_AGENT_CONFIGURED = Boolean(ISSUE_AGENT_COMMANDS.native || ISSUE_AGEN
  * a board with only `_WSL` set can research a distro-backed project and not a native one,
  * and the reverse. Naming the variable that is missing is the whole value of refusing here
  * rather than letting a run start and exit 127 somewhere the reader cannot see.
+ *
+ * The sentence itself is `agentNotEnabledRefusal`'s now, in `core/issue-agent.ts`, because a
+ * second caller of it is not a route: the founder chat refuses in that module, before anything
+ * is spawned, and two copies of this wording is how the two come to name different variables.
  */
 function agentCommandRefusal(
   workspace: Workspace,
@@ -2687,15 +2692,7 @@ function agentCommandRefusal(
   variable: string
 ): string | null {
   if (agentCommandFor(workspace, commands)) return null;
-
-  const where = workspace.environment.kind === 'wsl'
-    ? { wanted: `${variable}_WSL or ${variable}`, names: `the WSL distro "${workspace.environment.distro}" names it` }
-    : { wanted: variable, names: 'this machine names it' };
-  // The backend variable first, because it is the answer for a board that has an agent
-  // installed and no command line anywhere — which is every first run.
-  return `${what} is not enabled for workspace "${workspace.id}". `
-    + `Set ${settingName('AGENT_BACKEND')} to one of ${KNOWN_BACKEND_NAMES}, `
-    + `or ${where.wanted} to the agent command as ${where.names}.`;
+  return agentNotEnabledRefusal(workspace, what, variable);
 }
 
 /**
@@ -5976,7 +5973,53 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
  * somebody's board being broken — but a payload whose only machine-readable part is English
  * prose is one the next reader has to parse to act on.
  */
-type ProjectWorkspaceRefusal = { error: string; reason: 'no-workspace' | 'no-project' };
+type ProjectWorkspaceRefusal = {
+  error: string;
+  reason: 'no-workspace' | 'no-project';
+  /**
+   * The board itself, when there is one — a project refused is not always a workspace refused.
+   *
+   * Only `no-project` carries it, and only one caller reads it: the founder column, which is
+   * drawn on this very answer and takes its name from the workspace. A board that renamed the
+   * column it publishes into and then dropped its `githubProject` would otherwise be drawn a
+   * second column under the default name, which is the duplicate this column is built to avoid.
+   */
+  workspace?: Workspace;
+};
+
+/**
+ * The founder column this board's canvas should draw, or nothing at all to draw.
+ *
+ * It rides on the project-board answer rather than on a route of its own because it is drawn
+ * by the region that answer draws, on the same twenty-second poll — the mirror is rebuilt
+ * from scratch every time and remembers nothing, so what it knows has to arrive with the
+ * draw. `GET /api/founder-actions` (#547) is a different question with a different consumer:
+ * the panel, which reads one record whole and answers it.
+ *
+ * **It is sent on the 404 as well**, which is the case this column exists for. The first
+ * founder action a fresh clone produces is "sign `gh` in", and a clone that has not signed in
+ * has no `githubProject` either — so the board with no project is precisely the board with
+ * something waiting, and a payload that only carried this on success would draw the column
+ * everywhere except where it is needed first.
+ *
+ * The name is the workspace's own answer, through `founderColumn` in `project-board.ts` —
+ * the resolver #540 publishes a draft item with. Where the project already declares a column
+ * of that name, the layout draws none of its own, so the two cannot show the same work twice.
+ */
+function founderMirrorColumn(
+  workspaceId: string,
+  workspace: Workspace | null
+): { columnName: string; cards: FounderCard[] } | null {
+  const open = openFounderActions(workspaceId);
+  if (open.length === 0) return null;
+  return {
+    // The same answer `publishFounderAction` publishes into, from the same resolver: one
+    // column named once. A board that has no workspace at all — an id nobody registered —
+    // gets the default, which is what a board with no opinion would have got anyway.
+    columnName: workspace ? founderColumn(workspace).name : DEFAULT_FOUNDER_COLUMN,
+    cards: open.map((record) => ({ key: record.key, title: record.fields.title })),
+  };
+}
 
 async function projectWorkspace(
   req: Request
@@ -5996,7 +6039,8 @@ async function projectWorkspace(
   if (!workspace.githubProject) {
     return {
       error: 'This board has no "githubProject" in its board.config.json.',
-      reason: 'no-project'
+      reason: 'no-project',
+      workspace
     };
   }
   return { workspace };
@@ -6013,16 +6057,22 @@ app.get('/api/project-board', async (req: Request, res: Response) => {
   }
 
   const resolved = await projectWorkspace(req);
+  const founder = founderMirrorColumn(
+    workspaceIdFrom(req),
+    ('workspace' in resolved ? resolved.workspace : null) ?? null
+  );
   if ('error' in resolved) {
     // 404 rather than 400: the feature is absent for this board, not misused.
+    // The founder column rides along all the same — see `founderColumn` for why this answer
+    // is the one that most needs it.
     return res.status(404).json({
-      success: false, reason: resolved.reason, error: resolved.error
+      success: false, reason: resolved.reason, error: resolved.error, ...(founder ? { founder } : {})
     });
   }
 
   try {
     const board = await readProjectBoard(resolved.workspace);
-    res.json({ success: true, board });
+    res.json({ success: true, board, ...(founder ? { founder } : {}) });
   } catch (error) {
     // 422 rather than 404, and that split is the point of #317. A 404 is the canvas's
     // instruction to draw nothing and say nothing, which is right for the boards that have no
@@ -6142,343 +6192,502 @@ app.post('/api/project-board/move', async (req: Request, res: Response) => {
   }
 });
 
-// ─── Founder actions: list, settle, and the chat about one ────
+// ─── The founder column, read and answered ────────────────────
 //
-// Four routes, in one contiguous block, all loopback-only. What they answer with names
-// accounts, repositories and remedies — the very facts `core/agent-preflight.ts` forbids
-// `/health` from carrying — so a canvas reachable from the network must not hand them out.
+// Four routes in one contiguous block, and they land together on purpose. The
+// `src/server.ts · N routes` card on the structure map is a *count* that
+// `scripts/check-docs-counts.mjs` derives live from this file, so two route-adding branches
+// each bump it, each is green alone, and after both merge the card carries whichever number
+// landed last — red on `main` for whoever did not cause it. One issue bumps it once.
 //
-// **They read a local file and must keep answering when GitHub is the thing that is broken.**
-// That is the whole point of the column: the first founder action this product will ever
-// produce is "sign `gh` in", and a route that needed `gh` to list it would be empty on exactly
-// the board it exists for. The list therefore answers 200 on a board with no `githubProject`
-// and spawns nothing at all.
-//
-// **Position 12 (#547) is the issue that owns this surface**, and it had not landed when the
-// panel that needs it was written. What is here is the smallest set of answers the panel's
-// contract names, written where #547 says they belong; the retention rule, the exclusion of a
-// re-opened blocker and the `docs/rest-api.md` half are that issue's and are not anticipated.
+// All four are loopback-only, guarded the way `GET /api/project-board` and
+// `GET /api/github-status` are rather than through the caller funnel. The bodies name accounts,
+// repositories and remedies — the class of thing `core/agent-preflight.ts` forbids `/health` from
+// carrying — and one of them spawns a coding agent.
 
-/** The runs, by workspace and key. One chat in flight per action, as `recreateRuns` does. */
-interface FounderChatRunRecord {
+// The 403 is written out inline in each of the four rather than shared through a helper, which
+// is the one piece of repetition here that earns its keep. `scripts/check-guarded-routes-
+// documented.mjs` classifies a route by reading its *body* for one of the guard shapes it knows,
+// and a call to a private helper is not one of them — a route behind one reads as **open**, lands
+// in `docs/SECURITY.md`'s list of what a board on the network still answers, and is then probed
+// there. The inline test is also the shape the two GitHub routes above already carry, so a reader
+// comparing them is comparing like with like.
+
+/**
+ * What a chat turn has done so far, kept against the item rather than a shape.
+ *
+ * In memory, and against `(workspace, key)`, exactly as `recreateRuns` is against
+ * `(workspace, issue URL)`: a founder card drawn from the store has no element for a socket to
+ * update, and the panel polls this while its run is in flight. **The transcript is not here.** A
+ * conversation has to survive a restart — it is what the person said and what they were told —
+ * so the turns are in the store and only the run is in this map. A run interrupted by a restart
+ * is simply forgotten, which is honest: the founder's own message was written before anything
+ * was spawned, so nothing they typed is lost with it.
+ */
+interface FounderChatRun {
   state: 'running' | 'done' | 'failed';
-  error: string | null;
-  /**
-   * The one plain sentence a refused revision earns, or null.
-   *
-   * Kept on the run and not in the transcript, and the split is #547's: **the transcript is in
-   * the store and survives a restart; the run does not.** A refusal is a fact about one turn of
-   * one process — the founder has the agent's answer either way, and what a restart loses is
-   * only the note saying the card was left alone, which by then it visibly was.
-   */
-  refusal: string | null;
   startedAt: string;
   endedAt: string | null;
+  /** What the agent answered, once it has. */
+  reply: string | null;
+  /** Why a proposed revision was not applied. Null when none was proposed, or when it was. */
+  refusal: string | null;
+  /** Whether the item's fields changed as a result of this turn. */
+  revised: boolean;
+  /** Why the run itself failed, which is a different thing from a refused revision. */
+  error: string | null;
 }
 
-const founderChatRuns = new Map<string, FounderChatRunRecord>();
+const founderChatRuns = new Map<string, FounderChatRun>();
 const founderChatKey = (workspaceId: string, key: string): string => `${workspaceId}\n${key}`;
 
+/** What the panel may offer on this board, so it never has to probe a POST to find out. */
+interface FounderCapabilities {
+  /** Done is always offered: the store is local, and settling one is never a GitHub write. */
+  resolve: boolean;
+  /** Whether a chat turn can be run here at all. */
+  chat: boolean;
+  /** Why not, in the words a panel can print. Null when it can. */
+  chatRefusal: string | null;
+}
+
 /**
- * The workspace a founder request is about, or nothing.
+ * The board a founder route is about, or the refusal.
  *
- * Deliberately **not** `projectWorkspace`: that one refuses a board with no `githubProject`,
- * which is right for a route that mirrors a project and wrong for every route here. A founder
- * action is this board's own record and needs no project to exist, to be settled or to be
- * talked about.
+ * `no-workspace` for an id nobody registered, which is the ordinary 404 — with one carve-out that
+ * is the whole reason this column exists. `founderProducerPass` files against
+ * `DEFAULT_WORKSPACE_ID` when the registry holds no usable board at all, because a machine with
+ * nothing registered is exactly the machine most likely to be blocked. Refusing to read back what
+ * that pass wrote would empty the column on the fresh clone it was written for, so the same
+ * fallback is honoured here and nowhere else: a *named* board that is not registered is still a
+ * 404, and so is the default id on a machine that does have boards.
  */
-async function founderWorkspace(req: Request): Promise<Workspace | null> {
+async function founderWorkspace(req: Request): Promise<
+  { workspaceId: string; workspace: Workspace | null } | { error: string; reason: string }
+> {
   const workspaceId = workspaceIdFrom(req);
   const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
-  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
-  return workspace && !workspace.error ? workspace : null;
-}
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId) ?? null;
 
-/**
- * What the panel may offer, answered before anything is pressed.
- *
- * **Controls are driven by this and never by probing a POST.** A probe against a route that
- * exists would perform the write it was probing for — a `resolve` probe settles a card, and a
- * `chat` probe starts an agent — so what a board can do is stated rather than discovered.
- *
- * `chat` is false on a board with no issue agent granted, and on one whose run cannot have its
- * GitHub writes taken away. See `core/founder-chat-agent.ts`: #543's narrowing reports that it
- * could not narrow, and a caller that ran anyway would be holding a conversation with an agent
- * that can still file on somebody's repository.
- */
-function founderCapabilities(
-  workspace: Workspace
-): { resolve: boolean; chat: boolean; chatRefusal: string | null } {
-  const agent = ISSUE_AGENT_CONFIGURED
-    ? agentGrantFor(workspace, ISSUE_AGENT_GRANTS, 'issue')
-    : null;
-  if (!agent) {
-    return {
-      resolve: true,
-      chat: false,
-      chatRefusal: `No agent is granted for this board. Set ${settingName('ISSUE_AGENT')} to `
-        + 'the agent command to be able to ask about a founder action.',
-    };
+  if (workspace && !workspace.error) return { workspaceId, workspace };
+  if (workspace?.error) {
+    return { error: `Workspace is unusable: ${workspace.error}`, reason: 'no-workspace' };
   }
-  const { refusal } = founderChatInvocation(workspace, agent);
-  return { resolve: true, chat: !refusal, chatRefusal: refusal };
+  const usable = workspaces.filter((candidate) => !candidate.error);
+  if (workspaceId === DEFAULT_WORKSPACE_ID && usable.length === 0) {
+    return { workspaceId, workspace: null };
+  }
+  return {
+    error: `Workspace "${workspaceId}" is not registered, so it has no founder actions.`,
+    reason: 'no-workspace'
+  };
 }
 
 /**
- * The open actions this canvas is to draw, and what to call the column they go in.
+ * Which agent role and environment an `agent-*` record was filed about.
  *
- * Records carrying a `publishedItemId` are left out: such an action is already a draft item on
- * the project and the mirror draws it from there, so listing it here as well would put two
- * cards on the board for one blocker.
+ * Read back off the key, because that is where the producer put it: `blockerForAgentPreflight`
+ * composes its discriminator as `<role>:<environment>` precisely so that a missing implement
+ * agent in a distro and a missing issue agent on the host are two cards. The key is
+ * `<workspace>:<kind>:<role>:<environment>`, so the answer is its last two segments — and a key
+ * shaped otherwise falls back to the pair `implementAgentHealth` would have answered with.
+ */
+function agentHealthFor(record: FounderActionRecord): AgentEnvironmentHealth | null {
+  const parts = record.key.split(':');
+  const environment = parts[parts.length - 1] === 'wsl' ? 'wsl' : 'native';
+  const role = parts[parts.length - 2] === 'issue' ? 'issue' : 'implement';
+  return AGENT_PREFLIGHT[role]?.environments?.[environment] ?? null;
+}
+
+/**
+ * Look again at one record, having first thrown away what was remembered about it.
+ *
+ * **The invalidation is the point of this function.** Reading through the memo would tell a
+ * founder who has just run `gh auth login` and pressed Done that they are still blocked for the
+ * rest of the memo window — so they would press again, and be told the same thing, and conclude
+ * the button does nothing. The window is thirty seconds by default and is an operator setting,
+ * which means it can be minutes.
+ *
+ * Only the probe the record's own kind is answered by is re-run. A `push-denied` card asks
+ * GitHub about one repository and learns nothing from `gh auth status`; a `gh-*` card is the
+ * other way round; the three kinds nothing can ever confirm spawn nothing at all, because
+ * `verifyAgainst` will answer `cannot-say` however hard this looks.
+ */
+async function reprobeFor(
+  workspaceId: string,
+  workspace: Workspace | null,
+  record: FounderActionRecord
+): Promise<FounderSnapshot> {
+  const snapshot: FounderSnapshot = {};
+
+  if (record.kind.startsWith('gh-') && record.kind !== 'gh-rate-limit' && record.kind !== 'gh-billing') {
+    const scope = workspace ? workspace.id : `${workspaceId} host`;
+    ghStatusMemo.forget(scope, GH_STATUS_KEY);
+    snapshot.github = await ghStatusMemo
+      .read(scope, GH_STATUS_KEY, () => readGithubStatus(workspace))
+      .catch(() => null);
+  }
+
+  if (record.kind === 'push-denied' && workspace) {
+    ghPushMemo.forget(workspaceId, GH_PUSH_KEY);
+    snapshot.push = await ghPushMemo
+      .read(workspaceId, GH_PUSH_KEY, () => readPushAccess(workspace))
+      .catch(() => null);
+  }
+
+  if (record.kind === 'agent-missing' || record.kind === 'agent-not-granted') {
+    // The preflight is a startup snapshot with no memo in front of it, so "invalidate and probe"
+    // here is simply running it again — which is what a founder who has just installed the agent
+    // is asking for.
+    await runAgentPreflight();
+    snapshot.agent = agentHealthFor(record);
+  }
+
+  return snapshot;
+}
+
+/**
+ * `GET /api/founder-actions` — the open actions, the column they belong in, and what may be done.
+ *
+ * **200 for a board with no `githubProject`, and no `gh` behind it at all.** This store does not
+ * need a project: it is written by producers that run on a fresh clone, and the first action this
+ * product will ever file is "sign in to `gh`". Answering 404 there would empty the column on
+ * exactly the board it exists for, and shelling out would make the one route that has to keep
+ * answering while GitHub is broken depend on GitHub working.
  */
 app.get('/api/founder-actions', async (req: Request, res: Response) => {
-  if (offLoopback(res, 'Founder actions are read')) return;
-
-  const workspaceId = workspaceIdFrom(req);
-  const workspace = await founderWorkspace(req);
-  if (!workspace) {
-    return res.status(404).json({
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    return res.status(403).json({
       success: false,
-      reason: 'no-workspace',
-      error: `Workspace "${workspaceId}" is not registered, so it holds no founder actions.`,
+      error: 'Founder actions are read only while the server is bound to loopback.'
     });
   }
 
+  const resolved = await founderWorkspace(req);
+  if ('error' in resolved) {
+    return res.status(404).json({ success: false, reason: resolved.reason, error: resolved.error });
+  }
+  const { workspaceId, workspace } = resolved;
+
+  const chatRefusal = workspace
+    ? agentCommandRefusal(workspace, agentCommandsOf(ISSUE_AGENT_GRANTS), 'A chat about a founder action',
+                          settingName('ISSUE_AGENT'))
+    : 'A chat about a founder action needs a registered board, and this one is the host itself.';
+  const capabilities: FounderCapabilities = {
+    resolve: true,
+    chat: ISSUE_AGENT_CONFIGURED && !chatRefusal,
+    chatRefusal: ISSUE_AGENT_CONFIGURED
+      ? chatRefusal
+      : `Set ${settingName('ISSUE_AGENT')} to the agent command to enable it.`
+  };
+
+  const actions = openFounderActions(workspaceId);
   res.json({
     success: true,
-    workspace: workspaceId,
-    columnName: founderColumn(workspace).name,
-    actions: openFounderActions(workspaceId).filter((record) => !record.publishedItemId),
-    capabilities: founderCapabilities(workspace),
+    workspace: workspace ? workspace.id : null,
+    // The name the canvas draws its own column under, so a project keeping one under a name of
+    // its own has one column rather than two. A board with no project has no setting to read and
+    // gets the default, which is the name the publisher would have used.
+    columnName: workspace ? founderColumn(workspace).name : DEFAULT_FOUNDER_COLUMN,
+    capabilities,
+    actions,
+    // What the canvas owns. A record that was published is already drawn by the mirror, from the
+    // project, so drawing it a second time as a canvas-owned card would put one blocker on the
+    // board twice — and the two copies would answer different clicks.
+    canvas: actions.filter((action) => !action.publishedItemId)
   });
 });
 
 /**
- * Settle one action — by looking again, or on the founder's word.
+ * `POST /api/founder-actions/resolve` — Done, and what the board is willing to believe about it.
  *
- * **It invalidates the memo and then probes, rather than reading through it.** A founder who has
- * just run `gh auth login` and pressed Done would otherwise be told they are still blocked for
- * up to thirty seconds, and would press again; the click is not the last word precisely so that
- * the answer can be "no, still", and an answer thirty seconds stale is not that answer.
+ * `how: 'probe'` looks again and takes the verifier's word for it: `satisfied` settles the card,
+ * `still-blocked` answers 409 carrying the probe's own sentence and leaves it open — which is the
+ * requirement, and the reason the click is not the last word — and `cannot-say` settles it **on
+ * trust**, recording that a person said so rather than that the board checked. Three of the ten
+ * kinds can only ever answer that: nothing here can watch a bill being paid or a rate limit
+ * lifting, and a button that refused to close such a card would be a button that never worked.
  *
- * Three verdicts and three outcomes. `satisfied` closes it as the probe's. `still-blocked`
- * answers 409 with the probe's own sentence and leaves the record open. `cannot-say` closes it
- * as the **person's**, which is the honest record for a bill or a rate limit — nothing here can
- * watch either clear, and a board that recorded that as verified would be claiming to have
- * checked something it could not.
- *
- * Then the queue is nudged. Nothing about a fix is event-driven, so without it a founder who has
- * just settled the thing that stopped every run waits out the next interval for nothing.
+ * `how: 'person'` settles any open record with no probe at all, and is recorded as the person's.
+ * The two resolvers stay distinguishable in the store for that reason: a card the board watched
+ * close and a card somebody said was done are different facts about the same blocker.
  */
 app.post('/api/founder-actions/resolve', async (req: Request, res: Response) => {
-  if (offLoopback(res, 'A founder action is settled')) return;
-
-  const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
-  if (!key) return res.status(400).json({ success: false, error: 'A founder action needs a key.' });
-  const how: FounderActionResolver = req.body?.how === 'person' ? 'person' : 'probe';
-
-  const workspaceId = workspaceIdFrom(req);
-  const workspace = await founderWorkspace(req);
-  if (!workspace) {
-    return res.status(404).json({
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    return res.status(403).json({
       success: false,
-      reason: 'no-workspace',
-      error: `Workspace "${workspaceId}" is not registered, so it holds no founder actions.`,
+      error: 'Founder actions are settled only while the server is bound to loopback.'
     });
   }
+
+  const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
+  const how = req.body?.how === 'person' ? 'person' : req.body?.how === 'probe' ? 'probe' : null;
+  if (!key || !how) {
+    return res.status(400).json({
+      success: false,
+      error: 'Settling a founder action needs a key and how it was settled: "probe" or "person".'
+    });
+  }
+
+  const resolved = await founderWorkspace(req);
+  if ('error' in resolved) {
+    return res.status(404).json({ success: false, reason: resolved.reason, error: resolved.error });
+  }
+  const { workspaceId, workspace } = resolved;
 
   const record = readFounderAction(workspaceId, key);
   if (!record) {
-    return res.status(404).json({ success: false, error: `No founder action "${key}" on this board.` });
+    return res.status(404).json({
+      success: false, reason: 'no-action', error: `No founder action "${key}" on this board.`
+    });
   }
-  // Already settled is not an error and not a second settlement: the first one is the one that
-  // happened, and a reader who pressed twice gets the same answer both times.
   if (record.state !== 'open') {
-    return res.json({ success: true, action: record, verified: record.resolvedBy === 'probe', why: null });
-  }
-
-  if (how === 'person') {
-    const settled = resolveFounderAction(workspaceId, key, 'person');
-    void dispatchQueue(workspaceId);
-    return res.json({
-      success: true,
-      action: settled,
-      verified: false,
-      why: 'Taken on your word — the board did not look again.',
-    });
-  }
-
-  // The memo goes first. Everything below is the freshest answer this machine can give, which
-  // is the whole of why the button is worth pressing rather than waiting.
-  ghStatusMemo.forget(workspace.id, GH_STATUS_KEY);
-  let github: GithubStatus | null = null;
-  try {
-    github = await readGithubStatus(workspace);
-  } catch (error) {
-    logger.warn(`Founder resolve "${key}": gh could not be read — ${(error as Error).message}`);
-  }
-
-  // Only for the one kind that turns on it, because it is a second `gh` and every other kind is
-  // settled by the status already read.
-  let push: PushAccess | null = null;
-  if (record.kind === 'push-denied') {
-    ghPushMemo.forget(workspaceId, GH_PUSH_KEY);
-    push = await readPushAccess(workspace).catch(() => null);
-  }
-
-  const verdict = verifyAgainst(record.kind, {
-    github, push, agent: implementAgentHealth(workspace),
-  });
-  if (verdict.settled === 'still-blocked') {
     return res.status(409).json({
-      success: false, settled: verdict.settled, error: verdict.why, action: record,
+      success: false,
+      reason: 'already-settled',
+      error: `This one was already ${record.state}.`,
+      action: record
     });
   }
 
-  const settled = resolveFounderAction(
-    workspaceId, key, verdict.settled === 'satisfied' ? 'probe' : 'person'
-  );
-  logger.info(`Founder action "${key}" was settled from the panel: ${verdict.why}`);
+  let verdict: FounderVerdict | null = null;
+  if (how === 'probe') {
+    try {
+      verdict = verifyAgainst(record.kind, await reprobeFor(workspaceId, workspace, record));
+    } catch (error) {
+      // A probe that blew up has learned nothing, which is the third answer rather than a
+      // failure of the route: the card stays open and the reader is told why.
+      logger.warn(`Founder actions: the re-probe for "${key}" failed: ${(error as Error).message}`);
+      verdict = { settled: 'cannot-say', why: 'Nothing here could look again just now.' };
+    }
+    if (verdict.settled === 'still-blocked') {
+      return res.status(409).json({
+        success: false, reason: 'still-blocked', error: verdict.why, action: record
+      });
+    }
+  }
+
+  // `cannot-say` is settled by the person who pressed Done, not by a probe that declined to say.
+  // Recording it as the probe's would be the board claiming it checked something it could not.
+  const by = how === 'probe' && verdict?.settled === 'satisfied' ? 'probe' : 'person';
+  const settled = resolveFounderAction(workspaceId, key, by);
+  if (!settled) {
+    return res.status(404).json({
+      success: false, reason: 'no-action', error: `No founder action "${key}" on this board.`
+    });
+  }
+  logger.info(`Founder action "${key}" was settled by ${by}${verdict ? `: ${verdict.why}` : ''}`);
+
+  // Nothing about a fix is event-driven. Without this, a founder who has just been given push
+  // access waits out a whole queue interval — thirty seconds by default and an operator setting —
+  // while the board goes on refusing the card it has just been told about.
   void dispatchQueue(workspaceId);
+
   res.json({
     success: true,
     action: settled,
-    verified: verdict.settled === 'satisfied',
-    why: verdict.settled === 'satisfied'
-      ? verdict.why
-      : `${verdict.why} It is recorded as taken on your word.`,
+    settledBy: by,
+    /** True when nothing could confirm it and the board took the reader's word. */
+    onTrust: by === 'person' && how === 'probe',
+    why: verdict?.why ?? null
   });
 });
 
 /**
- * Ask about one action, and let the answer revise it.
+ * `POST /api/founder-actions/chat` — one turn, with the founder's words stored first.
  *
- * **The founder's own words reach the store before anything is spawned.** The recreate route's
- * precedent and its reason: a run that dies has still left what somebody typed where they put
- * it. One run in flight per action, and a second POST answers 409 rather than starting a
- * second agent against the same card.
+ * **The message reaches the store before anything is spawned**, which is the recreate route's
+ * precedent and its reason: a run that dies has still left what somebody typed where they put it.
+ * The agent is resolved before that, because a board that was never granted one has no run to
+ * lose the words of — a 404 there is a refusal rather than a turn.
+ *
+ * One run in flight per item, as `recreateRuns` is per issue, and a second POST answers 409
+ * rather than spawning a second agent. The answer is 202: a turn takes as long as an agent takes,
+ * and a request held open that long is indistinguishable from a hang.
  */
 app.post('/api/founder-actions/chat', async (req: Request, res: Response) => {
-  if (offLoopback(res, 'A founder action is asked about')) return;
-
-  const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
-  if (!key) return res.status(400).json({ success: false, error: 'A founder action needs a key.' });
-  // Kept exactly as typed. The chat is prose in a panel rather than card text, and
-  // `appendChatTurn` is deliberately not register-validated for that reason.
-  const message = typeof req.body?.message === 'string' ? req.body.message : '';
-  if (!message.trim()) {
-    return res.status(400).json({ success: false, error: 'There is nothing to ask.' });
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    return res.status(403).json({
+      success: false,
+      error: 'Founder actions are talked about only while the server is bound to loopback.'
+    });
   }
 
-  const workspaceId = workspaceIdFrom(req);
-  const workspace = await founderWorkspace(req);
+  if (!ISSUE_AGENT_CONFIGURED) {
+    return res.status(404).json({
+      success: false,
+      error: `Talking about a founder action is disabled. Set ${settingName('ISSUE_AGENT')} to the agent command to enable it.`
+    });
+  }
+
+  const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
+  // Kept as typed. What the founder wrote is the whole of what the turn is about, and it is
+  // stored verbatim: `appendChatTurn` is deliberately outside the register for that reason.
+  const message = typeof req.body?.message === 'string' ? req.body.message : '';
+  if (!key || !message.trim()) {
+    return res.status(400).json({
+      success: false, error: 'A chat turn needs the founder action\'s key and something to say.'
+    });
+  }
+
+  const resolved = await founderWorkspace(req);
+  if ('error' in resolved) {
+    return res.status(404).json({ success: false, reason: resolved.reason, error: resolved.error });
+  }
+  const { workspaceId, workspace } = resolved;
   if (!workspace) {
     return res.status(404).json({
       success: false,
       reason: 'no-workspace',
-      error: `Workspace "${workspaceId}" is not registered, so it holds no founder actions.`,
+      error: 'A chat runs in a board\'s own directory, and this is the host itself.'
     });
   }
 
   const record = readFounderAction(workspaceId, key);
   if (!record) {
-    return res.status(404).json({ success: false, error: `No founder action "${key}" on this board.` });
+    return res.status(404).json({
+      success: false, reason: 'no-action', error: `No founder action "${key}" on this board.`
+    });
   }
 
   const runKey = founderChatKey(workspaceId, key);
   if (founderChatRuns.get(runKey)?.state === 'running') {
     return res.status(409).json({
-      success: false,
-      error: 'A question about this item is already being answered.',
+      success: false, error: 'This item already has a turn in flight. Wait for the answer.'
     });
   }
 
-  const agent = ISSUE_AGENT_CONFIGURED ? agentGrantFor(workspace, ISSUE_AGENT_GRANTS, 'issue') : null;
-  const capabilities = founderCapabilities(workspace);
-  if (!agent || !capabilities.chat) {
-    return res.status(404).json({ success: false, error: capabilities.chatRefusal });
+  const agent = agentCommandOrRefuse(
+    res, workspace, ISSUE_AGENT_GRANTS, 'issue', 'Talking about a founder action',
+    settingName('ISSUE_AGENT')
+  );
+  if (!agent) return;
+
+  // Before the claim and long before the spawn.
+  const withMessage = appendChatTurn(workspaceId, key, { role: 'founder', text: message });
+  if (!withMessage) {
+    return res.status(404).json({
+      success: false, reason: 'no-action', error: `No founder action "${key}" on this board.`
+    });
   }
 
-  // Before the spawn, and before the answer: this is the only copy of what was typed.
-  const withQuestion = appendChatTurn(workspaceId, key, { role: 'founder', text: message });
-  const transcript = withQuestion?.chat ?? record.chat;
-
   founderChatRuns.set(runKey, {
-    state: 'running', error: null, refusal: null,
-    startedAt: new Date().toISOString(), endedAt: null,
+    state: 'running',
+    startedAt: new Date().toISOString(),
+    endedAt: null,
+    reply: null,
+    refusal: null,
+    revised: false,
+    error: null
   });
-  // Answered at once: a turn takes as long as an agent takes, and a request held open that long
-  // is indistinguishable from a hang. The panel polls the GET below.
-  res.status(202).json({ success: true, state: 'running', action: withQuestion ?? record });
+  res.status(202).json({ success: true, state: 'running', key });
 
-  const settle = (state: 'done' | 'failed', error: string | null, refusal: string | null): void => {
+  const settle = (run: Omit<FounderChatRun, 'startedAt' | 'endedAt' | 'state'> & {
+    state: 'done' | 'failed';
+  }): void => {
     const existing = founderChatRuns.get(runKey);
     founderChatRuns.set(runKey, {
-      state,
-      error,
-      refusal,
+      ...run,
       startedAt: existing?.startedAt ?? new Date().toISOString(),
-      endedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString()
     });
   };
 
   try {
-    const result = await runFounderChatTurn(
-      workspace,
-      { key: record.key, kind: record.kind, fields: record.fields },
-      record.evidence,
-      // The founder's own turn included: it is the thing being answered.
-      transcript.map((turn) => ({ role: turn.role, text: turn.text, at: turn.at })),
-      message,
-      { agent, notFoundVariable: settingName('ISSUE_AGENT_WSL') }
+    // The transcript is the turns *before* this one: the founder's message is passed separately,
+    // and a prompt carrying it twice would read as the person having said it twice.
+    const said = withMessage.chat.slice(0, -1);
+    const result = await runFounderChatAgent(
+      workspace, withMessage.fields, withMessage.evidence, said, message,
+      { agent, key, kind: withMessage.kind, notFoundVariable: settingName('ISSUE_AGENT_WSL') }
     );
-
-    if (!result.ok || !result.answer) {
-      settle('failed', result.error ?? 'The agent answered with nothing at all.', null);
+    if (!result.ok) {
+      settle({ state: 'failed', reply: null, refusal: null, revised: false, error: result.error });
+      logger.warn(`Founder chat on "${key}" failed: ${result.error}`);
       return;
     }
 
-    appendChatTurn(workspaceId, key, { role: 'agent', text: result.answer.reply });
+    // The record is read again rather than reused: the turn just appended is part of what the
+    // answer is about, and a producer may have moved `lastSeenAt` underneath it.
+    const current = readFounderAction(workspaceId, key) ?? withMessage;
+    const answer: FounderChatAnswer = parseFounderChatAnswer(
+      result.output, { key, kind: current.kind, fields: current.fields }
+    );
 
-    // A patch that survived the register is applied to the card in place, so "I did it, what
-    // now?" changes the instructions in front of the reader. A refused one leaves the card
-    // exactly as it was and says so — the founder is told, rather than silently getting an
-    // unchanged card.
-    if (result.answer.patch) {
-      const revised = reviseFounderAction(workspaceId, key, result.answer.patch);
-      if (!revised.ok) {
-        settle('done', null, 'The revision was not applied, so the item was left as it is.');
-        return;
+    // The reply reaches the store whatever became of the revision. A founder who asked a question
+    // and got an answer the register happened to refuse must still be able to read the answer.
+    appendChatTurn(workspaceId, key, { role: 'agent', text: answer.reply });
+
+    let revised = false;
+    // Flattened to the sentence plus its faults, because that is what a panel prints and what a
+    // poll carries. The structured refusal stays `core/founder-chat.ts`'s.
+    let refusal = answer.refusal
+      ? `${answer.refusal.said}${answer.refusal.faults.length > 0
+          ? ` (${answer.refusal.faults.map((fault) => `${fault.field} ${fault.rule}`).join('; ')})`
+          : ''}`
+      : null;
+    if (answer.patch) {
+      const written = reviseFounderAction(workspaceId, key, answer.patch);
+      revised = written.ok;
+      if (!written.ok) {
+        // Belt and braces: the parser has already read the merged whole against the register, so
+        // this arm is the store refusing something the parser accepted — a disagreement worth
+        // saying out loud rather than swallowing.
+        refusal = 'The revision was refused where it is stored: '
+          + written.faults.map((fault) => `${fault.field} ${fault.rule}`).join('; ');
       }
-      logger.info(`Founder action "${key}" was revised by the chat`);
     }
-    settle('done', null, result.answer.refusal?.said ?? null);
+
+    settle({ state: 'done', reply: answer.reply, refusal, revised, error: null });
+    logger.info(`Founder chat on "${key}" answered${revised ? ' and revised the item' : ''}`);
   } catch (error) {
-    settle('failed', (error as Error).message, null);
+    settle({
+      state: 'failed', reply: null, refusal: null, revised: false, error: (error as Error).message
+    });
   }
 });
 
 /**
- * What the chat has done so far, and the item as it now stands.
+ * `GET /api/founder-actions/chat` — the conversation, and what the run in flight has done.
  *
- * The run is in memory and the **transcript is not**: the conversation comes back from the
- * store on every read, so reloading the page shows all of it while a run nobody is waiting for
- * is simply gone. That split is why this hands back the record as well as the run — the panel
- * has one place to read the steps, the state and the turns from, whether it has been open for
- * an hour or for a second.
+ * Two answers from two places, and which is which is the whole of what this route documents.
+ * **`chat` is the store's**: it is the transcript, it survives a restart, and it is what the
+ * panel renders. **`run` is this process's**: it is the state of a turn that is going on now, it
+ * is forgotten when the server stops, and it is what the panel polls. A restart therefore leaves
+ * the conversation intact with `run: null`, which is exactly the truth about it.
  */
 app.get('/api/founder-actions/chat', async (req: Request, res: Response) => {
-  if (offLoopback(res, 'A founder chat is read')) return;
+  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
+    return res.status(403).json({
+      success: false,
+      error: 'A founder action\'s conversation is read only while the server is bound to loopback.'
+    });
+  }
 
   const key = typeof req.query.key === 'string' ? req.query.key.trim() : '';
-  if (!key) return res.status(400).json({ success: false, error: 'A founder action needs a key.' });
-
-  const workspaceId = workspaceIdFrom(req);
-  const action = readFounderAction(workspaceId, key);
-  if (!action) {
-    return res.status(404).json({ success: false, error: `No founder action "${key}" on this board.` });
+  if (!key) {
+    return res.status(400).json({ success: false, error: 'No founder action key was given.' });
   }
-  res.json({ success: true, run: founderChatRuns.get(founderChatKey(workspaceId, key)) ?? null, action });
+
+  const resolved = await founderWorkspace(req);
+  if ('error' in resolved) {
+    return res.status(404).json({ success: false, reason: resolved.reason, error: resolved.error });
+  }
+  const { workspaceId } = resolved;
+
+  const record = readFounderAction(workspaceId, key);
+  if (!record) {
+    return res.status(404).json({
+      success: false, reason: 'no-action', error: `No founder action "${key}" on this board.`
+    });
+  }
+
+  res.json({
+    success: true,
+    action: record,
+    chat: record.chat,
+    run: founderChatRuns.get(founderChatKey(workspaceId, key)) ?? null
+  });
 });
 
 // ─── Library API (shared shapes) ──────────────────────────────
