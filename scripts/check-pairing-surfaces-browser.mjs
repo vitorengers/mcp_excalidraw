@@ -59,7 +59,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
-import { networkInterfaces, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
@@ -67,6 +67,7 @@ import WebSocket from 'ws';
 import { findChrome, skipWithoutChrome } from './lib/find-chrome.mjs';
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas } from './lib/spawn-canvas.mjs';
+import { remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -235,15 +236,17 @@ function call(board, path, { method = 'GET', headers = {}, body = null, host } =
   });
 }
 
-/** The address a second machine would reach this one on, or null when there is no such address. */
-function externalAddress() {
-  for (const entries of Object.values(networkInterfaces())) {
-    for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal) return entry.address;
-    }
-  }
-  return null;
-}
+/**
+ * The address a second machine would reach this one on.
+ *
+ * `lib/remote-caller.mjs` rather than the first non-internal address this file used to take: that
+ * one picked whatever the machine listed first, which on a machine with a private overlay is the
+ * overlay — and Chrome could not reach a board put on a tailnet address here, so sections 3 and 4
+ * failed fourteen cases on a page that never loaded rather than on anything about pairing. The
+ * shared helper prefers a **host-only** adapter, probes that it can be bound before returning it,
+ * and says on stdout when it had to take a real interface instead.
+ */
+const externalAddress = () => remoteInterfaceAddress((line) => console.log(`  note  ${line}`));
 
 // ─── Talking to a Chrome ──────────────────────────────────────
 
@@ -564,7 +567,7 @@ try {
 
   // ─── 3 and 4. The device asking, at an origin of its own ────
 
-  const external = externalAddress();
+  const external = await externalAddress();
   if (!external) {
     console.log('\n3. the waiting screen on the device asking');
     console.log('  note  this machine has no non-loopback IPv4 address, so a second origin cannot '

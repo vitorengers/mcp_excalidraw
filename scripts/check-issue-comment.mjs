@@ -364,14 +364,19 @@ try {
         recordAfter?.url === 'https://github.com/vitorengers/vibemaxxing/pull/7',
         JSON.stringify(recordAfter));
 
-  console.log('\n8. it writes to GitHub, so it refuses to run off loopback');
+  console.log('\n8. it writes to GitHub, and a board bound off loopback still answers the operator');
   const remote = startCanvas(remotePort, '0.0.0.0');
   await waitForHealth(REMOTE_BASE, remote.child, remote.read);
   const off = await call('/api/issue/comment', {
-    method: 'POST', body: JSON.stringify({ url: ISSUE, body: 'from the network' }),
+    method: 'POST', body: JSON.stringify({ url: ISSUE, body: 'from this machine' }),
   }, REMOTE_BASE);
-  check('403 Forbidden', off.status === 403, `got ${off.status}`);
-  check('and it says loopback', /loopback/i.test(off.body?.error ?? ''), off.body?.error);
+  // 403 until #586, and the caller it was refusing is this one: `REMOTE_BASE` is `127.0.0.1`, so
+  // this request came from the machine the server runs on. The route asks who is calling now, and
+  // that it refuses a caller who is on neither this machine nor an approved device is asserted with
+  // a genuinely remote socket in `scripts/check-acting-caller-guard.mjs`.
+  check('not refused', off.status !== 403, `got ${off.status} ${JSON.stringify(off.body)}`);
+  check('and nothing it says is about the bind', !/loopback/i.test(off.body?.error ?? ''),
+        off.body?.error);
 
   console.log('\n9. the implement agent is told the comments are part of the issue');
   const { IMPLEMENT_AGENT_PROMPT } = await import(

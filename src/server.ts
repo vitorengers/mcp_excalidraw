@@ -1158,8 +1158,26 @@ const UpdateElementSchema = z.object({
 // ─── The loopback guard ───────────────────────────────────────
 //
 // Every route below that answers with something this machine owns asks this first. What it asks
-// lives in `core/caller-gate.ts`; the whole of the funnel is here, so the ~40 call sites keep
+// lives in `core/caller-gate.ts`; the whole of the funnel is here, so the ~50 call sites keep
 // the shape they have and there is one place where the question can change.
+
+/**
+ * Whether this request is the operator's own, on either of the two grounds this board recognises.
+ *
+ * The two funnels below differ in what they do with the answer and not in the question, so the
+ * question is written once: **a caller on the machine this server runs on, or a caller on a device
+ * the operator approved.** Nothing else — and in particular not the board's own token. A remote
+ * request carrying that token arrives here and is refused, which is what makes a copied token less
+ * than an approved laptop rather than equal to it.
+ *
+ * `callerIsLocal` reads the request's socket and no header at all; `core/caller-gate.ts` says at
+ * length why a forwarded header must not be allowed to answer this, and takes an address rather
+ * than a request so that it cannot start.
+ */
+function operatorsOwn(res: Response): boolean {
+  if (callerIsLocal(res.req)) return true;
+  return Boolean(res.locals.device);
+}
 
 /**
  * Refuse a caller that arrived over the network, and say which question was asked.
@@ -1210,10 +1228,16 @@ const UpdateElementSchema = z.object({
  *
  * What a device reaches by being admitted here is the whole of this funnel, which is the board
  * and the boards, the files, the images, the exports, the snapshots, the viewport, the projects,
- * the directory picker and the restart button — `docs/SECURITY.md` enumerates it. What it does
- * **not** reach is anything still guarded on the bind: the routes that spawn `gh` with the
- * operator's own credentials stay the operator's, and so does the pairing desk, which is
- * `notTheHost`'s and is how a device is approved in the first place.
+ * the directory picker and the restart button — `docs/SECURITY.md` enumerates it. **And since #586
+ * the routes that spawn `gh` are in here as well.** They were the last thing on this server still
+ * decided by the bind, which is what made a board opened on an interface refuse the project
+ * mirror, the GitHub status, every issue read and the founder column to the browser on the machine
+ * running it. Admitting a device to them takes nothing away that was being kept: `actingFor` had
+ * already handed an approved device a shell, and a shell is strictly more than any `gh` read.
+ *
+ * What is still not in here is the **pairing desk**, which is `notTheHost`'s and is how a device is
+ * approved in the first place. An approved laptop that could approve the next one would make the
+ * operator's press the first link of a chain rather than the whole of the decision.
  *
  * `res.req` rather than a second parameter, because a funnel is only one place to change while
  * nothing has to be threaded through the call sites to reach it. Express sets it on every
@@ -1231,8 +1255,7 @@ const UpdateElementSchema = z.object({
  * request holding a perfectly good token.
  */
 function offLoopback(res: Response, what: string): boolean {
-  if (callerIsLocal(res.req)) return false;
-  if (res.locals.device) return false;
+  if (operatorsOwn(res)) return false;
   res.status(403).json({
     success: false,
     // The credential, not the bind. A caller here has already satisfied the token gate — a
@@ -1250,32 +1273,37 @@ function offLoopback(res: Response, what: string): boolean {
 /**
  * Whether the two features that *act on this machine* are this caller's to use.
  *
- * A different question from the funnel above, and the reason it is different is the reason #518
- * gave for leaving it alone: the funnel asks who may **read** the records, and this asks whether
- * a shell and a coding agent may be started at all. Its old answer was the bind and nothing else
- * — `LOOPBACK_ADDRESSES.includes(HOST)` — because a board reachable from the network offered
- * remote code execution to whoever reached the port, and there was nobody to tell apart from
- * whoever.
+ * A separate name from the funnel above, and the reason is the one #518 gave for leaving it alone:
+ * the funnel asks who may **read** the records, and this asks whether a shell and a coding agent
+ * may be started at all. Its old answer was the bind and nothing else —
+ * `LOOPBACK_ADDRESSES.includes(HOST)` — because a board reachable from the network offered remote
+ * code execution to whoever reached the port, and there was nobody to tell apart from whoever.
  *
- * There is now: an approved device is one named, revocable record that the operator wrote by
- * looking at a card and pressing approve. So the bind stays the answer for a caller with no
- * credential — an interface-bound board still refuses the terminal and the implement agent to
- * its own operator, who has a loopback board a keystroke away — and a device is the second way
- * to be entitled rather than a hole in the first.
+ * #522 gave it somebody: an approved device is one named, revocable record the operator wrote by
+ * looking at a card and pressing approve. But it left the *first* clause testing the bind, and
+ * that clause is not about a stranger at all — it is about **the operator**. On a board opened on
+ * an interface it answered false for the browser on the machine running the server, whose request
+ * arrives from loopback, so the terminal, the implement agent and the queue toggle were off for the
+ * one caller no guard was ever trying to stop. #586 asks the caller instead, which for a remote one
+ * is strictly *tighter* than the bind was: the bind admitted nobody remote and refused the host
+ * too, so the only caller this newly admits is the operator's own.
  *
- * Taken with no response at all where a run of the board's own asks the question of *itself*
- * (`interactiveTabRefusal`, `implementTerminalHost`): nobody is calling there, and the bind is
- * the whole of the answer.
+ * **`null` is the board asking about itself**, for a run it starts on its own account
+ * (`interactiveTabRefusal`, `implementTerminalHost`), and it answers that the capability exists.
+ * There is no caller there to refuse: nobody made a request, and the run is going to happen either
+ * way — what the answer decides is whether it gets a terminal tab to be watched in. Refusing meant
+ * an interface-bound board quietly denied its own queue the live tab, which is the reader's only
+ * view of a run in flight. What the tab *streams* is guarded where a reader has to open a socket to
+ * see it, and that upgrade asks this same question of a real caller.
  *
- * This is one predicate on purpose. The two capability flags — `queue` on `GET /api/implement`,
- * and whether a terminal can be had — and the two refusals behind them are halves of the same
- * rule, and a board that drew a toggle its own route then refused would be lying to whoever
- * pressed it. That is what #518 objected to and it is answered by moving both halves together,
- * not by leaving the flag behind.
+ * This is one predicate on purpose. The two capability flags — `queue` on `GET /api/implement`, and
+ * whether a terminal can be had — and the two refusals behind them are halves of the same rule, and
+ * a board that drew a toggle its own route then refused would be lying to whoever pressed it. That
+ * is what #518 objected to, and it is why both halves move together every time this moves.
  */
 function actingFor(res: Response | null): boolean {
-  if (LOOPBACK_ADDRESSES.includes(HOST) || HOST === 'localhost') return true;
-  return Boolean(res?.locals.device);
+  if (!res) return true;
+  return operatorsOwn(res);
 }
 
 // API Routes
@@ -2898,13 +2926,9 @@ app.post('/api/issue-block/:id', async (req: Request, res: Response) => {
     });
   }
 
-  // Running an agent is remote code execution for anyone who can reach this port.
-  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
-    return res.status(403).json({
-      success: false,
-      error: 'Issue blocks only run while the server is bound to loopback.'
-    });
-  }
+  // Running an agent is remote code execution for anyone who can reach this port, so it is the
+  // operator's own to start — which is the caller's address and not the bind (#586).
+  if (offLoopback(res, 'An issue block is run')) return;
 
   const workspaceId = workspaceIdFrom(req);
   const store = elementsFor(workspaceId);
@@ -5306,14 +5330,14 @@ function implementingRefused(res: Response): boolean {
     return true;
   }
   // This agent writes to the repository, which makes reaching this route from the network
-  // strictly worse than reaching the issue route. `actingFor` rather than the bind alone since
-  // #522: an approved device is a caller with a name and a revoke, which is the thing the bind
-  // was standing in for the absence of.
+  // strictly worse than reaching the issue route. `actingFor` rather than the bind since #522 and
+  // #586: an approved device is a caller with a name and a revoke, which is the thing the bind was
+  // standing in for the absence of — and the bind refused the operator's own browser besides.
   if (!actingFor(res)) {
     res.status(403).json({
       success: false,
-      error: 'Implementing only runs while the server is bound to loopback, or for a device '
-        + 'this board has approved.'
+      error: 'Implementing only runs for a caller on this machine, or one on a device this board '
+        + 'has approved.'
     });
     return true;
   }
@@ -5479,18 +5503,18 @@ app.delete('/api/issue-block/:id/implement', (req: Request, res: Response) => {
  * asks this once per poll, for the marks on the cards, and the toggle's two appearances have
  * to survive every redraw — so the state that decides them has to arrive with the redraw's
  * own data or it will be one poll behind. `queue` is **absent** rather than off when
- * implementing is disabled or the server is not bound to loopback, because a button that
+ * implementing is disabled or this caller may not act on this machine, because a button that
  * cannot do anything should not be drawn at all.
  *
  * That last test is still not the funnel — it is `actingFor`, which asks whether this caller may
  * *act on this machine*, and the funnel asks who may read the records at all. It was the bind
  * alone until #522, on the reasoning that the toggle it decides turns `POST /api/implement/queue`
- * on and that route is bind-guarded with the rest of the implement agent, so drawing the button
- * on an interface-bound board would be a lie to whoever pressed it. That reasoning is why both
- * halves moved together rather than only this one: an approved device passes `actingFor` here
- * *and* at `implementingRefused`, so the toggle a device is drawn is a toggle that works, and the
- * operator on loopback of an interface-bound board is still shown nothing, because for them
- * nothing has changed.
+ * on and that route is guarded with the rest of the implement agent, so drawing the button where
+ * it would then be refused is a lie to whoever pressed it. That reasoning is why the halves move
+ * together every time this moves: an approved device passes `actingFor` here *and* at
+ * `implementingRefused`, so the toggle a device is drawn is a toggle that works — and since #586
+ * the same is true of the operator on an interface-bound board, who was shown nothing while the
+ * question was where the server opened rather than who was asking.
  *
  * The funnel is #508/#518, and this was the closest thing here to a decided exemption — it
  * dropped `queue` off loopback on purpose, which is precisely the shape of a route somebody
@@ -5540,13 +5564,8 @@ app.delete('/api/implement', (req: Request, res: Response) => {
  */
 app.get('/api/issue', async (req: Request, res: Response) => {
   // Reading is not writing, but it still spawns a process holding the user's gh
-  // credentials — the same reason the run route is loopback-only.
-  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
-    return res.status(403).json({
-      success: false,
-      error: 'Issues only read while the server is bound to loopback.'
-    });
-  }
+  // credentials — the same reason the run route is the operator's own.
+  if (offLoopback(res, 'An issue is read')) return;
 
   const issueUrl = typeof req.query.url === 'string' ? req.query.url : '';
   if (!isIssueUrl(issueUrl)) {
@@ -5583,18 +5602,13 @@ app.get('/api/issue', async (req: Request, res: Response) => {
  * Keyed by URL for the same reason implementing is: the panel also serves a mirrored card
  * the server has never seen, which has no element id to name it by.
  *
- * The loopback guard and nothing else. This writes to GitHub, so a canvas reachable from
- * the network must not reach it — but it starts no agent and touches no repository, so
- * `POST /api/project-board/move` is the precedent rather than the implement routes' opt-in
- * environment variable.
+ * The funnel and nothing else. This writes to GitHub, so a caller who is neither on this machine
+ * nor on a device this board has approved must not reach it — but it starts no agent and touches no
+ * repository, so `POST /api/project-board/move` is the precedent rather than the implement routes'
+ * opt-in environment variable.
  */
 app.post('/api/issue/comment', async (req: Request, res: Response) => {
-  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
-    return res.status(403).json({
-      success: false,
-      error: 'Issues only take comments while the server is bound to loopback.'
-    });
-  }
+  if (offLoopback(res, 'An observation is added to an issue')) return;
 
   const issueUrl = typeof req.body?.url === 'string' ? req.body.url : '';
   if (!isIssueUrl(issueUrl)) {
@@ -5913,13 +5927,8 @@ app.get('/api/issue-block/:id/issue', async (req: Request, res: Response) => {
   const elementId = req.params.id ?? '';
 
   // Reading is not writing, but it still spawns a process holding the user's gh
-  // credentials — the same reason the run route is loopback-only.
-  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
-    return res.status(403).json({
-      success: false,
-      error: 'Issue blocks only read while the server is bound to loopback.'
-    });
-  }
+  // credentials — the same reason the run route is the operator's own.
+  if (offLoopback(res, 'An issue block\'s issue is read')) return;
 
   const workspaceId = workspaceIdFrom(req);
   const element = elementsFor(workspaceId).get(elementId);
@@ -6048,13 +6057,8 @@ async function projectWorkspace(
 
 app.get('/api/project-board', async (req: Request, res: Response) => {
   // Reading is not writing, but it still spawns a process holding the user's gh
-  // credentials — the same reason the issue block's read route is loopback-only.
-  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
-    return res.status(403).json({
-      success: false,
-      error: 'The project board only reads while the server is bound to loopback.'
-    });
-  }
+  // credentials — the same reason the issue block's read route is the operator's own.
+  if (offLoopback(res, 'The project board is read')) return;
 
   const resolved = await projectWorkspace(req);
   const founder = founderMirrorColumn(
@@ -6098,21 +6102,16 @@ app.get('/api/project-board', async (req: Request, res: Response) => {
 /**
  * `GET /api/github-status` — whether `gh` is there and logged in, for this board.
  *
- * Loopback-only, like every other route that runs `gh`: this one spawns nothing on anybody's
- * behalf, but what it answers with is the account name and the token's scopes, and a canvas
- * reachable from the network must not hand those out.
+ * Behind the funnel, like every other route that runs `gh`: this one spawns nothing on anybody's
+ * behalf, but what it answers with is the account name and the token's scopes, and a caller who is
+ * neither on this machine nor on an approved device must not be handed those.
  *
  * The consumer is the canvas, on a poll that just failed. `GET /api/project-board` can say
  * that `gh` refused; only this can say *why* — not installed, not logged in, or logged in
  * without the `project` scope, which are three different things for the reader to go and do.
  */
 app.get('/api/github-status', async (req: Request, res: Response) => {
-  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
-    return res.status(403).json({
-      success: false,
-      error: 'The GitHub status only answers while the server is bound to loopback.'
-    });
-  }
+  if (offLoopback(res, 'The GitHub status is read')) return;
 
   const workspaceId = workspaceIdFrom(req);
   const workspaces = await loadWorkspaces(registryPath()).catch(() => []);
@@ -6143,17 +6142,11 @@ app.get('/api/github-status', async (req: Request, res: Response) => {
 /**
  * Move a card to another column.
  *
- * Behind the same loopback guard as the issue block's run route, and for a stronger
- * reason: this one writes. A canvas reachable from the network must not be able to
- * rearrange somebody's project board.
+ * Behind the same funnel as the issue block's run route, and for a stronger reason: this one
+ * writes. A caller this board does not recognise must not be able to rearrange somebody's project.
  */
 app.post('/api/project-board/move', async (req: Request, res: Response) => {
-  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
-    return res.status(403).json({
-      success: false,
-      error: 'The project board only moves cards while the server is bound to loopback.'
-    });
-  }
+  if (offLoopback(res, 'A card is moved')) return;
 
   const itemId = typeof req.body?.itemId === 'string' ? req.body.itemId.trim() : '';
   const optionId = typeof req.body?.optionId === 'string' ? req.body.optionId.trim() : '';
@@ -6356,12 +6349,7 @@ async function reprobeFor(
  * answering while GitHub is broken depend on GitHub working.
  */
 app.get('/api/founder-actions', async (req: Request, res: Response) => {
-  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
-    return res.status(403).json({
-      success: false,
-      error: 'Founder actions are read only while the server is bound to loopback.'
-    });
-  }
+  if (offLoopback(res, 'Founder actions are read')) return;
 
   const resolved = await founderWorkspace(req);
   if ('error' in resolved) {
@@ -6413,12 +6401,7 @@ app.get('/api/founder-actions', async (req: Request, res: Response) => {
  * close and a card somebody said was done are different facts about the same blocker.
  */
 app.post('/api/founder-actions/resolve', async (req: Request, res: Response) => {
-  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
-    return res.status(403).json({
-      success: false,
-      error: 'Founder actions are settled only while the server is bound to loopback.'
-    });
-  }
+  if (offLoopback(res, 'A founder action is settled')) return;
 
   const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
   const how = req.body?.how === 'person' ? 'person' : req.body?.how === 'probe' ? 'probe' : null;
@@ -6506,12 +6489,7 @@ app.post('/api/founder-actions/resolve', async (req: Request, res: Response) => 
  * and a request held open that long is indistinguishable from a hang.
  */
 app.post('/api/founder-actions/chat', async (req: Request, res: Response) => {
-  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
-    return res.status(403).json({
-      success: false,
-      error: 'Founder actions are talked about only while the server is bound to loopback.'
-    });
-  }
+  if (offLoopback(res, 'A founder action is talked about')) return;
 
   if (!ISSUE_AGENT_CONFIGURED) {
     return res.status(404).json({
@@ -6657,12 +6635,7 @@ app.post('/api/founder-actions/chat', async (req: Request, res: Response) => {
  * the conversation intact with `run: null`, which is exactly the truth about it.
  */
 app.get('/api/founder-actions/chat', async (req: Request, res: Response) => {
-  if (!LOOPBACK_ADDRESSES.includes(HOST) && HOST !== 'localhost') {
-    return res.status(403).json({
-      success: false,
-      error: 'A founder action\'s conversation is read only while the server is bound to loopback.'
-    });
-  }
+  if (offLoopback(res, 'A founder action\'s conversation is read')) return;
 
   const key = typeof req.query.key === 'string' ? req.query.key.trim() : '';
   if (!key) {
@@ -6827,12 +6800,13 @@ function terminalRefused(res: Response): boolean {
   // A shell on this port is remote code execution for anyone who can reach it — for *anyone*,
   // which since #522 is no longer the same set as "anyone off this machine": `actingFor` reads
   // the approved device the token gate resolved, and an approved device is somebody rather than
-  // anyone.
+  // anyone. Since #586 it reads the caller's address for the other half, so a board opened on an
+  // interface no longer refuses the shell to the operator sitting at it.
   if (!actingFor(res)) {
     res.status(403).json({
       success: false,
-      error: 'The terminal only runs while the server is bound to loopback, or for a device '
-        + 'this board has approved.'
+      error: 'The terminal only runs for a caller on this machine, or one on a device this board '
+        + 'has approved.'
     });
     return true;
   }
@@ -6882,9 +6856,9 @@ function requireTerminal(req: Request, res: Response): TerminalSession | null {
  * Whether a session could be opened at all, for a caller with no response to write.
  *
  * `res` is optional and null is not "no opinion": it is the board asking about *itself*, for a
- * run it is about to start on its own account, where there is no caller and the bind is the
- * whole answer. A request that has one passes it, so that a paired device is offered the tab
- * the same route would then give it.
+ * run it is about to start on its own account, where nobody is calling and the capability is
+ * therefore the board's — see `actingFor`. A request that has one passes it, so that a paired
+ * device is offered the tab the same route would then give it, and so is the operator.
  */
 function terminalAvailable(res: Response | null = null): boolean {
   return Boolean(TERMINAL_SETTING) && actingFor(res);

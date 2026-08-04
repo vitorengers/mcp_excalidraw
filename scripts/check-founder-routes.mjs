@@ -38,9 +38,10 @@
  * first.
  *
  * Three servers, because three of the cases are about how a server was *started*: one ordinary
- * board, one bound off loopback so the refusal is the bind's, and one whose `gh` is signed out
- * behind a long memo. A fourth is started at the end on the first server's own registry, which is
- * how "the transcript survives a restart and the run state does not" is asked.
+ * board, one bound off loopback — which since #586 is a board that still answers its own operator,
+ * and section 1 is where that is asserted rather than the refusal it used to be — and one whose
+ * `gh` is signed out behind a long memo. A fourth is started at the end on the first server's own
+ * registry, which is how "the transcript survives a restart and the run state does not" is asked.
  *
  * Usage: node scripts/check-founder-routes.mjs
  *
@@ -576,9 +577,16 @@ try {
   await waitForHealth(OFF, offServer);
 
   // ─── 1 ──────────────────────────────────────────────────────
-  console.log('1. a board bound off loopback refuses all four, and an unknown board is a 404');
+  //
+  // This section asserted 403 until #586, and the caller it was asserting about is this one: the
+  // board is bound to an address the old guard called "not loopback", and `callOn(OFF, …)` reaches
+  // it *from this machine*, so the request those four routes refused was the operator's own. They
+  // ask who is calling now. Refusing a genuinely remote socket needs one to be opened, which
+  // `scripts/check-acting-caller-guard.mjs` does rather than this file opening a second.
+  console.log('1. a board bound off loopback answers all four to a caller on this machine, and an '
+              + 'unknown board is still a 404');
 
-  const REFUSED = [
+  const ANSWERED_OFF_BIND = [
     ['GET /api/founder-actions', { path: '/api/founder-actions?workspace=mirror' }],
     ['POST /api/founder-actions/resolve', {
       path: '/api/founder-actions/resolve',
@@ -594,13 +602,13 @@ try {
       path: '/api/founder-actions/chat?workspace=mirror&key=mirror%3Agh-billing',
     }],
   ];
-  for (const [name, probe] of REFUSED) {
+  for (const [name, probe] of ANSWERED_OFF_BIND) {
     const answer = await callOn(OFF, probe.path, {
       method: probe.method ?? 'GET',
       headers: { 'Content-Type': 'application/json' },
       ...(probe.body === undefined ? {} : { body: JSON.stringify(probe.body) }),
     });
-    check(`${name} is refused 403 there`, answer.status === 403,
+    check(`${name} is not refused there`, answer.status !== 403,
           `got ${answer.status} ${JSON.stringify(answer.body)}`);
   }
 

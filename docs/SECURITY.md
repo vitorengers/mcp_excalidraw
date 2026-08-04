@@ -284,9 +284,9 @@ and the writes are behind the same guard:
   scene on connect and an HTTP guard cannot see it. Since #501 most of that list is refused on
   the caller rather than on the bind, so it is you it stops being refused to; since #522 it is
   also a device you approved, which is the one caller off this machine any of it is answered to.
-  The GitHub routes still test the bind and are refused to everybody on such a board. The
-  terminal and the implement agent test it too, and an approved device is the second way that
-  test passes — see [above](#pairing-a-second-machine).
+  **Since #586 that is the whole of the list and nothing is left on the bind:** the GitHub routes,
+  the terminal and the implement agent were the last three asking where this server had opened, and
+  what that cost was refusing you on your own machine — see [above](#pairing-a-second-machine).
 <!-- routes: answered-off-loopback -->
 - **Still reached by a caller on the network** — `GET /`, the page itself, which cannot read a
   token out of an address bar it has not loaded yet; `GET /health`, which is how anything finds
@@ -308,10 +308,10 @@ and the writes are behind the same guard:
   it existed and was invisible to the check that derives these lists (#522). They ask **who is
   calling** rather than where the server opened, so an interface-bound board serves them from
   your own keyboard while refusing the network the same route — and since #522 serves them to a
-  device you approved, which is the whole of what that credential is for. What is left on the
-  bind is the two agent helpers and the GitHub routes, which such a board refuses to everybody
-  including you, and the terminal and the implement agent, which it refuses to everybody except
-  an approved device.
+  device you approved, which is the whole of what that credential is for. **Nothing is left on the
+  bind.** The two agent helpers and the GitHub routes were the last that were, until #586, and such
+  a board refused them to everybody including you — which is what made opening the board so a second
+  machine could reach it cost you the project mirror and the shell on your own desk.
 
 So the sentence this used to end on — that a board bound that way is inert — was not true, and it
 is the kind of claim worth being exact about. What is inert **to a stranger** is the board:
@@ -350,6 +350,14 @@ device credential: #502 is the registry it lives in, #503 the pairing that puts 
 #522 is where this guard reads it. Until a device is paired, remote and refused are still the
 same answer, so nothing a stranger could not reach before is reachable now — what changed is
 that there is now something to be other than a stranger.
+
+**#586 is where the last of it followed.** #501 moved the funnel in front of the board's contents
+and left three things behind: the routes that spawn `gh`, the terminal and the implement agent. So a
+board on an interface was half a board for its own operator — it drew, and it had no project mirror,
+no GitHub status, no issue reads, no founder column and no shell. Those ask the caller now as well,
+and for a caller off this machine the new answer is *tighter* than the bind's rather than looser:
+the bind admitted nobody remote and refused you besides, so the only caller this admits that the
+bind did not is you.
 
 **`X-Forwarded-For` is not read, and it must not be.** A reverse proxy reaches this server *on
 loopback*, which is why a proxy configuration worked before that change and is untouched by it,

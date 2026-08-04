@@ -51,13 +51,13 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import http from 'node:http';
-import { networkInterfaces } from 'node:os';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { freePort } from './lib/free-port.mjs';
 import { startCanvas } from './lib/spawn-canvas.mjs';
+import { remoteInterfaceAddress } from './lib/remote-caller.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -174,15 +174,17 @@ function call(board, path, { method = 'GET', headers = {}, body = null, host } =
   });
 }
 
-/** The address a second machine would reach this one on, or null when there is no such address. */
-function externalAddress() {
-  for (const entries of Object.values(networkInterfaces())) {
-    for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal) return entry.address;
-    }
-  }
-  return null;
-}
+/**
+ * The address a second machine would reach this one on.
+ *
+ * `lib/remote-caller.mjs` rather than the first non-internal address this file used to take: that
+ * one picked whatever the machine listed first, which on a machine with a private overlay is the
+ * overlay — and a board put on a tailnet address here answered `connect EACCES`, so every case below
+ * was skipped by a transport error rather than run. The shared helper prefers a **host-only**
+ * adapter, probes that it can be bound before returning it, and says on stdout when it had to take a
+ * real interface instead.
+ */
+const externalAddress = () => remoteInterfaceAddress((line) => console.log(`  note  ${line}`));
 
 // ─── The cases ────────────────────────────────────────────────
 
@@ -353,7 +355,7 @@ try {
   // ─── 3. Only the host may approve ───────────────────────────
   console.log('\nOnly the host may approve');
 
-  const external = externalAddress();
+  const external = await externalAddress();
   if (!external) {
     console.log('  note  this machine has no non-loopback IPv4 address, so a caller that is '
                 + 'genuinely remote cannot be made here — section skipped');
