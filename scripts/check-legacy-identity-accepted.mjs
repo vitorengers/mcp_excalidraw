@@ -216,7 +216,7 @@ try {
   check('it wrote a pidfile into the directory this build writes to',
         written !== null && existsSync(written), `${written} is not there`);
   check('which is the legacy directory, unrenamed, as the ordering requires',
-        written !== null && written.startsWith(directories[1] ?? ' '),
+        written !== null && written.startsWith(directories[1] ?? '\0'),
         `${written} is not under ${directories[1]}`);
 
   const stopped = await cli(['stop', '--url', canvas.base]);
