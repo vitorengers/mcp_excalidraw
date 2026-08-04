@@ -452,8 +452,22 @@ try {
   await shot('02-recovered');
 
   check('the columns are drawn: the canvas\'s own and the two the project declares',
-        warm.columns.length === 3, JSON.stringify(warm.columns.map((column) => column.col)));
-  check('the cards are drawn', warm.cards.length === 2, String(warm.cards.length));
+        warm.columns.filter((column) => column.col !== 'canvas:founder').length === 3,
+        JSON.stringify(warm.columns.map((column) => column.col)));
+  check('the mirrored cards are drawn',
+        warm.cards.filter((card) => card.itemId).length === 2, String(warm.cards.length));
+
+  // The founder column is the other half of the same recovery, and it is drawn on purpose. The
+  // `gh` this section has just mended was failing terminally for two polls, and a terminal `gh`
+  // failure is a founder action (#541): a card asking a person to sign in. It stays open until a
+  // re-probe closes it — one `VIBEMAXXING_FOUNDER_PASS_MS` away, which is longer than this run —
+  // so a mirror that came back with no such column would mean the failure was noticed by nobody.
+  // Named here rather than counted into the two cases above, because it is not the project's
+  // column and the project's count is what those are about.
+  check('and the failure that has just been mended left a founder card behind',
+        warm.columns.some((column) => column.col === 'canvas:founder')
+        && warm.cards.some((card) => !card.itemId),
+        JSON.stringify(warm.columns.map((column) => column.col)));
   check('the strip is gone rather than left behind under them', warm.strip === null,
         JSON.stringify(warm.strip));
   check('and the mirror kept the edge the strip was pinned by',
