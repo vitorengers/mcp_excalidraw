@@ -384,3 +384,104 @@
 .element-docs__attach input[type="file"] {
   display: none;
 }
+
+/* ─── A founder action ────────────────────────────────────────
+   The card is 720px wide, the same reading column a whole GitHub issue body uses, and a
+   founder action is deliberately far shorter than what that column normally holds. So the
+   type is a size up from the issue text and the blocks are given room: what should read as
+   finished at this length is a short document, not a long one that ran out. Nothing here
+   scrolls on its own — a transcript with a scrollbar inside a card that already has one is
+   two places for a reader to be lost in. */
+.element-docs__founder {
+  margin-bottom: 1rem;
+}
+
+.element-docs__founder-what {
+  margin: 0.5rem 0 0;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.element-docs__founder-why {
+  margin: 0.5rem 0 1rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--color-gray-60);
+}
+
+/* The steps carry most of the height, which is right: they are the thing to go and do. */
+.element-docs__founder-steps {
+  margin: 0 0 1rem;
+  padding-left: 1.5rem;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.element-docs__founder-steps li {
+  margin: 0 0 0.5rem;
+}
+
+/* How they will know it worked, set apart from the steps rather than reading as one. */
+.element-docs__founder-confirm {
+  margin: 0 0 1rem;
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--color-gray-30);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--color-gray-60);
+}
+
+/* Closed by default, and quiet when it is: the one part written for an engineer. */
+.element-docs__founder-evidence {
+  margin: 0 0 1rem;
+  font-size: 0.8125rem;
+  color: var(--color-gray-60);
+}
+
+.element-docs__founder-evidence summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.element-docs__founder-evidence dl {
+  margin: 0.5rem 0 0;
+}
+
+.element-docs__founder-evidence dt {
+  font-weight: 600;
+}
+
+.element-docs__founder-evidence dd {
+  margin: 0 0 0.5rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.element-docs__founder-chat {
+  margin-top: 1rem;
+  border-top: 1px solid var(--color-gray-30);
+  padding-top: 0.75rem;
+}
+
+.element-docs__founder-turn {
+  margin: 0 0 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--color-gray-30);
+}
+
+/* What the founder said, in their own words and set apart from the answer. */
+.element-docs__founder-turn--founder {
+  border-left-color: var(--color-primary);
+}
+
+.element-docs__founder-said {
+  margin: 0;
+  font-size: 0.875rem;
+  white-space: pre-wrap;
+}
+
+/* Shorter than the observation box: a question is a sentence, not a specification. */
+.element-docs__founder-draft {
+  min-height: 72px;
+}

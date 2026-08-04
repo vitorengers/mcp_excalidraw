@@ -15,6 +15,9 @@ import { canvasFontsReady } from './canvas-fonts'
 import { withBoardToken } from './auth'
 import { STORAGE_KEYS, readSetting, writeSetting } from './storage'
 import { CollapsibleTarget, CommentPosted, IssueTarget } from './components/DocsPanel'
+import type {
+  FounderAction, FounderChatState, FounderControls, FounderResolved, FounderTarget
+} from './components/DocsPanel'
 import { AnchoredDocsPanel } from './components/AnchoredDocsPanel'
 import type { Rect } from '../../src/core/anchored-placement'
 import { resolvePanelTarget } from '../../src/core/panel-target'
@@ -234,6 +237,17 @@ const PRODUCT_NAME = 'VibeMaxxing';
  * being spawned all day.
  */
 const PROJECT_BOARD_POLL_MS = 20000;
+
+/**
+ * How often the canvas re-reads the work only a person can do.
+ *
+ * Its own cadence and its own request, because it is its own question: `GET /api/founder-actions`
+ * reads a local file and spawns nothing, so it costs nothing like a project read does — and,
+ * more to the point, it has to answer on a board where the project read is the thing that
+ * failed. Ten seconds rather than twenty, because a founder who has just pressed Done in a
+ * terminal wants the column to notice.
+ */
+const FOUNDER_POLL_MS = 10000;
 
 /**
  * How often the header re-reads what the coding agent has spent.
@@ -1436,6 +1450,21 @@ function App(): JSX.Element {
   const [libraryItems, setLibraryItems] = useState<unknown[]>([])
   const [collapsible, setCollapsible] = useState<CollapsibleTarget | null>(null)
   const [issue, setIssue] = useState<IssueTarget | null>(null)
+  /** The founder card under the pointer, when the selection is one. */
+  const [founder, setFounder] = useState<FounderTarget | null>(null)
+  /**
+   * What `GET /api/founder-actions` last answered for this board.
+   *
+   * The *panel's* half, and only that: the record behind a card — its steps, its evidence, its
+   * conversation — and what this board is willing to offer for it. The **column** is drawn from
+   * `projectBoardRef.current.founder`, which #539 feeds off the project-board answer, and that
+   * is deliberately one answer rather than two. A card carries a key and a face and nothing
+   * else, because the mirror redraws it on every poll.
+   */
+  const [founderState, setFounderState] = useState<{
+    actions: FounderAction[]
+    capabilities: FounderControls
+  } | null>(null)
 
   /**
    * The shape the card is pinned to, and where that shape currently is on screen.
@@ -2041,6 +2070,7 @@ function App(): JSX.Element {
 
     setSelectedDoc({ key: target?.docKey ?? null, title: target?.title ?? null })
     setIssue(target?.issue ?? null)
+    setFounder(target?.founder ?? null)
     setCollapsible(target?.collapsible ?? null)
 
     const anchorId = target?.anchorId ?? null
@@ -3255,6 +3285,119 @@ function App(): JSX.Element {
       if (activeWorkspaceRef.current !== workspace) return
       renderUnreadable((error as Error).message)
       void announceProjectBoardFailure(api, workspace, (error as Error).message)
+    }
+  }
+
+  /**
+   * Re-read what the panel needs to draw a founder action, on a request of its own.
+   *
+   * **Its own request, on its own timer, and deliberately not inside `refreshProjectBoard`.**
+   * That function's 404 branch — a board with no `githubProject` — calls `renderNotesOnly` and
+   * returns, so a read nested there would never run on exactly the board this column exists
+   * for: the fresh clone whose first blocker is that `gh` is signed out. It also has to keep
+   * answering when the project read is the thing that is broken.
+   *
+   * It draws nothing. The column is #539's, fed off the project-board answer and read there
+   * *before* its 404 branch for the same reason; a second thing deciding what is in that column
+   * would be two answers to one question. What this fetches is the half a card cannot carry —
+   * the steps, the evidence, the conversation, and what may be offered for them.
+   *
+   * **A failure changes nothing at all.** No board is written, so an already-warm mirror is
+   * left alone and a notes-only board is not marked warm — `renderUnreadable` reads warm as
+   * "`board` is set and is not the notes-only one", and re-opening #252's silence by writing a
+   * board here would be the cost of a feature that has nothing to say about the project.
+   */
+  const refreshFounderActions = async (): Promise<void> => {
+    const workspace = activeWorkspaceRef.current
+    let body: Record<string, unknown>
+    try {
+      const response = await fetch(apiUrl('/api/founder-actions'))
+      if (!response.ok) return
+      body = await response.json()
+    } catch {
+      // A board whose server is down keeps whatever column it already has, for the length of
+      // the outage. There is nothing here worth a toast: the project poll is already saying so.
+      return
+    }
+    // The tab may have been switched while the request was in flight, and this answer belongs
+    // to the board it was asked of.
+    if (activeWorkspaceRef.current !== workspace) return
+    if (!body?.success) return
+
+    setFounderState({
+      actions: (Array.isArray(body.actions) ? body.actions : []) as FounderAction[],
+      capabilities: (body.capabilities as FounderControls) ?? { resolve: true, chat: false }
+    })
+  }
+
+  /**
+   * Settle one founder action from the panel.
+   *
+   * `how: 'probe'` always: pressing Done is asking the board to look again, and the answer the
+   * reader deserves is the one it gets by looking rather than the one it remembered. A 409
+   * carries the probe's own sentence, which is what the panel shows in place.
+   */
+  const resolveFounderAction = async (key: string): Promise<FounderResolved> => {
+    try {
+      const response = await fetch(apiUrl('/api/founder-actions/resolve'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, how: 'probe' })
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok || !body?.success) {
+        return { ok: false, error: body?.error ?? `The server answered ${response.status}.` }
+      }
+      // The column is deliberately **not** redrawn here, and that is a decision rather than an
+      // omission. A settled action leaves the open list, so redrawing now would take the card
+      // out from under the reader in the same frame that the panel answered them — the shape
+      // goes, the selection empties, and the sentence saying what was settled is gone before
+      // it can be read. The poll takes it away a few seconds later, by which time the answer
+      // has been read and the card disappearing is the confirmation rather than the answer.
+      return {
+        ok: true,
+        why: typeof body.why === 'string' ? body.why : null,
+        // `onTrust` is the route's own word for "nothing could confirm it and the board took
+        // yours", which is a different fact from `settledBy`: a `how: 'person'` press is the
+        // person's too, and is not a claim about a probe that declined to say.
+        verified: body.settledBy === 'probe' && body.onTrust !== true,
+        action: (body.action as FounderAction) ?? null
+      }
+    } catch (error) {
+      return { ok: false, error: (error as Error).message }
+    }
+  }
+
+  /** Ask about one. Answers an error to show, or null; the reply arrives minutes later. */
+  const sendFounderChat = async (key: string, message: string): Promise<string | null> => {
+    try {
+      const response = await fetch(apiUrl('/api/founder-actions/chat'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, message })
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok || !body?.success) {
+        return body?.error ?? `The server answered ${response.status}.`
+      }
+      return null
+    } catch (error) {
+      return (error as Error).message
+    }
+  }
+
+  /** What that turn has done, and the item as the store now holds it. */
+  const readFounderChat = async (key: string): Promise<FounderChatState | null> => {
+    try {
+      const response = await fetch(apiUrl(`/api/founder-actions/chat?key=${encodeURIComponent(key)}`))
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok || !body?.success) return null
+      return {
+        run: (body.run as FounderChatState['run']) ?? null,
+        action: (body.action as FounderAction) ?? null
+      }
+    } catch {
+      return null
     }
   }
 
@@ -4793,6 +4936,42 @@ function App(): JSX.Element {
     void tick()
 
     const onVisible = (): void => { if (document.visibilityState === 'visible') void refreshProjectBoard() }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [activeWorkspace, excalidrawAPI])
+
+  /**
+   * The work only a person can do, polled beside the project rather than inside it.
+   *
+   * A loop of its own, and that is the requirement rather than a tidiness: the project poll
+   * returns early on a board with no `githubProject`, which is the board this column exists
+   * for. Nothing here spawns a `gh` — it is a local file — so the cost of the extra request is
+   * a read of memory on a page that is on screen.
+   *
+   * It is emptied when the board changes, before the first read for the new one lands, or one
+   * project's blockers would be read against the next project's cards for a poll.
+   */
+  useEffect(() => {
+    if (!excalidrawAPI) return
+    setFounderState(null)
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const tick = async (): Promise<void> => {
+      if (cancelled) return
+      if (document.visibilityState === 'visible') await refreshFounderActions()
+      if (!cancelled) timer = setTimeout(() => { void tick() }, FOUNDER_POLL_MS)
+    }
+    void tick()
+
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') void refreshFounderActions()
+    }
     document.addEventListener('visibilitychange', onVisible)
 
     return () => {
@@ -7015,6 +7194,19 @@ function App(): JSX.Element {
             onAdoptIssue={adoptIssueOnBlock}
             onAddComment={addObservationToIssue}
             onRecreateIssue={recreateIssue}
+            founder={founder}
+            // Looked up by key rather than carried on the shape: the mirror redraws a founder
+            // card from the server on every pass, so the card is the wrong place to keep the
+            // steps, the evidence or the conversation.
+            founderAction={
+              founder
+                ? (founderState?.actions.find((action) => action.key === founder.key) ?? null)
+                : null
+            }
+            founderControls={founderState?.capabilities ?? null}
+            onResolveFounder={resolveFounderAction}
+            onSendFounderChat={sendFounderChat}
+            onReadFounderChat={readFounderChat}
           />
 
           {/* Also siblings of the canvas, and for the same reason: a transcript is not a

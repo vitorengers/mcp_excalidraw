@@ -504,6 +504,16 @@ try {
   }
 
   console.log('\n5. the control: the same drag on a real card does send one');
+  // The founder card is still selected from section 3, and since #548 a selected founder card
+  // opens the documentation card on it — a 720-pixel DOM overlay standing over the columns to
+  // its right. A drag aimed at the canvas through that lands on the card instead and is
+  // silently swallowed, so this control would fail on a coordinate rather than on the feature.
+  // Deselected here rather than at the top of the run, because sections 3 and 4 are *about* a
+  // founder card being selected.
+  await evaluate('window.__founderApi.updateScene({ appState: { selectedElementIds: {} } })');
+  await sleep(500);
+  scene = await evaluate(PROBE);
+
   // Without this, "no request was sent" would pass on a harness that cannot see a request, or
   // on a drag that never happened at all.
   const real = scene.cards.find((card) => typeof card.itemId === 'string' && card.col === TODO.id);

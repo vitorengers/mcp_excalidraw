@@ -1619,6 +1619,16 @@ const FOUNDER_CHAT_RAW = 'a "raw" board spawns the command line it was given, ex
 const FOUNDER_CHAT_UNNARROWED = 'The founder chat runs only where this board can narrow the '
   + 'agent\'s permissions, and here it could not';
 
+/**
+ * How much of a streaming run's answer a chat turn keeps.
+ *
+ * `lastThingSaid` defaults to 600 characters because what it was written for is the tail of a
+ * run in a one-line error. A chat turn is the opposite: the reply is the thing the founder came
+ * for, and an offered revision arrives inside it as a fenced block, so a width that could cut
+ * one in half would turn a good answer into an unreadable one.
+ */
+const FOUNDER_CHAT_REPLY_LIMIT = 20000;
+
 /** What one turn needs beyond the conversation itself. */
 export interface FounderChatAgentOptions {
   /** Which agent, and the command that reaches it. The issue agent's. See `agentGrantFor`. */
@@ -1733,7 +1743,16 @@ export async function runFounderChatAgent(
     return {
       ok,
       issueUrl: null,
-      output: run.output,
+      // **What the agent said, not what its process printed.** A streaming backend prints a
+      // transcript of *events* — the words are inside JSON strings with their newlines escaped
+      // — so a caller reading `stdout` straight gets a wall of machine output where the founder
+      // expects a sentence, and `parseFounderChatAnswer`'s fence, which has to open at the start
+      // of a line, matches nothing in it. A revision arrives inside the reply, so a chat on a
+      // board configured the ordinary way could never revise anything: every headless Claude
+      // Code invocation this repository builds carries `--output-format stream-json`.
+      // `lastThingSaid` is the reader that already exists for this, at a width that cannot cut a
+      // block in half — it wants a tail for an error message, and this wants the whole answer.
+      output: adapter.streams(narrowed) ? lastThingSaid(run.output, FOUNDER_CHAT_REPLY_LIMIT) : run.output,
       error: ok ? null : (run.error ?? 'The founder chat agent ended without saying why.'),
     };
   } catch (error) {
