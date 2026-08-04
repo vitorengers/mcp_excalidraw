@@ -744,6 +744,14 @@ try {
     check('the reply arrives when the run settles',
           answered.turns.some((turn) => turn.who === 'agent' && turn.text.includes('signed out')),
           JSON.stringify(answered.turns));
+    // The stub streams its answer as events, which is what a board configured the ordinary way
+    // gets: `--output-format stream-json` is on every headless Claude Code invocation this
+    // repository builds. What the founder must read is the sentence inside them, not the
+    // transcript of them — and the fenced revision below is inside the same text, so a reply
+    // taken straight off the process's stdout would also mean no revision could ever be applied.
+    check('and it is what the agent said, not what its process printed',
+          answered.turns.every((turn) => !turn.text.includes('"type":"assistant"')),
+          JSON.stringify(answered.turns.map((turn) => turn.text.slice(0, 80))));
     check('and exactly one agent was started', agentCalls() - before === 1,
           `${agentCalls() - before} calls`);
     await shot('03-answered');
