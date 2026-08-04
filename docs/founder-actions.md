@@ -553,11 +553,49 @@ list rather than storing bad text: that one door is where the register is enforc
 `appendChatTurn` is deliberately not validated — see [the chat](#the-chat-is-a-loop-of-headless-turns)
 below.
 
-A record is `open`, `resolved` or `dismissed`, and **none of the three is ever deleted**: a column
-that forgets what it asked for asks for it again next week. `resolvedBy` says which of the two
-things settled it, this board's own re-probe or the person the card was written for. What happens
-to a settled record over months, and what a blocker that comes back does to one, are deliberately
-not decided in that module.
+A record is `open`, `resolved` or `dismissed`. `resolvedBy` says which of the two things settled
+it, this board's own re-probe or the person the card was written for.
+
+### A blocker that comes back, and how long the evidence is kept
+
+Both of these are about a poll. The producer runs on every memo read, roughly every thirty
+seconds while anything is looking at the board, and three of the ten kinds can only ever be
+settled on a person's word — nothing here can watch a bill being paid, a rate limit lifting or a
+usage window getting room. So Done pressed on a blocker that is still there is not an edge case:
+it is a card the very next pass notices again.
+
+**Inside an hour of the settlement, a re-detection re-opens the record that is already there.**
+`reopenedAt` is stamped, `lastSeenAt` moves, `createdAt` does not, and ten consecutive passes over
+a wrongly-trusted Done leave one card rather than ten. The record keeps its `publishedItemId`, so
+it is never published a second time. `resolvedAt` and `resolvedBy` stay exactly where they were:
+somebody said this was done at that moment and the board found it again at this one, and both
+halves of that are worth reading.
+
+**After the hour it is a recurrence, and a recurrence is a second event** — a distinct record
+under the same key, with a later `createdAt`, an empty transcript and no published item of its
+own, so *"I bought credit and it ran out again"* reaches the column as the new thing it is rather
+than as one card flickering. An hour is the width that separates the two: nothing a founder does
+about one of these and then undoes takes an hour, and `gh`'s own limits reset on the hour.
+
+That is what makes a key hold more than one record, and therefore what makes retention necessary
+at all — this file is parsed on every poll, and a column's own history must not become the reason
+the column is slow. A settled record is pruned on write only when it is past **both** bounds:
+older than thirty days, *and* beyond the three most recent settled records for its key. So the
+last few fixes for a blocker are readable however long ago they were, a blocker that recurs
+weekly keeps a month of them, and three things are never pruned at all: **an open record**,
+whatever its age, because an old open record is precisely the one that matters most; the current
+record under a key, which the count bound puts out of reach; and a record whose **transcript is
+still being appended to**, because the store is written on every turn and a prune between a
+question and its answer would take the record out from under the reply. What went is said in the
+log, in the house style of the card cap in `project-board.ts`: a line naming how many settled
+records were kept, of how many, and which keys lost some.
+
+The cooldown and the two bounds are constants of `founder-store.ts` rather than settings. They
+are facts about how often this board polls itself, not dials an operator has a reason to turn,
+and adding three settings would put three rows in a generated table for nobody.
+
+`scripts/check-founder-store-retention.mjs` holds all of it, and
+`scripts/check-founder-store.mjs` holds the doors.
 
 ### The store is the record, and GitHub is a projection of it
 
